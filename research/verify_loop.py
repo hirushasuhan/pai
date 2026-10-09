@@ -106,6 +106,33 @@ class FrozenTestSuite:
         except SyntaxError as e:
             raise TestSyntaxError(f"Test suite has invalid syntax: {e}") from e
 
+        # H3: Normalize top-level test function invocations into `if __name__ == '__main__':`
+        # Prevents import-time execution crashes during module load while preserving standalone script capability
+        test_func_names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test")}
+        main_calls = []
+        new_body = []
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name):
+                if stmt.value.func.id in test_func_names:
+                    main_calls.append(stmt)
+                    continue
+            new_body.append(stmt)
+
+        if main_calls:
+            main_if = ast.If(
+                test=ast.Compare(
+                    left=ast.Name(id="__name__", ctx=ast.Load()),
+                    ops=[ast.Eq()],
+                    comparators=[ast.Constant(value="__main__")],
+                ),
+                body=main_calls,
+                orelse=[],
+            )
+            new_body.append(main_if)
+            tree.body = new_body
+            ast.fix_missing_locations(tree)
+            clean_code = ast.unparse(tree)
+
         symbols: Set[str] = set()
         assertions = 0
         expected_ids: List[str] = []
@@ -794,9 +821,14 @@ if has_module_level_assertions:
         per_test_outcomes["<module>"] = {{"status": "ERROR", "type": type(module_error).__name__, "message": str(module_error)}}
 elif module_error is not None:
     discovered_tests.append("<module>")
-    error_count += 1
-    failures_list.append({{"test_id": "<module>", "type": type(module_error).__name__, "message": str(module_error)}})
-    per_test_outcomes["<module>"] = {{"status": "ERROR", "type": type(module_error).__name__, "message": str(module_error)}}
+    if isinstance(module_error, AssertionError):
+        failed_count += 1
+        failures_list.append({{"test_id": "<module>", "type": "AssertionError", "message": str(module_error)}})
+        per_test_outcomes["<module>"] = {{"status": "FAIL", "type": "AssertionError", "message": str(module_error)}}
+    else:
+        error_count += 1
+        failures_list.append({{"test_id": "<module>", "type": type(module_error).__name__, "message": str(module_error)}})
+        per_test_outcomes["<module>"] = {{"status": "ERROR", "type": type(module_error).__name__, "message": str(module_error)}}
 
 if module_error is None or isinstance(module_error, AssertionError):
     for name, func in standalone_test_funcs:

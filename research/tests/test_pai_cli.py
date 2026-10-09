@@ -66,30 +66,46 @@ class TestPaiCLI(unittest.TestCase):
 
     def test_pai_route_and_explain(self):
         """Verifies `pai route` commands."""
-        # Standard route
-        f_out = io.StringIO()
-        with redirect_stdout(f_out):
-            code = main(["route", "code"])
-        self.assertEqual(code, 0)
-        self.assertIn("Selected model:", f_out.getvalue())
+        from hardware_telemetry import HardwareBudget
+        mock_budget = HardwareBudget(
+            compute_tier="standard",
+            max_context_bytes=16 * 1024 * 1024,
+            allow_speculation=True,
+            thread_pool_limit=4,
+            throttle_warning="",
+            reasons=[],
+            avail_ram_mb=16384.0,
+        )
+        mock_snapshot = {
+            "budget": mock_budget,
+            "telemetry": {},
+            "candidates": [],
+        }
+        with patch("pai.HardwareTelemetry.get_system_snapshot", return_value=mock_snapshot):
+            # Standard route
+            f_out = io.StringIO()
+            with redirect_stdout(f_out):
+                code = main(["route", "code"])
+            self.assertEqual(code, 0)
+            self.assertIn("Selected model:", f_out.getvalue())
 
-        # Route with --explain-route
-        f_exp = io.StringIO()
-        with redirect_stdout(f_exp):
-            code = main(["route", "code", "--explain-route"])
-        self.assertEqual(code, 0)
-        exp_text = f_exp.getvalue()
-        self.assertIn("ROUTE EXPLANATION", exp_text)
-        self.assertIn("Data leaves machine:  No (Local inference)", exp_text)
+            # Route with --explain-route
+            f_exp = io.StringIO()
+            with redirect_stdout(f_exp):
+                code = main(["route", "code", "--explain-route"])
+            self.assertEqual(code, 0)
+            exp_text = f_exp.getvalue()
+            self.assertIn("ROUTE EXPLANATION", exp_text)
+            self.assertIn("Data leaves machine:  No (Local inference)", exp_text)
 
-        # Route with --json
-        f_json = io.StringIO()
-        with redirect_stdout(f_json):
-            code = main(["route", "code", "--json"])
-        self.assertEqual(code, 0)
-        dec_dict = json.loads(f_json.getvalue())
-        self.assertEqual(dec_dict["task_class"], "code")
-        self.assertEqual(dec_dict["data_leaves_machine"], False)
+            # Route with --json
+            f_json = io.StringIO()
+            with redirect_stdout(f_json):
+                code = main(["route", "code", "--json"])
+            self.assertEqual(code, 0)
+            dec_dict = json.loads(f_json.getvalue())
+            self.assertEqual(dec_dict["task_class"], "code")
+            self.assertEqual(dec_dict["data_leaves_machine"], False)
 
     def test_pai_route_invalid_command_fails_closed(self):
         """Invalid commands to `pai route` return non-zero exit code."""
@@ -100,13 +116,13 @@ class TestPaiCLI(unittest.TestCase):
         self.assertIn("Error: Unknown or invalid command", f_err.getvalue())
 
     def test_deferred_commands_notice(self):
-        """Direct execution commands (generate, forecast) print deferred notice."""
-        for cmd in ("generate", "forecast"):
+        """Direct execution command (generate) prints deferred notice."""
+        for cmd in ("generate",):
             f_out = io.StringIO()
             with redirect_stdout(f_out):
                 code = main([cmd, "test argument"])
             self.assertEqual(code, 0)
-            self.assertIn("deferred to Milestone M5+", f_out.getvalue())
+            self.assertIn("deferred to Milestone M6+", f_out.getvalue())
             self.assertIn(f"pai route {cmd}", f_out.getvalue())
 
     def test_probe_ollama_server_rejects_non_loopback(self):

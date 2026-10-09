@@ -714,9 +714,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_docs.add_argument("--model-timeout", type=float, default=None, help="Model generation HTTP request timeout in seconds")
     p_docs.add_argument("--json", action="store_true", help="Output analysis in JSON format")
 
-    # Deferred execution commands (M5+)
-    for deferred in ("generate", "forecast"):
-        p_def = subparsers.add_parser(deferred, help=f"Direct {deferred} execution (deferred to M5+)")
+    # M5 Time-Series Forecasting
+    p_forecast = subparsers.add_parser("forecast", help="Deterministic time-series forecasting with backtesting and uncertainty intervals (M5)")
+    p_forecast.add_argument("file", type=str, help="Target time-series CSV file path")
+    p_forecast.add_argument("--horizon", type=int, default=5, help="Forecast horizon steps (default: 5)")
+    p_forecast.add_argument("--date-col", type=str, default=None, help="Name of date/timestamp column (optional, auto-detected)")
+    p_forecast.add_argument("--value-col", type=str, default=None, help="Name of numeric target column (optional, auto-detected)")
+    p_forecast.add_argument("--json", action="store_true", help="Output forecast report in JSON format")
+
+    # Deferred execution commands (M6+)
+    for deferred in ("generate",):
+        p_def = subparsers.add_parser(deferred, help=f"Direct {deferred} execution (deferred to M6+)")
         p_def.add_argument("args", nargs="*", help="Arguments")
 
     return parser
@@ -1838,6 +1846,92 @@ def cmd_docs(args) -> int:
     return 0
 
 
+def cmd_forecast(args) -> int:
+    enforce_sandbox_boundary()
+    if not getattr(args, "json", False):
+        print("Sandbox execution boundary verified fail-closed.")
+
+    from forecast_engine import (
+        run_forecast_pipeline,
+        InsufficientDataError,
+        MalformedDataError,
+        ForecastError,
+    )
+
+    csv_path = args.file
+    horizon = getattr(args, "horizon", 5) or 5
+    date_col = getattr(args, "date_col", None)
+    value_col = getattr(args, "value_col", None)
+
+    try:
+        report = run_forecast_pipeline(
+            csv_path,
+            horizon=horizon,
+            date_col=date_col,
+            value_col=value_col,
+        )
+    except InsufficientDataError as ide:
+        err_out = {
+            "success": False,
+            "error": "INSUFFICIENT_DATA",
+            "detail": str(ide),
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(err_out, indent=2))
+        else:
+            print(f"Error: {ide}", file=sys.stderr)
+        return 1
+    except MalformedDataError as mde:
+        err_out = {
+            "success": False,
+            "error": "MALFORMED_DATA",
+            "detail": str(mde),
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(err_out, indent=2))
+        else:
+            print(f"Error: {mde}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        err_out = {
+            "success": False,
+            "error": "FORECAST_ERROR",
+            "detail": str(e),
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(err_out, indent=2))
+        else:
+            print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+
+    print("\n" + "=" * 65)
+    print(f"PAI FORECAST: {report.series_name} ({report.total_points} points, {report.frequency})")
+    print(f"Date Range: {report.date_range[0]} to {report.date_range[1]}")
+    if report.data_warnings:
+        print(f"Warnings: {'; '.join(report.data_warnings)}")
+    print("=" * 65)
+    print(f"Selected Method: {report.method_used}")
+    bt = report.backtest
+    impr = f"({(bt.naive_mae - bt.mae) / bt.naive_mae * 100:.1f}% improvement)" if bt.beated_naive else "(fallback to naive)"
+    print(f"Backtest Window: {bt.holdout_size} steps | MAE: {bt.mae:.2f} vs Naive: {bt.naive_mae:.2f} {impr}")
+    print(f"RMSE: {bt.rmse:.2f}" + (f" | MAPE: {bt.mape:.1f}%" if bt.mape is not None else ""))
+    print("-" * 65)
+    print(f"{'Step':<6} {'Date':<14} {'Forecast':<10} {'80% Interval':<16} {'95% Interval':<16}")
+    print("-" * 65)
+    for f in report.forecasts:
+        ci80 = f"[{f.lower_80:.1f}, {f.upper_80:.1f}]"
+        ci95 = f"[{f.lower_95:.1f}, {f.upper_95:.1f}]"
+        print(f"{f.step:<6} {f.date:<14} {f.point:<10.2f} {ci80:<16} {ci95:<16}")
+    print("-" * 65)
+    print(f"\n{report.summary_narration}\n")
+    print(f"{report.disclaimer}\n")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1846,8 +1940,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.print_help()
         return 0
 
-    if args.subcommand in ("generate", "forecast"):
-        print(f"Notice: Direct command execution '{args.subcommand}' is deferred to Milestone M5+.")
+    if args.subcommand in ("generate",):
+        print(f"Notice: Direct command execution '{args.subcommand}' is deferred to Milestone M6+.")
         print(f"        Use 'pai route {args.subcommand}' to evaluate adaptive routing decisions.")
         return 0
 
@@ -1857,6 +1951,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_analyze(args)
     elif args.subcommand == "docs":
         return cmd_docs(args)
+    elif args.subcommand == "forecast":
+        return cmd_forecast(args)
 
     if args.subcommand == "doctor":
         return cmd_doctor(args)

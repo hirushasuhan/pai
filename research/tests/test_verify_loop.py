@@ -1072,6 +1072,40 @@ assert multiply(3, 4) == 12
                     overwrite=True,
                 )
 
+    def test_top_level_test_function_invocation_normalized_and_passes_stub_probe(self):
+        # Hypothesis H3: Tests calling test functions at top level are normalized
+        # and do not crash during module import against stubs.
+        test_code = """
+from solution import find_first_missing_positive
+
+def test_find_first_missing_positive():
+    assert find_first_missing_positive([1, 2, 0]) == 3
+    assert find_first_missing_positive([3, 4, -1, 1]) == 2
+
+test_find_first_missing_positive()
+"""
+        suite = self.loop.freeze_tests(test_code)
+        self.assertIn("if __name__ == '__main__':", suite.test_code)
+        self.assertEqual(suite.expected_test_ids, ("test_find_first_missing_positive",))
+
+        # Must pass stub probe (fails stubs with substantive FAIL, not unhandled crash/ERROR)
+        probe_res = self.loop.run_stub_probe(suite)
+        self.assertTrue(probe_res.passed, f"Stub probe must pass for non-vacuous suite: {probe_res.detail}")
+
+        # Correct solution passes cleanly
+        good_sol = """
+def find_first_missing_positive(nums):
+    s = set(nums)
+    i = 1
+    while i in s:
+        i += 1
+    return i
+"""
+        res = self.loop.execute_solution_tests(good_sol, suite)
+        self.assertTrue(res.passed, f"Good solution must pass: {res.detail}")
+        self.assertEqual(res.status, "PASS")
+
 
 if __name__ == "__main__":
     unittest.main()
+

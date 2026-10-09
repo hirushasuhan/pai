@@ -1064,3 +1064,39 @@ Windows behaviour; real-model quality of `pai docs`; the hard-link and lone-sign
 - Gap: `test_mutant_benchmark.py` only checks that each mutant fails the hidden reference tests. It contains no runner that feeds a mutant through the gate together with a generated test suite, so the pre-declared "0 accepted mutants" rule cannot be measured yet. Mutants also cover only the tuning tasks; the holdout set has none.
 - Required before H5/H3 results count: a gate-level mutant runner (stored generated test suites from the diagnostic runs, plus fresh ones, run against each mutant of the same task through the production verify path, reporting accepted/rejected per mutant), and a separate frozen mutant set for the holdout tasks.
 - H5 design cautions given to the owner: tagged encoding must not be forgeable by a candidate returning a dict that looks like a tag; arguments sent into the worker must keep their types as well (tuple arguments may currently arrive as lists); strict `type(x) is` checks and size/depth limits stay.
+
+
+### Addendum (da48b2d): H5 codec and gate mutant runner review (2026-10-09)
+Linux, HEAD da48b2d, working tree clean, 385 tests OK (13 skipped).
+
+Verified:
+- End-to-end through `VerifyLoop` in the sandbox: tuple, set and int-key dict returns accepted; tuple versus list mismatches rejected both ways; bytes versus str rejected; a candidate returning a dict shaped like a tag (including a raw payload tag) does not become a tuple; tuple subclass, `__eq__`-hijack object and `int` subclass rejected; cycles, depth 100 nesting and a 200000-item list rejected; tuple and set arguments keep their type inside the worker; NaN is unequal to NaN as in Python. (A frozenset compared with a set is equal, as in Python.)
+- Suites from the gated diagnostic runs for code_14 now pass the known-good solution in both arms, so the codec defect is fixed for code_14.
+
+Findings:
+1. H5 recovers code_14 (both arms), not code_19. For code_19 English the generated suite still fails the known-good solution, now with real assertion mismatches (for example 6.0 != 5.0 and 4.0 != 12.0). The earlier equality-hijack error masked a wrong test. The H5 row of the cause table is therefore 2 arm-tasks, not 3, and code_19 moves to test-wrongness.
+2. The mutant result "0 of 42 accepted" is weakly informative. Most suites are broken: of the 42 mutants, 40 (English) and 38 (Singlish) fail the model suite, but only 5 (English) and 3 (Singlish) suites pass a known-good solution, which leaves 10 and 7 mutant checks that test discriminating power. All 17 were rejected. The runner reports 0 accepted but not this denominator.
+3. No gated re-run with the H5 codec exists yet, so no recall number after H5 exists. Existing JSONL files predate the codec.
+4. The runner counts a mutant as accepted when it passes the model suite, without applying the stub probe, so it is conservative for acceptance; this is the right direction.
+
+Required next: report mutant results as (mutants that pass vs fail, among suites that pass the known-good solution); re-run both gated arms with the codec on the tuning set and report acceptance with causes; keep holdout untouched until the gate is final.
+
+
+### Addendum: H5 re-run, H3 and M5 forecast review (2026-10-09)
+Linux, HEAD da48b2d with a large uncommitted working tree (H3 change in `verify_loop.py`, `forecast_engine.py`, forecast tests and fixtures, H5 diag JSONL files, `pai.py`, `gate_mutant_runner.py`). 398 tests OK (13 skipped). Review is of the working tree; nothing below is a reviewed commit.
+
+Gate recall (owner numbers, arithmetic consistent): English 5 of 20 gated accepted against 12 of 20 gate-off; Singlish 3 of 20 against 9 of 20. Gain from H5 is one task (code_14) per arm. 0 false accepts. The cause table adds up (English 7 dropped = 6 test-wrongness + 1 timeout; Singlish 6 = 4 + 2). The English code_08 "timeout" was not re-derived; it should be re-run or reported as an infrastructure exclusion with evidence.
+
+H3 (top-level calls of test functions moved under a main guard; a module-level AssertionError counted as a failure, not an error): reviewed in the diff and probed in the sandbox. A real suite with a top-level call is accepted; vacuous suites (pass, assert True, tautology, always-raising module, weak helper plus vacuous test) are rejected; a wrong candidate fails the real suite. Accepted. The gated re-run after H3 was not shown: Singlish code_08 and code_18 now pass the stub probe, but no acceptance number after H3 exists.
+
+M5 `pai forecast` findings (probed with synthetic and edge-case series):
+1. Invalid calendar dates are accepted. The shipped fixture `series_noisy_gap.csv` contains 2026-02-29, which does not exist, and a probe with 2026-02-30 ran with a fallback `t+1` axis instead of being refused.
+2. Labels that are not dates are sorted as text. A series labelled x0..x29 was reordered lexicographically (x0, x1, x10 ...) with a "timestamps were unsorted" warning, which scrambles the series before forecasting.
+3. Duplicate timestamps produce a warning and a forecast on an invented frequency ("step_0d"); they should be refused or aggregated by an explicit rule.
+4. `--horizon` is not validated: 0 prints an empty table, -1 crashes with "list index out of range", 100000 on a 90-point series prints about 7 MB.
+5. Model selection and error reporting use the same 3-step holdout, so the quoted improvement over naive (for example 90.3%) is optimistic, and intervals computed from 3 residuals are overconfident: exactly linear data gives zero-width 80% and 95% intervals ("[60.0, 60.0]"). A rolling-origin backtest with several origins, a minimum residual count, and an interval floor or an explicit statement of the sample size are needed.
+6. Skipped empty cells are reported as warnings but the series is then treated as regular, which shifts the time index.
+Positive: NaN, inf, overflow and formula-like cells are refused; too-short and non-numeric inputs exit 1 with clear messages; output is byte-identical across runs; the narration is produced from code, no model is used for figures (the model explanation step is not implemented yet).
+
+### Next steps given to the owner
+Commit the working tree first. Fix M5 findings 1 to 5 with tests. Report an after-H3 gated run. H1 first and measured alone. H2 only with a mutant-in-the-loop evaluation: a filter that drops assertions failing the candidate can make a wrong candidate pass, so every mutant must play the candidate role in the filter, and any accepted mutant rejects H2.
