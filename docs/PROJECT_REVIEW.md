@@ -1056,3 +1056,11 @@ M4 follow-up: the hard-link and lone-sign fixes are reported by the owner and co
 
 ### Not verified
 Windows behaviour; real-model quality of `pai docs`; the hard-link and lone-sign fixes on Linux.
+
+
+### Addendum (fa3b6da): commit check and mutant benchmark gap (2026-10-09)
+- Commit fa3b6da verified on Linux: working tree clean, 373 tests OK (13 skipped), holdout and mutant files present, `eval_sets_hashes.json` entries match the files on disk (8 files).
+- The owner's cause table (12 test-wrongness, 3 H5, 1 H3) is consistent with the reviewer's cross-check for the H5 and H3 rows. The 12 test-wrongness rows were not individually re-derived beyond the earlier failure-count reproduction.
+- Gap: `test_mutant_benchmark.py` only checks that each mutant fails the hidden reference tests. It contains no runner that feeds a mutant through the gate together with a generated test suite, so the pre-declared "0 accepted mutants" rule cannot be measured yet. Mutants also cover only the tuning tasks; the holdout set has none.
+- Required before H5/H3 results count: a gate-level mutant runner (stored generated test suites from the diagnostic runs, plus fresh ones, run against each mutant of the same task through the production verify path, reporting accepted/rejected per mutant), and a separate frozen mutant set for the holdout tasks.
+- H5 design cautions given to the owner: tagged encoding must not be forgeable by a candidate returning a dict that looks like a tag; arguments sent into the worker must keep their types as well (tuple arguments may currently arrive as lists); strict `type(x) is` checks and size/depth limits stay.

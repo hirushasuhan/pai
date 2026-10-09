@@ -45,6 +45,8 @@ _CURR_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CURR_DIR not in sys.path:
     sys.path.insert(0, _CURR_DIR)
 
+from value_codec import CodecError, EqualityHijackError, decode_value, encode_value
+
 from sandbox import get_sandbox, is_sandbox_supported
 
 
@@ -443,7 +445,16 @@ class VerifyLoop:
                     f"Test file tampering detected in scratch! Expected {frozen_suite.test_hash}, got {read_back_hash}"
                 )
 
-            # 4. Generate Candidate Worker Process (_pai_worker.py)
+            # 4. Copy _pai_codec.py into scratch
+            codec_src = os.path.join(_CURR_DIR, "value_codec.py")
+            codec_dst = os.path.join(sb.scratch_dir, "_pai_codec.py")
+            shutil.copyfile(codec_src, codec_dst)
+            try:
+                os.chmod(codec_dst, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+            except Exception:
+                pass
+
+            # 5. Generate Candidate Worker Process (_pai_worker.py)
             worker_code = '''
 import sys
 import os
@@ -453,6 +464,8 @@ scratch_dir = os.path.dirname(os.path.abspath(__file__))
 if scratch_dir not in sys.path:
     sys.path.insert(0, scratch_dir)
 
+from _pai_codec import encode_value, decode_value, CodecError, EqualityHijackError
+
 # Candidate Worker Process
 try:
     import solution
@@ -460,22 +473,6 @@ try:
 except BaseException as e:
     solution = None
     import_error = f"{type(e).__name__}: {e}"
-
-ALLOWED_PRIMITIVES = (int, float, str, bool, type(None))
-
-def validate_json_value(val):
-    """
-    Validates that return value is strictly composed of genuine builtin primitives.
-    Rejects custom classes, subclassed primitives (e.g. class R(int)), and non-JSON objects.
-    """
-    t = type(val)
-    if t in ALLOWED_PRIMITIVES:
-        return True
-    if t is list:
-        return all(validate_json_value(x) for x in val)
-    if t is dict:
-        return all(type(k) is str and validate_json_value(v) for k, v in val.items())
-    return False
 
 symbols = []
 if solution is not None:
@@ -500,8 +497,8 @@ while True:
     op = req.get("op")
     if op == "call":
         func_name = req.get("func")
-        args = req.get("args", [])
-        kwargs = req.get("kwargs", {})
+        enc_args = req.get("args")
+        enc_kwargs = req.get("kwargs")
         if solution is None:
             resp = {"status": "error", "error_type": "ImportError", "error": f"ImportError: {import_error}"}
         elif not hasattr(solution, func_name):
@@ -512,15 +509,24 @@ while True:
                 resp = {"status": "error", "error_type": "TypeError", "error": f"'{func_name}' is not callable"}
             else:
                 try:
+                    args = decode_value(enc_args) if enc_args is not None else []
+                    kwargs = decode_value(enc_kwargs) if enc_kwargs is not None else {}
                     res = fn(*args, **kwargs)
-                    if not validate_json_value(res):
+                    try:
+                        enc_res = encode_value(res)
+                        resp = {"status": "ok", "result": enc_res}
+                    except EqualityHijackError as ehe:
                         resp = {
                             "status": "error",
                             "error_type": "EqualityHijackError",
-                            "error": f"EqualityHijackError: Candidate '{func_name}' returned non-builtin or subclassed object of type '{type(res).__name__}'"
+                            "error": f"EqualityHijackError: Candidate '{func_name}' returned non-builtin or subclassed object: {ehe}"
                         }
-                    else:
-                        resp = {"status": "ok", "result": res}
+                    except CodecError as ce:
+                        resp = {
+                            "status": "error",
+                            "error_type": "EqualityHijackError",
+                            "error": f"EqualityHijackError: Codec violation: {ce}"
+                        }
                 except BaseException as ex:
                     resp = {"status": "error", "error_type": type(ex).__name__, "error": str(ex)}
         print(json.dumps(resp), flush=True)
@@ -534,10 +540,12 @@ while True:
             val = getattr(solution, attr_name)
             if callable(val):
                 resp = {"status": "callable"}
-            elif validate_json_value(val):
-                resp = {"status": "ok", "value": val}
             else:
-                resp = {"status": "error", "error_type": "TypeError", "error": f"TypeError: Attribute '{attr_name}' is not JSON serializable"}
+                try:
+                    enc_val = encode_value(val)
+                    resp = {"status": "ok", "value": enc_val}
+                except Exception as e:
+                    resp = {"status": "error", "error_type": "TypeError", "error": f"Attribute '{attr_name}' cannot be serialized: {e}"}
         print(json.dumps(resp), flush=True)
     elif op == "exit":
         break
@@ -550,7 +558,7 @@ while True:
             except Exception:
                 pass
 
-            # 5. Generate Trusted Test Driver Process (_pai_driver.py)
+            # 6. Generate Trusted Test Driver Process (_pai_driver.py)
             driver_code = f'''
 import sys
 import os
@@ -562,6 +570,12 @@ import types
 import ast
 import subprocess
 import atexit
+
+scratch_dir = os.path.dirname(os.path.abspath(__file__))
+if scratch_dir not in sys.path:
+    sys.path.insert(0, scratch_dir)
+
+from _pai_codec import encode_value, decode_value, CodecError, EqualityHijackError
 
 # 1. Linux non-dumpable protection: prevents child/sibling from inspecting fds or memory via /proc
 if sys.platform.startswith("linux"):
@@ -577,10 +591,6 @@ if sys.platform.startswith("linux"):
 parent_nonce = os.environ.pop("PAI_SESSION_NONCE", "")
 parent_hmac_key = os.environ.pop("PAI_HMAC_KEY", "")
 sys.argv = ["test_suite.py"]
-
-scratch_dir = os.path.dirname(os.path.abspath(__file__))
-if scratch_dir not in sys.path:
-    sys.path.insert(0, scratch_dir)
 
 expected_test_ids = {list(frozen_suite.expected_test_ids)}
 
@@ -644,9 +654,11 @@ def _call_worker(func_name, args, kwargs):
     if not worker_ready:
         raise RuntimeError(f"Candidate worker not available: {{worker_init_error}}")
     try:
-        req_json = json.dumps({{"op": "call", "func": func_name, "args": args, "kwargs": kwargs}}) + chr(10)
-    except TypeError as te:
-        raise TypeError(f"pai code v1 only supports JSON-serializable arguments/results: {{te}}")
+        enc_args = encode_value(list(args))
+        enc_kwargs = encode_value(dict(kwargs))
+        req_json = json.dumps({{"op": "call", "func": func_name, "args": enc_args, "kwargs": enc_kwargs}}) + chr(10)
+    except (TypeError, CodecError) as te:
+        raise TypeError(f"pai code v1 only supports serializable arguments/results: {{te}}")
     try:
         worker_proc.stdin.write(req_json)
         worker_proc.stdin.flush()
@@ -670,7 +682,12 @@ def _call_worker(func_name, args, kwargs):
         if not issubclass(exc_cls, BaseException):
             exc_cls = RuntimeError
         raise exc_cls(err_msg)
-    return resp.get("result")
+
+    enc_res = resp.get("result")
+    try:
+        return decode_value(enc_res)
+    except CodecError as ce:
+        raise AssertionError(f"EqualityHijackError: Malformed result from candidate: {{ce}}")
 
 def _make_proxy_callable(name):
     def _proxy(*args, **kwargs):
@@ -704,6 +721,11 @@ class SolutionProxyModule(types.ModuleType):
             fn = _make_proxy_callable(name)
             setattr(self, name, fn)
             return fn
+        if resp.get("status") == "ok":
+            try:
+                return decode_value(resp.get("value"))
+            except CodecError as ce:
+                raise AttributeError(f"Attribute '{{name}}' could not be decoded: {{ce}}")
         return resp.get("value")
 
 sol_mod = SolutionProxyModule("solution")

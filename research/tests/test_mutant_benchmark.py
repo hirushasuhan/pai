@@ -19,7 +19,9 @@ if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
 from eval_sets.mutants import MUTANTS
+from eval_sets.mutants_holdout import MUTANTS_HOLDOUT
 from eval_sets.hidden_tests.test_coding_tasks import HIDDEN_TESTS
+from eval_sets.hidden_tests.test_coding_tasks_holdout import HIDDEN_TESTS_HOLDOUT
 
 
 class TestMutantBenchmark(unittest.TestCase):
@@ -64,6 +66,45 @@ class TestMutantBenchmark(unittest.TestCase):
                     break
 
             self.assertFalse(all_passed, f"Mutant {mid} for task {tid} must FAIL hidden tests, but passed!")
+
+    def test_holdout_mutant_benchmark_integrity(self):
+        self.assertGreaterEqual(len(MUTANTS_HOLDOUT), 20, "Holdout mutant benchmark must contain >= 20 mutants")
+
+        for m in MUTANTS_HOLDOUT:
+            mid = m["id"]
+            tid = m["task_id"]
+            code = m["code"].strip()
+
+            self.assertTrue(code, f"Holdout mutant {mid} code must not be empty")
+            self.assertIn(tid, HIDDEN_TESTS_HOLDOUT, f"Holdout mutant {mid} references invalid task_id {tid}")
+
+            ns = {}
+            try:
+                compiled = compile(code, f"<mutant_{mid}>", "exec")
+                exec(compiled, ns)
+            except Exception as e:
+                self.fail(f"Holdout mutant {mid} failed compilation/exec: {e}")
+
+            fn = None
+            for k, v in ns.items():
+                if callable(v) and not k.startswith("_"):
+                    fn = v
+                    break
+
+            self.assertIsNotNone(fn, f"Holdout mutant {mid} must expose an entry point")
+
+            tests = HIDDEN_TESTS_HOLDOUT[tid]
+            all_passed = True
+            for t in tests:
+                try:
+                    if not t(fn):
+                        all_passed = False
+                        break
+                except Exception:
+                    all_passed = False
+                    break
+
+            self.assertFalse(all_passed, f"Holdout mutant {mid} for task {tid} must FAIL hidden tests, but passed!")
 
 
 if __name__ == "__main__":
