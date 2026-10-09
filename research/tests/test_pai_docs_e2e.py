@@ -207,6 +207,7 @@ class TestPaiDocsE2E(unittest.TestCase):
                 "Frank,40,+SUM(B1:B4),func\n"          # +SUM(...) (formula: escape)
                 "Grace,30, =spaced_cmd,spaced\n"       # Leading space before '=' (evasion: escape)
                 "Heidi,20,\t=tabbed_cmd,tab\n"         # Leading tab (escape)
+                "Ivan,10,-,+\n"                        # Lone '-' and '+' (empty markers): DO NOT escape
             )
 
         buf = io.StringIO()
@@ -226,9 +227,9 @@ class TestPaiDocsE2E(unittest.TestCase):
 
         self.assertIn("csv_metadata", data)
         csv_meta = data["csv_metadata"]
-        self.assertEqual(csv_meta["total_rows"], 9)
+        self.assertEqual(csv_meta["total_rows"], 10)
         # Formula-like cells: =CMD, @SUM, -calc.exe, +SUM,  =spaced_cmd, \t=tabbed_cmd (6 total)
-        # Note: +12345, -500, -5.25 are plain valid numbers and NOT formula-like cells.
+        # Note: +12345, -500, -5.25, and lone '-', '+' are NOT formula-like cells.
         self.assertEqual(csv_meta["formula_like_cells"], 6)
 
         # Verify deterministic column profiles computed via Python
@@ -254,13 +255,15 @@ class TestPaiDocsE2E(unittest.TestCase):
         self.assertIn("' =spaced_cmd", exp_content)
         self.assertIn("'\t=tabbed_cmd", exp_content)
 
-        # Plain numbers MUST NOT be corrupted with single quotes
+        # Plain numbers and lone sign empty markers MUST NOT be corrupted with single quotes
         self.assertIn(",+12345,", exp_content)
         self.assertIn(",-500,", exp_content)
         self.assertIn(",-5.25,", exp_content)
+        self.assertIn(",-,+", exp_content)
         self.assertNotIn("'+12345", exp_content)
         self.assertNotIn("'-500", exp_content)
         self.assertNotIn("'-5.25", exp_content)
+        self.assertNotIn("'-", exp_content.replace("'-calc.exe", ""))
 
     def test_export_collision_and_source_protection_returns_4(self):
         """
@@ -269,6 +272,7 @@ class TestPaiDocsE2E(unittest.TestCase):
         (2) Exporting over an existing destination without --overwrite returns Exit 4.
         (3) Exporting over an existing destination with --overwrite returns Exit 0.
         (4) Exporting over input file even with --overwrite is strictly refused (Exit 4).
+        (5) Exporting over a hard link alias of the input file is strictly refused (Exit 4).
         """
         src_path = os.path.join(self.tmp_dir, "source_data.csv")
         with open(src_path, "w", encoding="utf-8") as f:
@@ -305,6 +309,19 @@ class TestPaiDocsE2E(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             ret = pai.main(["docs", src_path, "--export", src_path, "--overwrite", "--json"])
         self.assertEqual(ret, 4)
+
+        # 5. Hard link alias to source path even WITH --overwrite must still be refused with exit 4
+        hardlink_path = os.path.join(self.tmp_dir, "hardlink_to_source.csv")
+        try:
+            os.link(src_path, hardlink_path)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ret = pai.main(["docs", src_path, "--export", hardlink_path, "--overwrite", "--json"])
+            self.assertEqual(ret, 4)
+            data = json.loads(buf.getvalue())
+            self.assertEqual(data["error"], "COLLISION")
+        except (OSError, NotImplementedError):
+            pass  # Filesystem does not support hard links
 
     # -------------------------------------------------------------------------
     # 5. Large CSV Sampling

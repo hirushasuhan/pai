@@ -999,4 +999,27 @@ Real-model answer quality for `pai docs` and `pai analyze`; Windows behaviour of
 ### Immediate Next Step
 - **Gate Recall Experiment (1–2 Day Time-Box)**: Immediate priority before advancing to Milestone M5 (`pai forecast`). Focuses on investigating and resolving the gap where `pai code` accepts only 3/12 English and 2/10 Singlish raw-solvable tasks due to model-written test failures, preserving the 0% false accept boundary.
 
+## M4 re-review (commit e03852b)
+
+Reviewer environment: Ubuntu 22.04.5, Python 3.10.12. Full suite: 372 tests, OK, 13 skipped (matches the owner's totals).
+
+### Result
+Accepted. One narrow gap remains (item 1).
+
+### Verified with probes (mock model, Linux)
+- Export onto the input path with `--overwrite`: exit 4, input unchanged. Export onto a symlink that points at the input: exit 4, input unchanged. Export onto an unrelated existing file without `--overwrite`: exit 4, file unchanged.
+- Escaping: `-5`, `-5.25`, `+12345`, `1e5`, `-1e5` stay numeric; `=SUM(A1)`, ` =cmd`, tab-prefixed, newline-prefixed, `@SUM(1)`, `+SUM(1)`, `-calc.exe`, `-1+1`, `--5`, `+-5` receive a leading quote. Counter and export agree (14 formula-like cells, 14 escaped).
+- Terminal sanitiser: C1 controls, bidirectional controls, ESC sequences, complete OSC 8 hyperlinks and an OSC terminated by ESC backslash are all removed from model output.
+- Coverage reports the real file size (67708 bytes for the probe file). Column profiles are computed over the whole file and match an independent calculation (mean of a column with 715 empty cells: 1249.7917).
+
+### Findings
+1. A hard link to the input file is not detected: `--export` to a hard link of the input with `--overwrite` exited 0 and replaced the input content. Compare files with `os.path.samefile` (inode and device) instead of resolved paths.
+2. A cell that contains only `-` or `+` (commonly used as an empty marker) is escaped to `'-`. This is a data change in the export; document it or leave a lone sign unescaped.
+
+### Resolution of Findings (Working Tree / Current Build)
+1. **Hard Link Protection**: Implemented `os.path.samefile(abs_export, abs_target)` in `cmd_docs` (`research/pai.py`). If `--export` targets a hard-link alias of the input file, it is strictly refused with exit 4 even if `--overwrite` is specified. Verified with unit and e2e tests in `test_pai_docs_e2e.py`.
+2. **Lone Sign Empty Marker Preservation**: Updated `is_formula_like_cell` (`research/pai.py`) to exempt lone `"-"` and `"+"` from formula escaping so that common empty cell markers remain unchanged and unquoted. Verified with test cases in `test_pai_docs_e2e.py`.
+
+### Not verified
+Windows behaviour; real-model answer quality for `pai docs`.
 

@@ -1323,6 +1323,9 @@ def is_formula_like_cell(raw_cell: Any) -> bool:
     if l_stripped.startswith(("=", "@")):
         return True
 
+    if l_stripped in ("-", "+"):
+        return False
+
     if l_stripped.startswith(("+", "-")):
         if is_plain_number(l_stripped):
             return False
@@ -1531,8 +1534,15 @@ def cmd_docs(args) -> int:
         abs_export = os.path.realpath(os.path.abspath(export_path))
         abs_target = os.path.realpath(os.path.abspath(target_file))
 
-        # Refuse to overwrite input document file
-        if abs_export == abs_target:
+        # Refuse to overwrite input document file (including hard link aliases)
+        is_same = (abs_export == abs_target)
+        if not is_same and os.path.exists(abs_export) and os.path.exists(abs_target):
+            try:
+                is_same = os.path.samefile(abs_export, abs_target)
+            except (OSError, ValueError):
+                is_same = False
+
+        if is_same:
             msg = f"Refusing to export over input document file '{export_path}'."
             if getattr(args, "json", False):
                 print(json.dumps({
