@@ -1100,3 +1100,55 @@ Positive: NaN, inf, overflow and formula-like cells are refused; too-short and n
 
 ### Next steps given to the owner
 Commit the working tree first. Fix M5 findings 1 to 5 with tests. Report an after-H3 gated run. H1 first and measured alone. H2 only with a mutant-in-the-loop evaluation: a filter that drops assertions failing the candidate can make a wrong candidate pass, so every mutant must play the candidate role in the filter, and any accepted mutant rejects H2.
+
+### Addendum: M5 resolution, H3 gated re-runs, and H1/H2 evaluation report (commit `fffd180`, 2026-10-09)
+
+1. **Commit and Test Regression State**:
+   - M5 findings 1–5 resolved and committed in `fffd180`. Working tree clean.
+   - Python test discovery: 404 tests OK (0 failures, 0 errors, 23 skipped on Windows).
+   - Rust core: 13 passed, clippy clean (`-D warnings`).
+   - Claims lint: passed (`test_claims.py`).
+
+2. **Milestone M5 (`pai forecast`) Resolution**:
+   - Shipped fixture `series_noisy_gap.csv`: `2026-02-29` corrected to `2026-03-01`.
+   - Finding 1: Strict calendar validation via `strptime` rejects invalid dates (`2026-02-29`, `2026-02-30`) with `MalformedDataError` (`test_invalid_calendar_date_refusal`).
+   - Finding 2: Non-date string labels (`x0..x29`) preserve original sequence order without lexicographical sorting (`test_non_date_label_ordering_preserved`).
+   - Finding 3: Duplicate timestamps strictly refused with `MalformedDataError` (`test_duplicate_timestamp_refusal`).
+   - Finding 4: Horizon validation enforced ($1 \le horizon \le 100$) (`test_horizon_bounds_validation`).
+   - Finding 5: Rolling-origin cross-validation ($K \le 3$) on training history strictly separated from out-of-sample holdout test; minimum uncertainty floor ($2\%$) applied when residual variance is zero to avoid zero-width intervals (`test_rolling_origin_validation_and_residual_floor`).
+   - Finding 6: Empty cells strictly refused to prevent index shifting (`test_empty_cell_refusal`).
+   - All 12 unit tests in `test_forecast_engine.py` and 6 e2e tests in `test_pai_forecast_e2e.py` pass.
+
+3. **Gated Re-runs after H3 (Tuning Set `code_01`–`code_20`, repeats=1, temp=0.0, seed=42)**:
+   - **Singlish Arm** (`docs/evidence/eval_qwen2.5_coder_7b_singlish_h3_diag.jsonl`):
+     - Gated acceptance: **5 / 20 (25.0% pass@1_repair3)**, up from 3 / 20 (15.0%).
+     - Net Gain from H3: **+2 tasks** (`code_08` and `code_18` converted to PASS).
+     - Accepted tasks: `code_02`, `code_08`, `code_12`, `code_14`, `code_18`.
+     - False-accept rate: **0.0%** (all 5 passed hidden reference tests).
+     - Discriminating mutant benchmark: **11 / 11 mutants killed** across valid suites (100% kill rate, strictly 0 false accepts).
+   - **English Arm** (`docs/evidence/eval_qwen2.5_coder_7b_english_h3_diag.jsonl`):
+     - Gated acceptance: **5 / 20 (25.0% pass@1_repair3)**.
+     - Accepted tasks: `code_02`, `code_12`, `code_13`, `code_14`, `code_18`.
+     - `code_08` timeout resolved: completed in 75.8s, passed stub probe, and moved to test-wrongness (`REPAIR_EXHAUSTED`).
+     - False-accept rate: **0.0%** (all 5 passed hidden reference tests).
+     - Discriminating mutant benchmark: **10 / 10 mutants killed** across valid suites (100% kill rate, strictly 0 false accepts).
+   - **Total Discriminating Mutant Power**: **21 / 21 mutants killed** (100% kill rate, strictly 0 false accepts).
+
+4. **Hypothesis H1 Evaluation (Deterministic Example Assertions Extractor Alone)**:
+   - Deterministic extractor parses canonical `Example:` input/output blocks from prompt docstrings (18/20 tasks with examples, 100% syntax validity).
+   - Evaluated as a standalone verification gate against all 42 mutants:
+     - Mutants on tasks with examples: 38.
+     - Killed by H1 example assertions alone: 32 / 38 (84.2%).
+     - Mutants passing H1 assertions (edge cases not covered by the single prompt example): 6 mutants (`code_05_mutant_2`, `code_07_mutant_1`, `code_07_mutant_2`, `code_10_mutant_1`, `code_18_mutant_2`, `code_19_mutant_2`).
+     - Mutants on tasks without prompt examples (`code_04`, `code_17`): 4 mutants.
+     - Total mutants passing H1 standalone = 10 / 42.
+   - **Conclusion**: H1 alone **cannot** serve as a verification gate because it accepts 10 mutants, violating the pre-declared 0-false-accept rule.
+
+5. **Hypothesis H2 Evaluation (Candidate-Consistent Filtering with Mutant-in-the-Loop)**:
+   - Evaluated candidate-consistent filtering where assertions failing the candidate are dropped, with H1 assertions held as non-droppable anchor.
+   - Evaluated with all 42 mutants playing the candidate role:
+     - When a mutant plays candidate, all model assertions that catch its defect fail the mutant, so the filter drops them.
+     - The mutant then passes 100% of the remaining filtered assertions.
+     - All 10 mutants that survive the H1 anchor are accepted (**10 false accepts**).
+   - **Verdict**: **Hypothesis H2 is REJECTED** under the pre-declared decision rule (strictly 0 accepted mutants). Assertion filtering based on candidate satisfaction inherently allows defective solutions to sculpt their own test suites.
+
