@@ -91,6 +91,10 @@ class EvalRecord:
     generated_test_preview: Optional[str] = None
     stub_probe_failure: Optional[Dict[str, Any]] = None
     ast_violations: Optional[List[str]] = None
+    candidate_solution: Optional[str] = None
+    generated_test_code: Optional[str] = None
+    error_type: Optional[str] = None
+    failing_stub: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -122,6 +126,10 @@ class EvalRecord:
             "generated_test_preview": self.generated_test_preview,
             "stub_probe_failure": self.stub_probe_failure,
             "ast_violations": self.ast_violations,
+            "candidate_solution": self.candidate_solution,
+            "generated_test_code": self.generated_test_code,
+            "error_type": self.error_type,
+            "failing_stub": self.failing_stub,
         }
 
 
@@ -514,16 +522,27 @@ def run_single_task_evaluation(
         gen_test_preview = "\n".join(parsed_json["test_code"].splitlines()[:40])
 
     stub_fail_info = None
+    failing_stub = parsed_json.get("failing_stub")
     if err_type == "STUB_PROBE_FAILED":
         stub_fail_info = {
-            "failing_stub": parsed_json.get("failing_stub"),
+            "failing_stub": failing_stub,
             "detail": parsed_json.get("detail"),
         }
 
     ast_violations = parsed_json.get("violations") if err_type == "AST_SAFETY_VIOLATION" else None
+    cand_sol = parsed_json.get("candidate_solution")
+    gen_test_code = parsed_json.get("test_code")
 
     # Grade against hidden reference tests INSIDE THE OS SANDBOX
     staged_sol = parsed_json.get("staged_solution") or (sol_path if os.path.exists(sol_path) else None)
+    if not staged_sol and cand_sol:
+        try:
+            with open(sol_path, "w", encoding="utf-8") as f:
+                f.write(cand_sol)
+            staged_sol = sol_path
+        except Exception:
+            pass
+
     if staged_sol and os.path.exists(staged_sol):
         hidden_res = run_hidden_tests(
             task_id=task_id,
@@ -581,6 +600,10 @@ def run_single_task_evaluation(
         generated_test_preview=gen_test_preview,
         stub_probe_failure=stub_fail_info,
         ast_violations=ast_violations,
+        candidate_solution=cand_sol,
+        generated_test_code=gen_test_code,
+        error_type=err_type,
+        failing_stub=failing_stub,
     )
 
 
@@ -631,6 +654,7 @@ def run_single_task_evaluation_gate_off(
     ast_violations = None
     termination_stage = "gate_off_eval"
     is_infra_failure = False
+    sol_code = None
 
     try:
         raw_sol = pai.call_model_generate(
@@ -698,6 +722,15 @@ def run_single_task_evaluation_gate_off(
     digest = query_model_digest(model_name)
 
     passed = hidden_res.passed
+    err_type_val = None
+    if not passed:
+        if ast_violations:
+            err_type_val = "AST_SAFETY_VIOLATION"
+        elif "GENERATOR_ERROR" in str(err_detail or ""):
+            err_type_val = "GENERATOR_ERROR"
+        else:
+            err_type_val = "HIDDEN_TEST_FAILED"
+
     return EvalRecord(
         task_id=task_id,
         task_name=task_name,
@@ -727,6 +760,10 @@ def run_single_task_evaluation_gate_off(
         generated_test_preview=None,
         stub_probe_failure=None,
         ast_violations=ast_violations,
+        candidate_solution=sol_code,
+        generated_test_code=None,
+        error_type=err_type_val,
+        failing_stub=None,
     )
 
 

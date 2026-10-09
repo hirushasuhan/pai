@@ -1,0 +1,62 @@
+[
+  {
+    "id": "code_21",
+    "name": "group_anagrams",
+    "entry_point": "group_anagrams",
+    "prompt": "Write a Python function `group_anagrams(words: list[str]) -> list[list[str]]` that groups strings that are anagrams of each other.\nWithin each group, words should appear in the order of their first appearance in the input list.\nGroups should be sorted in descending order of size; ties in group size should be sorted lexicographically by the first word of each group.\nAn empty input returns `[]`.\n\nExample:\n    words = [\"eat\", \"tea\", \"tan\", \"ate\", \"nat\", \"bat\"]\n    group_anagrams(words) -> [[\"eat\", \"tea\", \"ate\"], [\"tan\", \"nat\"], [\"bat\"]]"
+  },
+  {
+    "id": "code_22",
+    "name": "merge_intervals",
+    "entry_point": "merge_intervals",
+    "prompt": "Write a Python function `merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]` that merges all overlapping intervals.\nEach interval is `(start, end)` with `start <= end`.\nIntervals that touch (e.g. `(1, 4)` and `(4, 5)`) should also be merged into `(1, 5)`.\nThe returned list must be sorted in ascending order of `start`.\nAn empty input returns `[]`.\n\nExample:\n    merge_intervals([(1, 3), (2, 6), (8, 10), (15, 18)]) -> [(1, 6), (8, 10), (15, 18)]\n    merge_intervals([(1, 4), (4, 5)]) -> [(1, 5)]"
+  },
+  {
+    "id": "code_23",
+    "name": "parse_query_string",
+    "entry_point": "parse_query_string",
+    "prompt": "Write a Python function `parse_query_string(query: str) -> dict[str, list[str]]` that parses a URL query string into a dictionary mapping keys to a list of values.\nLeading '?' should be ignored if present.\nKeys and values should have '+' replaced with space and percent-encoded characters like '%20' decoded.\nPairs with missing '=' should be treated as having an empty string value `\"\"`.\nEmpty pairs (from consecutive '&') should be ignored.\n\nExample:\n    parse_query_string(\"name=Alice&tag=admin&tag=user&flag\") -> {\"name\": [\"Alice\"], \"tag\": [\"admin\", \"user\"], \"flag\": [\"\"]}\n    parse_query_string(\"?search=hello+world%21\") -> {\"search\": [\"hello world!\"]}"
+  },
+  {
+    "id": "code_24",
+    "name": "flatten_nested_dict",
+    "entry_point": "flatten_nested_dict",
+    "prompt": "Write a Python function `flatten_nested_dict(d: dict, sep: str = \".\") -> dict` that flattens a nested dictionary into a single level dictionary with concatenated keys separated by `sep`.\nEmpty sub-dictionaries should remain as `{}` under their key.\nAn empty input returns `{}`.\n\nExample:\n    d = {\"user\": {\"name\": \"Alice\", \"address\": {\"city\": \"Colombo\"}}, \"active\": True}\n    flatten_nested_dict(d) -> {\"user.name\": \"Alice\", \"user.address.city\": \"Colombo\", \"active\": True}"
+  },
+  {
+    "id": "code_25",
+    "name": "tokenize_arithmetic",
+    "entry_point": "tokenize_arithmetic",
+    "prompt": "Write a Python function `tokenize_arithmetic(expr: str) -> list[str]` that tokenizes an arithmetic expression into a list of strings representing integers, operators ('+', '-', '*', '/', '%'), and parentheses ('(', ')').\nWhitespace should be stripped.\nNegative numbers: a '-' followed immediately by digits should be tokenized as a negative integer if it appears at the start of the expression or immediately after an operator or '('.\n\nExample:\n    tokenize_arithmetic(\"3 + 4 * 2 / (1 - 5)\") -> [\"3\", \"+\", \"4\", \"*\", \"2\", \"/\", \"(\", \"1\", \"-\", \"5\", \")\"]\n    tokenize_arithmetic(\"-5 + 10\") -> [\"-5\", \"+\", \"10\"]"
+  },
+  {
+    "id": "code_26",
+    "name": "validate_credit_card",
+    "entry_point": "validate_credit_card",
+    "prompt": "Write a Python function `validate_credit_card(number: str) -> dict` that validates a payment card string using the Luhn checksum algorithm.\nRemove all spaces and dashes before validating.\nIf the string contains non-digit characters after removing spaces/dashes, or has length < 13 or > 19, return `{\"valid\": False, \"brand\": \"Unknown\"}`.\nLuhn algorithm: starting from the rightmost digit (check digit) and moving left, double every second digit. If doubling results in a number > 9, subtract 9. Sum all digits. If sum % 10 == 0, it is valid.\nDetect brand:\n- Visa: starts with '4'\n- Mastercard: starts with '51', '52', '53', '54', or '55'\n- Amex: starts with '34' or '37'\n- Otherwise: \"Unknown\"\nReturn `{\"valid\": bool, \"brand\": str}`.\n\nExample:\n    validate_credit_card(\"4532 0151 1283 036\") -> {\"valid\": True, \"brand\": \"Visa\"}"
+  },
+  {
+    "id": "code_27",
+    "name": "word_wrap_text",
+    "entry_point": "word_wrap_text",
+    "prompt": "Write a Python function `word_wrap_text(text: str, width: int) -> str` that performs greedy word wrapping on a single-paragraph text string so that no line exceeds `width` characters.\nWords are separated by spaces.\nLines should be joined with newline `\\n`.\nIf a single word is longer than `width`, it should occupy its own line without being split.\nLeading or trailing whitespace on lines should be stripped.\n\nExample:\n    word_wrap_text(\"The quick brown fox jumps over the lazy dog\", 15) -> \"The quick brown\\nfox jumps over\\nthe lazy dog\""
+  },
+  {
+    "id": "code_28",
+    "name": "levenshtein_distance",
+    "entry_point": "levenshtein_distance",
+    "prompt": "Write a Python function `levenshtein_distance(s1: str, s2: str) -> int` that computes the Levenshtein edit distance between two strings.\nAllowed operations are insertion, deletion, and substitution of a single character, each with cost 1.\nAn identical pair returns 0.\n\nExample:\n    levenshtein_distance(\"kitten\", \"sitting\") -> 3\n    levenshtein_distance(\"flaw\", \"lawn\") -> 2\n    levenshtein_distance(\"\", \"abc\") -> 3"
+  },
+  {
+    "id": "code_29",
+    "name": "longest_common_prefix",
+    "entry_point": "longest_common_prefix",
+    "prompt": "Write a Python function `longest_common_prefix(strs: list[str]) -> str` that finds the longest common prefix string amongst a list of strings.\nIf there is no common prefix or `strs` is empty, return `\"\"`.\n\nExample:\n    longest_common_prefix([\"flower\", \"flow\", \"flight\"]) -> \"fl\"\n    longest_common_prefix([\"dog\", \"racecar\", \"car\"]) -> \"\""
+  },
+  {
+    "id": "code_30",
+    "name": "compress_string_rle",
+    "entry_point": "compress_string_rle",
+    "prompt": "Write a Python function `compress_string_rle(s: str) -> str` that compresses a string using run-length encoding.\nFor each contiguous run of the same character, output the character followed by the run length count (e.g. 'a3').\nIf the run length is 1, omit the count (e.g. 'a' instead of 'a1').\nEmpty string returns `\"\"`.\n\nExample:\n    compress_string_rle(\"aaabbc\") -> \"a3b2c\"\n    compress_string_rle(\"abcd\") -> \"abcd\"\n    compress_string_rle(\"a\" * 10) -> \"a10\""
+  }
+]

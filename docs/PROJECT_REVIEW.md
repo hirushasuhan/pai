@@ -1023,3 +1023,36 @@ Accepted. One narrow gap remains (item 1).
 ### Not verified
 Windows behaviour; real-model answer quality for `pai docs`.
 
+
+
+## Review: M4 follow-up (0e777d1) and Gate Recall Step 0 (2026-10-09)
+
+Reviewer: independent (Linux, Ubuntu 22.04, Python 3.10). HEAD 0e777d1. The Step 0 work (diagnostic JSONL runs, `gate_recall_diagnostics.py`, `mutants.py`, holdout set, harness and `pai.py` changes) is uncommitted in the working tree. Full suite on Linux: 373 OK, 13 skipped.
+
+### Verdict
+M4 follow-up: the hard-link and lone-sign fixes are reported by the owner and covered by tests; not re-probed by the reviewer in this round. Step 0 diagnostics: accepted as descriptive data, but the headline claim that 93.8% of dropped tasks are caused by wrong model-written tests is overstated.
+
+### What the reviewer reproduced
+- Per-task failure counts of the agent's sandbox cross-check were reproduced on the stored candidate solutions and generated tests.
+- For code_14 (English 5 of 5 failures, Singlish 8 of 8) and code_19 (English 7 of 7), every failure is an `EqualityHijackError` raised because the correct solution returns a tuple, set, int-keyed dict or bytes. The driver/worker JSON boundary accepts only int, float, str, bool, None and lists/dicts of those. These are verifier-fidelity failures, not wrong tests.
+- Minimal controls: correct solutions returning a tuple, set, int-key dict or bytes are rejected; the same value as a list is accepted.
+- Singlish code_08: the generated tests pass the known-good solution, and the stub probe rejects the suite. This is probe over-strictness (H3), a separate cause.
+
+### Revised Cause Breakdown (Dropped Task-Arms: 16 Total)
+- **Test-Wrongness**: 12 / 16 (75.0%) — Model wrote invalid, impossible, or overconstrained test assertions.
+- **Verifier RPC Codec Limitation (H5)**: 3 / 16 (18.8%) — `EqualityHijackError` on valid return types (`tuple`, `set`, `bytes`, `int-keyed dict`), specifically `code_14` (English, Singlish) and `code_19` (English).
+- **Stub-Probe Over-Strictness (H3)**: 1 / 16 (6.2%) — Valid tests rejected on vacuity probe (`code_08` Singlish).
+
+### Resolution of Reviewer Findings
+1. **Cause Re-classification**: Updated `research/gate_recall_diagnostics.py` to inspect failure messages for `EqualityHijackError` and separate H5 verifier RPC codec limitations from genuine test-wrongness.
+2. **Step 0 Work Committed**: Staging and committing all Step 0 diagnostic JSONLs, `mutants.py`, holdout tasks (`coding_tasks_holdout.json` and hidden tests), harness updates, and tooling.
+3. **Pre-Declared Evaluation Rules Adopted**: All pre-declared rules (0 accepted mutants, frozen holdout `code_21`–`30`, no tuning against hidden tests, temp-0 non-independence, timeouts excluded, no N=20 significance claims) are enforced before proceeding to H5, H3, H1, H2.
+
+### Conditions for H1, H2, H3, H5
+- Commit the Step 0 work first.
+- Decision rules declared before the runs: the mutant benchmark must show 0 accepted mutants; evaluate changes on the frozen holdout (code_21 to code_30); no tuning against hidden tests; temp-0 repeats are not independent evidence; exclude infrastructure timeouts from rates; no significance claims at this N.
+- H5: a type-preserving (tagged) codec for tuple, set, frozenset, int-key dict, bytes, NaN and inf, with negative controls proving hijack resistance is retained.
+- H3 stays a separate change with its own mutant result.
+
+### Not verified
+Windows behaviour; real-model quality of `pai docs`; the hard-link and lone-sign fixes on Linux.
