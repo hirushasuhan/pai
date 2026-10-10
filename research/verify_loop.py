@@ -277,26 +277,157 @@ def generate_stub_code(symbols: Tuple[str, ...], stub_name: str, stub_body: str)
     return "\n".join(lines)
 
 
+_FORBIDDEN_EXAMPLE_NAMES: Set[str] = {
+    "open", "eval", "exec", "compile", "__import__", "system", "popen",
+    "getattr", "setattr", "delattr", "globals", "locals", "vars", "input",
+    "breakpoint", "print", "int", "float", "str", "bytes", "bool", "list",
+    "tuple", "set", "dict", "frozenset", "type", "object", "super",
+    "os", "sys", "subprocess", "shutil", "pathlib", "socket", "urllib",
+}
+
+
+def _split_code_and_comment(text: str) -> Tuple[str, str]:
+    """Splits a line/block into (code_part, comment_part), respecting string quotes."""
+    in_quote: Optional[str] = None
+    escaped = False
+    for idx, ch in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if in_quote:
+            if ch == in_quote:
+                in_quote = None
+        else:
+            if ch in ("'", '"'):
+                in_quote = ch
+            elif ch == "#":
+                return text[:idx].strip(), text[idx + 1 :].strip()
+    return text.strip(), ""
+
+
+def _is_safe_literal(
+    node: ast.AST,
+    allowed_vars: Optional[Set[str]] = None,
+    allow_inexact_floats: bool = True,
+) -> bool:
+    """
+    Returns True only if `node` is a safe literal (int, float, str, bytes, bool, None),
+    `float('inf')`/`float('-inf')`, a literal container (list, tuple, set, dict) of safe literals,
+    or a reference to a previously validated local variable in `allowed_vars`.
+    Strictly rejects Ellipsis (...), arbitrary function/method calls, attributes, subscripts, etc.
+    """
+    if isinstance(node, ast.Constant):
+        if node.value is Ellipsis:
+            return False
+        if isinstance(node.value, float) and not isinstance(node.value, bool):
+            if not allow_inexact_floats and round(node.value, 2) != node.value:
+                return False
+        return isinstance(node.value, (int, float, str, bytes, bool, type(None)))
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)) and not isinstance(node.operand.value, bool):
+            if isinstance(node.operand.value, float) and not allow_inexact_floats and round(node.operand.value, 2) != node.operand.value:
+                return False
+            return True
+        return False
+
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "float"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value in ("inf", "-inf", "+inf")
+    ):
+        return True
+
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return all(_is_safe_literal(elt, allowed_vars, allow_inexact_floats) for elt in node.elts)
+
+    if isinstance(node, ast.Dict):
+        return all(
+            k is not None
+            and _is_safe_literal(k, allowed_vars, allow_inexact_floats)
+            and _is_safe_literal(v, allowed_vars, allow_inexact_floats)
+            for k, v in zip(node.keys, node.values)
+        )
+
+    if allowed_vars and isinstance(node, ast.Name) and node.id in allowed_vars:
+        return True
+
+    return False
+
+
+def _is_safe_entry_call(node: ast.AST, entry_point: str, allowed_vars: Set[str]) -> bool:
+    """
+    Returns True only if `node` is a direct call `entry_point(...)` where every
+    positional and keyword argument is a safe literal, literal container, or allowed variable.
+    """
+    if not entry_point or entry_point.startswith("_") or entry_point in _FORBIDDEN_EXAMPLE_NAMES:
+        return False
+    if not isinstance(node, ast.Call):
+        return False
+    if not isinstance(node.func, ast.Name) or node.func.id != entry_point:
+        return False
+    for arg in node.args:
+        if not _is_safe_literal(arg, allowed_vars, allow_inexact_floats=True):
+            return False
+    for kw in node.keywords:
+        if kw.arg is None or not _is_safe_literal(kw.value, allowed_vars, allow_inexact_floats=True):
+            return False
+    return True
+
+
+def _infer_entry_point(prompt: str, section: str) -> Optional[str]:
+    marker = "Example:" if "Example:" in prompt else "Examples:"
+    header = prompt.split(marker, 1)[0] if marker in prompt else prompt
+    for pat in (
+        r"\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(",
+        r"`([a-zA-Z_][a-zA-Z0-9_]*)\s*\(",
+        r"\bfunction\s+`?([a-zA-Z_][a-zA-Z0-9_]*)\b",
+    ):
+        matches = [m for m in re.findall(pat, header) if not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES]
+        if matches:
+            return matches[0]
+
+    sec_matches = [
+        m
+        for m in re.findall(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", section, re.MULTILINE)
+        if not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+    ]
+    if sec_matches:
+        return sec_matches[0]
+    return None
+
+
 def extract_example_assertions(
     prompt: str,
     entry_point: Optional[str] = None,
 ) -> List[str]:
     """
     Deterministically extracts canonical example statements and assertions from a task prompt's
-    `Example:` or `Examples:` docstring section (H1).
-    Returns executable Python statements (setup assignments + assert statements) only when at least
-    one valid assertion is extracted; otherwise returns an empty list.
+    `Example:` or `Examples:` docstring section (H1) using a strict AST allow-list:
+    - Variable assignments must bind a simple variable name to a literal or container of literals.
+    - Assertions must be direct calls to `entry_point` with literal/container/variable arguments.
+    - Expected outputs must be safe literals or literal containers (no Ellipsis `...`, no arbitrary calls).
+    - Examples with approximation comments (`# approximately`, `# ~`, etc.) or inexact float
+      expectations (>2 decimal places like `0.333`) are skipped; exact scalar float expectations
+      are compared with a tolerance (`1e-3`).
     """
     if not prompt or ("Example:" not in prompt and "Examples:" not in prompt):
         return []
 
-    if not entry_point:
-        fn_matches = re.findall(r"\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", prompt)
-        if fn_matches:
-            entry_point = fn_matches[0]
-
     marker = "Example:" if "Example:" in prompt else "Examples:"
     section = prompt.split(marker, 1)[1]
+
+    if not entry_point:
+        entry_point = _infer_entry_point(prompt, section)
+    if not entry_point or entry_point.startswith("_") or entry_point in _FORBIDDEN_EXAMPLE_NAMES:
+        return []
 
     lines = section.splitlines()
     example_lines: List[str] = []
@@ -313,9 +444,10 @@ def extract_example_assertions(
     for line in example_lines:
         if current_block:
             joined = " ".join(current_block)
-            open_parens = joined.count("(") - joined.count(")")
-            open_brackets = joined.count("[") - joined.count("]")
-            open_braces = joined.count("{") - joined.count("}")
+            code_part, _ = _split_code_and_comment(joined)
+            open_parens = code_part.count("(") - code_part.count(")")
+            open_brackets = code_part.count("[") - code_part.count("]")
+            open_braces = code_part.count("{") - code_part.count("}")
             if open_parens <= 0 and open_brackets <= 0 and open_braces <= 0:
                 blocks.append(joined)
                 current_block = [line]
@@ -326,9 +458,15 @@ def extract_example_assertions(
         blocks.append(" ".join(current_block))
 
     statements: List[str] = []
+    allowed_vars: Set[str] = set()
+
     for blk in blocks:
-        clean_blk = re.sub(r"#.*$", "", blk).strip()
+        clean_blk, comment_part = _split_code_and_comment(blk)
         if not clean_blk:
+            continue
+
+        # Skip lines marked as approximate in comments
+        if comment_part and re.search(r"\b(approx|approximately|roughly|about|estimate|rounded)\b|~", comment_part, re.IGNORECASE):
             continue
 
         # Pattern 1: Arrow assertion: `expr -> expected`
@@ -337,46 +475,80 @@ def extract_example_assertions(
             expr = parts[0].strip()
             expected = parts[1].strip()
             try:
-                ast.parse(expr, mode="eval")
-                ast.parse(expected, mode="eval")
-                statements.append(f"assert {expr} == {expected}")
+                expr_ast = ast.parse(expr, mode="eval").body
+                expected_ast = ast.parse(expected, mode="eval").body
+                if not _is_safe_entry_call(expr_ast, entry_point, allowed_vars):
+                    continue
+                if not _is_safe_literal(expected_ast, allowed_vars=None, allow_inexact_floats=False):
+                    continue
+                is_scalar_float = (
+                    (isinstance(expected_ast, ast.Constant) and isinstance(expected_ast.value, float) and not isinstance(expected_ast.value, bool))
+                    or (
+                        isinstance(expected_ast, ast.UnaryOp)
+                        and isinstance(expected_ast.op, (ast.USub, ast.UAdd))
+                        and isinstance(expected_ast.operand, ast.Constant)
+                        and isinstance(expected_ast.operand.value, float)
+                    )
+                )
+                if is_scalar_float:
+                    statements.append(
+                        f"assert isinstance(({expr}), (int, float)) and not isinstance(({expr}), bool) "
+                        f"and abs(({expr}) - ({expected})) <= 1e-3"
+                    )
+                else:
+                    statements.append(f"assert {expr} == {expected}")
                 continue
             except SyntaxError:
-                pass
+                continue
 
         # Pattern 2: Direct comparison assertion: e.g. `call(...) > 0` or `call(...) == ...`
-        if entry_point and any(op in clean_blk for op in [">", "<", ">=", "<=", "=="]):
+        if any(op in clean_blk for op in [">", "<", ">=", "<=", "=="]):
             if entry_point in clean_blk:
                 try:
                     expr_ast = ast.parse(clean_blk, mode="eval").body
-                    if (
-                        isinstance(expr_ast, ast.Compare)
-                        and len(expr_ast.ops) == 1
-                        and isinstance(expr_ast.ops[0], (ast.Gt, ast.Lt, ast.GtE, ast.LtE))
-                    ):
-                        lhs = ast.get_source_segment(clean_blk, expr_ast.left)
-                        rhs = ast.get_source_segment(clean_blk, expr_ast.comparators[0])
-                        if lhs and rhs:
-                            statements.append(
-                                f"assert isinstance(({lhs}), (int, float)) and not isinstance(({lhs}), bool) "
-                                f"and isinstance(({rhs}), (int, float)) and not isinstance(({rhs}), bool) "
-                                f"and ({clean_blk})"
-                            )
+                    if isinstance(expr_ast, ast.Compare) and len(expr_ast.ops) == 1 and len(expr_ast.comparators) == 1:
+                        left_node = expr_ast.left
+                        right_node = expr_ast.comparators[0]
+                        left_ok = _is_safe_entry_call(left_node, entry_point, allowed_vars) or _is_safe_literal(left_node, allowed_vars, allow_inexact_floats=False)
+                        right_ok = _is_safe_entry_call(right_node, entry_point, allowed_vars) or _is_safe_literal(right_node, allowed_vars, allow_inexact_floats=False)
+                        has_entry_call = _is_safe_entry_call(left_node, entry_point, allowed_vars) or _is_safe_entry_call(right_node, entry_point, allowed_vars)
+                        if not (left_ok and right_ok and has_entry_call):
                             continue
-                    statements.append(f"assert {clean_blk}")
-                    continue
+                        if isinstance(expr_ast.ops[0], (ast.Gt, ast.Lt, ast.GtE, ast.LtE)):
+                            lhs = ast.get_source_segment(clean_blk, left_node)
+                            rhs = ast.get_source_segment(clean_blk, right_node)
+                            if lhs and rhs:
+                                statements.append(
+                                    f"assert isinstance(({lhs}), (int, float)) and not isinstance(({lhs}), bool) "
+                                    f"and isinstance(({rhs}), (int, float)) and not isinstance(({rhs}), bool) "
+                                    f"and ({clean_blk})"
+                                )
+                                continue
+                        elif isinstance(expr_ast.ops[0], ast.Eq):
+                            statements.append(f"assert {clean_blk}")
+                            continue
                 except SyntaxError:
-                    pass
+                    continue
 
-        # Pattern 3: Variable assignment: `var = ...`
+        # Pattern 3: Variable assignment: `var = <safe_literal_or_container>`
         if "=" in clean_blk and not clean_blk.startswith("assert"):
             try:
                 parsed_stmt = ast.parse(clean_blk)
                 if len(parsed_stmt.body) == 1 and isinstance(parsed_stmt.body[0], ast.Assign):
-                    statements.append(clean_blk)
-                    continue
+                    assign_node = parsed_stmt.body[0]
+                    if len(assign_node.targets) == 1 and isinstance(assign_node.targets[0], ast.Name):
+                        var_name = assign_node.targets[0].id
+                        if (
+                            not var_name.startswith("_")
+                            and var_name != entry_point
+                            and var_name not in _FORBIDDEN_EXAMPLE_NAMES
+                            and _is_safe_literal(assign_node.value, allowed_vars, allow_inexact_floats=False)
+                        ):
+                            allowed_vars.add(var_name)
+                            statements.append(clean_blk)
+                            continue
             except SyntaxError:
-                pass
+                continue
 
     if not any(s.startswith("assert ") for s in statements):
         return []
@@ -397,9 +569,13 @@ def append_canonical_example_tests(
 
     ep = entry_point
     if not ep:
-        fn_matches = re.findall(r"\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", task_prompt)
-        if fn_matches:
-            ep = fn_matches[0]
+        marker = "Example:" if "Example:" in task_prompt else "Examples:"
+        section = task_prompt.split(marker, 1)[1] if marker in task_prompt else ""
+        ep = _infer_entry_point(task_prompt, section)
+    if not ep:
+        imp_matches = re.findall(r"\bfrom\s+solution\s+import\s+([a-zA-Z_][a-zA-Z0-9_]*)", test_code)
+        if imp_matches:
+            ep = imp_matches[0]
 
     if not ep:
         return test_code
@@ -1548,3 +1724,69 @@ def stage_artifacts(
                         pass
 
     return sol_dest, test_dest
+
+
+def stage_unverified_artifact(
+    out_dir: str,
+    solution_code: str,
+    rejection_reason: str,
+    overwrite: bool = False,
+) -> str:
+    """
+    Race-free safe staging of an unverified candidate solution when `--allow-unverified` is enabled.
+    - Writes exclusively to `solution.unverified.py` (never `solution.py`).
+    - Prepends an explicit `# [UNVERIFIED]` header documenting why the gate rejected the candidate.
+    - Enforces symlink rejection, directory checks, and atomic O_CREAT|O_EXCL or os.replace.
+    """
+    abs_out = os.path.abspath(out_dir)
+
+    if os.path.islink(abs_out):
+        raise ValueError(f"Symlinks strictly rejected in staging target: {abs_out}")
+
+    os.makedirs(abs_out, exist_ok=True)
+
+    dest_path = os.path.join(abs_out, "solution.unverified.py")
+    if os.path.isdir(dest_path):
+        raise IsADirectoryError(f"Target destination is a directory, not a regular file: {dest_path}")
+
+    if os.path.islink(dest_path):
+        raise ValueError(f"Symlink destination rejected: {dest_path}")
+
+    clean_reason = "".join(ch for ch in str(rejection_reason) if 32 <= ord(ch) <= 126)
+    header = (
+        f"# [UNVERIFIED] Rejected by PAI verification gate: {clean_reason}\n"
+        "# WARNING: This candidate solution did NOT pass verification. Inspect before use.\n\n"
+    )
+    content = header + solution_code.lstrip()
+
+    if not overwrite:
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(dest_path, flags, 0o644)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+        except FileExistsError:
+            raise FileExistsError(
+                f"Refusing to overwrite existing file '{dest_path}'. Use --overwrite to replace."
+            )
+    else:
+        tmp_path = os.path.join(abs_out, f".solution.unverified.py.tmp.{uuid.uuid4().hex}")
+        try:
+            flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+            fd = os.open(tmp_path, flags, 0o644)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, dest_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    return dest_path
+

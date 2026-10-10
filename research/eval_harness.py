@@ -95,6 +95,8 @@ class EvalRecord:
     generated_test_code: Optional[str] = None
     error_type: Optional[str] = None
     failing_stub: Optional[str] = None
+    verified: bool = False
+    unverified_staged: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -109,6 +111,8 @@ class EvalRecord:
             "seed": self.seed,
             "exit_code": self.exit_code,
             "pai_verdict": self.pai_verdict,
+            "verified": self.verified,
+            "unverified_staged": self.unverified_staged,
             "pass_at_1_zero_shot": self.pass_at_1_zero_shot,
             "pass_at_1_repair3": self.pass_at_1_repair3,
             "total_repairs": self.total_repairs,
@@ -252,7 +256,22 @@ def run_hidden_tests(
     Never executes solution in the harness process.
     Guarantees isolation against sys.exit, infinite loops, and memory bombs.
     """
-    tests_for_task = HIDDEN_TESTS.get(task_id, [])
+    root = find_project_root()
+    if task_id in HIDDEN_TESTS:
+        tests_for_task = HIDDEN_TESTS.get(task_id, [])
+        hidden_test_file = os.path.join(root, "research", "eval_sets", "hidden_tests", "test_coding_tasks.py")
+        test_filename = "test_coding_tasks.py"
+        import_stmt = "from test_coding_tasks import HIDDEN_TESTS"
+    else:
+        try:
+            from eval_sets.hidden_tests.test_coding_tasks_holdout import HIDDEN_TESTS_HOLDOUT
+            tests_for_task = HIDDEN_TESTS_HOLDOUT.get(task_id, [])
+        except Exception:
+            tests_for_task = []
+        hidden_test_file = os.path.join(root, "research", "eval_sets", "hidden_tests", "test_coding_tasks_holdout.py")
+        test_filename = "test_coding_tasks_holdout.py"
+        import_stmt = "from test_coding_tasks_holdout import HIDDEN_TESTS_HOLDOUT as HIDDEN_TESTS"
+
     if not os.path.exists(solution_path):
         return HiddenTestResult(
             passed=False,
@@ -267,10 +286,8 @@ def run_hidden_tests(
     except Exception as e:
         return HiddenTestResult(passed=False, total_assertions=len(tests_for_task), passed_assertions=0, error=f"Read error: {e}")
 
-    root = find_project_root()
-    hidden_test_file = os.path.join(root, "research", "eval_sets", "hidden_tests", "test_coding_tasks.py")
     if not os.path.exists(hidden_test_file):
-        return HiddenTestResult(passed=False, total_assertions=len(tests_for_task), passed_assertions=0, error="test_coding_tasks.py not found")
+        return HiddenTestResult(passed=False, total_assertions=len(tests_for_task), passed_assertions=0, error=f"{test_filename} not found")
 
     with open(hidden_test_file, "r", encoding="utf-8") as f:
         hidden_test_code = f.read()
@@ -288,13 +305,13 @@ def run_hidden_tests(
         with open(sol_in_scratch, "w", encoding="utf-8") as f:
             f.write(solution_code)
 
-        # Write test_coding_tasks.py into sandbox scratch
-        test_in_scratch = os.path.join(sb.scratch_dir, "test_coding_tasks.py")
+        # Write hidden test module into sandbox scratch
+        test_in_scratch = os.path.join(sb.scratch_dir, test_filename)
         with open(test_in_scratch, "w", encoding="utf-8") as f:
             f.write(hidden_test_code)
 
         # Write _pai_hidden_runner.py into sandbox scratch
-        runner_code = '''
+        runner_code = f'''
 import sys
 import os
 import json
@@ -307,9 +324,9 @@ task_id = sys.argv[1]
 entry_point = sys.argv[2]
 
 try:
-    from test_coding_tasks import HIDDEN_TESTS
+    {import_stmt}
 except Exception as e:
-    print(json.dumps({"passed": False, "total_assertions": 0, "passed_assertions": 0, "error": f"Failed to load HIDDEN_TESTS: {e}"}))
+    print(json.dumps({{"passed": False, "total_assertions": 0, "passed_assertions": 0, "error": f"Failed to load HIDDEN_TESTS: {{e}}"}}))
     sys.exit(0)
 
 tests = HIDDEN_TESTS.get(task_id, [])
@@ -317,19 +334,19 @@ tests = HIDDEN_TESTS.get(task_id, [])
 # Execute solution.py with __name__ == "__main__" so that both module contents
 # and any __main__ blocks are evaluated safely inside the sandbox
 sol_path = os.path.join(scratch_dir, "solution.py")
-ns = {"__name__": "__main__"}
+ns = {{"__name__": "__main__"}}
 try:
     with open(sol_path, "r", encoding="utf-8") as f:
         src = f.read()
     compiled = compile(src, sol_path, "exec")
     exec(compiled, ns)
 except BaseException as e:
-    print(json.dumps({"passed": False, "total_assertions": len(tests), "passed_assertions": 0, "error": f"Execution error in solution: {type(e).__name__}: {e}"}))
+    print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": 0, "error": f"Execution error in solution: {{type(e).__name__}}: {{e}}"}}))
     sys.exit(0)
 
 fn_or_cls = ns.get(entry_point)
 if fn_or_cls is None:
-    print(json.dumps({"passed": False, "total_assertions": len(tests), "passed_assertions": 0, "error": f"Entry point '{entry_point}' not found in solution"}))
+    print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": 0, "error": f"Entry point '{{entry_point}}' not found in solution"}}))
     sys.exit(0)
 
 passed_count = 0
@@ -337,16 +354,16 @@ for idx, test_fn in enumerate(tests):
     try:
         ok = test_fn(fn_or_cls)
     except BaseException as e:
-        print(json.dumps({"passed": False, "total_assertions": len(tests), "passed_assertions": passed_count, "error": f"Assertion #{idx+1} raised {type(e).__name__}: {e}"}))
+        print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": passed_count, "error": f"Assertion #{{idx+1}} raised {{type(e).__name__}}: {{e}}"}}))
         sys.exit(0)
 
     if ok:
         passed_count += 1
     else:
-        print(json.dumps({"passed": False, "total_assertions": len(tests), "passed_assertions": passed_count, "error": f"Assertion #{idx+1} returned False"}))
+        print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": passed_count, "error": f"Assertion #{{idx+1}} returned False"}}))
         sys.exit(0)
 
-print(json.dumps({"passed": True, "total_assertions": len(tests), "passed_assertions": len(tests), "error": None}))
+print(json.dumps({{"passed": True, "total_assertions": len(tests), "passed_assertions": len(tests), "error": None}}))
 sys.exit(0)
 '''
         runner_path = os.path.join(sb.scratch_dir, "_pai_hidden_runner.py")
@@ -405,6 +422,7 @@ def run_single_task_evaluation(
     model_timeout: Optional[float] = None,
     temperature: Optional[float] = 0.0,
     seed: Optional[int] = 42,
+    allow_unverified: bool = False,
 ) -> EvalRecord:
     """
     Executes a single coding task through the production 'pai code' pipeline,
@@ -417,6 +435,7 @@ def run_single_task_evaluation(
 
     temp_out = tempfile.mkdtemp(prefix=f"pai_eval_{task_id}_r{repeat_idx}_")
     sol_path = os.path.join(temp_out, "solution.py")
+    unverified_path = os.path.join(temp_out, "solution.unverified.py")
 
     cmd_args = [
         "code",
@@ -428,6 +447,8 @@ def run_single_task_evaluation(
         "--memory-mb", str(memory_mb),
         "--json",
     ]
+    if allow_unverified:
+        cmd_args.append("--allow-unverified")
     if model_timeout is not None:
         cmd_args.extend(["--model-timeout", str(model_timeout)])
     if temperature is not None:
@@ -481,6 +502,11 @@ def run_single_task_evaluation(
                 continue
 
     pai_passed = (exit_code == 0) and parsed_json.get("success", False)
+    verified_flag = bool(pai_passed and parsed_json.get("verified", True))
+    unverified_staged = bool(
+        (not pai_passed)
+        and (os.path.exists(unverified_path) or bool(parsed_json.get("staged_unverified_solution")))
+    )
     pai_verdict = "PASS" if pai_passed else "FAIL"
     pass_zshot = bool(parsed_json.get("pass_at_1_zero_shot", False))
     pass_rep3 = bool(parsed_json.get("pass_at_1_repair3", False))
@@ -534,7 +560,11 @@ def run_single_task_evaluation(
     gen_test_code = parsed_json.get("test_code")
 
     # Grade against hidden reference tests INSIDE THE OS SANDBOX
-    staged_sol = parsed_json.get("staged_solution") or (sol_path if os.path.exists(sol_path) else None)
+    staged_sol = (
+        parsed_json.get("staged_solution")
+        or parsed_json.get("staged_unverified_solution")
+        or (sol_path if os.path.exists(sol_path) else (unverified_path if os.path.exists(unverified_path) else None))
+    )
     if not staged_sol and cand_sol:
         try:
             with open(sol_path, "w", encoding="utf-8") as f:
@@ -604,6 +634,8 @@ def run_single_task_evaluation(
         generated_test_code=gen_test_code,
         error_type=err_type,
         failing_stub=failing_stub,
+        verified=verified_flag,
+        unverified_staged=unverified_staged,
     )
 
 
@@ -780,6 +812,11 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
         total_r = len(r_recs)
         zshot_count = sum(1 for r in r_recs if r.pass_at_1_zero_shot)
         rep3_count = sum(1 for r in r_recs if r.pass_at_1_repair3)
+        verified_count = sum(1 for r in r_recs if r.verified or r.pass_at_1_repair3)
+        unverified_staged_count = sum(1 for r in r_recs if r.unverified_staged)
+        unverified_hidden_pass_count = sum(
+            1 for r in r_recs if r.unverified_staged and r.hidden_test_result.passed
+        )
         fa_count = sum(1 for r in r_recs if r.is_false_accept)
         fr_count = sum(1 for r in r_recs if r.is_false_reject)
         hidden_pass_count = sum(1 for r in r_recs if r.hidden_test_result.passed)
@@ -792,6 +829,9 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
         per_repeat_stats.append({
             "repeat_idx": r_idx,
             "total_tasks": total_r,
+            "verified_count": verified_count,
+            "unverified_staged_count": unverified_staged_count,
+            "unverified_hidden_pass_count": unverified_hidden_pass_count,
             "pass_at_1_zero_shot_count": zshot_count,
             "pass_at_1_zero_shot_rate": round(zshot_count / total_r, 4) if total_r else 0.0,
             "pass_at_1_repair3_count": rep3_count,
@@ -823,6 +863,11 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
             total_flips += 1
 
     total_records = len(records)
+    total_verified = sum(1 for r in records if r.verified or r.pass_at_1_repair3)
+    total_unverified_staged = sum(1 for r in records if r.unverified_staged)
+    total_unverified_hidden_pass = sum(
+        1 for r in records if r.unverified_staged and r.hidden_test_result.passed
+    )
     total_infra = sum(1 for r in records if r.is_infra_failure)
     total_pre_sol = sum(1 for r in records if (r.termination_stage or "").startswith("pre_solution_"))
     stages_breakdown: Dict[str, int] = {}
@@ -843,6 +888,9 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
         "num_tasks": num_tasks,
         "num_repeats": num_repeats,
         "total_runs": total_records,
+        "verified_count": total_verified,
+        "unverified_staged_count": total_unverified_staged,
+        "unverified_hidden_pass_count": total_unverified_hidden_pass,
         "mean_pass_at_1_zero_shot": round(mean_zshot, 4),
         "mean_pass_at_1_repair3": round(mean_rep3, 4),
         "mean_false_accept_rate": round(mean_fa, 4),
@@ -958,6 +1006,8 @@ def compute_eval_metrics_from_jsonl(jsonl_path: str) -> Dict[str, Any]:
                 generated_test_preview=data.get("generated_test_preview"),
                 stub_probe_failure=data.get("stub_probe_failure"),
                 ast_violations=data.get("ast_violations"),
+                verified=bool(data.get("verified", data.get("pai_verdict") == "PASS")),
+                unverified_staged=bool(data.get("unverified_staged", False)),
             )
             records.append(rec)
     return compute_eval_metrics(records)
@@ -977,6 +1027,7 @@ def run_eval_suite(
     temperature: Optional[float] = 0.0,
     seed: Optional[int] = 42,
     verbose: bool = True,
+    allow_unverified: bool = False,
 ) -> Tuple[List[EvalRecord], Dict[str, Any]]:
     """
     Executes complete evaluation suite across N repeats and saves raw JSONL records.
@@ -1036,6 +1087,7 @@ def run_eval_suite(
                         model_timeout=model_timeout,
                         temperature=temperature,
                         seed=seed,
+                        allow_unverified=allow_unverified,
                     )
                 all_records.append(rec)
                 if verbose:
@@ -1058,6 +1110,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--tasks", type=str, default=None, help="Path to coding tasks JSON file")
     parser.add_argument("--arm", type=str, default="english", choices=["english", "singlish", "gate_off_english", "gate_off_singlish"], help="Arm name")
     parser.add_argument("--gate-off", action="store_true", help="Run gate-off baseline (direct solution generation without model self-tests)")
+    parser.add_argument("--allow-unverified", action="store_true", help="Pass --allow-unverified to pai code and report verified vs unverified separately")
     parser.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Candidate model name")
     parser.add_argument("--repeats", type=int, default=3, help="Number of repeats (default: 3)")
     parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (default: 0.0)")
@@ -1101,6 +1154,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 gate_off=args.gate_off,
                 temperature=args.temperature,
                 seed=args.seed,
+                allow_unverified=args.allow_unverified,
             )
         except EvalSetIntegrityError as e:
             print(f"FATAL: Frozen eval set integrity failure: {e}", file=sys.stderr)
@@ -1123,6 +1177,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"Total tasks evaluated : {metrics['num_tasks']}")
                 print(f"Total runs            : {metrics['total_runs']}")
+                print(f"Verified accepted     : {metrics.get('verified_count', 0)} / {metrics['total_runs']}")
+                print(f"Unverified staged     : {metrics.get('unverified_staged_count', 0)} / {metrics['total_runs']} (hidden pass: {metrics.get('unverified_hidden_pass_count', 0)})")
                 print(f"pass@1 (zero-shot)    : {metrics['mean_pass_at_1_zero_shot'] * 100:.1f}%")
                 print(f"pass@1 (repair<=3)    : {metrics['mean_pass_at_1_repair3'] * 100:.1f}%")
                 print(f"False-accept rate     : {metrics['mean_false_accept_rate'] * 100:.1f}%")

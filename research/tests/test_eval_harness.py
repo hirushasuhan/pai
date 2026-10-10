@@ -130,37 +130,71 @@ class TestEvalHarness(unittest.TestCase):
     def test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks(self):
         """
         Invariant: Hidden reference tests must never appear in any prompt sent to the model.
-        Derives forbidden literals via inspect.getsource across all 20 tasks in HIDDEN_TESTS.
-        Asserts that no unique hidden test literal appears in any prompt across tasks.
+        Performs whole-assertion matching across all 20 tasks in HIDDEN_TESTS (with each task's
+        own Example lines as the only permitted overlap) plus AST literal extraction.
         """
-        # 1. Read all task prompts to distinguish public task requirements from secret test vectors
+        import ast
+        from verify_loop import extract_example_assertions
+
+        # 1. Read all task prompts and extract each task's permitted Example assertions
         root = eval_harness.find_project_root()
         tasks_file = os.path.join(root, "research", "eval_sets", "coding_tasks.json")
         with open(tasks_file, "r", encoding="utf-8") as f:
             tasks_data = json.load(f)
         public_text = " ".join(t["prompt"] for t in tasks_data)
+        tasks_by_id = {t["id"]: t for t in tasks_data}
 
-        # 2. Extract literals from all 20 tasks in HIDDEN_TESTS using inspect.getsource
+        allowed_example_assertions = set()
+        for t in tasks_data:
+            for stmt in extract_example_assertions(t["prompt"], entry_point=t["entry_point"]):
+                try:
+                    allowed_example_assertions.add(ast.unparse(ast.parse(stmt)).strip())
+                except Exception:
+                    allowed_example_assertions.add(stmt.strip())
+
+        # 2. Extract whole assertions and true AST literals from all 20 tasks in HIDDEN_TESTS
+        secret_assertions = set()
         secret_literals = set()
-        for tid, fns in HIDDEN_TESTS.items():
-            for fn in fns:
-                src = inspect.getsource(fn)
-                # Find quoted string literals (4+ chars)
-                found_strings = re.findall(r'["\']([^"\']{4,})["\']', src)
-                for s in found_strings:
-                    if s not in public_text and not s.startswith("__"):
-                        secret_literals.add(s)
-                # Find non-trivial numeric literals (4+ digits)
-                found_numbers = re.findall(r'\b\d{4,}\b', src)
-                for n in found_numbers:
-                    if n not in public_text:
-                        secret_literals.add(n)
 
+        class _ReplaceFWithEntryPoint(ast.NodeTransformer):
+            def __init__(self, ep_name: str):
+                self.ep_name = ep_name
+
+            def visit_Name(self, node: ast.Name):
+                if node.id == "f":
+                    return ast.copy_location(ast.Name(id=self.ep_name, ctx=node.ctx), node)
+                return node
+
+        for tid, fns in HIDDEN_TESTS.items():
+            ep = tasks_by_id[tid]["entry_point"]
+            for fn in fns:
+                src = inspect.getsource(fn).strip()
+                # Parse the outer test lambda node from source
+                for node in ast.walk(ast.parse(src)):
+                    if isinstance(node, ast.Lambda) and len(node.args.args) == 1:
+                        # Extract distinctive AST string/numeric test vectors not in public prompt text
+                        for sub in ast.walk(node.body):
+                            if isinstance(sub, ast.Constant):
+                                if isinstance(sub.value, str) and len(sub.value) >= 8:
+                                    if sub.value not in public_text and not sub.value.startswith("__"):
+                                        secret_literals.add(sub.value)
+                                elif isinstance(sub.value, int) and not isinstance(sub.value, bool) and len(str(abs(sub.value))) >= 4:
+                                    if str(sub.value) not in public_text:
+                                        secret_literals.add(str(sub.value))
+
+                        # Construct whole-assertion line with entry_point substituted for lambda arg `f`
+                        transformed_body = _ReplaceFWithEntryPoint(ep).visit(node.body)
+                        ast.fix_missing_locations(transformed_body)
+                        body_str = ast.unparse(transformed_body).strip()
+                        whole_assert = f"assert {body_str}"
+                        if whole_assert not in allowed_example_assertions:
+                            secret_assertions.add(whole_assert)
+
+        self.assertGreaterEqual(len(secret_assertions), 70, "Must extract whole hidden assertions across all 20 tasks")
         self.assertGreaterEqual(len(secret_literals), 20, "Must extract non-trivial secret test literals")
 
         # 3. Run mock evaluation for several tasks
         def handle(req):
-            prompt = req.get("prompt", "")
             return 200, {
                 "response": "```python\ndef solve(*args, **kwargs): return True\n```"
             }
@@ -180,11 +214,22 @@ class TestEvalHarness(unittest.TestCase):
             verbose=False,
         )
 
-        # 4. Assert that no secret test literal appears in any prompt logged by mock server
+        # 4. Assert that no secret whole assertion or secret literal appears in any prompt logged by mock server
         for req in self.mock_server.requests:
             p_text = req.get("prompt", "")
             self.assertNotIn("HIDDEN_TESTS", p_text)
             self.assertNotIn("test_coding_tasks.py", p_text)
+            normalized_prompt_lines = set()
+            for line in p_text.splitlines():
+                s_line = line.strip()
+                if s_line.startswith("assert "):
+                    try:
+                        normalized_prompt_lines.add(ast.unparse(ast.parse(s_line)).strip())
+                    except Exception:
+                        normalized_prompt_lines.add(s_line)
+            for secret_assert in secret_assertions:
+                self.assertNotIn(secret_assert, p_text, f"Secret hidden assertion leaked in prompt: '{secret_assert}'")
+                self.assertNotIn(secret_assert, normalized_prompt_lines, f"Secret hidden assertion leaked in prompt: '{secret_assert}'")
             for secret in secret_literals:
                 self.assertNotIn(secret, p_text, f"Secret hidden test literal leaked in prompt: '{secret}'")
 
@@ -596,7 +641,134 @@ class TestEvalHarness(unittest.TestCase):
         self.assertEqual(d["stub_probe_failure"]["failing_stub"], "stub_1")
         self.assertIsNone(d["ast_violations"])
 
+    def test_allow_unverified_flag_cli_and_harness_separation(self):
+        """
+        Verifies all 6 conditions of --allow-unverified:
+        1. Default off (no solution.unverified.py created when flag omitted).
+        2. Writes solution.unverified.py (never solution.py) and emits "verified": false in JSON.
+        3. Prints [UNVERIFIED] along with rejection stage and failing test details.
+        4. Exit code remains non-zero (1, never 0).
+        5. Harness reports verified_count and unverified_staged_count separately without changing gate metrics.
+        6. Candidate is never auto-run on host.
+        """
+        import contextlib
+        import io
+        import pai
+
+        # Mock model: generates a valid non-vacuous test suite that expects wrong output (999),
+        # while the candidate solution is actually a correct implementation of parse_simple_csv.
+        def handle(req):
+            prompt = req.get("prompt", "")
+            if "test suite" in prompt:
+                return 200, {
+                    "response": (
+                        "```python\n"
+                        "from solution import parse_simple_csv\n"
+                        "def test_wrong_expectation():\n"
+                        "    assert parse_simple_csv('a,b\\n1,2') == [['WRONG_EXPECTATION']]\n"
+                        "```"
+                    )
+                }
+            return 200, {
+                "response": (
+                    "```python\n"
+                    "def parse_simple_csv(text):\n"
+                    "    if not text or not text.strip():\n"
+                    "        return []\n"
+                    "    def split_line(line):\n"
+                    "        cells, cur, in_q = [], [], False\n"
+                    "        for ch in line:\n"
+                    "            if ch == '\"':\n"
+                    "                in_q = not in_q\n"
+                    "            elif ch == ',' and not in_q:\n"
+                    "                cells.append(''.join(cur).strip())\n"
+                    "                cur = []\n"
+                    "            else:\n"
+                    "                cur.append(ch)\n"
+                    "        cells.append(''.join(cur).strip())\n"
+                    "        return cells\n"
+                    "    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]\n"
+                    "    if len(lines) <= 1:\n"
+                    "        return []\n"
+                    "    headers = split_line(lines[0])\n"
+                    "    return [{headers[i]: r[i] for i in range(len(headers))} for r in (split_line(l) for l in lines[1:])]\n"
+                    "```"
+                )
+            }
+
+        self.mock_server.handler_fn = handle
+
+        # 1. Default off: neither solution.py nor solution.unverified.py is staged
+        out_default = os.path.join(self.tmp_dir, "out_default")
+        out_buf = io.StringIO()
+        err_buf = io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            rc_default = pai.main([
+                "code", "Write a Python function `parse_simple_csv(text: str)`",
+                "--out", out_default, "--model", "test-model", "--max-repairs", "1", "--json",
+            ])
+        self.assertEqual(rc_default, 2)
+        self.assertFalse(os.path.exists(os.path.join(out_default, "solution.py")))
+        self.assertFalse(os.path.exists(os.path.join(out_default, "solution.unverified.py")))
+        json_default = json.loads(out_buf.getvalue().strip())
+        self.assertFalse(json_default["verified"])
+
+        # 2. With --allow-unverified: solution.unverified.py is staged, solution.py is NOT staged,
+        #    exit code is still 2 (same non-zero gate reject code), JSON has "verified": false,
+        #    and terminal prints [UNVERIFIED] + stage/failing tests.
+        out_unv = os.path.join(self.tmp_dir, "out_unv")
+        out_buf2 = io.StringIO()
+        err_buf2 = io.StringIO()
+        with contextlib.redirect_stdout(out_buf2), contextlib.redirect_stderr(err_buf2):
+            rc_unv = pai.main([
+                "code", "Write a Python function `parse_simple_csv(text: str)`",
+                "--out", out_unv, "--model", "test-model", "--max-repairs", "1",
+                "--allow-unverified", "--json",
+            ])
+        self.assertEqual(rc_unv, 2)
+        self.assertFalse(os.path.exists(os.path.join(out_unv, "solution.py")))
+        self.assertTrue(os.path.exists(os.path.join(out_unv, "solution.unverified.py")))
+        json_unv = json.loads(out_buf2.getvalue().strip())
+        self.assertFalse(json_unv["verified"])
+        self.assertFalse(json_unv["success"])
+        self.assertIn("solution.unverified.py", json_unv["staged_unverified_solution"])
+        stderr_text = err_buf2.getvalue()
+        self.assertIn("[UNVERIFIED]", stderr_text)
+        self.assertIn("REPAIR_EXHAUSTED", stderr_text)
+        self.assertIn("test_wrong_expectation", stderr_text)
+
+        # 3. Harness separation: verified_count == 0, unverified_staged_count == 1,
+        #    while gate pass_at_1_zero_shot and pass_at_1_repair3 remain 0.0.
+        task = {
+            "id": "code_01",
+            "name": "parse_simple_csv",
+            "entry_point": "parse_simple_csv",
+            "prompt": "Write a Python function `parse_simple_csv(text: str)`",
+        }
+        rec = eval_harness.run_single_task_evaluation(
+            task=task,
+            arm="english",
+            model_name="test-model",
+            repeat_idx=1,
+            max_repairs=1,
+            allow_unverified=True,
+        )
+        self.assertEqual(rec.exit_code, 2)
+        self.assertEqual(rec.pai_verdict, "FAIL")
+        self.assertFalse(rec.verified)
+        self.assertTrue(rec.unverified_staged)
+        self.assertFalse(rec.pass_at_1_zero_shot)
+        self.assertFalse(rec.pass_at_1_repair3)
+        self.assertTrue(rec.hidden_test_result.passed)
+
+        metrics = eval_harness.compute_eval_metrics([rec])
+        self.assertEqual(metrics["verified_count"], 0)
+        self.assertEqual(metrics["unverified_staged_count"], 1)
+        self.assertEqual(metrics["unverified_hidden_pass_count"], 1)
+        self.assertEqual(metrics["mean_pass_at_1_zero_shot"], 0.0)
+        self.assertEqual(metrics["mean_pass_at_1_repair3"], 0.0)
+        self.assertEqual(metrics["mean_false_accept_rate"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
-

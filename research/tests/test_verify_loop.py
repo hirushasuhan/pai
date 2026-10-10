@@ -1116,12 +1116,53 @@ def find_first_missing_positive(nums):
             with open(fpath, "r", encoding="utf-8") as f:
                 tasks = json.load(f)
             extracted_tasks = 0
+            extracted_auto_ep = 0
             for t in tasks:
                 stmts = extract_example_assertions(t["prompt"], entry_point=t["entry_point"])
+                stmts_auto = extract_example_assertions(t["prompt"])
                 if stmts:
                     extracted_tasks += 1
                     self.assertTrue(any(s.startswith("assert ") for s in stmts))
+                if stmts_auto:
+                    extracted_auto_ep += 1
+                    self.assertEqual(stmts, stmts_auto)
             self.assertEqual(extracted_tasks, 18, f"Expected 18/20 tasks with examples in {fname}")
+            self.assertEqual(extracted_auto_ep, 18, f"Expected 18/20 tasks auto-inferred without entry_point in {fname}")
+
+    def test_extract_example_assertions_rejects_unsafe_calls_ellipsis_and_approx_floats(self):
+        # 1. Arbitrary calls in assignments or assertions must be rejected by the AST allow-list
+        malicious_prompt = """Write a function `f(x: int) -> int`.
+Example:
+    x = open("/etc/passwd").read()
+    __import__("os").system("id") -> 0
+    f(__import__("os").system("id")) -> 0
+"""
+        self.assertEqual(extract_example_assertions(malicious_prompt, entry_point="f"), [])
+
+        # 2. Approximation comments and inexact float expectations must be skipped
+        approx_prompt = """Write a function `f(x: float) -> float`.
+Example:
+    f(1.0) -> 0.333  # approximately
+    f(2.0) -> 0.667
+"""
+        self.assertEqual(extract_example_assertions(approx_prompt, entry_point="f"), [])
+
+        # 3. Ellipsis [...] must be skipped
+        ellipsis_prompt = """Write a function `f(x: int) -> list`.
+Example:
+    f(1) -> [...]
+    f(2) -> [1, ...]
+"""
+        self.assertEqual(extract_example_assertions(ellipsis_prompt, entry_point="f"), [])
+
+        # 4. Valid example alongside skipped lines extracts only the safe valid assertion
+        mixed_prompt = """Write a function `f(x: int) -> list`.
+Example:
+    x = open("/etc/passwd").read()
+    f(1) -> [...]
+    f(2) -> [1, 2]
+"""
+        self.assertEqual(extract_example_assertions(mixed_prompt, entry_point="f"), ["assert f(2) == [1, 2]"])
 
     def test_prepare_test_suite_appends_non_droppable_canonical_examples(self):
         task_prompt = '''def compact_number_formatter(n: float) -> str:
@@ -1158,8 +1199,38 @@ def compact_number_formatter(n):
         failed_ids = [f["test_id"] for f in exec_res.failures]
         self.assertIn("test_pai_canonical_examples", failed_ids)
 
+    def test_stage_unverified_artifact_isolated_and_collision_safe(self):
+        import shutil
+        from verify_loop import stage_unverified_artifact
+
+        out_dir = tempfile.mkdtemp(prefix="pai_unverified_test_")
+        try:
+            sol_code = "def add(a, b):\n    return a - b\n"
+            path = stage_unverified_artifact(
+                out_dir=out_dir,
+                solution_code=sol_code,
+                rejection_reason="REPAIR_EXHAUSTED: Repair loop exhausted after 3 repairs.",
+                overwrite=False,
+            )
+            self.assertEqual(os.path.basename(path), "solution.unverified.py")
+            self.assertTrue(os.path.exists(path))
+            self.assertFalse(os.path.exists(os.path.join(out_dir, "solution.py")))
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("# [UNVERIFIED] Rejected by PAI verification gate: REPAIR_EXHAUSTED", content)
+            self.assertIn("def add(a, b):", content)
+
+            # Collision without overwrite=True raises FileExistsError
+            with self.assertRaises(FileExistsError):
+                stage_unverified_artifact(
+                    out_dir=out_dir,
+                    solution_code=sol_code,
+                    rejection_reason="REPAIR_EXHAUSTED",
+                    overwrite=False,
+                )
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-

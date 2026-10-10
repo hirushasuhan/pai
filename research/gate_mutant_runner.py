@@ -35,6 +35,187 @@ def load_diag_jsonl(path: str) -> Dict[str, Dict[str, Any]]:
     return records
 
 
+_TUNING_FALLBACK_SOLUTIONS: Dict[str, str] = {
+    "code_03": '''
+def compact_number_formatter(n):
+    sign = "-" if n < 0 else ""
+    val = abs(n)
+    if val >= 1_000_000_000:
+        res = val / 1_000_000_000
+        s = f"{res:.1f}".rstrip("0").rstrip(".") + "B"
+    elif val >= 1_000_000:
+        res = val / 1_000_000
+        s = f"{res:.1f}".rstrip("0").rstrip(".") + "M"
+    elif val >= 1_000:
+        res = val / 1_000
+        s = f"{res:.1f}".rstrip("0").rstrip(".") + "K"
+    else:
+        if isinstance(val, int) or val == int(val):
+            s = str(int(val))
+        else:
+            s = f"{val:.1f}".rstrip("0").rstrip(".")
+    return sign + s
+''',
+    "code_07": '''
+def clean_phone_number(raw: str, default_country_code: str = "+94"):
+    cleaned = raw
+    for ch in " -.()":
+        cleaned = cleaned.replace(ch, "")
+    if cleaned.startswith("00"):
+        cleaned = "+" + cleaned[2:]
+    elif cleaned.startswith("0") and len(cleaned) == 10 and cleaned[1:].isdigit():
+        cleaned = default_country_code + cleaned[1:]
+    if not cleaned.startswith("+"):
+        return None
+    digits = cleaned[1:]
+    if not digits.isdigit():
+        return None
+    if 10 <= len(digits) <= 15:
+        return cleaned
+    return None
+''',
+    "code_10": '''
+def calculate_tax_bracket(income: float, brackets: list) -> float:
+    if income <= 0:
+        return 0.0
+    tax = 0.0
+    prev = 0.0
+    for upper, rate in brackets:
+        if income > prev:
+            taxable = min(income, upper) - prev
+            tax += taxable * rate
+            prev = upper
+        else:
+            break
+    return round(tax, 2)
+''',
+    "code_11": '''
+def fuzzy_search_score(query: str, target: str) -> int:
+    if not query:
+        return 0
+    q = query.lower()
+    t = target.lower()
+    q_idx = 0
+    score = 0
+    consec = 0
+    for ch in t:
+        if q_idx < len(q) and ch == q[q_idx]:
+            q_idx += 1
+            consec += 1
+            score += 10 * consec
+        else:
+            consec = 0
+    return score if q_idx == len(q) else 0
+''',
+    "code_15": '''
+import re
+def parse_duration_string(s: str) -> int:
+    if not s or not s.strip():
+        raise ValueError("Empty duration")
+    units = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+    cleaned = re.sub(r"\\s+", "", s)
+    matches = re.findall(r"(\\d+)([dhms])", cleaned)
+    if not matches or "".join(f"{v}{u}" for v, u in matches) != cleaned:
+        raise ValueError(f"Invalid duration: {s}")
+    return sum(int(val) * units[u] for val, u in matches)
+''',
+    "code_16": '''
+def sliding_window_median(nums: list, k: int) -> list:
+    if not nums or k <= 0 or k > len(nums):
+        return []
+    res = []
+    for i in range(len(nums) - k + 1):
+        w = sorted(nums[i:i+k])
+        mid = k // 2
+        if k % 2 == 1:
+            res.append(round(float(w[mid]), 2))
+        else:
+            res.append(round(float((w[mid - 1] + w[mid]) / 2.0), 2))
+    return res
+''',
+    "code_17": '''
+class CircularBuffer:
+    def __init__(self, capacity: int):
+        if capacity <= 0:
+            raise ValueError("Capacity must be positive")
+        self.capacity = capacity
+        self.buf = []
+    def enqueue(self, item) -> bool:
+        if len(self.buf) >= self.capacity:
+            return False
+        self.buf.append(item)
+        return True
+    def dequeue(self):
+        if not self.buf:
+            raise IndexError("Buffer is empty")
+        return self.buf.pop(0)
+    def peek(self):
+        if not self.buf:
+            raise IndexError("Buffer is empty")
+        return self.buf[0]
+    def is_empty(self) -> bool:
+        return len(self.buf) == 0
+    def is_full(self) -> bool:
+        return len(self.buf) == self.capacity
+    def size(self) -> int:
+        return len(self.buf)
+''',
+    "code_20": '''
+def evaluate_simple_expression(expr: str) -> int:
+    tokens = []
+    i = 0
+    while i < len(expr):
+        if expr[i].isspace():
+            i += 1
+        elif expr[i].isdigit():
+            j = i
+            while j < len(expr) and expr[j].isdigit():
+                j += 1
+            tokens.append(int(expr[i:j]))
+            i = j
+        else:
+            tokens.append(expr[i])
+            i += 1
+    stack = []
+    op = "+"
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if isinstance(tok, int):
+            if op == "+":
+                stack.append(tok)
+            elif op == "-":
+                stack.append(-tok)
+            elif op == "*":
+                stack.append(stack.pop() * tok)
+            elif op == "/":
+                if tok == 0:
+                    raise ZeroDivisionError("division by zero")
+                prev = stack.pop()
+                stack.append(int(prev / tok))
+        else:
+            op = tok
+        idx += 1
+    return sum(stack)
+''',
+}
+
+
+def _load_task_prompts(is_singlish: bool = False) -> Dict[str, str]:
+    eval_dir = os.path.join(_DIR, "eval_sets")
+    prompts: Dict[str, str] = {}
+    files = ["coding_tasks.json", "coding_tasks_holdout.json"]
+    if is_singlish:
+        files = ["coding_tasks_singlish.json", "coding_tasks_holdout.json"]
+    for fname in files:
+        fpath = os.path.join(eval_dir, fname)
+        if os.path.exists(fpath):
+            with open(fpath, "r", encoding="utf-8") as f:
+                for item in json.load(f):
+                    prompts[item["id"]] = item["prompt"]
+    return prompts
+
+
 def run_mutants_against_gate(
     diag_jsonl_path: str,
     gate_off_jsonl_path: Optional[str] = None,
@@ -48,9 +229,14 @@ def run_mutants_against_gate(
     gated_recs = load_diag_jsonl(diag_jsonl_path)
     loop = VerifyLoop(timeout_sec=timeout_sec, memory_mb=memory_mb)
 
+    is_singlish = "singlish" in os.path.basename(diag_jsonl_path).lower() or any(
+        r.get("arm") == "singlish" for r in gated_recs.values()
+    )
+    task_prompts = _load_task_prompts(is_singlish=is_singlish)
+
     # 1. Collect known-good solutions to check test suite validity (discriminating power)
-    known_good_sols: Dict[str, str] = {}
-    if gate_off_jsonl_path:
+    known_good_sols: Dict[str, str] = dict(_TUNING_FALLBACK_SOLUTIONS)
+    if gate_off_jsonl_path and os.path.exists(gate_off_jsonl_path):
         go_recs = load_diag_jsonl(gate_off_jsonl_path)
         for tid, r in go_recs.items():
             if r.get("hidden_test_result", {}).get("passed"):
@@ -63,14 +249,28 @@ def run_mutants_against_gate(
         if r.get("pai_verdict") == "PASS" and r.get("candidate_solution"):
             known_good_sols[tid] = r["candidate_solution"]
 
-    # 2. Check each task's generated test suite against known-good solution
+    # 2. Check each task's generated test suite (with H1 canonical examples appended) against known-good solution
     suite_validity: Dict[str, Dict[str, Any]] = {}
+    frozen_suites: Dict[str, FrozenTestSuite] = {}
     for tid, r in gated_recs.items():
         gt_tests = r.get("generated_test_code")
         if not gt_tests:
             suite_validity[tid] = {
                 "valid": False,
                 "reason": f"No tests generated ({r.get('termination_stage')})",
+            }
+            continue
+
+        try:
+            frozen = loop.prepare_test_suite(
+                model_test_code=gt_tests,
+                task_prompt=task_prompts.get(tid),
+            )
+            frozen_suites[tid] = frozen
+        except Exception as e:
+            suite_validity[tid] = {
+                "valid": False,
+                "reason": f"Suite preparation failed: {e}",
             }
             continue
 
@@ -83,7 +283,6 @@ def run_mutants_against_gate(
             continue
 
         try:
-            frozen = FrozenTestSuite.create(gt_tests)
             ref_res = loop.execute_solution_tests(ref_sol, frozen)
             if ref_res.passed:
                 suite_validity[tid] = {
@@ -131,7 +330,7 @@ def run_mutants_against_gate(
             uninf_tested += 1
 
         # If the gated pipeline rejected the task before solution or tests:
-        if not gt_tests:
+        if not gt_tests or tid not in frozen_suites:
             res_entry = {
                 "mutant_id": mid,
                 "task_id": tid,
@@ -149,9 +348,9 @@ def run_mutants_against_gate(
             results.append(res_entry)
             continue
 
-        # Execute mutant against the model's test suite inside the sandbox
+        # Execute mutant against the frozen test suite (including H1 canonical examples) inside the sandbox
         try:
-            frozen = FrozenTestSuite.create(gt_tests)
+            frozen = frozen_suites[tid]
             test_res = loop.execute_solution_tests(m_code, frozen)
             if test_res.passed:
                 res_entry = {

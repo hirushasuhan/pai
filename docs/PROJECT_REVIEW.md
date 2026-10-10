@@ -1198,3 +1198,95 @@ Open for the gate: test-wrongness remains the main loss (11 arm-tasks).
    - **Stub Probe Verification**: All **18 / 18** extracted H1 `Example:` suites pass `VerifyLoop.run_stub_probe` across all 11 stubs in `STUB_FAMILY` (relational comparisons in `code_11` are guarded with `isinstance(..., (int, float)) and not isinstance(..., bool)` so `None`/collection stubs fail with `AssertionError` rather than `TypeError`).
    - **Production Integration**: Added `extract_example_assertions` and `append_canonical_example_tests` to `research/verify_loop.py` and wired `task_prompt=args.task` into `VerifyLoop.prepare_test_suite` and `cmd_code` in `research/pai.py`. Every frozen model test suite now includes `def test_pai_canonical_examples():` as a non-droppable test function alongside the prompt hint.
 
+
+
+### Addendum (e71854c): M5 follow-ups, wrong-test analysis, H1 integration (2026-10-10)
+Linux, HEAD e71854c, working tree clean before this addendum. Full suite: 408 tests, 1 FAILURE, 13 skipped.
+
+Verified:
+- M5: `--horizon 0` is refused (exit 1) like -1 and 101; a 6-day jump in a daily series produces an "Irregular timestamp gaps" warning (in text and JSON output); the 2% floor is labelled as an uncalibrated constant.
+- The owner's classification of the 11 wrong-test arm-tasks is consistent with the earlier reviewer findings (code_06 time arithmetic, code_08 range(1,102), code_19 sums). The statement "0 of 11 contradict a prompt example" was not re-derived in full.
+
+Findings:
+1. Failing test at HEAD: `test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks` fails because the generated-test prompt now contains canonical examples, which contain the generic fragment `) == ` that the leak test uses as a "secret". The owner's report states a green suite. The leak test needs whole-assertion matching, with the task's own Example lines as the only permitted overlap; it must not be deleted or loosened to a smaller check.
+2. The extractor (`extract_example_assertions`) turns text into executable statements without an allow-list. Probes: `x = open("/etc/passwd").read()` and `__import__("os").system("id") -> 0` are copied into the appended test; `f(1.0) -> 0.333  # approximately` becomes an exact equality (the comment is stripped); `[...]` becomes an assertion that can never hold. The first group runs inside the sandbox; the other two cause false rejects, which is the safe direction but a usability defect. Restrict statements to calls of the entry point, literals and containers of literals; skip examples with an ellipsis or a float expectation (or compare with a tolerance).
+3. The 5 of 20 and 5 of 20 acceptance numbers were measured before the canonical examples were added to the prompt and to the suite. After H1 integration there is no gated re-run and the gate-level mutant runner does not append the examples, so it still measures the earlier gate.
+4. The holdout set (code_21 to code_30) has English prompts only; Singlish generalisation of the final gate will not be measured by it.
+
+Decisions recorded: `--allow-unverified` approved under constraints (default off; output named and marked as unverified; never reported as verified; gate metrics unchanged). Holdout evaluation is not started until findings 1 to 3 are closed and the gate protocol is written down before the run.
+
+
+### Addendum: Resolution of `e71854c` Findings 1–3, `--allow-unverified`, H1/H6 Tuning Evaluation & Pre-Registered Holdout Protocol (2026-10-10)
+
+1. **Resolution of Finding 1 (`test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks`)**:
+   - Upgraded [`test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_eval_harness.py#L130-L236) to inspect all 20 hidden test callables in `HIDDEN_TESTS` using AST parsing (`inspect.getsource` + `ast.walk`):
+     - Extracts every whole assertion statement (`>= 70` assertions across all 20 tasks) and every non-trivial string/numeric literal (`>= 20` literals).
+     - Permits overlap ONLY when an assertion or literal is already present in that task's own prompt `Example:` lines (`own_example_norms`).
+     - Verifies that zero hidden-only assertions or literals appear in any prompt sent to the model across all 20 tasks, and verifies negative-control detection when a hidden-only assertion is injected.
+
+2. **Resolution of Finding 2 (Strict AST Allow-List & Entry-Point Inference in `extract_example_assertions`)**:
+   - Hardened [`extract_example_assertions`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py#L280-L545) with an explicit AST safety validator (`_is_safe_example_expr`, `_contains_ellipsis`, `_has_inexact_float`):
+     - **AST Allow-List**: Setup assignments and `->` expectations allow ONLY literal constants (`int`, `float`, `str`, `bool`, `None`), literal containers (`list`, `tuple`, `set`, `dict`), safe unary signs (`+`, `-`), and direct calls to the inferred `entry_point` (or method calls on a local variable initialized from `entry_point`). Arbitrary calls (`open("/etc/passwd").read()`, `__import__("os").system("id")`, comprehensions, attribute chains, subscripts) are rejected and skipped.
+     - **Ellipsis & Approximation Handling**: Any expression containing `Ellipsis` (`...` / `[...]`), comments indicating approximation (`# approx`, `~`), or floats with $>2$ decimal places (`0.333`) is skipped so it cannot cause false rejections. Exact scalar floats with $\le 2$ decimal places (e.g., `1250.0` in `code_10`, `2.0` in `code_16`) are compared with `abs(actual - expected) <= 1e-3`.
+     - **Backticked Signature Inference**: Updated `_infer_entry_point` to parse backticked signatures (`` `func_name(...)` ``) in addition to `def`/`class` headers, automatically inferring `entry_point` for **18 / 20** tasks in both `coding_tasks.json` and `coding_tasks_singlish.json` (all 18 tasks that have `Example:` blocks) even when `entry_point=None`.
+     - Verified by unit test [`test_h1_extractor_ast_allowlist_and_safety_filters`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_verify_loop.py#L1110-L1200).
+
+3. **Implementation of `--allow-unverified` (All 6 Reviewer Constraints Enforced)**:
+   - Implemented across [`verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py#L1729-L1792) (`stage_unverified_artifact`), [`pai.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/pai.py#L675-L1185) (`--allow-unverified`), and [`eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_harness.py#L95-L1165):
+     1. **Default Off**: Requires explicit `--allow-unverified` CLI flag.
+     2. **Distinct File Naming & JSON Metadata**: Stages unverified code exclusively to `solution.unverified.py` (never `solution.py`) and outputs `"verified": false` in JSON (`"verified": true` when verified).
+     3. **Clear Terminal Banner**: Prints `[UNVERIFIED] Candidate solution staged to ...` together with the rejection stage (`error`) and failing test details.
+     4. **Non-Zero Exit Code Preserved**: Returns the exact same non-zero exit code (`1` or `2`; `4` on target collision without `--overwrite`) as when the gate rejects; never returns `0`.
+     5. **Strict Separation in `eval_harness.py`**: Reports `verified_accepted_count` (`verified: true`) separately from `unverified_staged_count` (`unverified_staged: true`); `pass_at_1_zero_shot`, `pass_at_1_repair3`, and `false_accept_rate` count strictly verified passes only.
+     6. **No Host Execution**: Candidate code is written to disk as inert text and never executed on the host.
+   - Verified by unit tests `test_stage_unverified_artifact_isolated_and_collision_safe` and `test_allow_unverified_flag_cli_and_harness_separation`.
+
+4. **Resolution of Finding 3 (H1-Integrated Gated Re-Run & Updated Mutant Runner)**:
+   - Updated [`research/gate_mutant_runner.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/gate_mutant_runner.py#L38-L320) to pass `task_prompt` into `loop.prepare_test_suite(model_test_code=gt_tests, task_prompt=task_prompts.get(tid))` so the mutant runner tests the exact H1-augmented suite (`test_pai_canonical_examples`).
+   - Removed the duplicate `canonical_hint` text injection from `test_prompt` in `pai.py` (since `args.task` already ends with the `Example:` block, duplicating it caused a `temperature=0.0` repetition timeout on `code_01`), while keeping `loop.prepare_test_suite(model_test_code=test_code, task_prompt=args.task)` to deterministically append `def test_pai_canonical_examples():`.
+   - **H1-Integrated Tuning Set Results (`code_01`–`code_20`, `qwen2.5-coder:7b`, `repeats=1`, `temp=0.0`, `seed=42`)**:
+     - **English H1** (`docs/evidence/eval_qwen2.5_coder_7b_english_h1_diag.jsonl`): **6 / 20** verified accepted (`30.0%` pass@1 repair<=3, `25.0%` zero-shot: `code_02, 12, 13, 14, 16, 18`), **0 false accepts**, 1 infra timeout (`code_07`), 7 wrong-test drops among raw-solvable tasks (`code_01, 04, 05, 06, 08, 09, 19`). Mutant benchmark: **0 / 42 accepted** (`100%` kill rate; **12 / 12 mutants killed** across 6 valid suites).
+     - **Singlish H1** (`docs/evidence/eval_qwen2.5_coder_7b_singlish_h1_diag.jsonl`): **4 / 20** verified accepted (`20.0%` pass@1 repair<=3: `code_08, 12, 14, 18`), **0 false accepts**, 2 infra timeouts (`code_07, 15`), 5 wrong-test drops among raw-solvable tasks (`code_02, 04, 06, 09, 13`). Mutant benchmark: **0 / 42 accepted** (`100%` kill rate; **11 / 11 mutants killed** across 5 valid suites).
+
+5. **Hypothesis H6 Evaluation on Tuning Set (`code_01`–`code_20`)**:
+   - **Hypothesis H6**: Because 11/11 wrong-test failures in Step 0 were caused by model-invented edge cases rather than prompt examples, updated `test_prompt` in [`research/pai.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/pai.py#L884-L893) to replace `- Write clear assertions testing functionality and edge cases.` with:
+     - `- Test ONLY the behaviours, rules, and canonical examples explicitly stated in the task description.`
+     - `- Do NOT invent extra edge cases, arbitrary boundary constraints, or unstated assumptions beyond the specification.`
+   - **H6 Tuning Set Results (`code_01`–`code_20`, `qwen2.5-coder:7b`, `repeats=1`, `temp=0.0`, `seed=42`)**:
+
+| Metric | H3 Baseline (Eng / Sing) | H1 Integrated (Eng / Sing) | **H6 + H1 Final Gate (Eng / Sing)** |
+|---|:---:|:---:|:---:|
+| Gate-Off Raw Solvable | 12/20 / 9/20 | 12/20 / 9/20 | **12/20 / 9/20** |
+| Verified Accepted (`pai code`) | 5/20 / 5/20 | 6/20 / 4/20 | **8/20 (40.0%) / 6/20 (30.0%)** |
+| `pass@1 (zero-shot)` | 25.0% / 20.0% | 25.0% / 20.0% | **35.0% / 25.0%** |
+| `pass@1 (repair<=3)` | 25.0% / 25.0% | 30.0% / 20.0% | **40.0% / 30.0%** |
+| False-Accept Rate (Hidden Tests) | 0.0% / 0.0% | 0.0% / 0.0% | **0.0% (0/8) / 0.0% (0/6)** |
+| Infra Timeouts | 1 / 2 | 1 / 2 | **0 / 2** (`code_07, 15` in Singlish) |
+| Wrong-Test Drops (Raw-Solvable) | 6 / 4 | 7 / 5 | **4 / 4** |
+| Valid Generated Suites (Pass Known-Good) | 5/20 / 5/20 | 6/20 / 5/20 | **11/20 / 6/20** |
+| Mutants Tested on Valid Suites | 10 / 11 | 12 / 11 | **24 / 13** |
+| Mutants Accepted (Valid Suites / Total) | 0/10 (0/42) / 0/11 (0/42) | 0/12 (0/42) / 0/11 (0/42) | **0/24 (0/42) / 0/13 (0/42)** |
+
+   - **H6 Decision Rule Verdict**: **RETAINED**.
+     - `total_accepted_mutants == 0` in both arms (0/24 on valid English suites, 0/13 on valid Singlish suites, 0/84 overall).
+     - Verified recall improved in both arms: **English 5/20 $\to$ 8/20** (`code_02, 06, 08, 12, 13, 14, 16, 18`), **Singlish 5/20 $\to$ 6/20** (`code_02, 06, 08, 14, 16, 18`).
+     - Valid generated test suites nearly doubled in English (**5/20 $\to$ 11/20**), eliminating wrong-test failures on `code_01`, `code_06`, and `code_08`.
+
+6. **Frozen Gate Definition & Pre-Registered Holdout Evaluation Protocol (`code_21`–`code_30`)**:
+   - **Frozen Gate Configuration**:
+     - H5 type-preserving tagged RPC codec (`verify_loop.py`)
+     - H3 AST main-guard wrapping & top-level `AssertionError` handling (`verify_loop.py`)
+     - H1 AST-allowlisted canonical example assertions appended via `VerifyLoop.prepare_test_suite` (`verify_loop.py` + `pai.py`)
+     - H6 specification-bounded test generation prompt (`pai.py`)
+   - **Pre-Registered Holdout Protocol (Executed Exactly Once After Gate Freeze Commit)**:
+     1. **Dataset**: `research/eval_sets/coding_tasks_holdout.json` (`code_21` through `code_30`, $N=10$ tasks) and `research/eval_sets/test_coding_tasks_holdout.py`, verified against SHA-256 entries in `docs/evidence/eval_sets_hashes.json`.
+     2. **Scope Limitation (Finding 4)**: `coding_tasks_holdout.json` contains **English prompts only**. Therefore, holdout evaluation measures English generalization of the frozen gate; Singlish generalization is **not** measured by the holdout set.
+     3. **Execution Arms (`qwen2.5-coder:7b`, `repeats=1`, `temperature=0.0`, `seed=42`)**:
+        - **Gated Holdout Arm**: `python research/eval_harness.py --run-eval --tasks research/eval_sets/coding_tasks_holdout.json --arm english --model qwen2.5-coder:7b --repeats 1 --temperature 0.0 --seed 42 --out-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gated_diag.jsonl`
+        - **Gate-Off Holdout Baseline**: `python research/eval_harness.py --run-eval --tasks research/eval_sets/coding_tasks_holdout.json --arm gate_off_english --gate-off --model qwen2.5-coder:7b --repeats 1 --temperature 0.0 --seed 42 --out-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl`
+        - **Holdout Mutant Benchmark (20 Mutants in `mutants_holdout.py`)**: `python research/gate_mutant_runner.py --diag-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gated_diag.jsonl --gate-off-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl --mutants-set holdout --json`
+     4. **Reporting Rules**:
+        - Report exact counts (`raw_solvable`, `verified_accepted`, `false_accepts`, `infra_timeouts`, `valid_suites_task_count`, `mutants_tested` on valid suites, `accepted_mutants`, and per-task root-cause breakdown).
+        - Because $N=10$ is a small descriptive sample at `temperature=0.0`, report raw counts and descriptive percentages only, with **no claims of statistical significance**.
+        - No further prompt or gate tuning is permitted after observing holdout outcomes.
+

@@ -675,6 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_code.add_argument("task", nargs="?", default="", help="Coding task prompt")
     p_code.add_argument("--tests", type=str, help="User-supplied test file (takes priority over model-written tests)")
     p_code.add_argument("--allow-weak-tests", action="store_true", help="Permit user-supplied tests that pass one or more stubs in the stub family")
+    p_code.add_argument("--allow-unverified", action="store_true", help="Stage rejected candidate code to solution.unverified.py with explicit UNVERIFIED label (default: False)")
     p_code.add_argument("--out", type=str, help="Output staging directory (required for artifact generation)")
     p_code.add_argument("--model", type=str, default=None, help="Explicit candidate model override")
     p_code.add_argument("--max-repairs", type=int, default=3, help="Maximum repair iterations (1..5, default: 3)")
@@ -746,7 +747,54 @@ def cmd_code(args) -> int:
         extract_example_assertions,
         sanitize_untrusted_diagnostics,
         stage_artifacts,
+        stage_unverified_artifact,
     )
+
+    allow_unverified = bool(getattr(args, "allow_unverified", False))
+
+    def _maybe_stage_unverified_pre_solution(stage_name: str, detail_str: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+        """When --allow-unverified is active and test suite / stub probe fails, generates and stages unverified candidate."""
+        if not allow_unverified or not getattr(args, "out", None) or not getattr(args, "task", ""):
+            return None, None, None
+        try:
+            unv_prompt = (
+                f"Write a Python solution for the following task:\n{args.task}\n\n"
+                "Requirements:\n"
+                "- Implement all required functions and classes in module 'solution'.\n"
+                "- Return ONLY the Python solution code enclosed in ```python ... ``` without explanations.\n"
+            )
+            raw_unv = call_model_generate(
+                model_name,
+                unv_prompt,
+                timeout=getattr(args, "model_timeout", None),
+                temperature=getattr(args, "temperature", None),
+                seed=getattr(args, "seed", None),
+            )
+            cand_unv = extract_python_code(raw_unv)
+            if not cand_unv or not check_source(cand_unv).ok:
+                return None, None, None
+            unv_path = stage_unverified_artifact(
+                args.out,
+                cand_unv,
+                rejection_reason=f"{stage_name}: {detail_str}",
+                overwrite=getattr(args, "overwrite", False),
+            )
+            print(f"[UNVERIFIED] Rejected at stage: {stage_name} | Detail: {detail_str}", file=sys.stderr)
+            print(f"  - Unverified solution staged to: {unv_path}", file=sys.stderr)
+            return unv_path, cand_unv, None
+        except (FileExistsError, ValueError, IsADirectoryError) as st_err:
+            if getattr(args, "json", False):
+                print(json.dumps({
+                    "success": False,
+                    "verified": False,
+                    "error": "COLLISION" if isinstance(st_err, FileExistsError) else "STAGING_VIOLATION",
+                    "detail": str(st_err),
+                }, indent=2))
+            else:
+                print(f"Error: Unverified staging failed: {st_err}", file=sys.stderr)
+            return None, None, 4
+        except Exception:
+            return None, None, None
 
     # 1. Validate inputs: command must have work to do
     if not getattr(args, "task", "") and not getattr(args, "tests", None):
@@ -789,7 +837,7 @@ def cmd_code(args) -> int:
         probe_res = loop.run_stub_probe(suite, allow_weak_tests=allow_weak)
         if not probe_res.passed:
             if getattr(args, "json", False):
-                print(json.dumps({"success": False, "error": "STUB_PROBE_FAILED", "detail": probe_res.detail}, indent=2))
+                print(json.dumps({"success": False, "verified": False, "error": "STUB_PROBE_FAILED", "detail": probe_res.detail}, indent=2))
             else:
                 print(f"Stub probe failed: {probe_res.detail}", file=sys.stderr)
             return 1
@@ -815,6 +863,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
+                    "verified": False,
                     "error": "ROUTE_REFUSAL",
                     "explanation": decision.explanation,
                     "reason_codes": decision.reason_codes,
@@ -833,20 +882,12 @@ def cmd_code(args) -> int:
     model_timeout = getattr(args, "model_timeout", None)
 
     if suite is None:
-        canonical_stmts = extract_example_assertions(args.task)
-        canonical_hint = ""
-        if canonical_stmts:
-            joined_canonical = "\n".join(f"  {s}" for s in canonical_stmts)
-            canonical_hint = (
-                "\nCanonical examples extracted from the specification (your tests MUST be consistent with these):\n"
-                f"{joined_canonical}\n"
-            )
         test_prompt = (
-            f"Write a Python test suite for the following task:\n{args.task}\n"
-            f"{canonical_hint}\n"
+            f"Write a Python test suite for the following task:\n{args.task}\n\n"
             "Requirements:\n"
             "- Tests must test the module named 'solution' (e.g. 'from solution import ...').\n"
-            "- Write clear assertions testing functionality and edge cases.\n"
+            "- Test ONLY the behaviours, rules, and canonical examples explicitly stated in the task description.\n"
+            "- Do NOT invent extra edge cases, arbitrary boundary constraints, or unstated assumptions beyond the specification.\n"
             "- Return ONLY the Python test code enclosed in ```python ... ``` without explanations.\n"
         )
         try:
@@ -854,7 +895,7 @@ def cmd_code(args) -> int:
         except Exception as e:
             is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
             if getattr(args, "json", False):
-                print(json.dumps({"success": False, "error": "GENERATOR_ERROR", "detail": str(e), "is_timeout": is_timeout}, indent=2))
+                print(json.dumps({"success": False, "verified": False, "error": "GENERATOR_ERROR", "detail": str(e), "is_timeout": is_timeout}, indent=2))
             else:
                 print(f"Error: Model failed to generate test suite: {e}", file=sys.stderr)
             return 2
@@ -862,13 +903,20 @@ def cmd_code(args) -> int:
         try:
             suite = loop.prepare_test_suite(model_test_code=test_code, task_prompt=args.task)
         except (VacuousTestError, TestSyntaxError, Exception) as e:
+            unv_path, cand_unv, st_err_code = _maybe_stage_unverified_pre_solution("TEST_SUITE_INVALID", str(e))
+            if st_err_code is not None:
+                return st_err_code
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
+                    "verified": False,
                     "error": "TEST_SUITE_INVALID",
                     "detail": str(e),
                     "test_code": test_code,
                     "test_code_preview": "\n".join(test_code.splitlines()[:40]),
+                    "unverified_solution_path": unv_path,
+                    "staged_unverified_solution": unv_path,
+                    "candidate_solution": cand_unv,
                 }, indent=2))
             else:
                 print(f"Error: Model generated invalid test suite: {e}", file=sys.stderr)
@@ -880,15 +928,22 @@ def cmd_code(args) -> int:
         allow_weak = getattr(args, "allow_weak_tests", False)
         probe_res = loop.run_stub_probe(suite, allow_weak_tests=allow_weak)
         if not probe_res.passed:
+            unv_path, cand_unv, st_err_code = _maybe_stage_unverified_pre_solution("STUB_PROBE_FAILED", probe_res.detail)
+            if st_err_code is not None:
+                return st_err_code
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
+                    "verified": False,
                     "error": "STUB_PROBE_FAILED",
                     "detail": probe_res.detail,
                     "failing_stub": probe_res.failing_stub,
                     "test_code": suite.test_code,
                     "test_hash": suite.test_hash,
                     "test_code_preview": "\n".join(suite.test_code.splitlines()[:40]),
+                    "unverified_solution_path": unv_path,
+                    "staged_unverified_solution": unv_path,
+                    "candidate_solution": cand_unv,
                 }, indent=2))
             else:
                 print(f"Stub probe failed: {probe_res.detail}", file=sys.stderr)
@@ -913,6 +968,7 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": False,
+                "verified": False,
                 "error": "GENERATOR_ERROR",
                 "detail": str(e),
                 "is_timeout": is_timeout,
@@ -933,6 +989,7 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": False,
+                "verified": False,
                 "error": "AST_SAFETY_VIOLATION",
                 "violations": v_details,
                 "candidate_solution": initial_solution,
@@ -989,6 +1046,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
+                    "verified": False,
                     "error": "COLLISION",
                     "detail": str(e),
                     "candidate_solution": repair_result.final_solution,
@@ -1005,6 +1063,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
+                    "verified": False,
                     "error": "STAGING_VIOLATION",
                     "detail": str(e),
                     "candidate_solution": repair_result.final_solution,
@@ -1021,6 +1080,7 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": True,
+                "verified": True,
                 "status": "PASS",
                 "selected_model": model_name,
                 "staged_solution": sol_dest,
@@ -1046,13 +1106,64 @@ def cmd_code(args) -> int:
             print(f"  - Repairs used    : {repair_result.total_repairs} / {max_repairs}")
         return 0
     else:
+        cand_final = repair_result.final_solution or initial_solution
+        failing_tests: List[str] = []
+        if repair_result.iterations and repair_result.iterations[-1].test_result.failures:
+            failing_tests = [
+                str(f.get("test_id", "<unknown>"))
+                for f in repair_result.iterations[-1].test_result.failures
+            ]
+
+        unverified_dest: Optional[str] = None
+        if allow_unverified and getattr(args, "out", None) and cand_final:
+            try:
+                unverified_dest = stage_unverified_artifact(
+                    args.out,
+                    cand_final,
+                    rejection_reason=f"REPAIR_EXHAUSTED (failing_tests={failing_tests})",
+                    overwrite=getattr(args, "overwrite", False),
+                )
+            except FileExistsError as e:
+                if getattr(args, "json", False):
+                    print(json.dumps({
+                        "success": False,
+                        "verified": False,
+                        "error": "COLLISION",
+                        "detail": str(e),
+                    }, indent=2))
+                else:
+                    print(f"Error: File collision during unverified staging: {e}", file=sys.stderr)
+                return 4
+            except (ValueError, IsADirectoryError) as e:
+                if getattr(args, "json", False):
+                    print(json.dumps({
+                        "success": False,
+                        "verified": False,
+                        "error": "STAGING_VIOLATION",
+                        "detail": str(e),
+                    }, indent=2))
+                else:
+                    print(f"Error: Safe staging safety violation: {e}", file=sys.stderr)
+                return 4
+
+        if unverified_dest:
+            print(
+                f"[UNVERIFIED] Rejected at stage: REPAIR_EXHAUSTED | Failing tests: {failing_tests}",
+                file=sys.stderr,
+            )
+            print(f"  - Unverified solution staged to: {unverified_dest}", file=sys.stderr)
+
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": False,
+                "verified": False,
                 "status": "FAIL",
                 "error": "REPAIR_EXHAUSTED",
+                "failing_tests": failing_tests,
+                "unverified_solution_path": unverified_dest,
+                "staged_unverified_solution": unverified_dest,
                 "selected_model": model_name,
-                "candidate_solution": repair_result.final_solution or initial_solution,
+                "candidate_solution": cand_final,
                 "test_code": suite.test_code if suite else None,
                 "test_hash": test_hash,
                 "test_code_preview": test_code_preview,
