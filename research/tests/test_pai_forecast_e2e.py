@@ -117,6 +117,20 @@ class TestPaiForecastE2E(unittest.TestCase):
         data = json.loads(stdout.getvalue())
         self.assertEqual(data["task_class"], "forecast")
 
+    def test_forecast_horizon_zero_refusal(self):
+        trend_csv = os.path.join(FIXTURES_DIR, "series_trend.csv")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            exit_code = pai.main(["forecast", trend_csv, "--horizon", "0", "--json"])
+
+        self.assertEqual(exit_code, 1)
+        data = json.loads(stdout.getvalue())
+        self.assertFalse(data["success"])
+        self.assertEqual(data["error"], "MALFORMED_DATA")
+        self.assertIn("Horizon must be an integer between 1 and 100", data["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1152,3 +1152,49 @@ Commit the working tree first. Fix M5 findings 1 to 5 with tests. Report an afte
      - All 10 mutants that survive the H1 anchor are accepted (**10 false accepts**).
    - **Verdict**: **Hypothesis H2 is REJECTED** under the pre-declared decision rule (strictly 0 accepted mutants). Assertion filtering based on candidate satisfaction inherently allows defective solutions to sculpt their own test suites.
 
+
+
+### Addendum (944f9cc): M5 fixes, H3 gated re-run, H1/H2 findings (2026-10-09)
+Linux, HEAD 944f9cc, working tree clean, 404 tests OK (13 skipped).
+
+Verified:
+- H3 gated re-run (stored JSONL, reread by the reviewer): English accepted 5 of 20 (code_02, 12, 13, 14, 18); Singlish accepted 5 of 20 (code_02, 08, 12, 14, 18). Every accepted run passes the hidden tests; 0 false accepts; model digest, temperature 0 and seed 42 are recorded. Stages: English 12 repair_exhausted, 2 stub probe, 1 generator timeout; Singlish 8 repair_exhausted, 3 stub probe, 2 AST violation, 2 generator timeout. Infrastructure failures: English code_07; Singlish code_07 and code_15. Gate-off baselines are 12 of 20 and 9 of 20.
+- M5 fixes probed on Linux: invalid calendar date refused (exit 1), duplicate timestamps refused, empty cells refused, horizon -1 and 101 refused, labels that are not dates keep file order and use a t+1 axis, zero-residual series get non-zero-width intervals with an explicit note, residual sample size is printed, selection is made on rolling-origin folds separate from the reported holdout.
+
+Findings:
+1. `--horizon 0` is silently replaced by 5 (`getattr(args, "horizon", 5) or 5` in `pai.py`); it should be refused like -1.
+2. Irregular date gaps (a daily series that skips 5 days) are not detected: the series is treated as regular and the forecast dates continue after the last date. Warn or refuse.
+3. The 2% uncertainty floor is a fixed constant, not derived from data; the output says so, which is acceptable, but it should not be described as a calibrated interval.
+4. English code_19 (stub probe stage) and Singlish code_04 (stub probe stage) are counted as test-wrongness; code_19 was confirmed by the reviewer, code_04 not re-derived.
+5. H1 alone accepts 10 of 42 mutants (6 survive despite a prompt example, 4 belong to tasks with no example), and the H2 simulation with each mutant as the candidate accepts the same 10. Both results are consistent with the mechanism (a filter that drops assertions a mutant fails removes the evidence). The reviewer did not re-run the simulation. H2 is rejected under the pre-declared rule.
+
+Open for the gate: test-wrongness remains the main loss (11 arm-tasks).
+
+
+### Addendum: M5 Follow-up Fixes, 11 Wrong-Test Root-Cause Breakdown & H1 Non-Droppable Suite Integration (2026-10-10)
+
+1. **M5 (`pai forecast`) Follow-up Defect Fixes**:
+   - **Finding 1 (`--horizon 0` refusal)**: Replaced `getattr(args, "horizon", 5) or 5` in `research/pai.py` with an explicit `None` check (`raw_horizon = getattr(args, "horizon", None); horizon = 5 if raw_horizon is None else raw_horizon`) so `--horizon 0` is passed to `run_forecast_pipeline` and refused with exit code 1 (`test_forecast_horizon_zero_refusal`).
+   - **Finding 2 (Irregular timestamp gap detection)**: Added consecutive timestamp delta inspection in `research/forecast_engine.py` (`parse_csv_series`). When a parsed date series has irregular step gaps (e.g., a daily series skipping 5 days), an explicit warning (`"Irregular timestamp gaps detected: ..."`) is emitted (`test_daily_five_day_gap_warning`).
+   - **Finding 3 (2.0% floor wording)**: Updated the zero-residual warning note in `research/forecast_engine.py` to explicitly state: `"An uncalibrated fixed constant floor of 2.0% (not derived from data) was applied to prevent zero-width intervals."`
+
+2. **Exact Measurement of the 11 Wrong-Test Arm-Tasks (Prompt Example Contradiction vs Model-Invented Edge Cases)**:
+   - Evaluated all 11 wrong-test arm-tasks (`English`: `code_01, 04, 05, 06, 08, 09, 19`; `Singlish`: `code_04, 06, 09, 13`) against known-good solutions that pass 100% of `HIDDEN_TESTS`:
+     - **Contradicts Prompt's `Example:` block**: **0 / 11 (0.0%)**. In all 9 out of 11 tasks that have an `Example:` section in the prompt (`English code_01, 05, 06, 08, 09, 19`; `Singlish code_06, 09, 13`), the 7B model copied the prompt's canonical examples verbatim into its generated test suite, and all of those assertions passed. The remaining 2 (`English code_04` and `Singlish code_04`) have no `Example:` section in the prompt.
+     - **Fails on Model-Invented Edge Cases**: **11 / 11 (100.0%)**. Every single failure is caused by extra edge-case assertions invented by the 7B model where the model miscalculated arithmetic, length, or tie-breaking rules:
+       - `English code_01` (`parse_simple_csv`): `test_empty_header` expects empty header column `""` to be omitted (`[{"age": "30"}]` instead of `[{"": "Alice", "age": "30"}]`).
+       - `English code_04` (`validate_password_strength`): `test_valid_password` asserts `"Aa1!"` (length 4) has `valid: True, score: 5`, violating the 8-character minimum length rule.
+       - `English code_05` (`top_k_frequent_words`): `test_multiple_words` asserts tie-breaker order `["fish", "two", "one"]` (`"two"` before `"blue"`/`"one"`), violating alphabetical tie-breaking.
+       - `English code_06` & `Singlish code_06` (`time_diff_humanized`): both assert `time_diff_humanized(86399) == "1d 23h 59m 59s"` (arithmetic error: $86399\text{ s} = 23\text{h } 59\text{m } 59\text{s}$).
+       - `English code_08` (`find_first_missing_positive`): asserts `find_first_missing_positive(list(range(1, 102))) == 1` instead of `102`.
+       - `English code_09` (`generate_slug`): passes `""` as `max_length: int` (`TypeError`) and expects a 12-char output `"hello-world"` when `max_length=10`.
+       - `Singlish code_09` (`generate_slug`): forgets default `max_length=50` truncates a 58-char string, and miscounts characters on `max_length=20` and `max_length=25`.
+       - `Singlish code_04` (`validate_password_strength` — **Finding 4 re-derivation**): fails stub probe at `result["valid"]` (`TypeError: 'NoneType' object is not subscriptable` on `None` stub), AND when executed against the known-good solution, `test_only_special_characters` calls `validate_password_strength("!@#$%^&*()")` (10 characters, all special) and asserts `result["score"] == 0` and `'length'` in `result["missing"]`, whereas a 10-character string satisfies both `length >= 8` and `special` (`score == 2`, `missing == ['uppercase', 'lowercase', 'digit']`).
+       - `Singlish code_13` (`matrix_transpose_ragged`): `test_ragged_matrix` asserts 2 rows `[[1, 3, 6], [2, 4, 0]]` for a 3-column ragged matrix `[[1, 2], [3, 4, 5], [6]]`, dropping the 3rd transposed row `[0, 5, 0]`.
+       - `English code_19` (`retry_backoff_schedule`): fails stub probe (`None[0]` -> `TypeError`), and against the known-good solution asserts `sum(schedule) == 5.0` for `[2.0, 4.0]` ($2.0+4.0=6.0$) and `sum(schedule) == 12.0` for `[1.0, 3.0]` ($1.0+3.0=4.0$).
+
+3. **H1 Verification & Integration as Non-Droppable Frozen Assertions**:
+   - **Known-Good Solution Verification**: All **18 / 18** extracted H1 `Example:` suites pass the known-good reference solutions inside the `VerifyLoop` sandbox (**0 false rejects** from the parser).
+   - **Stub Probe Verification**: All **18 / 18** extracted H1 `Example:` suites pass `VerifyLoop.run_stub_probe` across all 11 stubs in `STUB_FAMILY` (relational comparisons in `code_11` are guarded with `isinstance(..., (int, float)) and not isinstance(..., bool)` so `None`/collection stubs fail with `AssertionError` rather than `TypeError`).
+   - **Production Integration**: Added `extract_example_assertions` and `append_canonical_example_tests` to `research/verify_loop.py` and wired `task_prompt=args.task` into `VerifyLoop.prepare_test_suite` and `cmd_code` in `research/pai.py`. Every frozen model test suite now includes `def test_pai_canonical_examples():` as a non-droppable test function alongside the prompt hint.
+

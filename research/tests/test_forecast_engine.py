@@ -84,6 +84,7 @@ class TestForecastEngine(unittest.TestCase):
         self.assertTrue(report.success)
         self.assertEqual(len(report.forecasts), 5)
         self.assertIn("Forecasts are mathematical extrapolations", report.disclaimer)
+        self.assertTrue(any("Irregular timestamp gaps detected" in w for w in report.data_warnings))
 
     def test_insufficient_data_refusal(self):
         csv_path = os.path.join(FIXTURES_DIR, "series_too_short.csv")
@@ -207,6 +208,26 @@ class TestForecastEngine(unittest.TestCase):
                 self.assertLess(fp.lower_95, fp.point)
                 self.assertGreater(fp.upper_95, fp.point)
                 self.assertGreater(fp.upper_95 - fp.lower_95, 0.05)
+        finally:
+            if os.path.exists(tf_path):
+                os.remove(tf_path)
+
+    def test_daily_five_day_gap_warning(self):
+        # Reviewer defect 2: Daily series with a 5-day gap must emit an irregular timestamp gap warning
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="") as tf:
+            tf.write("date,value\n")
+            for d in range(1, 10):
+                tf.write(f"2026-01-{d:02d},{float(10 + d)}\n")
+            # Skip 5 days: jump from 2026-01-09 to 2026-01-15
+            for d in range(15, 25):
+                tf.write(f"2026-01-{d:02d},{float(10 + d)}\n")
+            tf_path = tf.name
+
+        try:
+            report = run_forecast_pipeline(tf_path, horizon=3)
+            self.assertTrue(report.success)
+            self.assertTrue(any("Irregular timestamp gaps detected" in w for w in report.data_warnings))
+            self.assertTrue(any("2026-01-09 to 2026-01-15" in w for w in report.data_warnings))
         finally:
             if os.path.exists(tf_path):
                 os.remove(tf_path)

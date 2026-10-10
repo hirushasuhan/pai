@@ -19,6 +19,8 @@ from verify_loop import (
     TestSyntaxError,
     VacuousTestError,
     VerifyLoop,
+    append_canonical_example_tests,
+    extract_example_assertions,
     generate_stub_code,
     sanitize_untrusted_diagnostics,
     stage_artifacts,
@@ -1105,7 +1107,59 @@ def find_first_missing_positive(nums):
         self.assertTrue(res.passed, f"Good solution must pass: {res.detail}")
         self.assertEqual(res.status, "PASS")
 
+    def test_extract_example_assertions_and_tuning_set_coverage(self):
+        import json
+
+        eval_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eval_sets")
+        for fname in ("coding_tasks.json", "coding_tasks_singlish.json"):
+            fpath = os.path.join(eval_dir, fname)
+            with open(fpath, "r", encoding="utf-8") as f:
+                tasks = json.load(f)
+            extracted_tasks = 0
+            for t in tasks:
+                stmts = extract_example_assertions(t["prompt"], entry_point=t["entry_point"])
+                if stmts:
+                    extracted_tasks += 1
+                    self.assertTrue(any(s.startswith("assert ") for s in stmts))
+            self.assertEqual(extracted_tasks, 18, f"Expected 18/20 tasks with examples in {fname}")
+
+    def test_prepare_test_suite_appends_non_droppable_canonical_examples(self):
+        task_prompt = '''def compact_number_formatter(n: float) -> str:
+    """
+    Format number compactly.
+    Example:
+        compact_number_formatter(950) -> "950"
+        compact_number_formatter(1200) -> "1.2K"
+        compact_number_formatter(2500000) -> "2.5M"
+    """
+'''
+        model_test = """
+from solution import compact_number_formatter
+
+def test_basic():
+    assert compact_number_formatter(100) == "100"
+"""
+        suite = self.loop.prepare_test_suite(model_test_code=model_test, task_prompt=task_prompt)
+        self.assertIn("def test_pai_canonical_examples():", suite.test_code)
+        self.assertIn("test_pai_canonical_examples", suite.expected_test_ids)
+        self.assertGreaterEqual(suite.assertion_count, 4)
+
+        # Must pass stub probe
+        probe_res = self.loop.run_stub_probe(suite)
+        self.assertTrue(probe_res.passed, f"Stub probe failed: {probe_res.detail}")
+
+        # A buggy candidate that passes test_basic(100) -> "100" but fails canonical examples (1200 -> "1.2K") is rejected
+        buggy_sol = """
+def compact_number_formatter(n):
+    return str(int(n))
+"""
+        exec_res = self.loop.execute_solution_tests(buggy_sol, suite)
+        self.assertFalse(exec_res.passed)
+        failed_ids = [f["test_id"] for f in exec_res.failures]
+        self.assertIn("test_pai_canonical_examples", failed_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

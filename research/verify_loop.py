@@ -31,6 +31,7 @@ import hmac
 import inspect
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -276,6 +277,147 @@ def generate_stub_code(symbols: Tuple[str, ...], stub_name: str, stub_body: str)
     return "\n".join(lines)
 
 
+def extract_example_assertions(
+    prompt: str,
+    entry_point: Optional[str] = None,
+) -> List[str]:
+    """
+    Deterministically extracts canonical example statements and assertions from a task prompt's
+    `Example:` or `Examples:` docstring section (H1).
+    Returns executable Python statements (setup assignments + assert statements) only when at least
+    one valid assertion is extracted; otherwise returns an empty list.
+    """
+    if not prompt or ("Example:" not in prompt and "Examples:" not in prompt):
+        return []
+
+    if not entry_point:
+        fn_matches = re.findall(r"\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", prompt)
+        if fn_matches:
+            entry_point = fn_matches[0]
+
+    marker = "Example:" if "Example:" in prompt else "Examples:"
+    section = prompt.split(marker, 1)[1]
+
+    lines = section.splitlines()
+    example_lines: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not line.startswith(" ") and not line.startswith("\t") and example_lines and ":" in stripped:
+            break
+        example_lines.append(stripped)
+
+    blocks: List[str] = []
+    current_block: List[str] = []
+    for line in example_lines:
+        if current_block:
+            joined = " ".join(current_block)
+            open_parens = joined.count("(") - joined.count(")")
+            open_brackets = joined.count("[") - joined.count("]")
+            open_braces = joined.count("{") - joined.count("}")
+            if open_parens <= 0 and open_brackets <= 0 and open_braces <= 0:
+                blocks.append(joined)
+                current_block = [line]
+                continue
+        current_block.append(line)
+
+    if current_block:
+        blocks.append(" ".join(current_block))
+
+    statements: List[str] = []
+    for blk in blocks:
+        clean_blk = re.sub(r"#.*$", "", blk).strip()
+        if not clean_blk:
+            continue
+
+        # Pattern 1: Arrow assertion: `expr -> expected`
+        if "->" in clean_blk:
+            parts = clean_blk.split("->", 1)
+            expr = parts[0].strip()
+            expected = parts[1].strip()
+            try:
+                ast.parse(expr, mode="eval")
+                ast.parse(expected, mode="eval")
+                statements.append(f"assert {expr} == {expected}")
+                continue
+            except SyntaxError:
+                pass
+
+        # Pattern 2: Direct comparison assertion: e.g. `call(...) > 0` or `call(...) == ...`
+        if entry_point and any(op in clean_blk for op in [">", "<", ">=", "<=", "=="]):
+            if entry_point in clean_blk:
+                try:
+                    expr_ast = ast.parse(clean_blk, mode="eval").body
+                    if (
+                        isinstance(expr_ast, ast.Compare)
+                        and len(expr_ast.ops) == 1
+                        and isinstance(expr_ast.ops[0], (ast.Gt, ast.Lt, ast.GtE, ast.LtE))
+                    ):
+                        lhs = ast.get_source_segment(clean_blk, expr_ast.left)
+                        rhs = ast.get_source_segment(clean_blk, expr_ast.comparators[0])
+                        if lhs and rhs:
+                            statements.append(
+                                f"assert isinstance(({lhs}), (int, float)) and not isinstance(({lhs}), bool) "
+                                f"and isinstance(({rhs}), (int, float)) and not isinstance(({rhs}), bool) "
+                                f"and ({clean_blk})"
+                            )
+                            continue
+                    statements.append(f"assert {clean_blk}")
+                    continue
+                except SyntaxError:
+                    pass
+
+        # Pattern 3: Variable assignment: `var = ...`
+        if "=" in clean_blk and not clean_blk.startswith("assert"):
+            try:
+                parsed_stmt = ast.parse(clean_blk)
+                if len(parsed_stmt.body) == 1 and isinstance(parsed_stmt.body[0], ast.Assign):
+                    statements.append(clean_blk)
+                    continue
+            except SyntaxError:
+                pass
+
+    if not any(s.startswith("assert ") for s in statements):
+        return []
+    return statements
+
+
+def append_canonical_example_tests(
+    test_code: str,
+    task_prompt: Optional[str] = None,
+    entry_point: Optional[str] = None,
+) -> str:
+    """
+    Appends non-droppable canonical example assertions (`test_pai_canonical_examples`)
+    extracted from `task_prompt` to `test_code` if valid examples exist (H1).
+    """
+    if not test_code or not task_prompt or "def test_pai_canonical_examples" in test_code:
+        return test_code
+
+    ep = entry_point
+    if not ep:
+        fn_matches = re.findall(r"\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", task_prompt)
+        if fn_matches:
+            ep = fn_matches[0]
+
+    if not ep:
+        return test_code
+
+    stmts = extract_example_assertions(task_prompt, entry_point=ep)
+    if not stmts:
+        return test_code
+
+    body_lines = [f"    from solution import {ep}"] + [f"    {s}" for s in stmts]
+    canonical_fn = "\n\ndef test_pai_canonical_examples():\n" + "\n".join(body_lines) + "\n"
+    combined = test_code.rstrip() + canonical_fn
+    try:
+        ast.parse(combined, filename="test_suite.py")
+        return combined
+    except SyntaxError:
+        return test_code
+
+
 class VerifyLoop:
     """
     Manages frozen test registration, stub family probing,
@@ -300,10 +442,13 @@ class VerifyLoop:
         self,
         user_tests_path: Optional[str] = None,
         model_test_code: Optional[str] = None,
+        task_prompt: Optional[str] = None,
     ) -> FrozenTestSuite:
         """
         Prepares and freezes the test suite.
         User-provided --tests strictly take priority over model-written tests.
+        When task_prompt is provided for model-written tests, canonical Example assertions (H1)
+        are deterministically appended as a non-droppable test function before freezing.
         """
         if user_tests_path and os.path.exists(user_tests_path):
             with open(user_tests_path, "r", encoding="utf-8") as f:
@@ -311,6 +456,8 @@ class VerifyLoop:
             return self.freeze_tests(user_code, source="user")
 
         if model_test_code:
+            if task_prompt:
+                model_test_code = append_canonical_example_tests(model_test_code, task_prompt=task_prompt)
             return self.freeze_tests(model_test_code, source="model")
 
         raise ValueError("No test code provided: neither user_tests_path nor model_test_code was specified")

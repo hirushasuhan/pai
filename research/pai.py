@@ -743,6 +743,7 @@ def cmd_code(args) -> int:
         TestSyntaxError,
         VacuousTestError,
         VerifyLoop,
+        extract_example_assertions,
         sanitize_untrusted_diagnostics,
         stage_artifacts,
     )
@@ -832,8 +833,17 @@ def cmd_code(args) -> int:
     model_timeout = getattr(args, "model_timeout", None)
 
     if suite is None:
+        canonical_stmts = extract_example_assertions(args.task)
+        canonical_hint = ""
+        if canonical_stmts:
+            joined_canonical = "\n".join(f"  {s}" for s in canonical_stmts)
+            canonical_hint = (
+                "\nCanonical examples extracted from the specification (your tests MUST be consistent with these):\n"
+                f"{joined_canonical}\n"
+            )
         test_prompt = (
-            f"Write a Python test suite for the following task:\n{args.task}\n\n"
+            f"Write a Python test suite for the following task:\n{args.task}\n"
+            f"{canonical_hint}\n"
             "Requirements:\n"
             "- Tests must test the module named 'solution' (e.g. 'from solution import ...').\n"
             "- Write clear assertions testing functionality and edge cases.\n"
@@ -850,7 +860,7 @@ def cmd_code(args) -> int:
             return 2
         test_code = extract_python_code(raw_tests)
         try:
-            suite = loop.prepare_test_suite(model_test_code=test_code)
+            suite = loop.prepare_test_suite(model_test_code=test_code, task_prompt=args.task)
         except (VacuousTestError, TestSyntaxError, Exception) as e:
             if getattr(args, "json", False):
                 print(json.dumps({
@@ -1859,7 +1869,8 @@ def cmd_forecast(args) -> int:
     )
 
     csv_path = args.file
-    horizon = getattr(args, "horizon", 5) or 5
+    raw_horizon = getattr(args, "horizon", None)
+    horizon = 5 if raw_horizon is None else raw_horizon
     date_col = getattr(args, "date_col", None)
     value_col = getattr(args, "value_col", None)
 

@@ -284,6 +284,32 @@ def parse_csv_series(
             parsed_dts = [p[0] for p in paired]
             dates = [p[1] for p in paired]
             values = [p[2] for p in paired]
+
+        valid_dts = [dt for dt in parsed_dts if dt is not None]
+        if len(valid_dts) >= 2:
+            all_deltas = [(valid_dts[i + 1] - valid_dts[i]).days for i in range(len(valid_dts) - 1)]
+            med_delta = sorted(all_deltas)[len(all_deltas) // 2]
+            if med_delta > 0:
+                def _is_irregular_step(d: int) -> bool:
+                    if med_delta == 1:
+                        return d != 1
+                    if 6 <= med_delta <= 8:
+                        return not (6 <= d <= 8)
+                    if 27 <= med_delta <= 32:
+                        return not (27 <= d <= 32)
+                    if 360 <= med_delta <= 370:
+                        return not (360 <= d <= 370)
+                    return abs(d - med_delta) > max(1, int(0.2 * med_delta))
+
+                gap_indices = [i for i, d in enumerate(all_deltas) if _is_irregular_step(d)]
+                if gap_indices:
+                    first_i = gap_indices[0]
+                    first_d = all_deltas[first_i]
+                    warnings.append(
+                        f"Irregular timestamp gaps detected: {len(gap_indices)} gap(s) found "
+                        f"(e.g. {dates[first_i]} to {dates[first_i + 1]}, {first_d}d step vs expected {med_delta}d). "
+                        "Series is treated as sequential observations; missing dates may shift horizon alignment."
+                    )
     else:
         # Non-date labels (e.g. x0, x1, ... x29): PRESERVE original sequence order!
         # Do NOT sort lexicographically (Finding 2).
@@ -548,9 +574,9 @@ def run_forecast_pipeline(
         res_std = max(0.02 * mean_val, 0.1)
         uncertainty_notes = (
             "Historical backtest has zero residual variance. "
-            "A minimum baseline uncertainty floor of 2.0% was applied to prevent overconfident zero-width intervals."
+            "An uncalibrated fixed constant floor of 2.0% (not derived from data) was applied to prevent zero-width intervals."
         )
-        warnings.append("Zero residual variance detected on backtest; conservative uncertainty floor applied.")
+        warnings.append("Zero residual variance detected on backtest; uncalibrated 2.0% constant floor applied.")
 
     backtest = BacktestResult(
         holdout_size=h_test,
