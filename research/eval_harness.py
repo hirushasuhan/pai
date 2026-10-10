@@ -95,7 +95,7 @@ class EvalRecord:
     generated_test_code: Optional[str] = None
     error_type: Optional[str] = None
     failing_stub: Optional[str] = None
-    verified: bool = False
+    gate: str = "failed"
     unverified_staged: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -111,7 +111,7 @@ class EvalRecord:
             "seed": self.seed,
             "exit_code": self.exit_code,
             "pai_verdict": self.pai_verdict,
-            "verified": self.verified,
+            "gate": self.gate,
             "unverified_staged": self.unverified_staged,
             "pass_at_1_zero_shot": self.pass_at_1_zero_shot,
             "pass_at_1_repair3": self.pass_at_1_repair3,
@@ -502,7 +502,7 @@ def run_single_task_evaluation(
                 continue
 
     pai_passed = (exit_code == 0) and parsed_json.get("success", False)
-    verified_flag = bool(pai_passed and parsed_json.get("verified", True))
+    gate_val = "passed" if (pai_passed and parsed_json.get("gate", "passed") == "passed") else "failed"
     unverified_staged = bool(
         (not pai_passed)
         and (os.path.exists(unverified_path) or bool(parsed_json.get("staged_unverified_solution")))
@@ -634,7 +634,7 @@ def run_single_task_evaluation(
         generated_test_code=gen_test_code,
         error_type=err_type,
         failing_stub=failing_stub,
-        verified=verified_flag,
+        gate=gate_val,
         unverified_staged=unverified_staged,
     )
 
@@ -796,7 +796,14 @@ def run_single_task_evaluation_gate_off(
         generated_test_code=None,
         error_type=err_type_val,
         failing_stub=None,
+        gate="passed" if passed else "failed",
     )
+
+
+_GATE_SCOPE_NOTE = (
+    "Candidate passed model-written tests and specification examples in sandbox "
+    "(not formal verification; 2/62 benchmark mutants accepted across tuning+holdout)."
+)
 
 
 def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> Dict[str, Any]:
@@ -812,7 +819,7 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
         total_r = len(r_recs)
         zshot_count = sum(1 for r in r_recs if r.pass_at_1_zero_shot)
         rep3_count = sum(1 for r in r_recs if r.pass_at_1_repair3)
-        verified_count = sum(1 for r in r_recs if r.verified or r.pass_at_1_repair3)
+        gate_passed_count = sum(1 for r in r_recs if r.gate == "passed" or r.pass_at_1_repair3)
         unverified_staged_count = sum(1 for r in r_recs if r.unverified_staged)
         unverified_hidden_pass_count = sum(
             1 for r in r_recs if r.unverified_staged and r.hidden_test_result.passed
@@ -829,7 +836,7 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
         per_repeat_stats.append({
             "repeat_idx": r_idx,
             "total_tasks": total_r,
-            "verified_count": verified_count,
+            "gate_passed_count": gate_passed_count,
             "unverified_staged_count": unverified_staged_count,
             "unverified_hidden_pass_count": unverified_hidden_pass_count,
             "pass_at_1_zero_shot_count": zshot_count,
@@ -863,7 +870,7 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
             total_flips += 1
 
     total_records = len(records)
-    total_verified = sum(1 for r in records if r.verified or r.pass_at_1_repair3)
+    total_gate_passed = sum(1 for r in records if r.gate == "passed" or r.pass_at_1_repair3)
     total_unverified_staged = sum(1 for r in records if r.unverified_staged)
     total_unverified_hidden_pass = sum(
         1 for r in records if r.unverified_staged and r.hidden_test_result.passed
@@ -888,7 +895,8 @@ def _compute_group_metrics(records: List[EvalRecord], arm: str, model: str) -> D
         "num_tasks": num_tasks,
         "num_repeats": num_repeats,
         "total_runs": total_records,
-        "verified_count": total_verified,
+        "gate_passed_count": total_gate_passed,
+        "gate_scope_note": _GATE_SCOPE_NOTE,
         "unverified_staged_count": total_unverified_staged,
         "unverified_hidden_pass_count": total_unverified_hidden_pass,
         "mean_pass_at_1_zero_shot": round(mean_zshot, 4),
@@ -977,6 +985,10 @@ def compute_eval_metrics_from_jsonl(jsonl_path: str) -> Dict[str, Any]:
                 else:
                     term_stage = "failed"
 
+            raw_gate = data.get("gate")
+            if raw_gate not in ("passed", "failed"):
+                raw_gate = "passed" if (data.get("pai_verdict") == "PASS") else "failed"
+
             rec = EvalRecord(
                 task_id=data["task_id"],
                 task_name=data.get("task_name", data["task_id"]),
@@ -1006,7 +1018,7 @@ def compute_eval_metrics_from_jsonl(jsonl_path: str) -> Dict[str, Any]:
                 generated_test_preview=data.get("generated_test_preview"),
                 stub_probe_failure=data.get("stub_probe_failure"),
                 ast_violations=data.get("ast_violations"),
-                verified=bool(data.get("verified", data.get("pai_verdict") == "PASS")),
+                gate=raw_gate,
                 unverified_staged=bool(data.get("unverified_staged", False)),
             )
             records.append(rec)
@@ -1110,7 +1122,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--tasks", type=str, default=None, help="Path to coding tasks JSON file")
     parser.add_argument("--arm", type=str, default="english", choices=["english", "singlish", "gate_off_english", "gate_off_singlish"], help="Arm name")
     parser.add_argument("--gate-off", action="store_true", help="Run gate-off baseline (direct solution generation without model self-tests)")
-    parser.add_argument("--allow-unverified", action="store_true", help="Pass --allow-unverified to pai code and report verified vs unverified separately")
+    parser.add_argument("--allow-unverified", action="store_true", help="Pass --allow-unverified to pai code and report gate-passed vs unverified separately")
     parser.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Candidate model name")
     parser.add_argument("--repeats", type=int, default=3, help="Number of repeats (default: 3)")
     parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (default: 0.0)")
@@ -1177,7 +1189,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"Total tasks evaluated : {metrics['num_tasks']}")
                 print(f"Total runs            : {metrics['total_runs']}")
-                print(f"Verified accepted     : {metrics.get('verified_count', 0)} / {metrics['total_runs']}")
+                print(f"Gate passed           : {metrics.get('gate_passed_count', 0)} / {metrics['total_runs']}")
+                print(f"Gate scope note       : {metrics.get('gate_scope_note', '')}")
                 print(f"Unverified staged     : {metrics.get('unverified_staged_count', 0)} / {metrics['total_runs']} (hidden pass: {metrics.get('unverified_hidden_pass_count', 0)})")
                 print(f"pass@1 (zero-shot)    : {metrics['mean_pass_at_1_zero_shot'] * 100:.1f}%")
                 print(f"pass@1 (repair<=3)    : {metrics['mean_pass_at_1_repair3'] * 100:.1f}%")

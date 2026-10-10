@@ -1,0 +1,62 @@
+[
+  {
+    "id": "code_21",
+    "name": "group_anagrams",
+    "entry_point": "group_anagrams",
+    "prompt": "Ekama letters thiyena anagram strings ekata group karana Python function ekak `group_anagrams(words: list[str]) -> list[list[str]]` liyanna.\nHama group ekak athulema words thiyenna ona input list eke mulinma apu order ekatama.\nGroups sort karanna ona group size eka descending order ekata; group dekaka size eka samanai nam e groups deke palaweni word eka anuwa lexicographically (alphabetical order ekata) sort karanna.\nInput list eka empty nam `[]` return karanna.\n\nExample:\n    words = [\"eat\", \"tea\", \"tan\", \"ate\", \"nat\", \"bat\"]\n    group_anagrams(words) -> [[\"eat\", \"tea\", \"ate\"], [\"tan\", \"nat\"], [\"bat\"]]"
+  },
+  {
+    "id": "code_22",
+    "name": "merge_intervals",
+    "entry_point": "merge_intervals",
+    "prompt": "Overlap wena intervals okkoma merge karana Python function ekak `merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]` liyanna.\nHama interval ekakma `start <= end` wena `(start, end)` tuple ekak.\nEkakata eka gaawena (touch wena) intervals unath (e.g. `(1, 4)` saha `(4, 5)`) `(1, 5)` widiyata merge karanna ona.\nReturn karana list eka `start` value eka anuwa ascending order ekata sort wela thiyenna ona.\nEmpty input ekakata `[]` return karanna.\n\nExample:\n    merge_intervals([(1, 3), (2, 6), (8, 10), (15, 18)]) -> [(1, 6), (8, 10), (15, 18)]\n    merge_intervals([(1, 4), (4, 5)]) -> [(1, 5)]"
+  },
+  {
+    "id": "code_23",
+    "name": "parse_query_string",
+    "entry_point": "parse_query_string",
+    "prompt": "URL query string ekak parse karala keys walata adala values list ekak map wena dictionary ekak return karana Python function ekak `parse_query_string(query: str) -> dict[str, list[str]]` liyanna.\nMulin '?' thiyenawa nam eka ignore karanna.\nKeys saha values wala '+' thiyena than space walin replace karala '%20' wage percent-encoded characters decode karanna.\n'=' nathi pairs walata empty string value ekak `\"\"` thiyenawa kiyala ganna.\nConsecutive '&' nisa ena empty pairs ignore karanna.\n\nExample:\n    parse_query_string(\"name=Alice&tag=admin&tag=user&flag\") -> {\"name\": [\"Alice\"], \"tag\": [\"admin\", \"user\"], \"flag\": [\"\"]}\n    parse_query_string(\"?search=hello+world%21\") -> {\"search\": [\"hello world!\"]}"
+  },
+  {
+    "id": "code_24",
+    "name": "flatten_nested_dict",
+    "entry_point": "flatten_nested_dict",
+    "prompt": "Nested dictionary ekak `sep` walin join wechcha keys thiyena single-level dictionary ekakata flatten karana Python function ekak `flatten_nested_dict(d: dict, sep: str = \".\") -> dict` liyanna.\nEmpty sub-dictionaries thiyenawa nam ewa `{}` widiyatama adala key eka yatathe thiyenna ona.\nEmpty input dictionary ekakata `{}` return karanna.\n\nExample:\n    d = {\"user\": {\"name\": \"Alice\", \"address\": {\"city\": \"Colombo\"}}, \"active\": True}\n    flatten_nested_dict(d) -> {\"user.name\": \"Alice\", \"user.address.city\": \"Colombo\", \"active\": True}"
+  },
+  {
+    "id": "code_25",
+    "name": "tokenize_arithmetic",
+    "entry_point": "tokenize_arithmetic",
+    "prompt": "Arithmetic expression string ekak integers, operators ('+', '-', '*', '/', '%'), saha parentheses ('(', ')') represent karana strings list ekakata tokenize karana Python function ekak `tokenize_arithmetic(expr: str) -> list[str]` liyanna.\nWhitespace okkoma strip karanna.\nNegative numbers: '-' ekata passe kelinma digits enawa nam, e '-' eka thiyenne expression eke mulama ho operator ekakata passe ho '(' ekakata kelinma passe nam eka negative integer token ekak widiyata ganna.\n\nExample:\n    tokenize_arithmetic(\"3 + 4 * 2 / (1 - 5)\") -> [\"3\", \"+\", \"4\", \"*\", \"2\", \"/\", \"(\", \"1\", \"-\", \"5\", \")\"]\n    tokenize_arithmetic(\"-5 + 10\") -> [\"-5\", \"+\", \"10\"]"
+  },
+  {
+    "id": "code_26",
+    "name": "validate_credit_card",
+    "entry_point": "validate_credit_card",
+    "prompt": "Luhn checksum algorithm eka use karala payment card number string ekak validate karana Python function ekak `validate_credit_card(number: str) -> dict` liyanna.\nValidate karanna kalin spaces saha dashes okkoma ain karanna.\nSpaces/dashes ain kalata passe non-digit characters thiyenawa nam ho length eka < 13 ho > 19 nam `{\"valid\": False, \"brand\": \"Unknown\"}` return karanna.\nLuhn algorithm eka: dakunu paththema digit eken (check digit) patan aran wamata yaddi, hama dewana digit ekama double karanna. Double kalama > 9 nam 9k adu karanna. Digits okkoma ekathu karama sum % 10 == 0 nam card eka valid.\nBrand eka detect karanna:\n- Visa: '4' walin patan gannawa\n- Mastercard: '51', '52', '53', '54', ho '55' walin patan gannawa\n- Amex: '34' ho '37' walin patan gannawa\n- Nathnam: \"Unknown\"\n`{\"valid\": bool, \"brand\": str}` return karanna.\n\nExample:\n    validate_credit_card(\"4532 0151 1283 036\") -> {\"valid\": True, \"brand\": \"Visa\"}"
+  },
+  {
+    "id": "code_27",
+    "name": "word_wrap_text",
+    "entry_point": "word_wrap_text",
+    "prompt": "Single-paragraph text string ekaka kisima line ekak `width` characters walata wada wadi nowena widiyata greedy word wrapping karana Python function ekak `word_wrap_text(text: str, width: int) -> str` liyanna.\nWords wen wenne spaces walin.\nLines join karanna ona newline `\\n` walin.\nThani word ekak `width` ekata wada digai nam, e word eka kadanne nathuwa thani line ekaka danna.\nLines wala mulai agai thiyena whitespace strip karanna.\n\nExample:\n    word_wrap_text(\"The quick brown fox jumps over the lazy dog\", 15) -> \"The quick brown\\nfox jumps over\\nthe lazy dog\""
+  },
+  {
+    "id": "code_28",
+    "name": "levenshtein_distance",
+    "entry_point": "levenshtein_distance",
+    "prompt": "Strings dekak athara Levenshtein edit distance eka compute karana Python function ekak `levenshtein_distance(s1: str, s2: str) -> int` liyanna.\nThani character ekak insert kirima, delete kirima, ho substitute kirima allow wenawa, hama operation ekakatama cost eka 1i.\nStrings deka samanai nam 0 return karanna.\n\nExample:\n    levenshtein_distance(\"kitten\", \"sitting\") -> 3\n    levenshtein_distance(\"flaw\", \"lawn\") -> 2\n    levenshtein_distance(\"\", \"abc\") -> 3"
+  },
+  {
+    "id": "code_29",
+    "name": "longest_common_prefix",
+    "entry_point": "longest_common_prefix",
+    "prompt": "Strings list ekaka okkotama podu digama prefix string eka (longest common prefix) hoyana Python function ekak `longest_common_prefix(strs: list[str]) -> str` liyanna.\nCommon prefix ekak nathnam ho `strs` list eka empty nam `\"\"` return karanna.\n\nExample:\n    longest_common_prefix([\"flower\", \"flow\", \"flight\"]) -> \"fl\"\n    longest_common_prefix([\"dog\", \"racecar\", \"car\"]) -> \"\""
+  },
+  {
+    "id": "code_30",
+    "name": "compress_string_rle",
+    "entry_point": "compress_string_rle",
+    "prompt": "Run-length encoding use karala string ekak compress karana Python function ekak `compress_string_rle(s: str) -> str` liyanna.\nEkama character eka digatama thiyena hama run ekakatama, e character ekai ekata passe run length count ekai output karanna (e.g. 'a3').\nRun length eka 1 nam count eka noda character eka witharak danna (e.g. 'a1' wenuwata 'a').\nEmpty string ekakata `\"\"` return karanna.\n\nExample:\n    compress_string_rle(\"aaabbc\") -> \"a3b2c\"\n    compress_string_rle(\"abcd\") -> \"abcd\"\n    compress_string_rle(\"a\" * 10) -> \"a10\""
+  }
+]

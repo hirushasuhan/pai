@@ -1234,10 +1234,10 @@ Decisions recorded: `--allow-unverified` approved under constraints (default off
 3. **Implementation of `--allow-unverified` (All 6 Reviewer Constraints Enforced)**:
    - Implemented across [`verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py#L1729-L1792) (`stage_unverified_artifact`), [`pai.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/pai.py#L675-L1185) (`--allow-unverified`), and [`eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_harness.py#L95-L1165):
      1. **Default Off**: Requires explicit `--allow-unverified` CLI flag.
-     2. **Distinct File Naming & JSON Metadata**: Stages unverified code exclusively to `solution.unverified.py` (never `solution.py`) and outputs `"verified": false` in JSON (`"verified": true` when verified).
+     2. **Distinct File Naming & JSON Metadata**: Stages unverified code exclusively to `solution.unverified.py` (never `solution.py`) and outputs `"gate": "failed"` in JSON (`"gate": "passed"` when the candidate passes the sandbox gate, accompanied by `"gate_meaning"`).
      3. **Clear Terminal Banner**: Prints `[UNVERIFIED] Candidate solution staged to ...` together with the rejection stage (`error`) and failing test details.
      4. **Non-Zero Exit Code Preserved**: Returns the exact same non-zero exit code (`1` or `2`; `4` on target collision without `--overwrite`) as when the gate rejects; never returns `0`.
-     5. **Strict Separation in `eval_harness.py`**: Reports `verified_accepted_count` (`verified: true`) separately from `unverified_staged_count` (`unverified_staged: true`); `pass_at_1_zero_shot`, `pass_at_1_repair3`, and `false_accept_rate` count strictly verified passes only.
+     5. **Strict Separation in `eval_harness.py`**: Reports `gate_passed_count` (`"gate": "passed"`) separately from `unverified_staged_count` (`unverified_staged: true`); `pass_at_1_zero_shot`, `pass_at_1_repair3`, and `false_accept_rate` count strictly gate-passed runs only.
      6. **No Host Execution**: Candidate code is written to disk as inert text and never executed on the host.
    - Verified by unit tests `test_stage_unverified_artifact_isolated_and_collision_safe` and `test_allow_unverified_flag_cli_and_harness_separation`.
 
@@ -1245,8 +1245,8 @@ Decisions recorded: `--allow-unverified` approved under constraints (default off
    - Updated [`research/gate_mutant_runner.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/gate_mutant_runner.py#L38-L320) to pass `task_prompt` into `loop.prepare_test_suite(model_test_code=gt_tests, task_prompt=task_prompts.get(tid))` so the mutant runner tests the exact H1-augmented suite (`test_pai_canonical_examples`).
    - Removed the duplicate `canonical_hint` text injection from `test_prompt` in `pai.py` (since `args.task` already ends with the `Example:` block, duplicating it caused a `temperature=0.0` repetition timeout on `code_01`), while keeping `loop.prepare_test_suite(model_test_code=test_code, task_prompt=args.task)` to deterministically append `def test_pai_canonical_examples():`.
    - **H1-Integrated Tuning Set Results (`code_01`–`code_20`, `qwen2.5-coder:7b`, `repeats=1`, `temp=0.0`, `seed=42`)**:
-     - **English H1** (`docs/evidence/eval_qwen2.5_coder_7b_english_h1_diag.jsonl`): **6 / 20** verified accepted (`30.0%` pass@1 repair<=3, `25.0%` zero-shot: `code_02, 12, 13, 14, 16, 18`), **0 false accepts**, 1 infra timeout (`code_07`), 7 wrong-test drops among raw-solvable tasks (`code_01, 04, 05, 06, 08, 09, 19`). Mutant benchmark: **0 / 42 accepted** (`100%` kill rate; **12 / 12 mutants killed** across 6 valid suites).
-     - **Singlish H1** (`docs/evidence/eval_qwen2.5_coder_7b_singlish_h1_diag.jsonl`): **4 / 20** verified accepted (`20.0%` pass@1 repair<=3: `code_08, 12, 14, 18`), **0 false accepts**, 2 infra timeouts (`code_07, 15`), 5 wrong-test drops among raw-solvable tasks (`code_02, 04, 06, 09, 13`). Mutant benchmark: **0 / 42 accepted** (`100%` kill rate; **11 / 11 mutants killed** across 5 valid suites).
+     - **English H1** (`docs/evidence/eval_qwen2.5_coder_7b_english_h1_diag.jsonl`): **6 / 20** gate-passed accepted (`30.0%` pass@1 repair<=3, `25.0%` zero-shot: `code_02, 12, 13, 14, 16, 18`), **0 false accepts**, 1 infra timeout (`code_07`), 7 wrong-test drops among raw-solvable tasks (`code_01, 04, 05, 06, 08, 09, 19`). Mutant benchmark: **0 / 42 accepted** (`100%` kill rate; **12 / 12 mutants killed** across 6 suites passing known-good).
+     - **Singlish H1** (`docs/evidence/eval_qwen2.5_coder_7b_singlish_h1_diag.jsonl`): **4 / 20** gate-passed accepted (`20.0%` pass@1 repair<=3: `code_08, 12, 14, 18`), **0 false accepts**, 2 infra timeouts (`code_07, 15`), 5 wrong-test drops among raw-solvable tasks (`code_02, 04, 06, 09, 13`). Mutant benchmark: **0 / 42 accepted** (`100%` kill rate; **11 / 11 mutants killed** across 5 suites passing known-good).
 
 5. **Hypothesis H6 Evaluation on Tuning Set (`code_01`–`code_20`)**:
    - **Hypothesis H6**: Because 11/11 wrong-test failures in Step 0 were caused by model-invented edge cases rather than prompt examples, updated `test_prompt` in [`research/pai.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/pai.py#L884-L893) to replace `- Write clear assertions testing functionality and edge cases.` with:
@@ -1257,20 +1257,20 @@ Decisions recorded: `--allow-unverified` approved under constraints (default off
 | Metric | H3 Baseline (Eng / Sing) | H1 Integrated (Eng / Sing) | **H6 + H1 Final Gate (Eng / Sing)** |
 |---|:---:|:---:|:---:|
 | Gate-Off Raw Solvable | 12/20 / 9/20 | 12/20 / 9/20 | **12/20 / 9/20** |
-| Verified Accepted (`pai code`) | 5/20 / 5/20 | 6/20 / 4/20 | **8/20 (40.0%) / 6/20 (30.0%)** |
+| Gate-Passed Accepted (`pai code`) | 5/20 / 5/20 | 6/20 / 4/20 | **8/20 (40.0%) / 6/20 (30.0%)** |
 | `pass@1 (zero-shot)` | 25.0% / 20.0% | 25.0% / 20.0% | **35.0% / 25.0%** |
 | `pass@1 (repair<=3)` | 25.0% / 25.0% | 30.0% / 20.0% | **40.0% / 30.0%** |
 | False-Accept Rate (Hidden Tests) | 0.0% / 0.0% | 0.0% / 0.0% | **0.0% (0/8) / 0.0% (0/6)** |
 | Infra Timeouts | 1 / 2 | 1 / 2 | **0 / 2** (`code_07, 15` in Singlish) |
 | Wrong-Test Drops (Raw-Solvable) | 6 / 4 | 7 / 5 | **4 / 4** |
-| Valid Generated Suites (Pass Known-Good) | 5/20 / 5/20 | 6/20 / 5/20 | **11/20 / 6/20** |
-| Mutants Tested on Valid Suites | 10 / 11 | 12 / 11 | **24 / 13** |
-| Mutants Accepted (Valid Suites / Total) | 0/10 (0/42) / 0/11 (0/42) | 0/12 (0/42) / 0/11 (0/42) | **0/24 (0/42) / 0/13 (0/42)** |
+| Suites Passing Known-Good (Diagnostic) | 5/20 / 5/20 | 6/20 / 5/20 | **11/20 / 6/20** |
+| Mutants Tested on Known-Good Suites | 10 / 11 | 12 / 11 | **24 / 13** |
+| Mutants Accepted (Known-Good / All Suites) | 0/10 (0/42) / 0/11 (0/42) | 0/12 (0/42) / 0/11 (0/42) | **0/24 (0/42) / 0/13 (0/42)** |
 
    - **H6 Decision Rule Verdict**: **RETAINED**.
-     - `total_accepted_mutants == 0` in both arms (0/24 on valid English suites, 0/13 on valid Singlish suites, 0/84 overall).
-     - Verified recall improved in both arms: **English 5/20 $\to$ 8/20** (`code_02, 06, 08, 12, 13, 14, 16, 18`), **Singlish 5/20 $\to$ 6/20** (`code_02, 06, 08, 14, 16, 18`).
-     - Valid generated test suites nearly doubled in English (**5/20 $\to$ 11/20**), eliminating wrong-test failures on `code_01`, `code_06`, and `code_08`.
+     - `total_accepted_mutants == 0` in both arms (0/24 on English suites passing known-good, 0/13 on Singlish suites passing known-good, 0/84 overall).
+     - Gate recall improved in both arms: **English 5/20 $\to$ 8/20** (`code_02, 06, 08, 12, 13, 14, 16, 18`), **Singlish 5/20 $\to$ 6/20** (`code_02, 06, 08, 14, 16, 18`).
+     - Suites passing the known-good solution nearly doubled in English (**5/20 $\to$ 11/20**), eliminating wrong-test failures on `code_01`, `code_06`, and `code_08`.
 
 6. **Frozen Gate Definition & Pre-Registered Holdout Evaluation Protocol (`code_21`–`code_30`)**:
    - **Frozen Gate Configuration**:
@@ -1286,26 +1286,27 @@ Decisions recorded: `--allow-unverified` approved under constraints (default off
         - **Gate-Off Holdout Baseline**: `python research/eval_harness.py --run-eval --tasks research/eval_sets/coding_tasks_holdout.json --arm gate_off_english --gate-off --model qwen2.5-coder:7b --repeats 1 --temperature 0.0 --seed 42 --out-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl`
         - **Holdout Mutant Benchmark (20 Mutants in `mutants_holdout.py`)**: `python research/gate_mutant_runner.py --diag-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gated_diag.jsonl --gate-off-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl --mutants-set holdout --json`
      4. **Reporting Rules**:
-        - Report exact counts (`raw_solvable`, `verified_accepted`, `false_accepts`, `infra_timeouts`, `valid_suites_task_count`, `mutants_tested` on valid suites, `accepted_mutants`, and per-task root-cause breakdown).
+        - Report exact counts (`raw_solvable`, `gate_passed_accepted`, `false_accepts`, `infra_timeouts`, `total_accepted_mutants` across all suites, `valid_suites_task_count`, `mutants_tested` on known-good-passing suites, and per-task root-cause breakdown).
         - Because $N=10$ is a small descriptive sample at `temperature=0.0`, report raw counts and descriptive percentages only, with **no claims of statistical significance**.
         - No further prompt or gate tuning is permitted after observing holdout outcomes.
 
 7. **One-Shot Holdout Evaluation Results (`code_21`–`code_30`, Frozen Gate Commit `6218fbc`)**:
    - Executed once after freezing the gate at commit `6218fbc` (`qwen2.5-coder:7b`, digest `dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`, `repeats=1`, `temperature=0.0`, `seed=42`, English-only prompts).
+   - **What the Gate Establishes**: Passing the `pai code` gate (`"gate": "passed"`) establishes that a candidate passed model-written tests and specification examples in the sandbox. It is not formal verification; across tuning (`0/42`) and holdout (`2/20`), **2 / 62 benchmark mutants were accepted** by generated suites (`code_21_mutant_1` and `code_25_mutant_2`).
    - **Summary Comparison (Holdout $N=10$ vs English Tuning $N=20$)**:
 
 | Metric | English Tuning Set (`code_01`–`code_20`, $N=20$) | **English Holdout Set (`code_21`–`code_30`, $N=10$)** | Notes |
 |---|:---:|:---:|---|
 | Gate-Off Raw Solvable | 12 / 20 (60.0%) | **5 / 10 (50.0%)** | `code_21, 22, 28, 29, 30` |
-| Verified Accepted (`pai code`) | 8 / 20 (40.0%) | **4 / 10 (40.0%)** | `code_22, 28, 29, 30` |
+| Gate-Passed Accepted (`pai code`) | 8 / 20 (40.0%) | **4 / 10 (40.0%)** | `code_22, 28, 29, 30` |
 | Gate Recall on Raw-Solvable | 8 / 12 (66.7%) | **4 / 5 (80.0%)** | 1 raw-solvable task dropped (`code_21`) |
 | `pass@1 (zero-shot)` | 7 / 20 (35.0%) | **4 / 10 (40.0%)** | Descriptive counts only ($N=10$) |
 | `pass@1 (repair<=3)` | 8 / 20 (40.0%) | **4 / 10 (40.0%)** | Descriptive counts only ($N=10$) |
 | False-Accept Rate (Hidden Tests) | 0 / 20 (0.0%) | **0 / 10 (0.0%)** | All 4 accepted runs passed hidden tests |
 | Infra Timeouts | 0 / 20 (0.0%) | **0 / 10 (0.0%)** | 0 timeouts |
-| Valid Generated Suites (Pass Known-Good) | 11 / 20 (55.0%) | **4 / 10 (40.0%)** | `code_22, 28, 29, 30` |
-| Mutants on Valid Suites (Accepted / Tested) | 0 / 24 (100% killed) | **0 / 8 (100% killed)** | 0 false accepts on valid suites |
-| Mutants on Broken Suites (Accepted / Tested) | 0 / 18 | **2 / 12** (`code_21_mutant_1`, `code_25_mutant_2`) | Total holdout mutants: 2 / 20 accepted |
+| **Mutants Accepted — All Suites (Product Denominator)** | **0 / 42 (100.0% killed)** | **2 / 20 (90.0% killed)** (`code_21_mutant_1`, `code_25_mutant_2`) | **2 / 62 accepted overall** across tuning + holdout; pre-declared "0 accepted mutants" rule failed on holdout |
+| Diagnostic Only: Suites Passing Known-Good Solution | 11 / 20 (55.0%) | **4 / 10 (40.0%)** | `code_22, 28, 29, 30` (requires reference solution unavailable at runtime) |
+| Diagnostic Only: Mutants on Suites Passing Known-Good | 0 / 24 | **0 / 8** | 2 / 12 accepted on the 6 suites that fail known-good |
 
    - **Per-Task Holdout Breakdown (`code_21`–`code_30`)**:
 
@@ -1316,17 +1317,51 @@ Decisions recorded: `--allow-unverified` approved under constraints (default off
 | `code_23` | `parse_query_string` | No | No | `pre_solution_ast_violation` | PASS (4/4) | **AST_SAFETY_VIOLATION** (`import urllib.parse` not in allow-list) |
 | `code_24` | `flatten_nested_dict` | No | No | `repair_exhausted` | FAIL (3/4) | **MODEL_RAW_CAPABILITY_LIMIT** (candidate drops empty nested dict `{}`) |
 | `code_25` | `tokenize_arithmetic` | No | No | `repair_exhausted` | FAIL (0/4) | **MODEL_RAW_CAPABILITY_LIMIT** (candidate regex fails unary minus) |
-| `code_26` | `validate_credit_card` | No | No | `repair_exhausted` | FAIL (0/5) | **MODEL_RAW_CAPABILITY_LIMIT** (`test_valid_amex_card` used invalid Luhn checksum) |
-| `code_27` | `word_wrap_text` | No | No | `repair_exhausted` | FAIL (2/4) | **MODEL_RAW_CAPABILITY_LIMIT** (`test_single_long_word` split word across lines, contradicting spec) |
+| `code_26` | `validate_credit_card` | No | No | `repair_exhausted` | FAIL (0/5) | **MIXED_CAPABILITY_AND_TEST_WRONGNESS** (candidate fails hidden tests AND `test_valid_amex_card` used an invalid Luhn checksum) |
+| `code_27` | `word_wrap_text` | No | No | `repair_exhausted` | FAIL (2/4) | **MIXED_CAPABILITY_AND_TEST_WRONGNESS** (candidate fails hidden tests AND `test_single_long_word` split a single long word across lines, contradicting spec) |
 | `code_28` | `levenshtein_distance` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
 | `code_29` | `longest_common_prefix` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
 | `code_30` | `compress_string_rle` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
 
-   - **Analysis of the 2 Holdout Mutants Accepted on Broken Suites**:
-     - Across the 4 **valid** holdout suites (`code_22, 28, 29, 30`), **0 / 8 mutants were accepted (100.0% kill rate)**.
-     - Across the 6 **broken** holdout suites, **2 / 12 mutants** passed the model's generated test suite:
-       1. `code_21_mutant_1` (*"Fails to sort tie-sized anagram groups lexicographically"*): In `code_21`, the model's wrong test `test_no_anagrams(["cat", "dog", "bird"]) == [["cat"], ["dog"], ["bird"]]` asserted insertion order rather than lexicographical tie-breaking for equal-sized groups. Consequently, `code_21`'s broken test suite rejected the known-good solution (and the model's own valid candidate solution) while accepting `code_21_mutant_1`, which had the exact same defect as the wrong test.
-       2. `code_25_mutant_2` (*"Fails to recognize unary minus after '(' parenthesis"*): In `code_25`, the prompt specification stated *"Handle negative numbers when `-` appears at the start of the expression or immediately after `(` or another operator"*, while the `Example:` block showed `"-5 + 10"` (start of expression). The model generated tests for `-` at the start (`"-5 + 10"`), after `*` (`"3 * -4 + 2"`), and after `-` (`"(3 - -4) * 2"`), which killed `code_25_mutant_1`, but omitted a test with `-` immediately after `(` (e.g., `"(-4) * 2"`), allowing `code_25_mutant_2` to pass the suite. (In the actual gated run for `code_25`, the model's candidate solution failed `test_negative_number_in_parentheses` and was rejected.)
-   - **Pre-Registered Protocol Compliance**: No changes to the gate or prompts were made after observing holdout outcomes. All raw JSONL artifacts (`docs/evidence/eval_qwen2.5_coder_7b_holdout_gated_diag.jsonl` and `docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl`) are committed to git.
+   - **Holdout Mutant Rule Failure (`2 / 20` Holdout Mutants Accepted; `2 / 62` Overall)**:
+     - Because `pai code` does not have a known-good reference solution at runtime, it cannot filter out "broken suites" before evaluating a candidate. Therefore, the denominator that applies to the product is **all generated suites**: **2 / 20 mutants were accepted on holdout** (`90.0%` kill rate), and **2 / 62 mutants were accepted overall** across tuning (`0/42`) + holdout (`2/20`). The pre-declared rule ("the gate must accept strictly 0 mutants") **failed on the holdout set**:
+       1. `code_21_mutant_1` (*"Fails to sort tie-sized anagram groups lexicographically"* — **Shared-Misconception Failure Mode**): In `code_21`, the model's generated test `test_no_anagrams(["cat", "dog", "bird"]) == [["cat"], ["dog"], ["bird"]]` encoded the exact same defect as `code_21_mutant_1` (unsorted tie order). As a result, the suite rejected the known-good solution (and the model's own correct candidate solution) while accepting `code_21_mutant_1`. If the model had produced that same tie-sorting defect in its candidate solution, the gate would have accepted a wrong solution. This demonstrates the fundamental limitation of model-written tests checking model-written code: a shared misconception between test generation and code generation is not caught unless contradicted by a canonical specification example.
+       2. `code_25_mutant_2` (*"Fails to recognize unary minus after '(' parenthesis"* — **Incomplete Specification Coverage**): In `code_25`, the prompt specification stated *"Handle negative numbers when `-` appears at the start of the expression or immediately after `(` or another operator"*, while the `Example:` block only showed `"-5 + 10"` (start of expression). The model generated tests for `-` at the start (`"-5 + 10"`), after `*` (`"3 * -4 + 2"`), and after `-` inside parentheses (`test_negative_number_in_parentheses`, which tested `"(3 - -4) * 2"`), killing `code_25_mutant_1`, but omitted any test case where `-` appears immediately after an opening parenthesis `(` (such as `"(-4) * 2"`). Consequently, `code_25_mutant_2` passed the generated suite. (In the actual gated run for `code_25`, the model's candidate failed `test_negative_number_in_parentheses` on `"(3 - -4) * 2"` and was rejected.)
+   - **Holdout Protocol Execution & Pre-Declared Rule Outcome**:
+     - **Execution Order**: The gate was frozen at commit `6218fbc` before running the holdout evaluation, and no changes to the gate or prompts were made after observing holdout outcomes (`docs/evidence/eval_qwen2.5_coder_7b_holdout_gated_diag.jsonl` and `docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl`). The holdout set (`code_21`–`code_30`) is now consumed and must not be used for any further gate or prompt tuning.
+     - **Pre-Declared Rule Outcome**: The pre-declared acceptance criterion requiring strictly `0` accepted mutants **failed on the holdout** (`2/20` holdout mutants accepted; `2/62` overall). Per the owner/reviewer decision, the Phase 1 gate remains frozen at `6218fbc` with this measured limitation explicitly documented in the CLI, JSON output, evaluation harness, and project documentation.
 
 
+
+
+### Addendum (1becb81): e71854c findings, H1/H6 tuning, one-shot holdout (2026-10-10)
+Linux, HEAD 1becb81, working tree clean before this addendum, 411 tests OK (13 skipped). Between 6218fbc (gate freeze and pre-registered protocol) and 1becb81 only the docs and the two holdout JSONL files changed; the JSONL files were written after the freeze commit.
+
+Verified:
+- Leak test and extractor: the leak test passes; the extractor now rejects `open(...)`, `__import__(...)`, attribute chains, comprehensions, lambdas, nested calls, ellipsis examples and approximate-float examples, and keeps plain entry-point calls with literal arguments (an exact float expectation is compared with a 1e-3 tolerance).
+- Holdout evidence re-read: accepted code_22, 28, 29, 30, each passing the hidden tests; no accepted run fails a hidden test; no infrastructure failure; temperature 0, seed 42, same model digest. Gate-off solvable: code_21, 22, 28, 29, 30 (5 of 10). Gate recall on those: 4 of 5.
+- The gate-level mutant runner, run by the reviewer on the holdout evidence, reports 2 of 20 mutants accepted (code_21_mutant_1 and code_25_mutant_2), 0 of 8 on suites that pass a known-good solution. These match the owner's numbers.
+
+Findings:
+1. The pre-declared rule "the gate must accept strictly 0 mutants" is not met on the holdout: 2 of 20 mutants pass the generated suites (the runner itself prints total_accepted_mutants 2 and a kill rate of 0.9). The write-up places both under "broken suites" and states protocol compliance; the correct statement is that the rule failed on the holdout. Over both sets the count is 0 of 42 (tuning) and 2 of 20 (holdout).
+2. The reviewer inspected both suites. code_21: the generated suite contains a wrong assertion that encodes the same defect as the mutant (unsorted tie order), so it rejects the correct solution and accepts the mutant. If the model had produced that same defect in its candidate, the gate would have accepted a wrong solution. This is the shared-misconception failure of model-written tests and model-written code. code_25: the suite has no case for a minus sign right after an opening parenthesis; the owner's sentence that the candidate "failed test_negative_number_in_parentheses" refers to a test that checks `(3 - -4)`, not `(-4)`.
+3. "Valid suite" is defined with the help of a known-good solution, which the product does not have. The denominator that applies to the product is all suites: 2 of 62 mutants accepted overall.
+4. The terms "verified" and `"verified": true` overstate what the gate establishes. The gate establishes that a candidate passed model-written tests and specification examples in the sandbox. Wording in the CLI, JSON and documents should say that, and cite the measured mutant result. <!-- claims-lint: quote -->
+5. Root-cause labels for code_26 and code_27 mix model capability and test errors (the notes mention an invalid Luhn checksum and a contradicting assertion); the label MODEL_RAW_CAPABILITY_LIMIT is only partly supported.
+6. The holdout is now consumed: it must not be used to tune anything further. Any later gate change needs a fresh holdout and fresh mutants written before the change.
+7. `--allow-unverified` only stages code when `--out` is given; reviewed from the diff and unit tests, not run against a live model by the reviewer.
+
+Decision recorded: the Phase 1 gate stays frozen at 6218fbc; known limitation documented in the finding above.
+
+#### Resolution of `1becb81` Findings & M7 Singlish Holdout Preparation (2026-10-10)
+1. **Phase 1 Gate Kept Frozen at `6218fbc`**: No modifications were made to the verification gate logic (`verify_loop.py`) or test generation prompt (`pai.py`). The English holdout set (`code_21`–`code_30`) is recorded as consumed and locked against any future tuning use.
+2. **Corrected Holdout Reporting (`docs/PROJECT_REVIEW.md` §7)**:
+   - Explicitly recorded that the pre-declared "0 accepted mutants" rule **failed on the holdout set**: **2 / 20 holdout mutants were accepted** (`code_21_mutant_1` and `code_25_mutant_2`), and **2 / 62 mutants were accepted overall** across tuning (`0/42`) and holdout (`2/20`) using the product-relevant denominator (all generated suites, since a known-good reference solution does not exist at runtime).
+   - Documented the **shared-misconception failure mode** in `code_21` (where both the model's test assertion and `code_21_mutant_1` left tie-sized groups unsorted) and corrected the `code_25` description (`test_negative_number_in_parentheses` tested `(3 - -4) * 2`, whereas the suite omitted any case with `-` immediately after `(`, such as `(-4) * 2`).
+   - Updated the root-cause labels for `code_26` and `code_27` to **`MIXED_CAPABILITY_AND_TEST_WRONGNESS`**.
+3. **Replaced `"verified"` Overclaims Across CLI, JSON, Harness & Claims Lint**:
+   - In [`research/pai.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/pai.py#L673-L1165): Replaced `"verified": true/false` in `pai code --json` output with `"gate": "passed" | "failed"` and `"gate_meaning"` (*"Candidate passed model-written tests and extracted specification examples in the sandbox; not formal verification (benchmark mutant acceptance: 2/62 across tuning 0/42 + holdout 2/20 due to shared test/code misconceptions or omitted edge cases)."*). Replaced `[VERIFIED PASS]` and `"Executing verified code generation..."` with `[GATE PASSED]` and `"Executing gated code generation..."`. <!-- claims-lint: quote -->
+   - In [`research/eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_harness.py#L95-L1190) and [`research/tests/test_eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_eval_harness.py#L644-L772): Replaced `EvalRecord.verified` and `verified_count` with `EvalRecord.gate` (`"passed"` / `"failed"`), `gate_passed_count`, and `gate_scope_note`.
+   - In [`research/tests/test_claims.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_claims.py#L14-L51): Added `"verified"\s*:\s*true`, `\[VERIFIED\s+PASS\]`, `Executing verified code generation`, and `100\s?%\s*verified` to `BANNED` so overclaiming wording cannot regress. <!-- claims-lint: quote -->
+4. **Authored Singlish Holdout Tasks (`code_21`–`code_30`) for Owner Review (M7 Pre-requisite)**:
+   - Created [`research/eval_sets/coding_tasks_holdout_singlish.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_sets/coding_tasks_holdout_singlish.json) (`code_21`–`code_30` in natural Sri Lankan Singlish with identical `id`, `name`, `entry_point`, and `Example:` blocks to `coding_tasks_holdout.json`, evaluated against `test_coding_tasks_holdout.py`) and registered its SHA-256 hash in [`docs/evidence/eval_sets_hashes.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/docs/evidence/eval_sets_hashes.json) for owner inspection prior to M7 evaluation.

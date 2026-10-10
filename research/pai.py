@@ -671,7 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_route.add_argument("--gemma4-opt-in", action="store_true", help="Explicit owner opt-in for Gemma 4B")
 
     # code (M2b verify loop)
-    p_code = subparsers.add_parser("code", help="Sandbox-verified code generation (M2b)")
+    p_code = subparsers.add_parser("code", help="Sandbox-gated code generation against model-written tests and spec examples (M2b)")
     p_code.add_argument("task", nargs="?", default="", help="Coding task prompt")
     p_code.add_argument("--tests", type=str, help="User-supplied test file (takes priority over model-written tests)")
     p_code.add_argument("--allow-weak-tests", action="store_true", help="Permit user-supplied tests that pass one or more stubs in the stub family")
@@ -731,10 +731,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_GATE_PASSED_MEANING = (
+    "Candidate passed model-written tests and specification examples in sandbox "
+    "(not formal verification; 2/62 benchmark mutants accepted across tuning+holdout due to shared model test/code misconceptions or omitted edge cases)."
+)
+
+
 def cmd_code(args) -> int:
     enforce_sandbox_boundary()
     if not getattr(args, "json", False):
-        print("Sandbox execution boundary verified fail-closed.")
+        print("Sandbox execution boundary probe passed fail-closed.")
 
     from ast_guard import check_source
     from verify_loop import (
@@ -786,7 +792,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
-                    "verified": False,
+                    "gate": "failed",
                     "error": "COLLISION" if isinstance(st_err, FileExistsError) else "STAGING_VIOLATION",
                     "detail": str(st_err),
                 }, indent=2))
@@ -837,7 +843,7 @@ def cmd_code(args) -> int:
         probe_res = loop.run_stub_probe(suite, allow_weak_tests=allow_weak)
         if not probe_res.passed:
             if getattr(args, "json", False):
-                print(json.dumps({"success": False, "verified": False, "error": "STUB_PROBE_FAILED", "detail": probe_res.detail}, indent=2))
+                print(json.dumps({"success": False, "gate": "failed", "error": "STUB_PROBE_FAILED", "detail": probe_res.detail}, indent=2))
             else:
                 print(f"Stub probe failed: {probe_res.detail}", file=sys.stderr)
             return 1
@@ -863,7 +869,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
-                    "verified": False,
+                    "gate": "failed",
                     "error": "ROUTE_REFUSAL",
                     "explanation": decision.explanation,
                     "reason_codes": decision.reason_codes,
@@ -874,7 +880,7 @@ def cmd_code(args) -> int:
         model_name = decision.selected_model
 
     if not getattr(args, "json", False):
-        print(f"Executing verified code generation with model '{model_name}'...")
+        print(f"Executing gated code generation with model '{model_name}' (sandbox model-tests + spec examples gate)...")
 
     # 6. If model-written tests needed: generate, freeze, and probe
     temperature = getattr(args, "temperature", None)
@@ -895,7 +901,7 @@ def cmd_code(args) -> int:
         except Exception as e:
             is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
             if getattr(args, "json", False):
-                print(json.dumps({"success": False, "verified": False, "error": "GENERATOR_ERROR", "detail": str(e), "is_timeout": is_timeout}, indent=2))
+                print(json.dumps({"success": False, "gate": "failed", "error": "GENERATOR_ERROR", "detail": str(e), "is_timeout": is_timeout}, indent=2))
             else:
                 print(f"Error: Model failed to generate test suite: {e}", file=sys.stderr)
             return 2
@@ -909,7 +915,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
-                    "verified": False,
+                    "gate": "failed",
                     "error": "TEST_SUITE_INVALID",
                     "detail": str(e),
                     "test_code": test_code,
@@ -934,7 +940,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
-                    "verified": False,
+                    "gate": "failed",
                     "error": "STUB_PROBE_FAILED",
                     "detail": probe_res.detail,
                     "failing_stub": probe_res.failing_stub,
@@ -968,7 +974,7 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": False,
-                "verified": False,
+                "gate": "failed",
                 "error": "GENERATOR_ERROR",
                 "detail": str(e),
                 "is_timeout": is_timeout,
@@ -989,7 +995,7 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": False,
-                "verified": False,
+                "gate": "failed",
                 "error": "AST_SAFETY_VIOLATION",
                 "violations": v_details,
                 "candidate_solution": initial_solution,
@@ -1046,7 +1052,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
-                    "verified": False,
+                    "gate": "failed",
                     "error": "COLLISION",
                     "detail": str(e),
                     "candidate_solution": repair_result.final_solution,
@@ -1063,7 +1069,7 @@ def cmd_code(args) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({
                     "success": False,
-                    "verified": False,
+                    "gate": "failed",
                     "error": "STAGING_VIOLATION",
                     "detail": str(e),
                     "candidate_solution": repair_result.final_solution,
@@ -1080,7 +1086,8 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": True,
-                "verified": True,
+                "gate": "passed",
+                "gate_meaning": _GATE_PASSED_MEANING,
                 "status": "PASS",
                 "selected_model": model_name,
                 "staged_solution": sol_dest,
@@ -1098,9 +1105,10 @@ def cmd_code(args) -> int:
                 "detail": repair_result.detail,
             }, indent=2))
         else:
-            print(f"[VERIFIED PASS] Solution verified and staged to {args.out}")
-            print(f"  - Solution: {sol_dest}")
-            print(f"  - Tests   : {test_dest}")
+            print(f"[GATE PASSED] Candidate passed model-written tests and specification examples in sandbox; staged to {args.out}")
+            print(f"  - Gate scope    : {_GATE_PASSED_MEANING}")
+            print(f"  - Solution      : {sol_dest}")
+            print(f"  - Tests         : {test_dest}")
             print(f"  - pass@1_zero_shot: {repair_result.pass_at_1_zero_shot}")
             print(f"  - pass@1_repair3  : {repair_result.pass_at_1_repair3}")
             print(f"  - Repairs used    : {repair_result.total_repairs} / {max_repairs}")
@@ -1127,7 +1135,7 @@ def cmd_code(args) -> int:
                 if getattr(args, "json", False):
                     print(json.dumps({
                         "success": False,
-                        "verified": False,
+                        "gate": "failed",
                         "error": "COLLISION",
                         "detail": str(e),
                     }, indent=2))
@@ -1138,7 +1146,7 @@ def cmd_code(args) -> int:
                 if getattr(args, "json", False):
                     print(json.dumps({
                         "success": False,
-                        "verified": False,
+                        "gate": "failed",
                         "error": "STAGING_VIOLATION",
                         "detail": str(e),
                     }, indent=2))
@@ -1156,7 +1164,8 @@ def cmd_code(args) -> int:
         if getattr(args, "json", False):
             print(json.dumps({
                 "success": False,
-                "verified": False,
+                "gate": "failed",
+                "gate_meaning": _GATE_PASSED_MEANING,
                 "status": "FAIL",
                 "error": "REPAIR_EXHAUSTED",
                 "failing_tests": failing_tests,
@@ -1176,7 +1185,7 @@ def cmd_code(args) -> int:
                 "detail": repair_result.detail,
             }, indent=2))
         else:
-            print(f"[FAIL] Verification failed: {repair_result.detail}", file=sys.stderr)
+            print(f"[GATE FAILED] Candidate did not pass model-written tests / specification examples: {repair_result.detail}", file=sys.stderr)
         return 2
 
 

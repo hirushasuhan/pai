@@ -645,10 +645,10 @@ class TestEvalHarness(unittest.TestCase):
         """
         Verifies all 6 conditions of --allow-unverified:
         1. Default off (no solution.unverified.py created when flag omitted).
-        2. Writes solution.unverified.py (never solution.py) and emits "verified": false in JSON.
+        2. Writes solution.unverified.py (never solution.py) and emits "gate": "failed" in JSON.
         3. Prints [UNVERIFIED] along with rejection stage and failing test details.
-        4. Exit code remains non-zero (1, never 0).
-        5. Harness reports verified_count and unverified_staged_count separately without changing gate metrics.
+        4. Exit code remains non-zero (2, never 0).
+        5. Harness reports gate_passed_count and unverified_staged_count separately without changing gate metrics.
         6. Candidate is never auto-run on host.
         """
         import contextlib
@@ -711,10 +711,11 @@ class TestEvalHarness(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(out_default, "solution.py")))
         self.assertFalse(os.path.exists(os.path.join(out_default, "solution.unverified.py")))
         json_default = json.loads(out_buf.getvalue().strip())
-        self.assertFalse(json_default["verified"])
+        self.assertEqual(json_default["gate"], "failed")
+        self.assertIn("2/62", json_default["gate_meaning"])
 
         # 2. With --allow-unverified: solution.unverified.py is staged, solution.py is NOT staged,
-        #    exit code is still 2 (same non-zero gate reject code), JSON has "verified": false,
+        #    exit code is still 2 (same non-zero gate reject code), JSON has "gate": "failed",
         #    and terminal prints [UNVERIFIED] + stage/failing tests.
         out_unv = os.path.join(self.tmp_dir, "out_unv")
         out_buf2 = io.StringIO()
@@ -729,7 +730,7 @@ class TestEvalHarness(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(out_unv, "solution.py")))
         self.assertTrue(os.path.exists(os.path.join(out_unv, "solution.unverified.py")))
         json_unv = json.loads(out_buf2.getvalue().strip())
-        self.assertFalse(json_unv["verified"])
+        self.assertEqual(json_unv["gate"], "failed")
         self.assertFalse(json_unv["success"])
         self.assertIn("solution.unverified.py", json_unv["staged_unverified_solution"])
         stderr_text = err_buf2.getvalue()
@@ -737,7 +738,7 @@ class TestEvalHarness(unittest.TestCase):
         self.assertIn("REPAIR_EXHAUSTED", stderr_text)
         self.assertIn("test_wrong_expectation", stderr_text)
 
-        # 3. Harness separation: verified_count == 0, unverified_staged_count == 1,
+        # 3. Harness separation: gate_passed_count == 0, unverified_staged_count == 1,
         #    while gate pass_at_1_zero_shot and pass_at_1_repair3 remain 0.0.
         task = {
             "id": "code_01",
@@ -755,14 +756,14 @@ class TestEvalHarness(unittest.TestCase):
         )
         self.assertEqual(rec.exit_code, 2)
         self.assertEqual(rec.pai_verdict, "FAIL")
-        self.assertFalse(rec.verified)
+        self.assertEqual(rec.gate, "failed")
         self.assertTrue(rec.unverified_staged)
         self.assertFalse(rec.pass_at_1_zero_shot)
         self.assertFalse(rec.pass_at_1_repair3)
         self.assertTrue(rec.hidden_test_result.passed)
 
         metrics = eval_harness.compute_eval_metrics([rec])
-        self.assertEqual(metrics["verified_count"], 0)
+        self.assertEqual(metrics["gate_passed_count"], 0)
         self.assertEqual(metrics["unverified_staged_count"], 1)
         self.assertEqual(metrics["unverified_hidden_pass_count"], 1)
         self.assertEqual(metrics["mean_pass_at_1_zero_shot"], 0.0)

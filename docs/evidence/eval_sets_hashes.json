@@ -9,6 +9,7 @@
     "research/eval_sets/router_golden_vectors.json": "69f885ec8f332e20176378c65b0b458961c8b8de0993396950d6c3572b1195bd",
     "research/eval_sets/coding_tasks_singlish.json": "0dac2393a659d9a6b32899ffb96ded361c6d9ea02e7c2111939a40295e63dc69",
     "research/eval_sets/coding_tasks_holdout.json": "2ee27e0769ad2af6f45b4a9f8774835f6e54e836ade51da7b45b8e86c979733b",
+    "research/eval_sets/coding_tasks_holdout_singlish.json": "f2c1c0b322fff045b9941c05dfd083acb2e5b553d10339289e5c0449a364e340",
     "research/eval_sets/hidden_tests/test_coding_tasks_holdout.py": "6b21096fb142ed8971327b3299468cef71ea239596bf34cdd90d8f370f9b7a59",
     "research/eval_sets/mutants.py": "aec0e86dad6a5b096d08f226819ed7886470298b27906c685edab25cf721bec5",
     "research/eval_sets/mutants_holdout.py": "ce159eb6f51bce4c7d9c1b28f6556f196f4797929db6f0052c81ca25e549103b"
