@@ -1290,3 +1290,43 @@ Decisions recorded: `--allow-unverified` approved under constraints (default off
         - Because $N=10$ is a small descriptive sample at `temperature=0.0`, report raw counts and descriptive percentages only, with **no claims of statistical significance**.
         - No further prompt or gate tuning is permitted after observing holdout outcomes.
 
+7. **One-Shot Holdout Evaluation Results (`code_21`–`code_30`, Frozen Gate Commit `6218fbc`)**:
+   - Executed once after freezing the gate at commit `6218fbc` (`qwen2.5-coder:7b`, digest `dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`, `repeats=1`, `temperature=0.0`, `seed=42`, English-only prompts).
+   - **Summary Comparison (Holdout $N=10$ vs English Tuning $N=20$)**:
+
+| Metric | English Tuning Set (`code_01`–`code_20`, $N=20$) | **English Holdout Set (`code_21`–`code_30`, $N=10$)** | Notes |
+|---|:---:|:---:|---|
+| Gate-Off Raw Solvable | 12 / 20 (60.0%) | **5 / 10 (50.0%)** | `code_21, 22, 28, 29, 30` |
+| Verified Accepted (`pai code`) | 8 / 20 (40.0%) | **4 / 10 (40.0%)** | `code_22, 28, 29, 30` |
+| Gate Recall on Raw-Solvable | 8 / 12 (66.7%) | **4 / 5 (80.0%)** | 1 raw-solvable task dropped (`code_21`) |
+| `pass@1 (zero-shot)` | 7 / 20 (35.0%) | **4 / 10 (40.0%)** | Descriptive counts only ($N=10$) |
+| `pass@1 (repair<=3)` | 8 / 20 (40.0%) | **4 / 10 (40.0%)** | Descriptive counts only ($N=10$) |
+| False-Accept Rate (Hidden Tests) | 0 / 20 (0.0%) | **0 / 10 (0.0%)** | All 4 accepted runs passed hidden tests |
+| Infra Timeouts | 0 / 20 (0.0%) | **0 / 10 (0.0%)** | 0 timeouts |
+| Valid Generated Suites (Pass Known-Good) | 11 / 20 (55.0%) | **4 / 10 (40.0%)** | `code_22, 28, 29, 30` |
+| Mutants on Valid Suites (Accepted / Tested) | 0 / 24 (100% killed) | **0 / 8 (100% killed)** | 0 false accepts on valid suites |
+| Mutants on Broken Suites (Accepted / Tested) | 0 / 18 | **2 / 12** (`code_21_mutant_1`, `code_25_mutant_2`) | Total holdout mutants: 2 / 20 accepted |
+
+   - **Per-Task Holdout Breakdown (`code_21`–`code_30`)**:
+
+| Task ID | Task Name | Gate-Off Solvable? | Gated Accepted? | Gated Stage | Gated Candidate Hidden Tests | Root Cause Category |
+|---|---|:---:|:---:|---|---|---|
+| `code_21` | `group_anagrams` | Yes | No | `repair_exhausted` | PASS (4/4) | **TEST_WRONGNESS** (`test_no_anagrams(["cat", "dog", "bird"])` asserted unsorted `[["cat"], ["dog"], ["bird"]]`, violating alphabetical tie-breaking) |
+| `code_22` | `merge_intervals` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
+| `code_23` | `parse_query_string` | No | No | `pre_solution_ast_violation` | PASS (4/4) | **AST_SAFETY_VIOLATION** (`import urllib.parse` not in allow-list) |
+| `code_24` | `flatten_nested_dict` | No | No | `repair_exhausted` | FAIL (3/4) | **MODEL_RAW_CAPABILITY_LIMIT** (candidate drops empty nested dict `{}`) |
+| `code_25` | `tokenize_arithmetic` | No | No | `repair_exhausted` | FAIL (0/4) | **MODEL_RAW_CAPABILITY_LIMIT** (candidate regex fails unary minus) |
+| `code_26` | `validate_credit_card` | No | No | `repair_exhausted` | FAIL (0/5) | **MODEL_RAW_CAPABILITY_LIMIT** (`test_valid_amex_card` used invalid Luhn checksum) |
+| `code_27` | `word_wrap_text` | No | No | `repair_exhausted` | FAIL (2/4) | **MODEL_RAW_CAPABILITY_LIMIT** (`test_single_long_word` split word across lines, contradicting spec) |
+| `code_28` | `levenshtein_distance` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
+| `code_29` | `longest_common_prefix` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
+| `code_30` | `compress_string_rle` | Yes | **Yes** | `accepted_pass` | PASS (5/5) | **ACCEPTED_PASS** (0 repairs) |
+
+   - **Analysis of the 2 Holdout Mutants Accepted on Broken Suites**:
+     - Across the 4 **valid** holdout suites (`code_22, 28, 29, 30`), **0 / 8 mutants were accepted (100.0% kill rate)**.
+     - Across the 6 **broken** holdout suites, **2 / 12 mutants** passed the model's generated test suite:
+       1. `code_21_mutant_1` (*"Fails to sort tie-sized anagram groups lexicographically"*): In `code_21`, the model's wrong test `test_no_anagrams(["cat", "dog", "bird"]) == [["cat"], ["dog"], ["bird"]]` asserted insertion order rather than lexicographical tie-breaking for equal-sized groups. Consequently, `code_21`'s broken test suite rejected the known-good solution (and the model's own valid candidate solution) while accepting `code_21_mutant_1`, which had the exact same defect as the wrong test.
+       2. `code_25_mutant_2` (*"Fails to recognize unary minus after '(' parenthesis"*): In `code_25`, the prompt specification stated *"Handle negative numbers when `-` appears at the start of the expression or immediately after `(` or another operator"*, while the `Example:` block showed `"-5 + 10"` (start of expression). The model generated tests for `-` at the start (`"-5 + 10"`), after `*` (`"3 * -4 + 2"`), and after `-` (`"(3 - -4) * 2"`), which killed `code_25_mutant_1`, but omitted a test with `-` immediately after `(` (e.g., `"(-4) * 2"`), allowing `code_25_mutant_2` to pass the suite. (In the actual gated run for `code_25`, the model's candidate solution failed `test_negative_number_in_parentheses` and was rejected.)
+   - **Pre-Registered Protocol Compliance**: No changes to the gate or prompts were made after observing holdout outcomes. All raw JSONL artifacts (`docs/evidence/eval_qwen2.5_coder_7b_holdout_gated_diag.jsonl` and `docs/evidence/eval_qwen2.5_coder_7b_holdout_gate_off_diag.jsonl`) are committed to git.
+
+
