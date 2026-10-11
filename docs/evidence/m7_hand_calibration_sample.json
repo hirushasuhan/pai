@@ -6,6 +6,9 @@
     "1": "Understands the Singlish prompt and gives a factually correct answer, but replies in English or unnatural/broken Singlish.",
     "2": "Factually correct answer AND natural Singlish/Sinhala reply following the user language (or passing sandboxed code for code class)."
   },
+  "calibration_status": "owner_approved",
+  "approved_at": "2026-10-11T20:01:48+05:30",
+  "owner_confirmation": "Finding 2 anumtha karanawa / Finding 3 ee lakunu deela thiyena widiya approve karanawa",
   "sample_count": 12,
   "models_included": [
     "llama3.2:3b",
@@ -25,8 +28,8 @@
         "passed_exec": false,
         "detail": "Failed sandbox assertion: [{'test_id': 'test_square_evens', 'type': 'AssertionError', 'message': ''}]"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 1,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 2,
@@ -41,8 +44,8 @@
         "passed_exec": true,
         "detail": "Passed all 3 sandbox assertions"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 2,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 3,
@@ -62,8 +65,8 @@
         "singlish_reply": true,
         "detail": "All grounded facts + Singlish/Sinhala language style matched"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 2,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 4,
@@ -83,8 +86,8 @@
         "singlish_reply": false,
         "detail": "All grounded facts matched, but response was in English only"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 1,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 5,
@@ -102,8 +105,8 @@
         "singlish_reply": false,
         "detail": "Insufficient factual accuracy (1/2 required)"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 0,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 6,
@@ -121,8 +124,8 @@
         "singlish_reply": false,
         "detail": "Insufficient factual accuracy (1/2 required)"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 0,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 7,
@@ -142,8 +145,8 @@
         "singlish_reply": true,
         "detail": "All grounded facts + Singlish/Sinhala language style matched"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 2,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 8,
@@ -163,8 +166,8 @@
         "singlish_reply": false,
         "detail": "All grounded facts matched, but response was in English only"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 1,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 9,
@@ -182,8 +185,8 @@
         "singlish_reply": true,
         "detail": "All grounded facts + Singlish/Sinhala language style matched"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 2,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 10,
@@ -201,8 +204,8 @@
         "singlish_reply": false,
         "detail": "All grounded facts matched, but response was in English only"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 1,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 11,
@@ -222,8 +225,8 @@
         "singlish_reply": true,
         "detail": "All grounded facts + Singlish/Sinhala language style matched"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 2,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     },
     {
       "sample_index": 12,
@@ -242,8 +245,8 @@
         "singlish_reply": true,
         "detail": "Singlish reply with partial facts (2/3 required, 3/4 expected)"
       },
-      "owner_hand_score": null,
-      "owner_notes": ""
+      "owner_hand_score": 1,
+      "owner_notes": "Approved by owner (2026-10-11T20:01:48+05:30)"
     }
   ]
 }
