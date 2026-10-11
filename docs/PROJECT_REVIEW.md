@@ -1365,3 +1365,35 @@ Decision recorded: the Phase 1 gate stays frozen at 6218fbc; known limitation do
    - In [`research/tests/test_claims.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_claims.py#L14-L51): Added `"verified"\s*:\s*true`, `\[VERIFIED\s+PASS\]`, `Executing verified code generation`, and `100\s?%\s*verified` to `BANNED` so overclaiming wording cannot regress. <!-- claims-lint: quote -->
 4. **Authored Singlish Holdout Tasks (`code_21`–`code_30`) for Owner Review (M7 Pre-requisite)**:
    - Created [`research/eval_sets/coding_tasks_holdout_singlish.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_sets/coding_tasks_holdout_singlish.json) (`code_21`–`code_30` in natural Sri Lankan Singlish with identical `id`, `name`, `entry_point`, and `Example:` blocks to `coding_tasks_holdout.json`, evaluated against `test_coding_tasks_holdout.py`) and registered its SHA-256 hash in [`docs/evidence/eval_sets_hashes.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/docs/evidence/eval_sets_hashes.json) for owner inspection prior to M7 evaluation.
+
+
+### Addendum (d49d270): corrections after 1becb81 and Singlish holdout set (2026-10-11)
+Linux, HEAD d49d270, working tree clean before this addendum, 411 tests OK (13 skipped).
+
+Verified:
+- The mutant-rule failure on the holdout (2 of 20; 2 of 62 over both sets) is now stated as a failure; the sentence claiming protocol compliance is gone. The code_25 note and the shared-misconception explanation for code_21 are corrected.
+- The wording "verified" is replaced in the code-generation output by `gate: passed|failed` with a scope note; the remaining uses of "verified" in `pai.py` concern the sandbox capability probe and are unrelated. The claims lint bans the old phrases.
+- `coding_tasks_holdout_singlish.json`: SHA-256 matches the value in the hash registry; ids, entry points and Example blocks are byte-identical to the English holdout for all 10 tasks.
+- The reviewer compared each Singlish instruction with its English source: the rules, orderings, limits and return values match for all 10 tasks (code_21 ordering, code_25 negative-number rule, code_26 Luhn description and brands, code_27 long-word rule included). No semantic drift found. Whether the Singlish reads naturally is the owner's judgement and is not claimed here.
+
+Not done: the owner's approval of the 10 Singlish prompts; the roadmap header still says "Last reviewed: 2026-10-07".
+
+#### Pre-Registered Singlish Holdout Evaluation Protocol (`code_21`–`code_30`, Frozen Gate `6218fbc`) (2026-10-11)
+1. **Owner Approval & Frozen Gate Status**:
+   - The 10 Singlish holdout prompts in [`research/eval_sets/coding_tasks_holdout_singlish.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_sets/coding_tasks_holdout_singlish.json) (SHA-256: `f2c1c0b322fff045b9941c05dfd083acb2e5b553d10339289e5c0449a364e340`) were reviewed and approved by the owner on 2026-10-11.
+   - The `docs/ROADMAP.md` header has been updated to `Last reviewed: 2026-10-11` (recording the frozen gate at `6218fbc`, M5 completion, and M7 in progress).
+   - The Phase 1 verification gate (`verify_loop.py` + `test_prompt` in `pai.py`) remains strictly frozen at commit `6218fbc`.
+2. **Methodological Disclosure (Shared Underlying Problems `code_21`–`code_30`)**:
+   - The underlying algorithmic problems (`code_21`–`code_30`) were previously observed during the English holdout evaluation (`1becb81`). However, because zero changes have been made to the gate or prompts since `6218fbc` and zero changes will be made after observing the Singlish results, this one-shot run serves strictly as a descriptive measurement comparing Singlish vs. English holdout performance under the identical frozen gate.
+3. **Execution Arms (`qwen2.5-coder:7b`, `repeats=1`, `temperature=0.0`, `seed=42`, Executed Once After This Protocol Commit)**:
+   - **Singlish Gated Holdout Arm**:
+     `python research/eval_harness.py --run-eval --tasks research/eval_sets/coding_tasks_holdout_singlish.json --arm singlish --model qwen2.5-coder:7b --repeats 1 --temperature 0.0 --seed 42 --out-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_singlish_gated_diag.jsonl`
+   - **Singlish Gate-Off Holdout Baseline**:
+     `python research/eval_harness.py --run-eval --tasks research/eval_sets/coding_tasks_holdout_singlish.json --arm gate_off_singlish --gate-off --model qwen2.5-coder:7b --repeats 1 --temperature 0.0 --seed 42 --out-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_singlish_gate_off_diag.jsonl`
+   - **Singlish Holdout Mutant Benchmark (`20` Mutants in `mutants_holdout.py`)**:
+     `python research/gate_mutant_runner.py --diag-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_singlish_gated_diag.jsonl --gate-off-jsonl docs/evidence/eval_qwen2.5_coder_7b_holdout_singlish_gate_off_diag.jsonl --mutants-set holdout --json`
+4. **Reporting & M2c Decision Rules**:
+   - Report exact counts (`raw_solvable`, `gate_passed_accepted`, `false_accepts`, `infra_timeouts`, `total_accepted_mutants` across all suites as the product denominator, diagnostic counts on suites passing the known-good solution, and per-task root-cause breakdown).
+   - No changes to the gate or prompts are permitted after observing the Singlish holdout outcomes.
+   - **M2c Singlish Bridge Rule**: Keep on hold unless the Singlish holdout shows a large gated vs. gate-off or Singlish vs. English gap that warrants revisiting M2c.
+
