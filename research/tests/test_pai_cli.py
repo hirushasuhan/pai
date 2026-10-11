@@ -22,7 +22,7 @@ from pai import main, probe_gpu, probe_ollama_server
 
 class TestPaiCLI(unittest.TestCase):
     def test_pai_doctor_text_and_json(self):
-        """Verifies `pai doctor` output in standard and JSON mode."""
+        """Verifies `pai doctor` output in standard and JSON mode, including smoke tests."""
         # 1. Standard text mode
         f_text = io.StringIO()
         with redirect_stdout(f_text):
@@ -32,6 +32,11 @@ class TestPaiCLI(unittest.TestCase):
         self.assertIn("PAI SYSTEM & HARDWARE DOCTOR", out_text)
         self.assertIn("RAM Total / Avail", out_text)
         self.assertIn("Candidate Eligibility Report", out_text)
+        self.assertIn("End-to-End Doctor Pass/Fail Table", out_text)
+        self.assertIn("smoke_code", out_text)
+        self.assertIn("smoke_analyze", out_text)
+        self.assertIn("smoke_docs", out_text)
+        self.assertIn("smoke_forecast", out_text)
 
         # 2. JSON mode
         f_json = io.StringIO()
@@ -39,10 +44,28 @@ class TestPaiCLI(unittest.TestCase):
             code = main(["doctor", "--json"])
         self.assertEqual(code, 0)
         parsed = json.loads(f_json.getvalue())
+        self.assertTrue(parsed["all_passed"])
         self.assertIn("os", parsed)
         self.assertIn("telemetry", parsed)
         self.assertIn("candidates", parsed)
+        self.assertIn("smoke_tests", parsed)
+        self.assertIn("checks", parsed)
+        self.assertEqual(len(parsed["smoke_tests"]), 4)
+        self.assertTrue(all(sm["passed"] for sm in parsed["smoke_tests"]))
         self.assertTrue(len(parsed["candidates"]) >= 5)
+
+    def test_pai_doctor_returns_nonzero_on_failed_check(self):
+        """Negative control: `pai doctor` returns exit code 1 if any check (e.g. smoke test) fails."""
+        failed_smokes = [
+            {"command": "code", "passed": False, "exit_code": 1, "detail": "Simulated smoke failure"}
+        ]
+        f_json = io.StringIO()
+        with patch("pai._run_doctor_smoke_tests", return_value=failed_smokes), redirect_stdout(f_json):
+            code = main(["doctor", "--json"])
+        self.assertEqual(code, 1)
+        parsed = json.loads(f_json.getvalue())
+        self.assertFalse(parsed["all_passed"])
+
 
     def test_pai_models_list(self):
         """Verifies `pai models list` output in standard and JSON mode."""

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0] — 2026-10-11 — Phase 1 Python Prototype Freeze, M7 Singlish Quality Gate, Singlish Holdout & Open-Item Hardening
+
+### One-Shot Singlish Holdout Evaluation (`code_21`–`code_30`, Frozen Gate `6218fbc`)
+- **Pre-Registered Protocol & Execution**: Following owner approval of [`research/eval_sets/coding_tasks_holdout_singlish.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_sets/coding_tasks_holdout_singlish.json) (`d49d270`), executed one-shot Singlish gated (`docs/evidence/eval_qwen2.5_coder_7b_holdout_singlish_gated_diag.jsonl`) and gate-off (`docs/evidence/eval_qwen2.5_coder_7b_holdout_singlish_gate_off_diag.jsonl`) runs under the unchanged gate frozen at `6218fbc`.
+- **Empirical Results**: Raw solvability (`5/10 = 50.0%` on `code_21, 22, 28, 29, 30`) matches the English holdout (`5/10`). Singlish gated accepted `3/10` (`3/8 = 37.5%` excluding 2 generator timeouts on `code_23, 26`), solving `code_24`, `code_25`, and `code_29` with `0` false accepts on model candidates (`2/20` holdout mutants accepted overall: `code_21_mutant_1` and `code_25_mutant_2`).
+- **M2c Decision**: Kept on hold (disabled) per the pre-registered decision rule.
+
+### Resolution of 4 Open Items (`research/eval_harness.py`, `research/ingest.py`, `research/eval_sets/analyze_docs_questions.json`)
+- **Two-Process Hidden-Test Grader & HMAC-SHA256 Verdict Framing (`research/eval_harness.py`)**: Upgraded `run_hidden_tests` to split the trusted grader (`_pai_hidden_driver.py`) and untrusted candidate (`_pai_hidden_worker.py`) into separate processes inside the OS sandbox, communicating via tagged JSON RPC (`_InstanceProxy`) and emitting an HMAC-SHA256 signed verdict frame (`---PAI_VERDICT_START---` / `---PAI_VERDICT_END---`). Verified against stdout verdict forgery and `sys.modules` tampering in `test_eval_harness.py`.
+- **`/api/tags`-First Digest Resolution (`research/eval_harness.py`)**: Updated `query_model_digest` to query `GET /api/tags` first, falling back to `POST /api/show`, and returning `None` (`null`) when absent.
+- **Extended Secret Deny-List & Content Secret Scanning (`research/ingest.py`)**: Added `.kube/config`, `docker/config.json`, `.docker/config.json`, and `service-account.json` to `DEFAULT_SECRET_DENY_PATTERNS`; added `scan_secret_content` to reject PEM private keys, AWS `AKIA` keys, GitHub PATs, `sk-` API keys, Slack tokens, and inline secret assignments (`SECRET_CONTENT`); ordered context items by `(bytes_read, path)`.
+- **Frozen Real-Model Evaluation for `pai analyze` and `pai docs`**: Created `research/eval_sets/analyze_docs_questions.json` (`8` factual questions across `core`, `core/src`, `CONSTITUTION.md`, `MEASUREMENT_PROCEDURE.md`, `NET_POLICY.md`, and `series_seasonal.csv`), registered its hash in `docs/evidence/eval_sets_hashes.json`, and recorded **8 / 8 (100.0%)** on live `qwen2.5-coder:7b` in `docs/evidence/eval_analyze_docs_qwen2.5_coder_7b.json`.
+
+### Milestone M7: Singlish Response-Quality Gate (`research/router.py`, `research/pai.py`, `research/model_profiles.json`)
+- **Frozen 25-Prompt Evaluation Set**: Created `research/eval_sets/singlish_quality_gate.json` (`5` prompts per task class across `code`, `analyze`, `docs`, `forecast`, `chat`) and evaluated all 6 candidate models (`docs/evidence/singlish_quality_gate_results.json`): `qwen3.5:4b` (`1.76`), `gemma4:e2b` (`1.76`), and `llama3.2:3b` (`1.52`) pass threshold `>= 1.20`; `qwen2.5-coder:7b` (`1.00`), `qwen2.5-coder:1.5b` (`0.88`), and `llama3.2:1b` (`0.80`) are marked `Singlish not recommended`.
+- **Singlish-Aware Routing & Threat T21 Defense**: Added `detect_singlish_or_sinhala` (applied strictly to user `prompt_text`, never untrusted `context`), `SINGLISH_THRESHOLD_PREFERRED` / `SINGLISH_GATE_PASSED` / `SINGLISH_NOT_RECOMMENDED` routing in `ModelRouter.route`, `check_singlish_promotion_gate`, and bilingual response support in `pai chat`, `pai forecast --question`, `pai analyze --question`, and `pai docs --question`.
+
+### Phase 1 Integration & End-to-End `pai doctor` (`research/pai.py`, `research/tests/test_pai_cli.py`)
+- **End-to-End `pai doctor`**: Upgraded `pai doctor` to verify OS telemetry, sandbox capability probe, RAM admission, safe ingestion limits, and in-process smoke tests (`smoke_code`, `smoke_analyze`, `smoke_docs`, `smoke_forecast`), printing a Pass/Fail summary table and returning exit code `1` on any failure.
+
 ## [0.7.16] — 2026-10-09 — Milestone M4: Safe Document Analysis (`pai docs`) & M3 Follow-Up Resolution
 
 ### Safe Document Analysis (`research/pai.py`, `research/tests/test_pai_docs_e2e.py`)

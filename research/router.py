@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -47,6 +48,93 @@ from config import (
     load_machine_profile,
     load_user_config,
 )
+
+DEFAULT_SINGLISH_THRESHOLD = 1.2
+
+UNAMBIGUOUS_SINGLISH_WORDS = frozenset({
+    "karanna", "karanne", "karala", "karamu", "karapu", "kalama", "karaddi", "karaganna",
+    "kiyanna", "kiyanne", "kiyala", "kiyak", "kiyada",
+    "mokakda", "monawada", "mokada", "kohomada", "koheda", "kawada",
+    "ekak", "ekata", "ekakata", "eken", "ekai", "ekama", "ekakwath",
+    "dekak", "dekama", "thunak", "thunen",
+    "puluwan", "puluwanda", "puluvanda",
+    "thiyena", "thiyenawa", "thiyenawada", "thiyenne", "thiyeddi", "thibuna", "thibbath", "tiyena", "tiyenawa",
+    "hadanna", "hadala", "hadamu",
+    "liyanna", "liyala", "liyamu", "liyana",
+    "balanna", "balala", "pennanna", "pennala",
+    "denna", "dunnama", "ganna", "gaththama",
+    "wenawa", "wenne", "wena", "wenasa", "wenas", "wechcha", "wune", "wenuwata",
+    "widiha", "widiyata", "hatiyata", "hati",
+    "nathuwa", "nathi", "nathnam", "nokara", "nogena", "nowena", "nokala",
+    "witharak", "vitharak", "okkoma", "okkotama", "hamadama", "hama",
+    "pahadili", "visthara", "ketiyen", "poddak", "hodata", "prayojanaya", "pradhana",
+    "athara", "ethakota", "habai", "nisa", "nisada", "anuwa", "genath",
+    "aluth", "parana", "digama", "aduma", "uparima", "mulinma",
+    "ayin", "maru", "ekathu", "bedanna", "aththatama", "hambawunada",
+})
+
+CONTEXTUAL_SINGLISH_PARTICLES = frozenset({
+    "eka", "eke", "ekka", "walin", "walata", "wala", "saha", "nam", "namuth",
+    "wage", "ona", "one", "onada", "ai", "oya", "mata", "api", "apita", "me", "meke", "meka",
+})
+
+
+def detect_singlish_or_sinhala(text: Optional[str]) -> bool:
+    """
+    Deterministic, zero-model-call detector for Sinhala script or Sri Lankan Singlish prompts (M7).
+    1. Returns True if any character is in the Sinhala Unicode block (U+0D80..U+0DFF).
+    2. Returns True if the tokenized ASCII prompt contains at least one unambiguous Singlish word
+       plus at least one additional Singlish word or particle.
+    """
+    if not text or not isinstance(text, str):
+        return False
+
+    for ch in text:
+        cp = ord(ch)
+        if 0x0D80 <= cp <= 0x0DFF:
+            return True
+
+    tokens = re.findall(r"[a-z]+", text.lower())
+    if not tokens:
+        return False
+
+    unambiguous_hits = {t for t in tokens if t in UNAMBIGUOUS_SINGLISH_WORDS}
+    particle_hits = {t for t in tokens if t in CONTEXTUAL_SINGLISH_PARTICLES}
+
+    if len(unambiguous_hits) >= 2:
+        return True
+    if len(unambiguous_hits) >= 1 and len(particle_hits) >= 1:
+        return True
+    return False
+
+
+def check_singlish_promotion_gate(
+    candidate_score: Optional[float],
+    baseline_score: float,
+    threshold: float = DEFAULT_SINGLISH_THRESHOLD,
+) -> Tuple[bool, str]:
+    """
+    M7 Singlish Response-Quality Release / Promotion Gate:
+    - Blocks promotion if candidate_score is unmeasured (None).
+    - Blocks promotion if candidate_score < baseline_score (Singlish regression).
+    - Blocks promotion if candidate_score < threshold.
+    """
+    if candidate_score is None:
+        return False, "REJECTED: Candidate has no measured Singlish quality score."
+    if candidate_score < baseline_score - 1e-9:
+        return (
+            False,
+            f"REJECTED: Singlish score regressed ({candidate_score:.2f} < baseline {baseline_score:.2f}).",
+        )
+    if candidate_score < threshold - 1e-9:
+        return (
+            False,
+            f"REJECTED: Singlish score ({candidate_score:.2f}) is below threshold ({threshold:.2f}).",
+        )
+    return (
+        True,
+        f"PASSED: Singlish score ({candidate_score:.2f}) >= baseline ({baseline_score:.2f}) and threshold ({threshold:.2f}).",
+    )
 
 
 @dataclass
@@ -65,10 +153,16 @@ class ModelCandidate:
     unverified_notice: str = ""
     endpoint: str = ""
     tags: List[str] = field(default_factory=list)
+    singlish_score: Optional[float] = None
+    singlish_threshold: float = DEFAULT_SINGLISH_THRESHOLD
 
     @property
     def min_available_ram_mb(self) -> float:
         return round(self.host_delta_mb + self.headroom_mb, 1)
+
+    @property
+    def meets_singlish_gate(self) -> bool:
+        return self.singlish_score is not None and self.singlish_score >= self.singlish_threshold
 
 
 @dataclass
@@ -218,11 +312,15 @@ class ModelRouter:
 
         profiles = data.get("profiles", {})
         headroom = float(data.get("headroom_mb", 512.0))
+        default_singlish_threshold = float(data.get("singlish_threshold", DEFAULT_SINGLISH_THRESHOLD))
 
         for name, p in profiles.items():
             lic_id = p.get("license_id", "Apache-2.0")
             lic_status = p.get("license_status", "verified")
             req_opt = bool(p.get("requires_opt_in", False) or lic_id == "unverified" or name == "gemma4:e2b")
+            raw_s_score = p.get("singlish_score")
+            s_score = float(raw_s_score) if raw_s_score is not None else None
+            s_thresh = float(p.get("singlish_threshold", default_singlish_threshold))
 
             self.candidates[name] = ModelCandidate(
                 name=name,
@@ -238,6 +336,8 @@ class ModelRouter:
                 license_status=lic_status,
                 unverified_notice=p.get("unverified_notice", ""),
                 tags=p.get("tags", []),
+                singlish_score=s_score,
+                singlish_threshold=s_thresh,
             )
 
     def register_candidate(self, candidate: ModelCandidate) -> None:
@@ -369,15 +469,21 @@ class ModelRouter:
         budget: Optional[HardwareBudget] = None,
         resident_model: Optional[str] = None,
         gemma4_opt_in: bool = False,
+        prompt_text: Optional[str] = None,
+        is_singlish: bool = False,
     ) -> RouteDecision:
         """
         Executes adaptive routing decision based on hardware constraints and task class.
         Raises ValueError immediately if command is unknown.
+        T21 Defense: `context` (untrusted file/web data) is never inspected for task class or Singlish routing.
+        Only explicit `prompt_text` / `is_singlish` from the user's CLI invocation activates M7 Singlish checks.
         """
         task_class = self.resolve_task_class(command, context=context)
         if task_class is None:
             valid_cmds = sorted(list(set(COMMAND_TO_TASK_CLASS.keys())))
             raise ValueError(f"Unknown or invalid command / task class: '{command}'. Valid commands are: {valid_cmds}")
+
+        singlish_active = bool(is_singlish or (prompt_text and detect_singlish_or_sinhala(prompt_text)))
 
         # Extract telemetry parameters
         avail_ram_mb = budget.avail_ram_mb if budget else None
@@ -386,59 +492,6 @@ class ModelRouter:
 
         reason_codes: List[str] = []
         rejected_models: List[Dict[str, str]] = []
-
-        def make_decision(
-            selected_model: Optional[str],
-            kind: str,
-            data_leaves_machine: bool,
-            codes: List[str],
-            switches: int,
-            thinking: bool,
-            explanation: str,
-        ) -> RouteDecision:
-            codes_copy = list(codes)
-            has_implausible = any(
-                "CALIBRATION_IMPLAUSIBLE" in str(r) for r in rejected_models
-            )
-            if selected_model and selected_model in self.candidates:
-                cand = self.candidates[selected_model]
-                if self.machine_profile:
-                    cal_profiles = self.machine_profile.get("calibrated_profiles", {})
-                    if selected_model in cal_profiles:
-                        cal_delta = float(cal_profiles[selected_model].get("host_delta_mb", cand.host_delta_mb))
-                        if cal_delta < 0.5 * cand.host_delta_mb:
-                            if "CALIBRATION_IMPLAUSIBLE" not in codes_copy:
-                                codes_copy.append("CALIBRATION_IMPLAUSIBLE")
-                            if "UNCALIBRATED" not in codes_copy:
-                                codes_copy.append("UNCALIBRATED")
-                        else:
-                            if "MACHINE_PROFILE_CALIBRATED" not in codes_copy:
-                                codes_copy.append("MACHINE_PROFILE_CALIBRATED")
-                    else:
-                        if "UNCALIBRATED" not in codes_copy:
-                            codes_copy.append("UNCALIBRATED")
-                elif not self.reference_profile_mode:
-                    if "UNCALIBRATED" not in codes_copy:
-                        codes_copy.append("UNCALIBRATED")
-            elif selected_model is None:
-                if not self.reference_profile_mode and not self.machine_profile:
-                    if "UNCALIBRATED" not in codes_copy:
-                        codes_copy.append("UNCALIBRATED")
-
-            if has_implausible and "CALIBRATION_IMPLAUSIBLE" not in codes_copy:
-                codes_copy.append("CALIBRATION_IMPLAUSIBLE")
-
-            return RouteDecision(
-                selected_model=selected_model,
-                kind=kind,
-                data_leaves_machine=data_leaves_machine,
-                task_class=task_class,
-                reason_codes=codes_copy,
-                rejected_models=rejected_models,
-                switches_count=switches,
-                thinking_mode=thinking,
-                explanation=explanation,
-            )
 
         # Check user config allow-list (T21)
         user_allowed = self.user_config.get("allowed_models") if self.user_config else None
@@ -482,6 +535,128 @@ class ModelRouter:
             or "low-battery" in reasons
             or "cpu-saturated" in reasons
         )
+
+        def _find_singlish_qualified_candidate(exclude_name: str) -> Optional[ModelCandidate]:
+            """
+            When a Singlish prompt is active and a candidate is below `singlish_threshold`,
+            searches `preferred_candidates` for an allowed, fitting candidate that meets the
+            M7 Singlish threshold (preferring highest `singlish_score`).
+            """
+            best_alt: Optional[ModelCandidate] = None
+            for alt_name in preferred_candidates:
+                if alt_name == exclude_name or alt_name not in self.candidates:
+                    continue
+                if not is_allowed(alt_name):
+                    continue
+                if alt_name in HEAVY_MODELS and has_resource_pressure:
+                    continue
+                if alt_name == "gemma4:e2b" and (not gemma4_opt_in or not avail_ram_mb or avail_ram_mb < 3500.0):
+                    continue
+                if alt_name == "llama3.2:3b" and (tier == "COMPRESSED" or "cpu-saturated" in reasons):
+                    continue
+                alt_cand = self.candidates[alt_name]
+                if not alt_cand.meets_singlish_gate:
+                    continue
+                fit_alt, _ = self.check_candidate_fit(alt_cand, avail_ram_mb, resident_model=valid_resident)
+                if fit_alt:
+                    if best_alt is None or (alt_cand.singlish_score or 0.0) > (best_alt.singlish_score or 0.0):
+                        best_alt = alt_cand
+            return best_alt
+
+        def make_decision(
+            selected_model: Optional[str],
+            kind: str,
+            data_leaves_machine: bool,
+            codes: List[str],
+            switches: int,
+            thinking: bool,
+            explanation: str,
+            allow_singlish_override: bool = True,
+        ) -> RouteDecision:
+            if singlish_active and allow_singlish_override and selected_model and selected_model in self.candidates:
+                cand_check = self.candidates[selected_model]
+                if not cand_check.meets_singlish_gate:
+                    alt_cand = _find_singlish_qualified_candidate(exclude_name=selected_model)
+                    if alt_cand is not None:
+                        s_lbl = f"{cand_check.singlish_score:.2f}" if cand_check.singlish_score is not None else "unmeasured"
+                        rejected_models.append({
+                            cand_check.name: (
+                                f"Singlish not recommended (score {s_lbl} < threshold {cand_check.singlish_threshold:.2f}); "
+                                f"preferred '{alt_cand.name}' (score {alt_cand.singlish_score:.2f})"
+                            )
+                        })
+                        selected_model = alt_cand.name
+                        kind = alt_cand.kind
+                        data_leaves_machine = alt_cand.data_leaves_machine
+                        switches = 1 if valid_resident != alt_cand.name else 0
+                        thinking = alt_cand.thinking_default
+                        codes = list(codes) + ["SINGLISH_THRESHOLD_PREFERRED"]
+                        if alt_cand.license_id == "unverified" and "UNVERIFIED_LICENCE" not in codes:
+                            codes.append("UNVERIFIED_LICENCE")
+                        explanation = (
+                            f"Preferred '{alt_cand.name}' (Singlish score {alt_cand.singlish_score:.2f} >= "
+                            f"threshold {alt_cand.singlish_threshold:.2f}) over '{cand_check.name}' for Singlish prompt."
+                        )
+
+            codes_copy = list(codes)
+            if singlish_active and "SINGLISH_PROMPT_DETECTED" not in codes_copy:
+                codes_copy.append("SINGLISH_PROMPT_DETECTED")
+
+            has_implausible = any(
+                "CALIBRATION_IMPLAUSIBLE" in str(r) for r in rejected_models
+            )
+            if selected_model and selected_model in self.candidates:
+                cand = self.candidates[selected_model]
+                if singlish_active:
+                    if cand.meets_singlish_gate:
+                        if "SINGLISH_GATE_PASSED" not in codes_copy:
+                            codes_copy.append("SINGLISH_GATE_PASSED")
+                    else:
+                        if "SINGLISH_NOT_RECOMMENDED" not in codes_copy:
+                            codes_copy.append("SINGLISH_NOT_RECOMMENDED")
+                        s_lbl = f"{cand.singlish_score:.2f}" if cand.singlish_score is not None else "unmeasured"
+                        if "Singlish not recommended" not in explanation:
+                            explanation = (
+                                f"{explanation} [Singlish not recommended: score {s_lbl} < "
+                                f"threshold {cand.singlish_threshold:.2f}]"
+                            )
+                if self.machine_profile:
+                    cal_profiles = self.machine_profile.get("calibrated_profiles", {})
+                    if selected_model in cal_profiles:
+                        cal_delta = float(cal_profiles[selected_model].get("host_delta_mb", cand.host_delta_mb))
+                        if cal_delta < 0.5 * cand.host_delta_mb:
+                            if "CALIBRATION_IMPLAUSIBLE" not in codes_copy:
+                                codes_copy.append("CALIBRATION_IMPLAUSIBLE")
+                            if "UNCALIBRATED" not in codes_copy:
+                                codes_copy.append("UNCALIBRATED")
+                        else:
+                            if "MACHINE_PROFILE_CALIBRATED" not in codes_copy:
+                                codes_copy.append("MACHINE_PROFILE_CALIBRATED")
+                    else:
+                        if "UNCALIBRATED" not in codes_copy:
+                            codes_copy.append("UNCALIBRATED")
+                elif not self.reference_profile_mode:
+                    if "UNCALIBRATED" not in codes_copy:
+                        codes_copy.append("UNCALIBRATED")
+            elif selected_model is None:
+                if not self.reference_profile_mode and not self.machine_profile:
+                    if "UNCALIBRATED" not in codes_copy:
+                        codes_copy.append("UNCALIBRATED")
+
+            if has_implausible and "CALIBRATION_IMPLAUSIBLE" not in codes_copy:
+                codes_copy.append("CALIBRATION_IMPLAUSIBLE")
+
+            return RouteDecision(
+                selected_model=selected_model,
+                kind=kind,
+                data_leaves_machine=data_leaves_machine,
+                task_class=task_class,
+                reason_codes=codes_copy,
+                rejected_models=rejected_models,
+                switches_count=switches,
+                thinking_mode=thinking,
+                explanation=explanation,
+            )
 
         # -------------------------------------------------------------
         # 1. User Preferred Model Check

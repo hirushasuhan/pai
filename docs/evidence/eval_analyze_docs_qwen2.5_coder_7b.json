@@ -1,0 +1,202 @@
+{
+  "schema_version": "1.0",
+  "eval_set": "research/eval_sets/analyze_docs_questions.json",
+  "model_name": "qwen2.5-coder:7b",
+  "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+  "temperature": 0.0,
+  "seed": 42,
+  "evaluated_at": "2026-10-11T13:18:34Z",
+  "total_questions": 8,
+  "passed_questions": 8,
+  "accuracy": 1.0,
+  "results": [
+    {
+      "id": "ad_01",
+      "command": "analyze",
+      "target": "core",
+      "question": "According to Cargo.toml in this folder, what is the package name, version, and which crate is used as a Windows-specific target dependency?",
+      "ground_truth_answer": "The package name is pai-core, version 0.1.0, and the Windows-specific dependency is windows-sys (version 0.52).",
+      "required_keywords": [
+        "pai-core",
+        "0.1.0",
+        "windows-sys"
+      ],
+      "min_keywords": 3,
+      "matched_keywords": [
+        "pai-core",
+        "0.1.0",
+        "windows-sys"
+      ],
+      "exit_code": 0,
+      "latency_sec": 36.716,
+      "passed": true,
+      "model_summary": "**Direct Answer to User Question:**\nAccording to Cargo.toml in this folder, the package name is \"pai-core\", the version is \"0.1.0\", and the crate used as a Windows-specific target dependency is \"windows-sys\".\n\n**Structure:**\n- The codebase consists of 10 files.\n- The primary components are:\n  - `Cargo.toml`: Contains metadata and dependencies.\n  - `README.md`: Provides project documentation.\n  - `src/`: Contains the source code, including modules like `conformance.rs`, `lib.rs`, `main.rs`, `tier.rs`, and `url_policy.rs`.\n\n**Entry Points:**\n- `src/main.rs`: The entry point for the CLI runner, which can execute commands like `--conformance <DIR>` and `--differential <FILE>`.\n- `src/lib.rs`: Defines the public API of the library.\n- `src/tier.rs`: Contains the `calculate_budget` function, which is a key component of the hardware budgeting policy.\n- `src/url_policy.rs`: Contains the `evaluate_url` function, which validates URLs.\n\n**Dependencies:**\n- The project depends on several crates:\n  - `serde` and `serde_json` for serialization and deserialization.\n  - `windows-sys` for Windows-specific functionality, which is only included when targeting Windows.\n\n**Obvious Risks:**\n- The project does not contain any obvious security risks or dangerous patterns.\n- The codebase does not include any sensitive files or data that could be misused.\n\n**Language & Style:**\nThe response is in English, following the style of the user's question. All technical terms and identifiers are in English."
+    },
+    {
+      "id": "ad_02",
+      "command": "analyze",
+      "target": "core",
+      "question": "What are the four public modules declared in src/lib.rs, and what crate-level lint attribute is enforced at the top of src/lib.rs and src/main.rs?",
+      "ground_truth_answer": "The four public modules are conformance, tier, url_policy, and win32, and the crate-level lint attribute is #![deny(unsafe_code)].",
+      "required_keywords": [
+        "conformance",
+        "tier",
+        "url_policy",
+        "win32",
+        "unsafe_code"
+      ],
+      "min_keywords": 4,
+      "matched_keywords": [
+        "conformance",
+        "tier",
+        "url_policy",
+        "win32",
+        "unsafe_code"
+      ],
+      "exit_code": 0,
+      "latency_sec": 40.58,
+      "passed": true,
+      "model_summary": "### Direct Answer to User Question:\nThe four public modules declared in `src/lib.rs` are:\n- `conformance`\n- `tier`\n- `url_policy`\n- `win32`\n\nThe crate-level lint attribute enforced at the top of both `src/lib.rs` and `src/main.rs` is:\n- `#![deny(unsafe_code)]`\n\n### Codebase Structure:\n- **Folder Layout**: The codebase is organized into a single directory (`src`) containing multiple Rust files.\n- **File Count**: There are 10 files in total, including `README.md`, `Cargo.toml`, and `Cargo.lock`.\n- **Primary Components**:\n  - `src/lib.rs`: Contains the library code.\n  - `src/main.rs`: Contains the main executable code.\n  - `src/conformance.rs`: Contains the conformance vector runner.\n  - `src/tier.rs`: Contains the hardware budgeting policy.\n  - `src/url_policy.rs`: Contains the URL validation and canonical blocked CIDR table.\n  - `src/win32.rs`: Contains Windows-specific code.\n\n### Entry Points:\n- **Execution Entry Points**:\n  - `src/main.rs`: This file contains the entry point for the CLI runner, which can be executed with commands like `--conformance <DIR>` and `--differential <FILE>`.\n\n### Dependencies:\n- **Libraries and Dependencies**:\n  - `serde`: A serialization and deserialization library.\n  - `serde_json`: A JSON serialization and deserialization library.\n  - `windows-sys`: A Rust FFI to Windows APIs (only on Windows targets).\n\n### Obvious Risks:\n- **Security Concerns**:\n  - The codebase explicitly denies the use of unsafe code (`#![deny(unsafe_code)]`), which is a good practice to ensure safety.\n  - The codebase does not include any fake telemetry, adhering to the design and safety guarantees.\n  - The codebase does not have any network crate dependencies, which is a security measure to avoid potential vulnerabilities.\n- **Dangerous Patterns**:\n  - The codebase does not include any obvious dangerous patterns or sensitive files.\n- **Rejected Sensitive Files**:\n  - The codebase does not include any sensitive files or data.\n\n### Language & Style:\nThe response is provided in English, keeping all code, file paths, identifiers, and technical terms in English."
+    },
+    {
+      "id": "ad_03",
+      "command": "analyze",
+      "target": "core/src",
+      "question": "In main.rs, which CLI option flags are supported by the pai-core binary?",
+      "ground_truth_answer": "The supported CLI flags are --conformance, --differential, --telemetry, --json, --help (-h), and --version (-v).",
+      "required_keywords": [
+        "--conformance",
+        "--differential",
+        "--telemetry",
+        "--json"
+      ],
+      "min_keywords": 3,
+      "matched_keywords": [
+        "--conformance",
+        "--differential",
+        "--telemetry",
+        "--json"
+      ],
+      "exit_code": 0,
+      "latency_sec": 29.676,
+      "passed": true,
+      "model_summary": "**Direct Answer to User Question:**\nIn `main.rs`, the CLI option flags supported by the `pai-core` binary are:\n- `--conformance <DIR>`\n- `--differential <FILE>`\n- `--telemetry`\n- `--json`\n- `--help, -h`\n- `--version, -v`\n\n**Structure:**\nThe codebase consists of six files:\n1. `conformance.rs`\n2. `lib.rs`\n3. `main.rs`\n4. `tier.rs`\n5. `url_policy.rs`\n6. `win32.rs`\n\nThe primary components are:\n- `lib.rs`: Acts as the root module, re-exporting modules like `conformance`, `tier`, `url_policy`, and `win32`.\n- `main.rs`: Contains the entry point of the application and handles command-line arguments.\n- `tier.rs`: Defines the `ComputeTier` enum and functions for calculating hardware budgets based on system telemetry.\n- `url_policy.rs`: Contains functions for evaluating URLs.\n- `win32.rs`: Provides functions for querying hardware telemetry on Windows.\n\n**Entry Points:**\n- The entry point of the application is the `main` function in `main.rs`.\n\n**Dependencies:**\nThe codebase depends on the following libraries:\n- `serde`: For serialization and deserialization.\n- `std::env`: For accessing command-line arguments.\n- `std::fs`: For file operations.\n- `std::io`: For input/output operations.\n- `std::path`: For path manipulation.\n- `std::process`: For process management.\n\n**Obvious Risks:**\n- The codebase does not include any obvious security concerns or dangerous patterns.\n- The `lib.rs` file is marked with `#![deny(unsafe_code)]`, which is a good practice to ensure that unsafe code is not used.\n- The codebase does not include any sensitive files or data.\n\n**Language & Style:**\nThe codebase is written in Rust, following the standard Rust style guide. The documentation and comments are in English, and the code uses English identifiers and technical terms."
+    },
+    {
+      "id": "ad_04",
+      "command": "analyze",
+      "target": "core/src",
+      "question": "In tier.rs, what are the four ComputeTier enum variants defined for hardware resource budgeting?",
+      "ground_truth_answer": "The four ComputeTier variants are HIGH, BALANCED, LOW, and COMPRESSED.",
+      "required_keywords": [
+        "HIGH",
+        "BALANCED",
+        "LOW",
+        "COMPRESSED"
+      ],
+      "min_keywords": 4,
+      "matched_keywords": [
+        "HIGH",
+        "BALANCED",
+        "LOW",
+        "COMPRESSED"
+      ],
+      "exit_code": 0,
+      "latency_sec": 31.321,
+      "passed": true,
+      "model_summary": "### Direct Answer to User Question\nIn `tier.rs`, the four `ComputeTier` enum variants defined for hardware resource budgeting are:\n- `HIGH`\n- `BALANCED`\n- `COMPRESSED`\n\n### Codebase Structure\nThe codebase consists of six files:\n1. `conformance.rs`\n2. `lib.rs`\n3. `main.rs`\n4. `tier.rs`\n5. `url_policy.rs`\n6. `win32.rs`\n\nThe folder layout is as follows:\n- `pai_core/`\n  - `conformance.rs`\n  - `lib.rs`\n  - `main.rs`\n  - `tier.rs`\n  - `url_policy.rs`\n  - `win32.rs`\n\n### Entry Points\nThe primary entry points for the codebase are:\n- `main.rs`: The main executable file that handles command-line arguments and invokes the appropriate functions based on the user's input.\n- `lib.rs`: The library file that exports the public modules (`conformance`, `tier`, `url_policy`, `win32`).\n\n### Dependencies\nThe codebase depends on the following libraries:\n- `serde`: For serialization and deserialization of data structures.\n- `std::fs`, `std::io`, `std::path`: For file and path operations.\n- `pai_core::win32`: For hardware telemetry operations.\n\n### Obvious Risks\n1. **Security Directives**: The codebase includes security directives (`#![deny(unsafe_code)]`) to prevent the use of unsafe code, which is a good practice for ensuring safety.\n2. **Sensitive Files**: The codebase does not include any sensitive files or data that could pose security risks.\n3. **Error Handling**: The codebase includes basic error handling, which is important for robustness.\n4. **Configuration Management**: The codebase uses configuration files (`tier_policy_vectors.json`, `url_policy_vectors.json`) for conformance testing, which can be a potential point of failure if the files are not correctly configured.\n\n### Language & Style\nThe codebase is written in Rust, following Rust's conventions for naming, structuring, and commenting. The code is well-documented with comments and uses Rust's powerful type system to ensure type safety."
+    },
+    {
+      "id": "ad_05",
+      "command": "docs",
+      "target": "docs/CONSTITUTION.md",
+      "question": "In the PAI Safety Constitution, where is the SHA-256 hash of the Constitution pinned, and what happens if a release is built against a different hash?",
+      "ground_truth_answer": "The SHA-256 hash is pinned in the updater's trust root (not inside the engine), and a release built against a different hash is refused by the updater.",
+      "required_keywords": [
+        "trust root",
+        "updater",
+        "refused"
+      ],
+      "min_keywords": 2,
+      "matched_keywords": [
+        "trust root",
+        "updater",
+        "refused"
+      ],
+      "exit_code": 0,
+      "latency_sec": 10.838,
+      "passed": true,
+      "model_summary": "In the PAI Safety Constitution, the SHA-256 hash of the Constitution is pinned in the updater's trust root. If a release is built against a different hash, it is refused by the updater."
+    },
+    {
+      "id": "ad_06",
+      "command": "docs",
+      "target": "docs/MEASUREMENT_PROCEDURE.md",
+      "question": "How many independent cold runs are executed per candidate model in the standard measurement protocol, and what is the formula for the RAM admission rule?",
+      "ground_truth_answer": "5 independent cold runs are executed per candidate model, and the RAM admission rule is available_ram_mb >= host_delta_mb + 512 MB.",
+      "required_keywords": [
+        "5",
+        "host_delta_mb",
+        "512"
+      ],
+      "min_keywords": 3,
+      "matched_keywords": [
+        "5",
+        "host_delta_mb",
+        "512"
+      ],
+      "exit_code": 0,
+      "latency_sec": 5.478,
+      "passed": true,
+      "model_summary": "Based on the document provided, the answers to the user's questions are as follows:\n\n1. **How many independent cold runs are executed per candidate model in the standard measurement protocol?**\n   - 5 independent cold runs are executed per candidate model in the standard measurement protocol.\n\n2. **What is the formula for the RAM admission rule?**\n   - The formula for the RAM admission rule is:\n     $$\\text{available\\_ram\\_mb} \\ge \\text{host\\_delta\\_mb} + 512\\text{ MB}$$"
+    },
+    {
+      "id": "ad_07",
+      "command": "docs",
+      "target": "docs/NET_POLICY.md",
+      "question": "Which two outbound port numbers are allowed by the URL grammar, and how are explicit ports with leading zeros like 080 handled?",
+      "ground_truth_answer": "Allowed outbound ports are 80 and 443; explicit ports with leading zeros like 080 are strictly rejected.",
+      "required_keywords": [
+        "80",
+        "443",
+        "rejected"
+      ],
+      "min_keywords": 3,
+      "matched_keywords": [
+        "80",
+        "443",
+        "rejected"
+      ],
+      "exit_code": 0,
+      "latency_sec": 11.535,
+      "passed": true,
+      "model_summary": "The two outbound port numbers allowed by the URL grammar are `80` and `443`. Explicit ports with leading zeros like `080` are rejected."
+    },
+    {
+      "id": "ad_08",
+      "command": "docs",
+      "target": "research/eval_sets/forecast_series/series_seasonal.csv",
+      "question": "What are the two column names in this CSV dataset, how many non-null data rows are profiled, and what are the minimum and maximum values of the revenue column?",
+      "ground_truth_answer": "The two columns are month and revenue with 72 rows; minimum revenue is 269.86 and maximum revenue is 435.14.",
+      "required_keywords": [
+        "month",
+        "revenue",
+        "72",
+        "269.86",
+        "435.14"
+      ],
+      "min_keywords": 4,
+      "matched_keywords": [
+        "month",
+        "revenue",
+        "72",
+        "269.86",
+        "435.14"
+      ],
+      "exit_code": 0,
+      "latency_sec": 11.844,
+      "passed": true,
+      "model_summary": "The two column names in this CSV dataset are 'month' and 'revenue'. There are 72 non-null data rows profiled. The minimum value of the revenue column is 269.86, and the maximum value is 435.14."
+    }
+  ]
+}

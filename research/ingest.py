@@ -62,6 +62,10 @@ DEFAULT_SECRET_DENY_PATTERNS: Tuple[str, ...] = (
     "credentials.json",
     "service_account*.json",
     "service-account*.json",
+    "service-account.json",
+    ".kube/config",
+    "docker/config.json",
+    ".docker/config.json",
     ".npmrc",
     ".netrc",
     ".git-credentials",
@@ -315,15 +319,39 @@ def is_secret_file(
         if part in sensitive_dirs:
             return True
 
-    # 2. Check filename against deny patterns
+    # 2. Check filename and path suffixes against deny patterns
     for pat in deny_patterns:
         pat_lower = pat.lower()
         if fnmatch.fnmatch(base, pat_lower):
             return True
         if "/" in pat_lower:
-            if fnmatch.fnmatch(norm, f"*{pat_lower}*"):
+            if norm == pat_lower or norm.endswith("/" + pat_lower) or fnmatch.fnmatch(norm, f"*{pat_lower}*"):
                 return True
     return False
+
+
+_SECRET_CONTENT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("pem_private_key", re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----")),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("github_token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
+    ("api_secret_key", re.compile(r"\bsk-(?:proj-|ant-api03-)?[A-Za-z0-9_-]{20,}\b")),
+    ("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+)
+
+
+def scan_secret_content(text: str) -> Optional[str]:
+    """
+    Scans text content for embedded high-confidence credential/private-key patterns
+    (PEM private keys, AWS access keys, GitHub tokens, sk-* API keys, Slack tokens, Google API keys).
+    Returns the pattern label if a match is found, or None if clean. Never echoes the secret value.
+    """
+    if not text:
+        return None
+    for label, pattern in _SECRET_CONTENT_PATTERNS:
+        if pattern.search(text):
+            return label
+    return None
 
 
 def is_junk_dir(dirname: str, junk_patterns: Tuple[str, ...] = DEFAULT_JUNK_DIR_PATTERNS) -> bool:
@@ -405,7 +433,8 @@ def assemble_untrusted_context(
     effective_budget = max(0, char_budget - manifest_cost)
     current_chars = 0
 
-    for item in report.items:
+    ordered_items = sorted(report.items, key=lambda it: (it.bytes_read, it.path))
+    for item in ordered_items:
         clean_item_path = sanitize_header(item.path)
         item_header = f"File: {clean_item_path} (SHA-256: {item.sha256[:16]}...)"
         wrapped = wrap_untrusted_envelope(item.text, header=item_header, nonce=run_nonce)
@@ -575,6 +604,16 @@ def ingest_file(
 
     # 8. Sanitize and normalize text
     norm_text = sanitize_text_content(raw_data, max_line_length=max_line_length)
+
+    # 9. Content-based secret scanning (PEM private keys, AWS AKIA/ASIA, GitHub ghp_, sk-*, Slack xox*)
+    secret_match = scan_secret_content(norm_text)
+    if secret_match is not None:
+        return None, IngestionRejection(
+            path=rel_path,
+            reason_code="SECRET_CONTENT",
+            message=f"Access denied: secret credential pattern ({secret_match}) detected in file content: {os.path.basename(file_path)}",
+        )
+
     sha256_hash = hashlib.sha256(raw_data).hexdigest()
 
     item = IngestedItem(

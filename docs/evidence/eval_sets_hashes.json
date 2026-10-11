@@ -12,6 +12,8 @@
     "research/eval_sets/coding_tasks_holdout_singlish.json": "f2c1c0b322fff045b9941c05dfd083acb2e5b553d10339289e5c0449a364e340",
     "research/eval_sets/hidden_tests/test_coding_tasks_holdout.py": "6b21096fb142ed8971327b3299468cef71ea239596bf34cdd90d8f370f9b7a59",
     "research/eval_sets/mutants.py": "aec0e86dad6a5b096d08f226819ed7886470298b27906c685edab25cf721bec5",
-    "research/eval_sets/mutants_holdout.py": "ce159eb6f51bce4c7d9c1b28f6556f196f4797929db6f0052c81ca25e549103b"
+    "research/eval_sets/mutants_holdout.py": "ce159eb6f51bce4c7d9c1b28f6556f196f4797929db6f0052c81ca25e549103b",
+    "research/eval_sets/analyze_docs_questions.json": "0ba352dcbfe2aba865ddc45cc32ee51f3dcfbd9a08eb507bc9daec4256400801",
+    "research/eval_sets/singlish_quality_gate.json": "c9e373a9680dd9dbb0afe91724e7259a4bd03f2386310fa604b813443475f195"
   }
 }

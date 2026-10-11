@@ -19,10 +19,13 @@ import argparse
 import contextlib
 import dataclasses
 import hashlib
+import hmac
 import io
 import json
 import os
+import secrets
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -149,7 +152,8 @@ def find_project_root() -> str:
 
 def query_model_digest(model_name: str, base_url: Optional[str] = None, timeout: float = 5.0) -> Optional[str]:
     """
-    Queries model digest from local model server /api/show or /api/tags, or returns None.
+    Queries model digest from local model server /api/tags first (matching model_name),
+    falling back to /api/show, or returns None.
     Does not use parent_model as digest.
     """
     url = base_url or os.environ.get("PAI_MODEL_URL", "http://127.0.0.1:11434")
@@ -158,7 +162,32 @@ def query_model_digest(model_name: str, base_url: Optional[str] = None, timeout:
         hostname = (parts.hostname or "").lower()
         if hostname not in ("127.0.0.1", "localhost", "::1", "[::1]"):
             return None
-        # 1. Try /api/show for explicit model digest
+    except Exception:
+        return None
+
+    try:
+        # 1. Try /api/tags first which lists available models with their digests
+        req = urllib.request.Request(
+            f"{url}/api/tags",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("models", [])
+            # First pass: exact model_name match
+            for m in models:
+                if m.get("name", "") == model_name and m.get("digest"):
+                    return str(m["digest"])
+            # Second pass: base name match when tag omitted
+            for m in models:
+                name = m.get("name", "")
+                if (name.split(":")[0] == model_name or model_name.split(":")[0] == name) and m.get("digest"):
+                    return str(m["digest"])
+    except Exception:
+        pass
+
+    try:
+        # 2. Fall back to /api/show for explicit model digest
         req = urllib.request.Request(
             f"{url}/api/show",
             data=json.dumps({"name": model_name}).encode("utf-8"),
@@ -169,23 +198,6 @@ def query_model_digest(model_name: str, base_url: Optional[str] = None, timeout:
             digest = data.get("digest")
             if digest:
                 return str(digest)
-    except Exception:
-        pass
-
-    try:
-        # 2. Try /api/tags which lists available models with their digests
-        req = urllib.request.Request(
-            f"{url}/api/tags",
-            headers={"Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            for m in data.get("models", []):
-                name = m.get("name", "")
-                if name == model_name or name.split(":")[0] == model_name or model_name.split(":")[0] == name:
-                    digest = m.get("digest")
-                    if digest:
-                        return str(digest)
     except Exception:
         pass
 
@@ -252,9 +264,14 @@ def run_hidden_tests(
     timeout_sec: float = 5.0,
 ) -> HiddenTestResult:
     """
-    Executes hidden reference tests against staged solution.py INSIDE the OS sandbox.
-    Never executes solution in the harness process.
-    Guarantees isolation against sys.exit, infinite loops, and memory bombs.
+    Executes hidden reference tests against staged solution.py INSIDE the OS sandbox
+    using the two-process driver/worker split + HMAC-SHA256 authenticated verdict framing:
+    1. Trusted Hidden Test Driver (_pai_hidden_driver.py): holds HIDDEN_TESTS, PAI_SESSION_NONCE,
+       and PAI_HMAC_KEY; verifies hidden test file SHA-256; never imports or executes candidate code.
+    2. Isolated Candidate Worker (_pai_hidden_worker.py): executes solution.py in a separate
+       child process with close_fds=True and communicates strictly via _pai_codec JSON-RPC over pipes.
+    3. Authenticated Verdict: parent verifies single ---PAI_VERDICT_START--- / ---PAI_VERDICT_END---
+       frame, session nonce, and HMAC-SHA256 signature.
     """
     root = find_project_root()
     if task_id in HIDDEN_TESTS:
@@ -292,89 +309,327 @@ def run_hidden_tests(
     with open(hidden_test_file, "r", encoding="utf-8") as f:
         hidden_test_code = f.read()
 
+    expected_test_hash = hashlib.sha256(hidden_test_code.strip().encode("utf-8")).hexdigest()
+    parent_nonce = secrets.token_hex(32)
+    parent_hmac_key = secrets.token_hex(32)
+
     sb = get_sandbox(
         memory_mb=memory_mb,
         timeout_sec=timeout_sec,
-        max_processes=2,
+        max_processes=8,
     )
     sb.setup()
 
     try:
-        # Write solution.py into sandbox scratch
+        # 1. Write solution.py into sandbox scratch
         sol_in_scratch = os.path.join(sb.scratch_dir, "solution.py")
         with open(sol_in_scratch, "w", encoding="utf-8") as f:
             f.write(solution_code)
 
-        # Write hidden test module into sandbox scratch
+        # 2. Write hidden test module into sandbox scratch and verify read-back hash
         test_in_scratch = os.path.join(sb.scratch_dir, test_filename)
         with open(test_in_scratch, "w", encoding="utf-8") as f:
             f.write(hidden_test_code)
+        try:
+            os.chmod(test_in_scratch, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+        except Exception:
+            pass
 
-        # Write _pai_hidden_runner.py into sandbox scratch
-        runner_code = f'''
+        # 3. Copy _pai_codec.py into sandbox scratch
+        codec_src = os.path.join(_DIR, "value_codec.py")
+        codec_dst = os.path.join(sb.scratch_dir, "_pai_codec.py")
+        shutil.copyfile(codec_src, codec_dst)
+        try:
+            os.chmod(codec_dst, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+        except Exception:
+            pass
+
+        # 4. Write Candidate Worker Process (_pai_hidden_worker.py)
+        worker_code = f'''
 import sys
 import os
 import json
+import inspect
+
+_ipc_out = sys.stdout
+sys.stdout = sys.stderr
 
 scratch_dir = os.path.dirname(os.path.abspath(__file__))
 if scratch_dir not in sys.path:
     sys.path.insert(0, scratch_dir)
 
-task_id = sys.argv[1]
-entry_point = sys.argv[2]
+from _pai_codec import encode_value, decode_value, CodecError, EqualityHijackError
 
-try:
-    {import_stmt}
-except Exception as e:
-    print(json.dumps({{"passed": False, "total_assertions": 0, "passed_assertions": 0, "error": f"Failed to load HIDDEN_TESTS: {{e}}"}}))
-    sys.exit(0)
-
-tests = HIDDEN_TESTS.get(task_id, [])
-
-# Execute solution.py with __name__ == "__main__" so that both module contents
-# and any __main__ blocks are evaluated safely inside the sandbox
+entry_point = {json.dumps(entry_point)}
 sol_path = os.path.join(scratch_dir, "solution.py")
 ns = {{"__name__": "__main__"}}
+exec_error = None
 try:
     with open(sol_path, "r", encoding="utf-8") as f:
         src = f.read()
     compiled = compile(src, sol_path, "exec")
     exec(compiled, ns)
 except BaseException as e:
-    print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": 0, "error": f"Execution error in solution: {{type(e).__name__}}: {{e}}"}}))
-    sys.exit(0)
+    exec_error = f"Execution error in solution: {{type(e).__name__}}: {{e}}"
 
-fn_or_cls = ns.get(entry_point)
-if fn_or_cls is None:
-    print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": 0, "error": f"Entry point '{{entry_point}}' not found in solution"}}))
-    sys.exit(0)
+fn_or_cls = ns.get(entry_point) if exec_error is None else None
+if exec_error is not None:
+    _ipc_out.write(json.dumps({{"status": "exec_error", "error": exec_error}}) + "\\n")
+    _ipc_out.flush()
+    os._exit(0)
+elif fn_or_cls is None:
+    _ipc_out.write(json.dumps({{"status": "missing_entry", "error": f"Entry point '{{entry_point}}' not found in solution"}}) + "\\n")
+    _ipc_out.flush()
+    os._exit(0)
+else:
+    _ipc_out.write(json.dumps({{"status": "ready"}}) + "\\n")
+    _ipc_out.flush()
+
+instances = {{}}
+next_id = 1
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    try:
+        req = json.loads(line)
+    except Exception as e:
+        _ipc_out.write(json.dumps({{"status": "error", "error_type": "ValueError", "error": f"Invalid JSON: {{e}}"}}) + "\\n")
+        _ipc_out.flush()
+        continue
+
+    op = req.get("op")
+    if op == "call":
+        try:
+            args = decode_value(req.get("args")) if req.get("args") is not None else []
+            kwargs = decode_value(req.get("kwargs")) if req.get("kwargs") is not None else {{}}
+            res = fn_or_cls(*args, **kwargs)
+            if inspect.isclass(fn_or_cls) and isinstance(res, fn_or_cls):
+                obj_id = next_id
+                next_id += 1
+                instances[obj_id] = res
+                resp = {{"status": "instance", "obj_id": obj_id}}
+            else:
+                enc_res = encode_value(res)
+                resp = {{"status": "ok", "result": enc_res}}
+        except (EqualityHijackError, CodecError) as ce:
+            resp = {{"status": "error", "error_type": "EqualityHijackError", "error": f"EqualityHijackError: {{ce}}"}}
+        except BaseException as ex:
+            resp = {{"status": "error", "error_type": type(ex).__name__, "error": str(ex)}}
+        _ipc_out.write(json.dumps(resp) + "\\n")
+        _ipc_out.flush()
+    elif op == "call_method":
+        obj_id = req.get("obj_id")
+        method_name = req.get("method")
+        if obj_id not in instances:
+            resp = {{"status": "error", "error_type": "RuntimeError", "error": f"Unknown instance {{obj_id}}"}}
+        else:
+            obj = instances[obj_id]
+            try:
+                args = decode_value(req.get("args")) if req.get("args") is not None else []
+                kwargs = decode_value(req.get("kwargs")) if req.get("kwargs") is not None else {{}}
+                m_fn = getattr(obj, method_name)
+                res = m_fn(*args, **kwargs)
+                enc_res = encode_value(res)
+                resp = {{"status": "ok", "result": enc_res}}
+            except (EqualityHijackError, CodecError) as ce:
+                resp = {{"status": "error", "error_type": "EqualityHijackError", "error": f"EqualityHijackError: {{ce}}"}}
+            except BaseException as ex:
+                resp = {{"status": "error", "error_type": type(ex).__name__, "error": str(ex)}}
+        _ipc_out.write(json.dumps(resp) + "\\n")
+        _ipc_out.flush()
+    elif op == "exit":
+        break
+'''
+        worker_path = os.path.join(sb.scratch_dir, "_pai_hidden_worker.py")
+        with open(worker_path, "w", encoding="utf-8") as f:
+            f.write(worker_code)
+        try:
+            os.chmod(worker_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+        except Exception:
+            pass
+
+        # 5. Write Trusted Hidden Test Driver Process (_pai_hidden_driver.py)
+        driver_code = f'''
+import sys
+import os
+import json
+import hashlib
+import hmac
+import subprocess
+import builtins
+
+scratch_dir = os.path.dirname(os.path.abspath(__file__))
+if scratch_dir not in sys.path:
+    sys.path.insert(0, scratch_dir)
+
+from _pai_codec import encode_value, decode_value, CodecError, EqualityHijackError
+
+if sys.platform.startswith("linux"):
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        libc.prctl(4, 0)
+    except Exception:
+        pass
+
+parent_nonce = os.environ.pop("PAI_SESSION_NONCE", "")
+parent_hmac_key = os.environ.pop("PAI_HMAC_KEY", "")
+task_id = {json.dumps(task_id)}
+entry_point = {json.dumps(entry_point)}
+test_filename = {json.dumps(test_filename)}
+expected_test_hash = {json.dumps(expected_test_hash)}
+
+def _emit_verdict(passed, total_assertions, passed_assertions, error):
+    payload = {{
+        "session_nonce": parent_nonce,
+        "passed": bool(passed),
+        "total_assertions": int(total_assertions),
+        "passed_assertions": int(passed_assertions),
+        "error": error,
+    }}
+    canonical = json.dumps(payload, sort_keys=True).encode("utf-8")
+    mac = hmac.new(parent_hmac_key.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+    signed = {{**payload, "mac": mac}}
+    sys.stdout.write("\\n---PAI_VERDICT_START---\\n" + json.dumps(signed) + "\\n---PAI_VERDICT_END---\\n")
+    sys.stdout.flush()
+    os._exit(0)
+
+# Verify hidden test file integrity inside sandbox before importing
+with open(os.path.join(scratch_dir, test_filename), "r", encoding="utf-8") as f:
+    actual_test_src = f.read()
+actual_test_hash = hashlib.sha256(actual_test_src.strip().encode("utf-8")).hexdigest()
+if actual_test_hash != expected_test_hash:
+    _emit_verdict(False, 0, 0, f"Hidden test file hash mismatch inside sandbox: expected {{expected_test_hash}}, got {{actual_test_hash}}")
+
+try:
+    {import_stmt}
+except Exception as e:
+    _emit_verdict(False, 0, 0, f"Failed to load HIDDEN_TESTS: {{e}}")
+
+tests = list(HIDDEN_TESTS.get(task_id, []))
+
+py_exe = sys._base_executable if hasattr(sys, "_base_executable") else sys.executable
+worker_env = {{"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}}
+
+worker_proc = subprocess.Popen(
+    [py_exe, "-I", "-B", "-s", os.path.join(scratch_dir, "_pai_hidden_worker.py")],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+    cwd=scratch_dir,
+    env=worker_env,
+    text=True,
+)
+
+def _kill_worker():
+    try:
+        if worker_proc.poll() is None:
+            try:
+                worker_proc.stdin.write(json.dumps({{"op": "exit"}}) + "\\n")
+                worker_proc.stdin.flush()
+            except Exception:
+                pass
+            worker_proc.kill()
+            worker_proc.wait(timeout=2.0)
+    except Exception:
+        pass
+
+hs_line = worker_proc.stdout.readline()
+if not hs_line:
+    poll_rc = worker_proc.poll()
+    _kill_worker()
+    _emit_verdict(False, len(tests), 0, f"Candidate worker exited prematurely (exit code {{poll_rc}})")
+
+try:
+    hs = json.loads(hs_line)
+except Exception as e:
+    _kill_worker()
+    _emit_verdict(False, len(tests), 0, f"Candidate worker invalid handshake: {{e}}")
+
+if hs.get("status") != "ready":
+    _kill_worker()
+    _emit_verdict(False, len(tests), 0, hs.get("error", "Candidate worker initialization failed"))
+
+def _send_rpc(req_dict):
+    worker_proc.stdin.write(json.dumps(req_dict) + "\\n")
+    worker_proc.stdin.flush()
+    line = worker_proc.stdout.readline()
+    if not line:
+        poll_rc = worker_proc.poll()
+        raise RuntimeError(f"Candidate worker terminated unexpectedly (exit code {{poll_rc}})")
+    resp = json.loads(line)
+    if resp.get("status") == "error":
+        err_type = resp.get("error_type", "RuntimeError")
+        err_msg = resp.get("error", "Candidate error")
+        if err_type == "EqualityHijackError" or "EqualityHijackError" in err_msg:
+            raise AssertionError(err_msg)
+        exc_cls = getattr(builtins, err_type, RuntimeError)
+        if not (isinstance(exc_cls, type) and issubclass(exc_cls, BaseException)):
+            exc_cls = RuntimeError
+        raise exc_cls(err_msg)
+    return resp
+
+class _InstanceProxy:
+    def __init__(self, obj_id):
+        self._obj_id = obj_id
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        def _method(*args, **kwargs):
+            enc_args = encode_value(list(args))
+            enc_kwargs = encode_value(dict(kwargs))
+            resp = _send_rpc({{"op": "call_method", "obj_id": self._obj_id, "method": name, "args": enc_args, "kwargs": enc_kwargs}})
+            return decode_value(resp.get("result"))
+        return _method
+
+def _proxy_entry(*args, **kwargs):
+    enc_args = encode_value(list(args))
+    enc_kwargs = encode_value(dict(kwargs))
+    resp = _send_rpc({{"op": "call", "args": enc_args, "kwargs": enc_kwargs}})
+    if resp.get("status") == "instance":
+        return _InstanceProxy(resp.get("obj_id"))
+    return decode_value(resp.get("result"))
 
 passed_count = 0
 for idx, test_fn in enumerate(tests):
     try:
-        ok = test_fn(fn_or_cls)
+        ok = test_fn(_proxy_entry)
     except BaseException as e:
-        print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": passed_count, "error": f"Assertion #{{idx+1}} raised {{type(e).__name__}}: {{e}}"}}))
-        sys.exit(0)
+        _kill_worker()
+        _emit_verdict(False, len(tests), passed_count, f"Assertion #{{idx+1}} raised {{type(e).__name__}}: {{e}}")
 
-    if ok:
+    if ok is True:
         passed_count += 1
     else:
-        print(json.dumps({{"passed": False, "total_assertions": len(tests), "passed_assertions": passed_count, "error": f"Assertion #{{idx+1}} returned False"}}))
-        sys.exit(0)
+        _kill_worker()
+        _emit_verdict(False, len(tests), passed_count, f"Assertion #{{idx+1}} returned False")
 
-print(json.dumps({{"passed": True, "total_assertions": len(tests), "passed_assertions": len(tests), "error": None}}))
-sys.exit(0)
+_kill_worker()
+_emit_verdict(True, len(tests), len(tests), None)
 '''
-        runner_path = os.path.join(sb.scratch_dir, "_pai_hidden_runner.py")
-        with open(runner_path, "w", encoding="utf-8") as f:
-            f.write(runner_code)
+        driver_path = os.path.join(sb.scratch_dir, "_pai_hidden_driver.py")
+        with open(driver_path, "w", encoding="utf-8") as f:
+            f.write(driver_code)
+        try:
+            os.chmod(driver_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+        except Exception:
+            pass
 
-        # Execute inside OS sandbox with timeout and memory limits
-        res = sb.execute(runner_path, args=[task_id, entry_point])
+        # 6. Execute driver inside OS sandbox with HMAC key and nonce in private env
+        res = sb.execute(
+            driver_path,
+            args=[],
+            extra_env={
+                "PAI_SESSION_NONCE": parent_nonce,
+                "PAI_HMAC_KEY": parent_hmac_key,
+            },
+        )
 
-        # If sandbox exited abnormally or timed out:
-        if res.exit_code != 0:
+        if res.exit_code != 0 or res.status == "timeout":
             return HiddenTestResult(
                 passed=False,
                 total_assertions=len(tests_for_task),
@@ -382,30 +637,54 @@ sys.exit(0)
                 error=f"Sandbox execution failed: {res.status} (exit {res.exit_code}): {res.stderr.strip()[:200]}",
             )
 
-        # Parse JSON output from runner
-        out_str = res.stdout.strip()
-        last_json = None
-        for line in out_str.split("\n"):
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                try:
-                    last_json = json.loads(line)
-                except Exception:
-                    continue
+        comb_out = res.stdout or ""
+        start_count = comb_out.count("---PAI_VERDICT_START---")
+        end_count = comb_out.count("---PAI_VERDICT_END---")
 
-        if not last_json:
+        if start_count != 1 or end_count != 1:
             return HiddenTestResult(
                 passed=False,
                 total_assertions=len(tests_for_task),
                 passed_assertions=0,
-                error=f"No JSON verdict from sandbox hidden test runner: stdout={out_str[:200]}",
+                error=f"Integrity violation in hidden test runner: expected 1 verdict frame, got ({start_count} start, {end_count} end)",
+            )
+
+        try:
+            payload_str = comb_out.split("---PAI_VERDICT_START---", 1)[1].split("---PAI_VERDICT_END---", 1)[0].strip()
+            verdict_data = json.loads(payload_str)
+        except Exception as e:
+            return HiddenTestResult(
+                passed=False,
+                total_assertions=len(tests_for_task),
+                passed_assertions=0,
+                error=f"Unparseable verdict frame from hidden test runner: {e}",
+            )
+
+        received_mac = verdict_data.get("mac", "")
+        payload_without_mac = {k: v for k, v in verdict_data.items() if k != "mac"}
+        canonical_bytes = json.dumps(payload_without_mac, sort_keys=True).encode("utf-8")
+        expected_mac = hmac.new(parent_hmac_key.encode("utf-8"), canonical_bytes, hashlib.sha256).hexdigest()
+        if not (received_mac and hmac.compare_digest(received_mac, expected_mac)):
+            return HiddenTestResult(
+                passed=False,
+                total_assertions=len(tests_for_task),
+                passed_assertions=0,
+                error="INTEGRITY_VIOLATION: Hidden test verdict HMAC-SHA256 signature verification failed",
+            )
+
+        if verdict_data.get("session_nonce") != parent_nonce:
+            return HiddenTestResult(
+                passed=False,
+                total_assertions=len(tests_for_task),
+                passed_assertions=0,
+                error="INTEGRITY_VIOLATION: Hidden test verdict session nonce mismatch",
             )
 
         return HiddenTestResult(
-            passed=bool(last_json.get("passed", False)),
-            total_assertions=int(last_json.get("total_assertions", 0)),
-            passed_assertions=int(last_json.get("passed_assertions", 0)),
-            error=last_json.get("error"),
+            passed=bool(verdict_data.get("passed", False)),
+            total_assertions=int(verdict_data.get("total_assertions", 0)),
+            passed_assertions=int(verdict_data.get("passed_assertions", 0)),
+            error=verdict_data.get("error"),
         )
     finally:
         sb.cleanup()

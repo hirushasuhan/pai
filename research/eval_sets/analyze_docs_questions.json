@@ -1,0 +1,74 @@
+[
+  {
+    "id": "ad_01",
+    "command": "analyze",
+    "target": "core",
+    "question": "According to Cargo.toml in this folder, what is the package name, version, and which crate is used as a Windows-specific target dependency?",
+    "ground_truth_answer": "The package name is pai-core, version 0.1.0, and the Windows-specific dependency is windows-sys (version 0.52).",
+    "required_keywords": ["pai-core", "0.1.0", "windows-sys"],
+    "min_keywords": 3
+  },
+  {
+    "id": "ad_02",
+    "command": "analyze",
+    "target": "core",
+    "question": "What are the four public modules declared in src/lib.rs, and what crate-level lint attribute is enforced at the top of src/lib.rs and src/main.rs?",
+    "ground_truth_answer": "The four public modules are conformance, tier, url_policy, and win32, and the crate-level lint attribute is #![deny(unsafe_code)].",
+    "required_keywords": ["conformance", "tier", "url_policy", "win32", "unsafe_code"],
+    "min_keywords": 4
+  },
+  {
+    "id": "ad_03",
+    "command": "analyze",
+    "target": "core/src",
+    "question": "In main.rs, which CLI option flags are supported by the pai-core binary?",
+    "ground_truth_answer": "The supported CLI flags are --conformance, --differential, --telemetry, --json, --help (-h), and --version (-v).",
+    "required_keywords": ["--conformance", "--differential", "--telemetry", "--json"],
+    "min_keywords": 3
+  },
+  {
+    "id": "ad_04",
+    "command": "analyze",
+    "target": "core/src",
+    "question": "In tier.rs, what are the four ComputeTier enum variants defined for hardware resource budgeting?",
+    "ground_truth_answer": "The four ComputeTier variants are HIGH, BALANCED, LOW, and COMPRESSED.",
+    "required_keywords": ["HIGH", "BALANCED", "LOW", "COMPRESSED"],
+    "min_keywords": 4
+  },
+  {
+    "id": "ad_05",
+    "command": "docs",
+    "target": "docs/CONSTITUTION.md",
+    "question": "In the PAI Safety Constitution, where is the SHA-256 hash of the Constitution pinned, and what happens if a release is built against a different hash?",
+    "ground_truth_answer": "The SHA-256 hash is pinned in the updater's trust root (not inside the engine), and a release built against a different hash is refused by the updater.",
+    "required_keywords": ["trust root", "updater", "refused"],
+    "min_keywords": 2
+  },
+  {
+    "id": "ad_06",
+    "command": "docs",
+    "target": "docs/MEASUREMENT_PROCEDURE.md",
+    "question": "How many independent cold runs are executed per candidate model in the standard measurement protocol, and what is the formula for the RAM admission rule?",
+    "ground_truth_answer": "5 independent cold runs are executed per candidate model, and the RAM admission rule is available_ram_mb >= host_delta_mb + 512 MB.",
+    "required_keywords": ["5", "host_delta_mb", "512"],
+    "min_keywords": 3
+  },
+  {
+    "id": "ad_07",
+    "command": "docs",
+    "target": "docs/NET_POLICY.md",
+    "question": "Which two outbound port numbers are allowed by the URL grammar, and how are explicit ports with leading zeros like 080 handled?",
+    "ground_truth_answer": "Allowed outbound ports are 80 and 443; explicit ports with leading zeros like 080 are strictly rejected.",
+    "required_keywords": ["80", "443", "rejected"],
+    "min_keywords": 3
+  },
+  {
+    "id": "ad_08",
+    "command": "docs",
+    "target": "research/eval_sets/forecast_series/series_seasonal.csv",
+    "question": "What are the two column names in this CSV dataset, how many non-null data rows are profiled, and what are the minimum and maximum values of the revenue column?",
+    "ground_truth_answer": "The two columns are month and revenue with 72 rows; minimum revenue is 269.86 and maximum revenue is 435.14.",
+    "required_keywords": ["month", "revenue", "72", "269.86", "435.14"],
+    "min_keywords": 4
+  }
+]

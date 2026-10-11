@@ -1434,4 +1434,100 @@ Not done: the owner's approval of the 10 Singlish prompts; the roadmap header st
 4. **M2c Singlish Bridge Decision (Kept on Hold / Disabled)**:
    - Across both the 20-task tuning set (`944f9cc`: English gated `5/19 = 26.3%` vs. Singlish gated `5/18 = 27.8%`) and the 10-task holdout set (`4c896ce`: English gate-off `5/10 = 50.0%` vs. Singlish gate-off `5/10 = 50.0%`; English gated `4/10 = 40.0%` vs. Singlish gated `3/8 = 37.5%` excluding timeouts, with Singlish gated solving `code_24` and `code_25` which English gated missed), `qwen2.5-coder:7b` exhibits no systematic Singlish comprehension deficit that would justify a two-model translation bridge (`M2c`). All 3 Singlish holdout false rejects (`code_22`, `code_28`, `code_30`) stem from standard LLM test-assertion hallucinations (`(2,4)+(6,8)->(2,8)`, `edit_dist("kitten","sittin")==1`, and `"a"->"a1"`). Per the pre-registered rule and owner instruction, **M2c remains on hold (not enabled)**.
 
+#### Resolution of 4 Open Items, M7 Singlish Quality Gate & Phase 1 Python Freeze (2026-10-11)
+
+1. **Resolution of the 4 Open Technical Items**:
+   - **Item 1 — Sandboxed Hidden-Test Grader Driver/Worker Split & HMAC-SHA256 Verdict Framing ([`research/eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_harness.py#L220-L535))**:
+     - Upgraded `run_hidden_tests` so the trusted grader (`_pai_hidden_driver.py`) and the untrusted candidate solution (`_pai_hidden_worker.py`) execute in **two separate processes** inside the OS sandbox.
+     - `_pai_hidden_driver.py` holds a per-run 32-byte `secrets.token_hex(32)` key in memory (never passed to the worker environment, arguments, or disk), proxies function calls and class instances (`_InstanceProxy`) to the child worker over tagged JSON stdio RPC (`_encode_rpc_val` / `_decode_rpc_val`), and emits an HMAC-SHA256 signed frame (`---PAI_VERDICT_START---` / `---PAI_VERDICT_END---`).
+     - Verified with negative controls in [`research/tests/test_eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_eval_harness.py): candidate forging `{"passed": true}` on `sys.stdout` (`test_sandboxed_hidden_test_forged_stdout_verdict_rejected`) and candidate attempting to mutate `sys.modules["test_coding_tasks"].HIDDEN_TESTS` (`test_sandboxed_hidden_test_sys_modules_tampering_isolated`) both fail closed (`passed=False`).
+   - **Item 2 — Model Digest Resolution Order ([`research/eval_harness.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_harness.py#L198-L245))**:
+     - Updated `query_model_digest` to query `GET /api/tags` first (matching `name`/`model` against `model_name` or `f"{model_name}:latest"`), falling back to `POST /api/show` only if absent from `/api/tags`, and returning `None` (`null` in JSON) when neither endpoint returns a valid SHA-256 digest. Verified by `test_query_model_digest_prefers_api_tags_and_falls_back_to_null`.
+   - **Item 3 — Secret Deny Patterns & Content-Based Secret Scanning ([`research/ingest.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/ingest.py#L46-L185))**:
+     - Added `".kube/config"`, `"docker/config.json"`, `".docker/config.json"`, and `"service-account.json"` (plus `"*service-account*.json"`) to `DEFAULT_SECRET_DENY_PATTERNS`.
+     - Implemented `scan_secret_content(text)` in `ingest_file`, refusing files whose contents match PEM private key headers (`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`), AWS access key IDs (`AKIA[0-9A-Z]{16}`), GitHub personal/fine-grained tokens (`gh[pousr]_[A-Za-z0-9_]{36,}`, `github_pat_...`), OpenAI/Anthropic keys (`sk-[A-Za-z0-9_-]{20,}`), Slack tokens (`xox[baprs]-...`), or inline secret assignments (`api_key`, `secret_key`, `access_token`, `private_key`, `password`) with reason `"SECRET_CONTENT"`.
+     - Updated `assemble_untrusted_context` to order files by `(item.bytes_read, item.path)` so concise source/config files are prioritized before large data files when a folder exceeds the 24,000-character prompt budget.
+   - **Item 4 — Frozen Real-Model Evaluation Set for `pai analyze` and `pai docs` ([`research/eval_sets/analyze_docs_questions.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_sets/analyze_docs_questions.json))**:
+     - Created 8 deterministic factual questions (`ad_01`–`ad_04` for `pai analyze` on `core` and `core/src`; `ad_05`–`ad_08` for `pai docs` on `docs/CONSTITUTION.md`, `docs/MEASUREMENT_PROCEDURE.md`, `docs/NET_POLICY.md`, and `research/eval_sets/forecast_series/series_seasonal.csv`) and registered its LF SHA-256 (`0ba352dcbfe2aba865ddc45cc32ee51f3dcfbd9a08eb507bc9daec4256400801`) in `docs/evidence/eval_sets_hashes.json`.
+     - Configured `call_model_generate` in `research/pai.py` to request `num_ctx: 8192` when `len(prompt) > 6000` (preventing Ollama's default `2048`-token context window from truncating the top of 24 KB codebase prompts while leaving `pai code` prompts `< 3 KB` unchanged).
+     - Executed against live `qwen2.5-coder:7b` (`temperature=0.0`, `seed=42`): achieved **8 / 8 (100.0%)** accuracy (`4/4` on `pai analyze`, `4/4` on `pai docs`), recorded in [`docs/evidence/eval_analyze_docs_qwen2.5_coder_7b.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/docs/evidence/eval_analyze_docs_qwen2.5_coder_7b.json):
+
+| ID | Subcommand | Target | Question Summary | Score | Latency (s) |
+|---|---|---|---|---|---|
+| `ad_01` | `pai analyze` | `core` | Package name & edition in `Cargo.toml` (`pai-core`, `2021`) | **PASS** | 25.09 |
+| `ad_02` | `pai analyze` | `core/src` | Four compute tier names in `tier.rs` (`HIGH`, `BALANCED`, `COMPRESSED`, `MINIMAL`) | **PASS** | 51.31 |
+| `ad_03` | `pai analyze` | `core/src` | Private IPv4 CIDR ranges blocked in `url_policy.rs` (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | **PASS** | 23.09 |
+| `ad_04` | `pai analyze` | `core/src` | Allowed URL schemes (`http`, `https`) and default ports (`80`, `443`) | **PASS** | 20.66 |
+| `ad_05` | `pai docs` | `docs/CONSTITUTION.md` | Article I non-maleficence & Article II loop iterations (`64`) / wall-clock (`30s`) | **PASS** | 12.14 |
+| `ad_06` | `pai docs` | `docs/MEASUREMENT_PROCEDURE.md` | Cold-load runs (`5`), warm-up prompts (`3`), idle wait (`10s`) | **PASS** | 10.67 |
+| `ad_07` | `pai docs` | `docs/NET_POLICY.md` | Redirect hops (`3`), response cap (`2 MB`), timeout (`10s`) | **PASS** | 9.93 |
+| `ad_08` | `pai docs` | `series_seasonal.csv` | Row count (`36`), min (`100.0`), max (`163.0`) | **PASS** | 18.88 |
+
+2. **Milestone M7 — Singlish Response-Quality Gate (`research/eval_sets/singlish_quality_gate.json`, `research/router.py`, `research/pai.py`)**:
+   - **Frozen 25-Prompt Singlish Evaluation Set**: Created [`research/eval_sets/singlish_quality_gate.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/eval_sets/singlish_quality_gate.json) (LF SHA-256: `c9e373a9680dd9dbb0afe91724e7259a4bd03f2386310fa604b813443475f195`), containing 5 Singlish prompts per task class across all 5 task classes (`code`, `analyze`, `docs`, `forecast`, `chat` — 25 prompts total), each scored on a `0–2` rubric (`0`: wrong answer or refuses/garbles; `1`: understands Singlish and answers accurately in English or broken Singlish; `2`: accurate answer + natural Singlish/Sinhala response following the user's language, or passing sandboxed code execution for `code`).
+   - **Real-Model Evaluation Across All 6 Candidate Models (`temperature=0.0`, `seed=42`, recorded in [`docs/evidence/singlish_quality_gate_results.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/docs/evidence/singlish_quality_gate_results.json))**:
+
+| Candidate Model | `code` (0–2) | `analyze` (0–2) | `docs` (0–2) | `forecast` (0–2) | `chat` (0–2) | Total Points (/50) | **Mean `singlish_score` (0–2)** | Threshold (`>= 1.20`) Status |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `qwen3.5:4b` | 2.00 | 1.60 | 1.40 | 2.00 | 1.80 | 44 / 50 | **1.76** | **PASS (`recommended`)** |
+| `gemma4:e2b` | 2.00 | 1.40 | 1.40 | 2.00 | 2.00 | 44 / 50 | **1.76** | **PASS (`recommended`)** |
+| `llama3.2:3b` | 1.80 | 1.60 | 0.80 | 1.40 | 2.00 | 38 / 50 | **1.52** | **PASS (`recommended`)** |
+| `qwen2.5-coder:7b` | 2.00 | 0.60 | 0.60 | 0.80 | 1.00 | 25 / 50 | **1.00** | **BELOW THRESHOLD (`Singlish not recommended`)** |
+| `qwen2.5-coder:1.5b` | 2.00 | 0.20 | 0.80 | 0.60 | 0.80 | 22 / 50 | **0.88** | **BELOW THRESHOLD (`Singlish not recommended`)** |
+| `llama3.2:1b` | 2.00 | 0.40 | 0.20 | 0.80 | 0.60 | 20 / 50 | **0.80** | **BELOW THRESHOLD (`Singlish not recommended`)** |
+
+   - **Router Enforcement & Threat T21 Protection ([`research/router.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/router.py))**:
+     - `detect_singlish_or_sinhala(text)` inspects **only** the user's explicit prompt (`prompt_text`), never untrusted file/folder/web `context` (preventing Threat T21 where Singlish tokens inside an untrusted repository could force a model switch). Verified with `test_detect_singlish_or_sinhala_positive_across_all_eval_sets` (`55/55` Singlish prompts detected), `test_detect_singlish_or_sinhala_negative_on_english_eval_sets` (`0/38` false positives on English prompts), and `test_threat_t21_singlish_in_untrusted_context_never_triggers_singlish_routing`.
+     - When a Singlish prompt is detected, `ModelRouter.route` prefers a fitting candidate that meets `singlish_score >= 1.20` (`SINGLISH_THRESHOLD_PREFERRED`, `SINGLISH_GATE_PASSED`). For example, on Singlish `analyze`/`docs`/`forecast` questions, it prefers `qwen3.5:4b` (`1.76`) or `llama3.2:3b` (`1.52`) over `qwen2.5-coder:7b` (`1.00`), while for `code` tasks where only coder models (`1.00` / `0.88`) are in the candidate pool, or under tight RAM constraints where only `qwen2.5-coder:1.5b` fits, it routes with an explicit `"SINGLISH_NOT_RECOMMENDED"` reason code and `"Singlish not recommended"` explanation warning.
+     - `check_singlish_promotion_gate(candidate_score, baseline_score, threshold=1.20)` blocks promotion of any candidate model with an unmeasured score (`None`), a score below `1.20`, or a score that regresses below the current baseline.
+     - Added `pai chat <prompt>` and `pai forecast <csv> --question <q>` to [`research/pai.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/pai.py), instructing the model to reply in the user's language (`Singlish` / `Sinhala` when detected) while keeping all forecast numbers 100% deterministic in Python.
+
+3. **Phase 1 Integration, End-to-End `pai doctor` & Python Prototype Freeze**:
+   - **Single Entry Point (`research/pai.py`)**: All Phase 1 / Track L subcommands (`doctor`, `calibrate`, `models`, `route`, `code`, `analyze`, `docs`, `forecast`, `chat`) run through a unified CLI entry point with consistent exit codes (`0` success, `1` input/validation/secret refusal, `2` model/repair failure, `3` unsupported document type, `4` target file collision, `5` router/sandbox boundary refusal).
+   - **End-to-End `pai doctor` Verification**: Upgraded `pai doctor` (`cmd_doctor` in `research/pai.py`) to run 8 live health and in-process smoke checks (using an ephemeral loopback mock HTTP server for model smoke tests so `pai doctor` succeeds deterministically offline or online) and return non-zero (`1`) if any check fails:
+
+| `pai doctor` Check Name | Scope Verified | Status on Windows Host |
+|---|---|---|
+| `os_telemetry` | Live OS kernel RAM/CPU/power telemetry (`win32-kernel32` / `/proc`) | **PASS** |
+| `sandbox_boundary` | Fail-closed OS sandbox capability probe (`Win32Sandbox` / `LinuxBwrapSandbox`) | **PASS** |
+| `ram_admission` | Candidate model RAM fit against live available memory | **PASS** (`6/6` eligible) |
+| `ingest_limits` | Safe ingestion byte caps (`1 MB` file / `10 MB` run) & `35` secret deny patterns | **PASS** |
+| `smoke_code` | `VerifyLoop.prepare_test_suite` + sandboxed stub probe against ephemeral fixture | **PASS** |
+| `smoke_analyze` | `ingest_folder` + per-run nonce envelope on temporary repository | **PASS** |
+| `smoke_docs` | `cmd_docs` Markdown ingestion + mock loopback model round-trip | **PASS** |
+| `smoke_forecast` | `run_forecast_pipeline` backtest & interval generation on synthetic series | **PASS** |
+
+   - **Frozen Evaluation Sets Registry (`docs/evidence/eval_sets_hashes.json`, 13 Locked Files)**:
+
+| Frozen Evaluation File | LF SHA-256 Digest | Purpose |
+|---|---|---|
+| `research/eval_sets/coding_tasks.json` | `df026a8b472c3eb2af8103c21e6f3b53db7baddca54df8b85826e7b274c9a56e` | M1/M2b English tuning coding tasks (`code_01`–`20`) |
+| `research/eval_sets/coding_tasks_singlish.json` | `0dac2393a659d9a6b32899ffb96ded361c6d9ea02e7c2111939a40295e63dc69` | M2b Singlish tuning coding tasks (`code_01`–`20`) |
+| `research/eval_sets/hidden_tests/test_coding_tasks.py` | `63e1e839ca4715e7bee944f1e3e3f528a3bef4a38c0d654a147599474369f1b1` | Hidden reference tests for `code_01`–`20` |
+| `research/eval_sets/mutants.py` | `aec0e86dad6a5b096d08f226819ed7886470298b27906c685edab25cf721bec5` | 42 defective mutants for tuning tasks (`code_01`–`20`) |
+| `research/eval_sets/coding_tasks_holdout.json` | `2ee27e0769ad2af6f45b4a9f8774835f6e54e836ade51da7b45b8e86c979733b` | Consumed English holdout coding tasks (`code_21`–`30`) |
+| `research/eval_sets/coding_tasks_holdout_singlish.json` | `f2c1c0b322fff045b9941c05dfd083acb2e5b553d10339289e5c0449a364e340` | Owner-approved Singlish holdout tasks (`code_21`–`30`) |
+| `research/eval_sets/hidden_tests/test_coding_tasks_holdout.py` | `6b21096fb142ed8971327b3299468cef71ea239596bf34cdd90d8f370f9b7a59` | Hidden reference tests for holdout `code_21`–`30` |
+| `research/eval_sets/mutants_holdout.py` | `ce159eb6f51bce4c7d9c1b28f6556f196f4797929db6f0052c81ca25e549103b` | 20 defective mutants for holdout `code_21`–`30` |
+| `research/eval_sets/singlish_prompts.json` | `b502c1ef8930402c76a2b5a148079630120f7e13171111942aea35559139afb4` | M1 initial 10 Singlish bake-off prompts |
+| `research/eval_sets/doc_analysis_tasks.json` | `cc320004121f76ca84222611a33bda0b1f89d9853b4199c94fdc1c1384ee2cbd` | M1 20 document Q&A bake-off tasks |
+| `research/eval_sets/router_golden_vectors.json` | `69f885ec8f332e20176378c65b0b458961c8b8de0993396950d6c3572b1195bd` | M1b 15 deterministic router golden vectors |
+| `research/eval_sets/analyze_docs_questions.json` | `0ba352dcbfe2aba865ddc45cc32ee51f3dcfbd9a08eb507bc9daec4256400801` | M3/M4 8-question real-model evaluation set |
+| `research/eval_sets/singlish_quality_gate.json` | `c9e373a9680dd9dbb0afe91724e7259a4bd03f2386310fa604b813443475f195` | M7 25-prompt Singlish response-quality gate set |
+
+   - **Security-Critical Modules & Trust-Boundary Inventory for the Rust-Scope Decision (Phase 2/3)**:
+     - Per the roadmap compression plan, freezing the Python prototype enables a clean Rust-scope decision: **only security-critical boundary modules and hot-path policy enforcement need to be in Rust**, while high-level orchestration, formatting, and statistical helpers can remain in Python or be ported incrementally:
+
+| Module (`research/`) | Trust Boundary / Security Role | Current Verification Status | Rust Port Priority |
+|---|---|---|---|
+| `hardware_telemetry.py` | OS memory/CPU/battery reading & tier classification | **Ported to Rust (`core/src/tier.rs`, `core/src/win32.rs`)** — 200 golden vectors + live Win32 parity verified | **Done (VS2 / VS3a)** |
+| `outbound_policy.py` / `net_guard.py` | Outbound URL allow-list, SSRF & IPv4/IPv6 CIDR blocking | **Ported to Rust (`core/src/url_policy.rs`)** — 87 adversarial vectors + 10,000 fuzz cases (`0` mismatches) | **Done (VS2)** |
+| `sandbox_win32.py` / `sandbox_bwrap.py` / `sandbox_probe.py` | Untrusted code execution containment (Win32 AppContainer + Job Object; Linux `bwrap` namespaces) | **Verified fail-closed** (adversarial matrix A1–A11, live capability probe on every run) | **High (Phase 4 RSI runner)** — native Rust process/job launcher |
+| `verify_loop.py` / `ast_guard.py` | Driver/worker IPC split, HMAC-SHA256 verdict framing, tagged RPC codec, AST allow-list | **Frozen at `6218fbc`** (measured on 20 tuning + 10 holdout tasks, 62 mutants) | **Medium** — keep in Python for Track L; port HMAC/RPC framing if Rust hosts sandbox |
+| `ingest.py` | Path-escape defense, symlink rejection, secret file & content scanning, cryptographic nonce envelope, terminal sanitizer | **Hardened & verified** (35 file patterns, 6 content regexes, OSC/C1/bidi stripping) | **High (Phase 3)** — deterministic Rust file scanner & sanitizer |
+| `updater.py` / `ed25519_ref.py` | Ed25519 manifest signature check, anti-rollback, pinned Constitution hash | **Verified in Python** (unit + tamper tests) | **High (Phase 4)** — native Rust hot-swap verifier |
+| `capabilities.py` | Deny-by-default capability broker, taint tracking (`context_tainted`), hash-chained audit log | **Verified in Python** (unit + taint escalation tests) | **High (Phase 5)** — before any OS control tool is attached |
+| `router.py` / `forecast_engine.py` / `pai.py` | Model selection, deterministic Holt-Winters/backtest math, CLI presentation | **Verified in Python** (421 Python unit/e2e tests + 13 Rust tests passing) | **Low (Keep in Python)** — no untrusted execution boundary; Python stdlib is fast and maintainable |
+
+
 

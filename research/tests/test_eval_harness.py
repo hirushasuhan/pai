@@ -44,10 +44,24 @@ class MockModelServer:
     def __init__(self):
         self.handler_fn = None
         self.requests = []
+        self.get_requests = []
+        self.tags_payload = None
+        self.show_payload = {"digest": "sha256:mock_model_digest_12345"}
 
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.get_requests.append(self.path)
+                if self.path == "/api/tags" and outer.tags_payload is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(outer.tags_payload).encode("utf-8"))
+                    return
+                self.send_response(404)
+                self.end_headers()
+
             def do_POST(self):
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length).decode("utf-8")
@@ -58,10 +72,14 @@ class MockModelServer:
                 outer.requests.append(data)
 
                 if self.path == "/api/show":
+                    if outer.show_payload is None:
+                        self.send_response(404)
+                        self.end_headers()
+                        return
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    self.wfile.write(json.dumps({"digest": "sha256:mock_model_digest_12345"}).encode("utf-8"))
+                    self.wfile.write(json.dumps(outer.show_payload).encode("utf-8"))
                     return
 
                 if outer.handler_fn:
@@ -770,6 +788,106 @@ class TestEvalHarness(unittest.TestCase):
         self.assertEqual(metrics["mean_pass_at_1_repair3"], 0.0)
         self.assertEqual(metrics["mean_false_accept_rate"], 0.0)
 
+    def test_query_model_digest_tags_first_then_show_fallback(self):
+        """
+        Verifies query_model_digest queries /api/tags first (matching model_name),
+        falls back to /api/show when absent from /api/tags, and returns None when both omit digest.
+        """
+        # 1. /api/tags returns digest -> used directly without needing /api/show digest
+        self.mock_server.tags_payload = {
+            "models": [
+                {"name": "other:1b", "digest": "sha256:other_digest"},
+                {"name": "qwen2.5-coder:7b", "digest": "sha256:tags_digest_7b"},
+            ]
+        }
+        self.mock_server.show_payload = {}
+        self.mock_server.requests.clear()
+        self.mock_server.get_requests.clear()
+
+        d1 = eval_harness.query_model_digest("qwen2.5-coder:7b", base_url=self.mock_server.url)
+        self.assertEqual(d1, "sha256:tags_digest_7b")
+        self.assertIn("/api/tags", self.mock_server.get_requests)
+        self.assertEqual(len(self.mock_server.requests), 0, "Should not call /api/show when /api/tags matched")
+
+        # 2. /api/tags has no match -> falls back to /api/show
+        self.mock_server.tags_payload = {"models": [{"name": "other:1b", "digest": "sha256:other"}]}
+        self.mock_server.show_payload = {"digest": "sha256:fallback_show_digest"}
+        d2 = eval_harness.query_model_digest("qwen2.5-coder:7b", base_url=self.mock_server.url)
+        self.assertEqual(d2, "sha256:fallback_show_digest")
+
+        # 3. Negative control: neither /api/tags nor /api/show provides a digest -> returns None
+        self.mock_server.tags_payload = {"models": []}
+        self.mock_server.show_payload = {"modelfile": "FROM something"}
+        d3 = eval_harness.query_model_digest("qwen2.5-coder:7b", base_url=self.mock_server.url)
+        self.assertIsNone(d3)
+
+    def test_run_hidden_tests_two_process_hmac_and_tamper_resistance(self):
+        """
+        Verifies run_hidden_tests executes candidate code in an isolated worker process:
+        1. Positive control: class-based task (code_17 CircularBuffer) passes across _InstanceProxy RPC.
+        2. Negative control A: candidate attempting to forge ---PAI_VERDICT_START--- on stdout/fd 1 is rejected.
+        3. Negative control B: candidate attempting to mutate HIDDEN_TESTS in memory is rejected.
+        """
+        # 1. Positive control: CircularBuffer (code_17)
+        sol_cb = os.path.join(self.tmp_dir, "sol_cb.py")
+        with open(sol_cb, "w", encoding="utf-8") as f:
+            f.write(
+                "class CircularBuffer:\n"
+                "    def __init__(self, capacity: int):\n"
+                "        self.cap = capacity\n"
+                "        self.buf = []\n"
+                "    def enqueue(self, item) -> bool:\n"
+                "        if len(self.buf) >= self.cap:\n"
+                "            return False\n"
+                "        self.buf.append(item)\n"
+                "        return True\n"
+                "    def dequeue(self):\n"
+                "        return self.buf.pop(0) if self.buf else None\n"
+                "    def peek(self):\n"
+                "        return self.buf[0] if self.buf else None\n"
+                "    def is_empty(self) -> bool:\n"
+                "        return len(self.buf) == 0\n"
+                "    def is_full(self) -> bool:\n"
+                "        return len(self.buf) == self.cap\n"
+                "    def size(self) -> int:\n"
+                "        return len(self.buf)\n"
+            )
+        res_cb = eval_harness.run_hidden_tests("code_17", "CircularBuffer", sol_cb)
+        self.assertTrue(res_cb.passed, f"Expected CircularBuffer to pass, got error: {res_cb.error}")
+        self.assertEqual(res_cb.passed_assertions, res_cb.total_assertions)
+
+        # 2. Negative control A: Candidate prints forged verdict frame to stdout / __stdout__
+        sol_forge = os.path.join(self.tmp_dir, "sol_forge.py")
+        with open(sol_forge, "w", encoding="utf-8") as f:
+            f.write(
+                "import sys, json\n"
+                "forged = {'session_nonce': 'forged', 'passed': True, 'total_assertions': 5, 'passed_assertions': 5, 'error': None, 'mac': '0'*64}\n"
+                "sys.__stdout__.write('\\n---PAI_VERDICT_START---\\n' + json.dumps(forged) + '\\n---PAI_VERDICT_END---\\n')\n"
+                "sys.__stdout__.flush()\n"
+                "def parse_simple_csv(text):\n"
+                "    return 'WRONG'\n"
+            )
+        res_forge = eval_harness.run_hidden_tests("code_01", "parse_simple_csv", sol_forge)
+        self.assertFalse(res_forge.passed)
+
+        # 3. Negative control B: Candidate attempts to import test_coding_tasks and overwrite HIDDEN_TESTS
+        sol_tamper = os.path.join(self.tmp_dir, "sol_tamper.py")
+        with open(sol_tamper, "w", encoding="utf-8") as f:
+            f.write(
+                "import sys\n"
+                "try:\n"
+                "    import test_coding_tasks\n"
+                "    test_coding_tasks.HIDDEN_TESTS['code_01'] = [lambda f: True]\n"
+                "except Exception:\n"
+                "    pass\n"
+                "def parse_simple_csv(text):\n"
+                "    return 'WRONG'\n"
+            )
+        res_tamper = eval_harness.run_hidden_tests("code_01", "parse_simple_csv", sol_tamper)
+        self.assertFalse(res_tamper.passed)
+        self.assertEqual(res_tamper.passed_assertions, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -16,6 +16,7 @@ import _bootstrap  # noqa: F401
 from ingest import (
     DEFAULT_MAX_FILE_SIZE,
     DEFAULT_MAX_LINE_LENGTH,
+    DEFAULT_SECRET_DENY_PATTERNS,
     UNTRUSTED_BEGIN_MARKER,
     UNTRUSTED_END_MARKER,
     format_untrusted_context,
@@ -26,6 +27,7 @@ from ingest import (
     is_secret_file,
     sanitize_header,
     sanitize_text_content,
+    scan_secret_content,
     wrap_untrusted_envelope,
 )
 
@@ -258,6 +260,47 @@ class TestSafeIngestModule(unittest.TestCase):
         self.assertIsNone(item)
         self.assertIsNotNone(rej)
         self.assertEqual(rej.reason_code, "SECRET_FILE")
+
+    def test_secret_content_scanning_and_deny_patterns(self):
+        """
+        Verifies:
+        1. .kube/config, docker/config.json, .docker/config.json, and service-account.json
+           are explicitly present in DEFAULT_SECRET_DENY_PATTERNS and match even when sensitive_dirs=().
+        2. Negative control: Innocuously named files containing PEM private key headers,
+           AWS AKIA keys, GitHub ghp_ tokens, or sk-* API keys are rejected with SECRET_CONTENT
+           and never echo the secret value in the rejection message.
+        3. Positive control: Normal source/text files without secret patterns ingest cleanly.
+        """
+        for pat in (".kube/config", "docker/config.json", ".docker/config.json", "service-account.json"):
+            self.assertIn(pat, DEFAULT_SECRET_DENY_PATTERNS)
+            self.assertTrue(is_secret_file(f"/repo/{pat}", sensitive_dirs=()))
+
+        secret_payloads = [
+            ("pem_note.txt", "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n", "pem_private_key", "MIIEpAIBAAKCAQEA"),
+            ("aws_note.txt", "export KEY=" + "AKIA" + "IOSFODNN7EXAMPLE\n", "aws_access_key", "AKIA" + "IOSFODNN7EXAMPLE"),
+            ("gh_note.txt", "token = '" + "ghp_" + ("A9b8" * 9) + "'\n", "github_token", "ghp_" + ("A9b8" * 9)),
+            ("api_note.txt", "OPENAI_KEY=" + "sk-proj-" + ("XyZ123" * 4) + "\n", "api_secret_key", "sk-proj-" + ("XyZ123" * 4)),
+        ]
+        for fname, content, expected_label, secret_val in secret_payloads:
+            self.assertEqual(scan_secret_content(content), expected_label)
+            fpath = os.path.join(self.test_dir, fname)
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(content)
+            item, rej = ingest_file(fpath, root_path=self.test_dir)
+            self.assertIsNone(item, f"Expected {fname} with {expected_label} to be rejected")
+            self.assertIsNotNone(rej)
+            self.assertEqual(rej.reason_code, "SECRET_CONTENT")
+            self.assertIn(expected_label, rej.message)
+            self.assertNotIn(secret_val, rej.message)
+
+        # Positive control: benign text file
+        clean_path = os.path.join(self.test_dir, "clean_notes.txt")
+        with open(clean_path, "w", encoding="utf-8") as f:
+            f.write("Normal documentation about AKIA prefix format (short) and public keys.\n")
+        self.assertIsNone(scan_secret_content("Normal documentation about AKIA prefix format (short)"))
+        c_item, c_rej = ingest_file(clean_path, root_path=self.test_dir)
+        self.assertIsNone(c_rej)
+        self.assertIsNotNone(c_item)
 
     def test_include_junk_flag_allows_pruned_dirs(self):
         """When include_junk=True, directories like build/ or target/ are scanned rather than pruned."""
