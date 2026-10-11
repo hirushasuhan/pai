@@ -85,10 +85,12 @@ class TestSinglishQualityGate(unittest.TestCase):
             self.assertNotIn(code, decision.reason_codes)
 
     def test_router_singlish_threshold_preference_and_below_threshold_warning(self):
-        """Router prefers models meeting singlish_threshold, and warns ('Singlish not recommended') when only a below-threshold model fits."""
+        """
+        Router uses requested task_class Singlish score, requires passing quality check
+        for that class, and requires a verified licence when preferring a candidate.
+        """
         router = ModelRouter(load_system_profile=False)
 
-        # Case 1: High RAM -> selects a model meeting Singlish gate (>= 1.2)
         high_budget = HardwareBudget(
             compute_tier="HIGH",
             max_context_bytes=16 * 1024 * 1024,
@@ -98,38 +100,67 @@ class TestSinglishQualityGate(unittest.TestCase):
             reasons=["High RAM test"],
             avail_ram_mb=8192.0,
         )
-        dec_ok = router.route(
+
+        # Case 1: Singlish `code` prompt selects qwen2.5-coder:7b and PASSES Singlish gate
+        # because its `code` class score is 2.00 >= 1.20 (even though overall mean is 1.00),
+        # `code` is in quality_checked_classes, and licence is verified (Apache-2.0).
+        dec_code = router.route(
+            command="code",
+            budget=high_budget,
+            prompt_text="List ekak sort karanna Python function ekak liyanna.",
+        )
+        self.assertEqual(dec_code.selected_model, "qwen2.5-coder:7b")
+        self.assertIn("SINGLISH_GATE_PASSED", dec_code.reason_codes)
+        self.assertNotIn("SINGLISH_NOT_RECOMMENDED", dec_code.reason_codes)
+        self.assertNotIn("UNVERIFIED_LICENCE", dec_code.reason_codes)
+
+        # Case 2: Singlish `chat` prompt prefers llama3.2:3b (chat score 2.00 >= 1.20,
+        # quality_checked_classes includes 'chat', verified Llama-3.2-Community licence)
+        # over qwen3.5:4b (unverified licence).
+        dec_chat = router.route(
             command="chat",
             budget=high_budget,
             prompt_text="Python dictionary ekaka key ekak safely ganna widiha mokakda?",
         )
-        self.assertIsNotNone(dec_ok.selected_model)
-        self.assertIn("SINGLISH_GATE_PASSED", dec_ok.reason_codes)
-        self.assertNotIn("SINGLISH_NOT_RECOMMENDED", dec_ok.reason_codes)
+        self.assertEqual(dec_chat.selected_model, "llama3.2:3b")
+        self.assertIn("SINGLISH_THRESHOLD_PREFERRED", dec_chat.reason_codes)
+        self.assertIn("SINGLISH_GATE_PASSED", dec_chat.reason_codes)
+        self.assertNotIn("UNVERIFIED_LICENCE", dec_chat.reason_codes)
+        self.assertNotIn("SINGLISH_NOT_RECOMMENDED", dec_chat.reason_codes)
 
-        # Case 2: Singlish analyze prompt prefers qwen3.5:4b (1.76 >= 1.20) over qwen2.5-coder:7b (1.00 < 1.20) at 8 GB,
-        # and prefers llama3.2:3b (1.52 >= 1.20) when RAM is 3400 MB (where qwen3.5:4b uncalibrated 3614 MB does not fit)
-        dec_analyze = router.route(
+        # Case 3: Singlish `analyze`, `docs`, and `forecast` prompts do NOT switch to
+        # qwen3.5:4b (unverified licence, no quality check on analyze/docs/forecast) or
+        # llama3.2:3b (no quality check on analyze/docs/forecast; docs score 0.80 < 1.20).
+        # Instead, they retain qwen2.5-coder:7b (verified licence, quality-checked) and
+        # report SINGLISH_NOT_RECOMMENDED with the class-specific score (0.60 / 0.60 / 0.80).
+        for cmd, expected_score_str in (("analyze", "0.60"), ("docs", "0.60"), ("forecast", "0.80")):
+            dec_unpref = router.route(
+                command=cmd,
+                budget=high_budget,
+                prompt_text="Me codebase eke main entry point eka mokakda kiyala Singlish walin kiyanna.",
+            )
+            self.assertEqual(dec_unpref.selected_model, "qwen2.5-coder:7b")
+            self.assertIn("SINGLISH_NOT_RECOMMENDED", dec_unpref.reason_codes)
+            self.assertNotIn("UNVERIFIED_LICENCE", dec_unpref.reason_codes)
+            self.assertNotIn("SINGLISH_THRESHOLD_PREFERRED", dec_unpref.reason_codes)
+            self.assertIn(f"score {expected_score_str} < threshold 1.20", dec_unpref.explanation)
+
+        # Case 4: When a candidate DOES have a verified licence, passing class quality check,
+        # and class Singlish score >= 1.20, the router prefers it for that class.
+        router_qual = ModelRouter(load_system_profile=False)
+        router_qual.candidates["llama3.2:3b"].quality_checked_classes.append("analyze")
+        dec_qual = router_qual.route(
             command="analyze",
             budget=high_budget,
             prompt_text="Me codebase eke main entry point eka mokakda kiyala Singlish walin kiyanna.",
         )
-        self.assertEqual(dec_analyze.selected_model, "qwen3.5:4b")
-        self.assertIn("SINGLISH_THRESHOLD_PREFERRED", dec_analyze.reason_codes)
-        self.assertIn("SINGLISH_GATE_PASSED", dec_analyze.reason_codes)
+        self.assertEqual(dec_qual.selected_model, "llama3.2:3b")
+        self.assertIn("SINGLISH_THRESHOLD_PREFERRED", dec_qual.reason_codes)
+        self.assertIn("SINGLISH_GATE_PASSED", dec_qual.reason_codes)
+        self.assertNotIn("UNVERIFIED_LICENCE", dec_qual.reason_codes)
+        self.assertNotIn("UNMEASURED_CLASS", dec_qual.reason_codes)
 
-        router_3b = ModelRouter(load_system_profile=False)
-        router_3b.user_config = {"allowed_models": ["qwen2.5-coder:7b", "llama3.2:3b", "qwen2.5-coder:1.5b"]}
-        dec_analyze_3b = router_3b.route(
-            command="analyze",
-            budget=high_budget,
-            prompt_text="Me codebase eke main entry point eka mokakda kiyala Singlish walin kiyanna.",
-        )
-        self.assertEqual(dec_analyze_3b.selected_model, "llama3.2:3b")
-        self.assertIn("SINGLISH_THRESHOLD_PREFERRED", dec_analyze_3b.reason_codes)
-        self.assertIn("SINGLISH_GATE_PASSED", dec_analyze_3b.reason_codes)
-
-        # Case 3: Constrained RAM where only a below-threshold model fits (qwen2.5-coder:1.5b = 0.88 < 1.20)
+        # Case 5: Constrained RAM on `chat` where only qwen2.5-coder:1.5b fits (chat score 0.80 < 1.20)
         tight_budget = HardwareBudget(
             compute_tier="COMPRESSED",
             max_context_bytes=2 * 1024 * 1024,
@@ -140,16 +171,24 @@ class TestSinglishQualityGate(unittest.TestCase):
             avail_ram_mb=1450.0,  # Only qwen2.5-coder:1.5b (1397.6 MB uncalibrated) fits
         )
         dec_warn = router.route(
-            command="code",
+            command="chat",
             budget=tight_budget,
-            prompt_text="List ekak sort karanna Python function ekak liyanna.",
+            prompt_text="Python dictionary ekaka key ekak safely ganna widiha mokakda?",
         )
         self.assertEqual(dec_warn.selected_model, "qwen2.5-coder:1.5b")
         self.assertIn("SINGLISH_NOT_RECOMMENDED", dec_warn.reason_codes)
-        self.assertIn("Singlish not recommended", dec_warn.explanation)
+        self.assertIn("score 0.80 < threshold 1.20", dec_warn.explanation)
 
     def test_check_singlish_promotion_gate_enforces_no_regression_and_threshold(self):
-        """Promotion gate rejects None, below-threshold, or regression against baseline."""
+        """Promotion gate rejects unverified licence, failed class quality check, None, below-threshold, or regression."""
+        ok, msg = check_singlish_promotion_gate(1.80, baseline_score=1.40, threshold=1.20, license_verified=False)
+        self.assertFalse(ok)
+        self.assertIn("licence is unverified", msg)
+
+        ok, msg = check_singlish_promotion_gate(1.80, baseline_score=1.40, threshold=1.20, class_quality_passed=False)
+        self.assertFalse(ok)
+        self.assertIn("task-class quality check", msg)
+
         ok, msg = check_singlish_promotion_gate(None, baseline_score=1.40, threshold=1.20)
         self.assertFalse(ok)
         self.assertIn("no measured Singlish quality score", msg)

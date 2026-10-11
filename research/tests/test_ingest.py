@@ -293,11 +293,45 @@ class TestSafeIngestModule(unittest.TestCase):
             self.assertIn(expected_label, rej.message)
             self.assertNotIn(secret_val, rej.message)
 
+        # Inline credential assignment variants (all 5 must be rejected)
+        inline_variants = [
+            ('password = "S3cr3tP@ssw0rd99!"\n', "inline_secret_assignment"),
+            ('API_KEY = "live_9876543210abcdef"\n', "inline_secret_assignment"),
+            ('DB_PASSWORD=prod_db_pass_2026\n', "inline_secret_assignment"),
+            ("secret_key = 'my_super_secret_jwt_key'\n", "inline_secret_assignment"),
+            ('{"access_token": "tok_live_1234567890abcdef"}\n', "inline_secret_assignment"),
+        ]
+        for idx, (variant_text, expected_label) in enumerate(inline_variants):
+            self.assertEqual(scan_secret_content(variant_text), expected_label, f"Failed on variant {idx}: {variant_text!r}")
+            v_path = os.path.join(self.test_dir, f"inline_cred_{idx}.py")
+            with open(v_path, "w", encoding="utf-8") as f:
+                f.write(variant_text)
+            v_item, v_rej = ingest_file(v_path, root_path=self.test_dir)
+            self.assertIsNone(v_item)
+            self.assertIsNotNone(v_rej)
+            self.assertEqual(v_rej.reason_code, "SECRET_CONTENT")
+
+        # False-positive negative controls (env lookups, placeholders, prose must NOT be rejected)
+        benign_variants = [
+            'Normal documentation about AKIA prefix format (short) and public keys.\n',
+            'api_key = os.environ["API_KEY"]\n',
+            'db_password = os.environ.get("DB_PASSWORD")\n',
+            'secret_key = os.getenv("SECRET_KEY")\n',
+            'password = None\n',
+            'password = ""\n',
+            'password = "changeme"\n',
+            'password = "your_password_here"\n',
+            'password = "must be at least 8 characters long"\n',
+            'API_KEY = "${API_KEY}"\n',
+            'DB_PASSWORD=<insert_password>\n',
+        ]
+        for benign_text in benign_variants:
+            self.assertIsNone(scan_secret_content(benign_text), f"False positive on: {benign_text!r}")
+
         # Positive control: benign text file
         clean_path = os.path.join(self.test_dir, "clean_notes.txt")
         with open(clean_path, "w", encoding="utf-8") as f:
             f.write("Normal documentation about AKIA prefix format (short) and public keys.\n")
-        self.assertIsNone(scan_secret_content("Normal documentation about AKIA prefix format (short)"))
         c_item, c_rej = ingest_file(clean_path, root_path=self.test_dir)
         self.assertIsNone(c_rej)
         self.assertIsNotNone(c_item)

@@ -8,7 +8,9 @@
   "evaluated_at": "2026-10-11T13:18:34Z",
   "total_questions": 8,
   "passed_questions": 8,
-  "accuracy": 1.0,
+  "evaluation_type": "keyword_match_smoke_test",
+  "smoke_pass_rate": 1.0,
+  "evaluation_scope_note": "Keyword-count check on English facts quoted from repository files; smoke test, not a general accuracy measurement.",
   "results": [
     {
       "id": "ad_01",

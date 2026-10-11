@@ -112,13 +112,21 @@ def check_singlish_promotion_gate(
     candidate_score: Optional[float],
     baseline_score: float,
     threshold: float = DEFAULT_SINGLISH_THRESHOLD,
+    license_verified: bool = True,
+    class_quality_passed: bool = True,
 ) -> Tuple[bool, str]:
     """
     M7 Singlish Response-Quality Release / Promotion Gate:
+    - Blocks promotion if license is unverified (`license_verified=False`).
+    - Blocks promotion if class quality check did not pass (`class_quality_passed=False`).
     - Blocks promotion if candidate_score is unmeasured (None).
     - Blocks promotion if candidate_score < baseline_score (Singlish regression).
     - Blocks promotion if candidate_score < threshold.
     """
+    if not license_verified:
+        return False, "REJECTED: Candidate model licence is unverified."
+    if not class_quality_passed:
+        return False, "REJECTED: Candidate model has not passed the task-class quality check."
     if candidate_score is None:
         return False, "REJECTED: Candidate has no measured Singlish quality score."
     if candidate_score < baseline_score - 1e-9:
@@ -155,10 +163,41 @@ class ModelCandidate:
     tags: List[str] = field(default_factory=list)
     singlish_score: Optional[float] = None
     singlish_threshold: float = DEFAULT_SINGLISH_THRESHOLD
+    singlish_class_scores: Dict[str, float] = field(default_factory=dict)
+    quality_checked_classes: List[str] = field(default_factory=list)
 
     @property
     def min_available_ram_mb(self) -> float:
         return round(self.host_delta_mb + self.headroom_mb, 1)
+
+    @property
+    def has_verified_license(self) -> bool:
+        return self.license_status == "verified" and self.license_id != "unverified"
+
+    def get_singlish_score(self, task_class: Optional[str] = None) -> Optional[float]:
+        if task_class and task_class in self.singlish_class_scores:
+            return float(self.singlish_class_scores[task_class])
+        return self.singlish_score
+
+    def meets_singlish_gate_for(self, task_class: Optional[str] = None) -> bool:
+        score = self.get_singlish_score(task_class)
+        return score is not None and score >= self.singlish_threshold
+
+    def passes_class_quality_check(self, task_class: str) -> bool:
+        return task_class in self.quality_checked_classes
+
+    def qualifies_for_singlish_preference(self, task_class: str) -> bool:
+        """
+        Requires all three conditions for Singlish routing preference:
+        1. Requested task_class Singlish score >= threshold
+        2. Passing quality check for the requested task_class
+        3. Verified model licence
+        """
+        return (
+            self.meets_singlish_gate_for(task_class)
+            and self.passes_class_quality_check(task_class)
+            and self.has_verified_license
+        )
 
     @property
     def meets_singlish_gate(self) -> bool:
@@ -321,6 +360,9 @@ class ModelRouter:
             raw_s_score = p.get("singlish_score")
             s_score = float(raw_s_score) if raw_s_score is not None else None
             s_thresh = float(p.get("singlish_threshold", default_singlish_threshold))
+            raw_class_scores = p.get("singlish_class_scores", {})
+            class_scores = {str(k): float(v) for k, v in raw_class_scores.items()} if isinstance(raw_class_scores, dict) else {}
+            qc_classes = [str(c) for c in p.get("quality_checked_classes", [])]
 
             self.candidates[name] = ModelCandidate(
                 name=name,
@@ -338,6 +380,8 @@ class ModelRouter:
                 tags=p.get("tags", []),
                 singlish_score=s_score,
                 singlish_threshold=s_thresh,
+                singlish_class_scores=class_scores,
+                quality_checked_classes=qc_classes,
             )
 
     def register_candidate(self, candidate: ModelCandidate) -> None:
@@ -538,9 +582,13 @@ class ModelRouter:
 
         def _find_singlish_qualified_candidate(exclude_name: str) -> Optional[ModelCandidate]:
             """
-            When a Singlish prompt is active and a candidate is below `singlish_threshold`,
-            searches `preferred_candidates` for an allowed, fitting candidate that meets the
-            M7 Singlish threshold (preferring highest `singlish_score`).
+            When a Singlish prompt is active and a candidate does not qualify for Singlish
+            preference in `task_class`, searches `preferred_candidates` for an allowed, fitting
+            candidate that satisfies all three requirements:
+            1. Requested `task_class` Singlish score >= `singlish_threshold`
+            2. Passing quality check for `task_class` (`task_class in quality_checked_classes`)
+            3. Verified licence (`has_verified_license`)
+            Prefers the candidate with the highest class-specific Singlish score.
             """
             best_alt: Optional[ModelCandidate] = None
             for alt_name in preferred_candidates:
@@ -555,11 +603,13 @@ class ModelRouter:
                 if alt_name == "llama3.2:3b" and (tier == "COMPRESSED" or "cpu-saturated" in reasons):
                     continue
                 alt_cand = self.candidates[alt_name]
-                if not alt_cand.meets_singlish_gate:
+                if not alt_cand.qualifies_for_singlish_preference(task_class):
                     continue
                 fit_alt, _ = self.check_candidate_fit(alt_cand, avail_ram_mb, resident_model=valid_resident)
                 if fit_alt:
-                    if best_alt is None or (alt_cand.singlish_score or 0.0) > (best_alt.singlish_score or 0.0):
+                    alt_score = alt_cand.get_singlish_score(task_class) or 0.0
+                    best_score = best_alt.get_singlish_score(task_class) or 0.0 if best_alt else -1.0
+                    if best_alt is None or alt_score > best_score:
                         best_alt = alt_cand
             return best_alt
 
@@ -573,29 +623,52 @@ class ModelRouter:
             explanation: str,
             allow_singlish_override: bool = True,
         ) -> RouteDecision:
-            if singlish_active and allow_singlish_override and selected_model and selected_model in self.candidates:
+            explicit_opt_in_keep = bool(
+                selected_model == user_pref
+                or (selected_model == "gemma4:e2b" and gemma4_opt_in)
+            )
+            if (
+                singlish_active
+                and allow_singlish_override
+                and not explicit_opt_in_keep
+                and selected_model
+                and selected_model in self.candidates
+            ):
                 cand_check = self.candidates[selected_model]
-                if not cand_check.meets_singlish_gate:
+                if not cand_check.qualifies_for_singlish_preference(task_class):
                     alt_cand = _find_singlish_qualified_candidate(exclude_name=selected_model)
                     if alt_cand is not None:
-                        s_lbl = f"{cand_check.singlish_score:.2f}" if cand_check.singlish_score is not None else "unmeasured"
-                        rejected_models.append({
-                            cand_check.name: (
-                                f"Singlish not recommended (score {s_lbl} < threshold {cand_check.singlish_threshold:.2f}); "
-                                f"preferred '{alt_cand.name}' (score {alt_cand.singlish_score:.2f})"
+                        c_score = cand_check.get_singlish_score(task_class)
+                        s_lbl = f"{c_score:.2f}" if c_score is not None else "unmeasured"
+                        alt_score = alt_cand.get_singlish_score(task_class) or 0.0
+                        if not cand_check.meets_singlish_gate_for(task_class):
+                            rej_note = (
+                                f"Singlish not recommended for class '{task_class}' "
+                                f"(score {s_lbl} < threshold {cand_check.singlish_threshold:.2f}); "
+                                f"preferred '{alt_cand.name}' (class '{task_class}' score {alt_score:.2f}, verified licence)"
                             )
-                        })
+                        elif not cand_check.has_verified_license:
+                            rej_note = (
+                                f"Unverified licence ({cand_check.license_id}); "
+                                f"preferred verified-licence '{alt_cand.name}' (class '{task_class}' score {alt_score:.2f})"
+                            )
+                        else:
+                            rej_note = (
+                                f"No passing quality check for class '{task_class}'; "
+                                f"preferred '{alt_cand.name}' (class '{task_class}' score {alt_score:.2f}, verified licence)"
+                            )
+                        rejected_models.append({cand_check.name: rej_note})
                         selected_model = alt_cand.name
                         kind = alt_cand.kind
                         data_leaves_machine = alt_cand.data_leaves_machine
                         switches = 1 if valid_resident != alt_cand.name else 0
                         thinking = alt_cand.thinking_default
-                        codes = list(codes) + ["SINGLISH_THRESHOLD_PREFERRED"]
-                        if alt_cand.license_id == "unverified" and "UNVERIFIED_LICENCE" not in codes:
-                            codes.append("UNVERIFIED_LICENCE")
+                        codes = [c for c in codes if c not in ("UNVERIFIED_LICENCE", "UNMEASURED_CLASS")]
+                        codes.append("SINGLISH_THRESHOLD_PREFERRED")
                         explanation = (
-                            f"Preferred '{alt_cand.name}' (Singlish score {alt_cand.singlish_score:.2f} >= "
-                            f"threshold {alt_cand.singlish_threshold:.2f}) over '{cand_check.name}' for Singlish prompt."
+                            f"Preferred '{alt_cand.name}' (class '{task_class}' Singlish score {alt_score:.2f} >= "
+                            f"threshold {alt_cand.singlish_threshold:.2f}, class quality verified, licence '{alt_cand.license_id}') "
+                            f"over '{cand_check.name}' for Singlish prompt."
                         )
 
             codes_copy = list(codes)
@@ -608,16 +681,19 @@ class ModelRouter:
             if selected_model and selected_model in self.candidates:
                 cand = self.candidates[selected_model]
                 if singlish_active:
-                    if cand.meets_singlish_gate:
+                    c_score = cand.get_singlish_score(task_class)
+                    if cand.meets_singlish_gate_for(task_class) and (
+                        cand.qualifies_for_singlish_preference(task_class) or explicit_opt_in_keep
+                    ):
                         if "SINGLISH_GATE_PASSED" not in codes_copy:
                             codes_copy.append("SINGLISH_GATE_PASSED")
                     else:
                         if "SINGLISH_NOT_RECOMMENDED" not in codes_copy:
                             codes_copy.append("SINGLISH_NOT_RECOMMENDED")
-                        s_lbl = f"{cand.singlish_score:.2f}" if cand.singlish_score is not None else "unmeasured"
+                        s_lbl = f"{c_score:.2f}" if c_score is not None else "unmeasured"
                         if "Singlish not recommended" not in explanation:
                             explanation = (
-                                f"{explanation} [Singlish not recommended: score {s_lbl} < "
+                                f"{explanation} [Singlish not recommended for class '{task_class}': score {s_lbl} < "
                                 f"threshold {cand.singlish_threshold:.2f}]"
                             )
                 if self.machine_profile:

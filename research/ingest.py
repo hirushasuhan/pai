@@ -339,11 +339,108 @@ _SECRET_CONTENT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
 )
 
+_CRED_KEY_PART = (
+    r"(?:[A-Za-z0-9_]*_)?"
+    r"(?:password|passwd|pwd|api_key|apikey|secret_key|access_token|auth_token|private_key|client_secret)"
+    r"(?:_[A-Za-z0-9_]+)?"
+)
+
+_INLINE_CREDENTIAL_QUOTED_RE = re.compile(
+    rf"""(?:^|[\s,{{])(?:export\s+)?["']?{_CRED_KEY_PART}["']?[ \t]*(?:=|:)[ \t]*["']([^"'\r\n]{{6,}})["']""",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_INLINE_CREDENTIAL_UNQUOTED_RE = re.compile(
+    rf"""(?:^|\n)[ \t]*(?:export[ \t]+)?{_CRED_KEY_PART}[ \t]*=[ \t]*([^\s#"'\r\n();,\[\]{{}}]{{6,}})""",
+    re.IGNORECASE,
+)
+
+_BENIGN_CREDENTIAL_VALUES = frozenset({
+    "none",
+    "null",
+    "true",
+    "false",
+    "changeme",
+    "password",
+    "secret",
+    "apikey",
+    "api_key",
+    "your_api_key",
+    "your-api-key",
+    "your_password",
+    "your-password",
+    "your_secret",
+    "your_token",
+    "example",
+    "dummy",
+    "placeholder",
+    "redacted",
+    "todo",
+    "fixme",
+    "test",
+    "testing",
+    "mock",
+    "sample",
+    "default",
+    "empty",
+    "unknown",
+    "unverified",
+})
+
+_BENIGN_CREDENTIAL_PREFIXES = (
+    "os.environ",
+    "os.getenv",
+    "environ.",
+    "getenv(",
+    "settings.",
+    "config.",
+    "args.",
+    "self.",
+    "cls.",
+    "req.",
+    "request.",
+    "env.",
+    "process.env",
+    "std::env",
+    "${",
+    "$(",
+    "%(",
+    "{{",
+    "your_",
+    "your-",
+    "example_",
+    "example-",
+    "dummy_",
+    "placeholder_",
+    "test_",
+    "mock_",
+)
+
+
+def _is_benign_credential_rhs(raw_val: str) -> bool:
+    """Returns True if a matched credential RHS is an env lookup, variable reference, or placeholder."""
+    v = raw_val.strip()
+    if len(v) < 6:
+        return True
+    # Prose strings with spaces are not raw credential tokens/passwords
+    if " " in v or "\t" in v:
+        return True
+    v_low = v.lower()
+    if v_low in _BENIGN_CREDENTIAL_VALUES:
+        return True
+    if any(v_low.startswith(p) for p in _BENIGN_CREDENTIAL_PREFIXES):
+        return True
+    if (v.startswith("<") and v.endswith(">")) or set(v_low) <= {"*", "x", ".", "-", "_"}:
+        return True
+    return False
+
 
 def scan_secret_content(text: str) -> Optional[str]:
     """
     Scans text content for embedded high-confidence credential/private-key patterns
-    (PEM private keys, AWS access keys, GitHub tokens, sk-* API keys, Slack tokens, Google API keys).
+    (PEM private keys, AWS access keys, GitHub tokens, sk-* API keys, Slack tokens,
+    Google API keys, and inline credential assignments such as `password = "..."`,
+    `API_KEY = "..."`, `DB_PASSWORD=...`).
     Returns the pattern label if a match is found, or None if clean. Never echoes the secret value.
     """
     if not text:
@@ -351,6 +448,12 @@ def scan_secret_content(text: str) -> Optional[str]:
     for label, pattern in _SECRET_CONTENT_PATTERNS:
         if pattern.search(text):
             return label
+    for m in _INLINE_CREDENTIAL_QUOTED_RE.finditer(text):
+        if not _is_benign_credential_rhs(m.group(1)):
+            return "inline_secret_assignment"
+    for m in _INLINE_CREDENTIAL_UNQUOTED_RE.finditer(text):
+        if not _is_benign_credential_rhs(m.group(1)):
+            return "inline_secret_assignment"
     return None
 
 

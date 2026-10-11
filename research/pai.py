@@ -726,7 +726,9 @@ def cmd_models_list(args: argparse.Namespace) -> int:
             "user_allowed": in_allowlist,
             "singlish_score": c.singlish_score,
             "singlish_threshold": c.singlish_threshold,
-            "singlish_recommended": c.meets_singlish_gate,
+            "singlish_class_scores": c.singlish_class_scores,
+            "quality_checked_classes": c.quality_checked_classes,
+            "singlish_recommended": c.meets_singlish_gate and c.has_verified_license,
         })
 
     if getattr(args, "json", False):

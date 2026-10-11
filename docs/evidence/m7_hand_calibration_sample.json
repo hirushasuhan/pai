@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "description": "12-response stratified calibration sample across 2 verified-licence models (llama3.2:3b and qwen2.5-coder:7b) and all 5 task classes (code, analyze, docs, forecast, chat) for owner 0-2 hand-scoring comparison against the M7 automated heuristic scorer.",
+  "rubric": {
+    "0": "Wrong answer, fails sandboxed test, or garbles/refuses the Singlish prompt.",
+    "1": "Understands the Singlish prompt and gives a factually correct answer, but replies in English or unnatural/broken Singlish.",
+    "2": "Factually correct answer AND natural Singlish/Sinhala reply following the user language (or passing sandboxed code for code class)."
+  },
+  "sample_count": 12,
+  "models_included": [
+    "llama3.2:3b",
+    "qwen2.5-coder:7b"
+  ],
+  "items": [
+    {
+      "sample_index": 1,
+      "item_id": "sqg_code_01",
+      "task_class": "code",
+      "model_name": "llama3.2:3b",
+      "prompt": "Integers list ekak dunnama eke thiyena even numbers witharak square karala aluth list ekak widiyata return karana Python function ekak `square_evens(nums: list[int]) -> list[int]` liyanna. Order eka wenas karanna epa.",
+      "response_preview": "```python\ndef square_evens(nums: list[int]) -> list[int]:\n    return sorted([num ** 2 for num in nums if num % 2 == 0])\n```",
+      "auto_heuristic_score": 1,
+      "auto_diagnostics": {
+        "has_def": true,
+        "passed_exec": false,
+        "detail": "Failed sandbox assertion: [{'test_id': 'test_square_evens', 'type': 'AssertionError', 'message': ''}]"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 2,
+      "item_id": "sqg_code_01",
+      "task_class": "code",
+      "model_name": "qwen2.5-coder:7b",
+      "prompt": "Integers list ekak dunnama eke thiyena even numbers witharak square karala aluth list ekak widiyata return karana Python function ekak `square_evens(nums: list[int]) -> list[int]` liyanna. Order eka wenas karanna epa.",
+      "response_preview": "```python\ndef square_evens(nums: list[int]) -> list[int]:\n    return [x**2 for x in nums if x % 2 == 0]\n```",
+      "auto_heuristic_score": 2,
+      "auto_diagnostics": {
+        "has_def": true,
+        "passed_exec": true,
+        "detail": "Passed all 3 sandbox assertions"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 3,
+      "item_id": "sqg_analyze_01",
+      "task_class": "analyze",
+      "model_name": "llama3.2:3b",
+      "prompt": "Me codebase context eka balala main entry point file eka mokakda saha eke mona external libraries import karala thiyenawada kiyala Singlish walin kiyanna.",
+      "response_preview": "Eka balala main entry point file eka mokakda saha eke mona external libraries import karala thiyenawada kiyala?\n\nFile: src/server.py, eka main entry point file, eka mokakda saha eke mona. Eka main entry point file eka mokakda saha eke mona, eka start_app function eka define karala. Eka function eka return pass karala, eka meaning eka do nothing karala.\n\nEka external libraries eka import karala, ek",
+      "auto_heuristic_score": 2,
+      "auto_diagnostics": {
+        "matched_all": [
+          "server.py",
+          "fastapi",
+          "pydantic"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": true,
+        "detail": "All grounded facts + Singlish/Sinhala language style matched"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 4,
+      "item_id": "sqg_analyze_01",
+      "task_class": "analyze",
+      "model_name": "qwen2.5-coder:7b",
+      "prompt": "Me codebase context eka balala main entry point file eka mokakda saha eke mona external libraries import karala thiyenawada kiyala Singlish walin kiyanna.",
+      "response_preview": "The main entry point file in your codebase is `src/server.py`. In this file, you import external libraries such as `sqlite3`, `fastapi`, and `pydantic`. The `start_app` function is defined but not implemented, and there is a conditional block that checks if the script is being run directly (`if __name__ == '__main__':`) and then calls the `start_app` function.",
+      "auto_heuristic_score": 1,
+      "auto_diagnostics": {
+        "matched_all": [
+          "server.py",
+          "fastapi",
+          "pydantic"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": false,
+        "detail": "All grounded facts matched, but response was in English only"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 5,
+      "item_id": "sqg_docs_01",
+      "task_class": "docs",
+      "model_name": "llama3.2:3b",
+      "prompt": "Me document ekata anuwa manual owner review ekakata kalin uparima consecutive autonomous releases kiyak deploy karanna puluwanda, saha Constitution hash eka pin karala thiyenne koheda kiyala Singlish walin kiyanna.",
+      "response_preview": "The document states that automatic self-updating is bounded by a limit of 3 consecutive autonomous releases. If more than 3 releases are deployed without explicit, interactive owner review, a review is required.",
+      "auto_heuristic_score": 0,
+      "auto_diagnostics": {
+        "matched_all": [
+          "3"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": false,
+        "detail": "Insufficient factual accuracy (1/2 required)"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 6,
+      "item_id": "sqg_docs_01",
+      "task_class": "docs",
+      "model_name": "qwen2.5-coder:7b",
+      "prompt": "Me document ekata anuwa manual owner review ekakata kalin uparima consecutive autonomous releases kiyak deploy karanna puluwanda, saha Constitution hash eka pin karala thiyenne koheda kiyala Singlish walin kiyanna.",
+      "response_preview": "The document states that no more than 3 consecutive autonomous releases may be deployed without explicit, interactive owner review.",
+      "auto_heuristic_score": 0,
+      "auto_diagnostics": {
+        "matched_all": [
+          "3"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": false,
+        "detail": "Insufficient factual accuracy (1/2 required)"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 7,
+      "item_id": "sqg_forecast_01",
+      "task_class": "forecast",
+      "model_name": "llama3.2:3b",
+      "prompt": "Me deterministic Python forecast report eke select wechcha method eka mokakda, holdout MAE eka kiyada, saha step 1 forecast point value eka kiyada kiyala numbers wenas nokara Singlish walin explain karanna.",
+      "response_preview": "\"Me explain karanna, eke select wechcha method eka mokakda, holdout MAE eka kiyada. \n\nStep 1 forecast point value eka kiyada kiyala numbers wenas nokara 412.50. 80% CI eka [410.1, 414.9] wenas, 95% CI eka [408.8, 416.2] wenas. \n\nDisclaimer eka: Forecasts eka mathematical extrapolations eka historical patterns. \n\nMAE eka Naive method eka 6.85, eke Holt Linear Trend method eka 1.42 (79.3% improvemen",
+      "auto_heuristic_score": 2,
+      "auto_diagnostics": {
+        "matched_all": [
+          "Holt",
+          "1.42",
+          "412.5"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": true,
+        "detail": "All grounded facts + Singlish/Sinhala language style matched"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 8,
+      "item_id": "sqg_forecast_01",
+      "task_class": "forecast",
+      "model_name": "qwen2.5-coder:7b",
+      "prompt": "Me deterministic Python forecast report eke select wechcha method eka mokakda, holdout MAE eka kiyada, saha step 1 forecast point value eka kiyada kiyala numbers wenas nokara Singlish walin explain karanna.",
+      "response_preview": "The selected method for the forecast is Holt Linear Trend. The backtest window used was 5 steps, and the Mean Absolute Error (MAE) for this method was 1.42, which is significantly better than the Naive method's MAE of 6.85, showing a 79.3% improvement.\n\nFor the forecast point value at step 1, which is for the date 2026-01-01, the predicted value is 412.50. The 80% confidence interval for this fore",
+      "auto_heuristic_score": 1,
+      "auto_diagnostics": {
+        "matched_all": [
+          "Holt",
+          "1.42",
+          "412.5"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": false,
+        "detail": "All grounded facts matched, but response was in English only"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 9,
+      "item_id": "sqg_chat_01",
+      "task_class": "chat",
+      "model_name": "llama3.2:3b",
+      "prompt": "Python dictionary ekaka key ekak nathi unoth `KeyError` eka enawata wada safely default value ekak ganna puluwan `dict.get()` method eka example ekak ekka Singlish walin explain karanna.",
+      "response_preview": "Python dictionary ekak key ekak nathi unoth `KeyError` eka enawata wada safely default value ekak ganna puluwan `dict.get()` method eka example ekak ekka.\n\n`dict.get()` method ekak key ekak nathi unoth `KeyError` eka enawata wada safely default value ekak ganna puluwan. `dict.get()` method ekak key ekak nathi unoth `KeyError` eka enawata wada safely default value ekak ganna puluwan.\n\n```python\nmy_",
+      "auto_heuristic_score": 2,
+      "auto_diagnostics": {
+        "matched_all": [
+          ".get("
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": true,
+        "detail": "All grounded facts + Singlish/Sinhala language style matched"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 10,
+      "item_id": "sqg_chat_01",
+      "task_class": "chat",
+      "model_name": "qwen2.5-coder:7b",
+      "prompt": "Python dictionary ekaka key ekak nathi unoth `KeyError` eka enawata wada safely default value ekak ganna puluwan `dict.get()` method eka example ekak ekka Singlish walin explain karanna.",
+      "response_preview": "Sure! The `dict.get()` method in Python is a handy way to safely access values in a dictionary without raising a `KeyError` if the key doesn't exist. Here's an example:\n\n```python\n# Example dictionary\nmy_dict = {'name': 'John', 'age': 30}\n\n# Using dict.get() to safely access the 'name' key\nname = my_dict.get('name')\nprint(name)  # Output: John\n\n# Using dict.get() to safely access a non-existent ke",
+      "auto_heuristic_score": 1,
+      "auto_diagnostics": {
+        "matched_all": [
+          ".get("
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": false,
+        "detail": "All grounded facts matched, but response was in English only"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 11,
+      "item_id": "sqg_chat_03",
+      "task_class": "chat",
+      "model_name": "llama3.2:3b",
+      "prompt": "Git wala `git merge` saha `git cherry-pick` athara thiyena pradhana wenasa mokakda kiyala Singlish walin ketiyen pahadili karanna.",
+      "response_preview": "`git merge` kiyala `git cherry-pick` athara thiyena pradhana wenasa mokakda kiyala. `git cherry-pick` kiyala `git merge` kiyala saha `git commit` karanna. `git cherry-pick` kiyala `git merge` kiyala saha `git revert` karanna.\n\n`git merge` kiyala:\n- `git merge` kiyala `git branch` saha `git merge` karanna.\n- `git merge` kiyala `git merge` kiyala saha `git merge` karanna.\n\n`git cherry-pick` kiyala:\n",
+      "auto_heuristic_score": 2,
+      "auto_diagnostics": {
+        "matched_all": [
+          "cherry-pick",
+          "merge",
+          "commit"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": true,
+        "detail": "All grounded facts + Singlish/Sinhala language style matched"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    },
+    {
+      "sample_index": 12,
+      "item_id": "sqg_chat_03",
+      "task_class": "chat",
+      "model_name": "qwen2.5-coder:7b",
+      "prompt": "Git wala `git merge` saha `git cherry-pick` athara thiyena pradhana wenasa mokakda kiyala Singlish walin ketiyen pahadili karanna.",
+      "response_preview": "Sure! Here's a brief explanation of `git merge` and `git cherry-pick` in Sinhala:\n\n1. **Git Merge**:\n   - එය ඔබගේ ප්‍රධාන ප්‍රතිඵලය (main branch) පිළිගැනීමට ප්‍රධාන ප්‍රතිඵලය (main branch) පිළිගැනීමට ප්‍රධාන ප්‍රතිඵලය (main branch) පිළිගැනීමට ප්‍රධාන ප්‍රතිඵලය (main branch) පිළිගැනීමට ප්‍රධාන ප්‍රතිඵලය (main branch) පිළිගැනීමට ප්‍රධාන ප්‍රතිඵලය (main branch) පිළිගැනීමට ප්‍රධාන ප්‍රතිඵලය (main bran",
+      "auto_heuristic_score": 1,
+      "auto_diagnostics": {
+        "matched_all": [
+          "cherry-pick",
+          "merge"
+        ],
+        "forbidden_hits": [],
+        "singlish_reply": true,
+        "detail": "Singlish reply with partial facts (2/3 required, 3/4 expected)"
+      },
+      "owner_hand_score": null,
+      "owner_notes": ""
+    }
+  ]
+}

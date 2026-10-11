@@ -3,6 +3,9 @@
   "eval_set": "research/eval_sets/singlish_quality_gate.json",
   "evaluated_at": "2026-10-11T13:35:46Z",
   "rubric_scale": "0..2 per prompt (25 prompts across code, analyze, docs, forecast, chat)",
+  "prompt_provenance": "25 Singlish prompts authored by the owner agent (frozen in research/eval_sets/singlish_quality_gate.json)",
+  "scoring_method": "automated_heuristic (required-facts keyword check + forbidden-term check + Singlish-reply detector; score 1 = required facts in English, score 2 = required facts + Singlish reply or passing sandboxed code execution; pending owner hand-score calibration on docs/evidence/m7_hand_calibration_sample.json)",
+  "calibration_sample": "docs/evidence/m7_hand_calibration_sample.json",
   "singlish_threshold": 1.2,
   "models": {
     "qwen2.5-coder:7b": {
