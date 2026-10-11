@@ -341,17 +341,61 @@ _SECRET_CONTENT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
 
 _CRED_KEY_PART = (
     r"(?:[A-Za-z0-9_]*_)?"
-    r"(?:password|passwd|pwd|api_key|apikey|secret_key|access_token|auth_token|private_key|client_secret)"
+    r"(?:password|passwd|pwd|api_key|apikey|secret_key|secret_access_key|aws_secret|"
+    r"access_token|auth_token|refresh_token|private_key|client_secret|app_secret|jwt_secret)"
     r"(?:_[A-Za-z0-9_]+)?"
 )
 
+_NON_SECRET_KEY_SUFFIXES: Tuple[str, ...] = (
+    "_hash",
+    "_field",
+    "_input",
+    "_validator",
+    "_policy",
+    "_length",
+    "_regex",
+    "_pattern",
+    "_error",
+    "_label",
+    "_prompt",
+    "_header",
+    "_name",
+    "_path",
+    "_file",
+    "_type",
+    "_column",
+    "_form",
+    "_widget",
+    "_count",
+    "_enabled",
+    "_required",
+)
+
+_CONFIG_FILE_EXTENSIONS: Tuple[str, ...] = (
+    ".env",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".properties",
+)
+
 _INLINE_CREDENTIAL_QUOTED_RE = re.compile(
-    rf"""(?:^|[\s,{{])(?:export\s+)?["']?{_CRED_KEY_PART}["']?[ \t]*(?:=|:)[ \t]*["']([^"'\r\n]{{6,}})["']""",
+    rf"""(?:^|[\s,{{])(?:export\s+)?["']?(?P<key>{_CRED_KEY_PART})["']?[ \t]*(?:=|:)[ \t]*["'](?P<val>[^"'\r\n]{{6,}})["']""",
     re.IGNORECASE | re.MULTILINE,
 )
 
 _INLINE_CREDENTIAL_UNQUOTED_RE = re.compile(
-    rf"""(?:^|\n)[ \t]*(?:export[ \t]+)?{_CRED_KEY_PART}[ \t]*=[ \t]*([^\s#"'\r\n();,\[\]{{}}]{{6,}})""",
+    rf"""(?:^|\n)[ \t]*(?:export[ \t]+)?(?P<key>{_CRED_KEY_PART})[ \t]*(?:=|:)[ \t]*(?P<val>[^\s#"'\r\n();,\[\]{{}}]{{6,}})[ \t]*(?:#[^\r\n]*)?(?=\r?\n|$)""",
+    re.IGNORECASE,
+)
+
+_DB_URL_PASSWORD_RE = re.compile(
+    r"\b(?:postgres(?:ql)?(?:\+[a-z0-9_]+)?|mysql(?:\+[a-z0-9_]+)?|mariadb(?:\+[a-z0-9_]+)?|"
+    r"mongodb(?:\+srv)?|redis(?:s)?|amqp(?:s)?|mssql(?:\+[a-z0-9_]+)?)://"
+    r"[^/\s:@\"']*:(?P<pw>[^/\s@\"']{4,})@[^/\s\"']+",
     re.IGNORECASE,
 )
 
@@ -385,6 +429,10 @@ _BENIGN_CREDENTIAL_VALUES = frozenset({
     "empty",
     "unknown",
     "unverified",
+    "postgres",
+    "admin",
+    "guest",
+    "root",
 })
 
 _BENIGN_CREDENTIAL_PREFIXES = (
@@ -414,13 +462,38 @@ _BENIGN_CREDENTIAL_PREFIXES = (
     "placeholder_",
     "test_",
     "mock_",
+    "user_input",
+    "raw_",
+    "hashed_",
+    "input_",
 )
 
 
-def _is_benign_credential_rhs(raw_val: str) -> bool:
+def _is_non_secret_key_name(key_name: str) -> bool:
+    """Returns True if the LHS variable/key name denotes a hash, UI field, validator, or metadata rather than a secret."""
+    k = key_name.strip().lower()
+    return any(k.endswith(suffix) for suffix in _NON_SECRET_KEY_SUFFIXES)
+
+
+def _is_config_file_for_unquoted_secrets(file_path: Optional[str]) -> bool:
+    """
+    Returns True if unquoted `KEY = VALUE` credential scanning applies to `file_path`.
+    When `file_path` is provided, only configuration-style files (.env, .ini, .cfg, .conf,
+    .yaml, .yml, .toml, .properties) enable the unquoted rule; code files require quoted literals.
+    """
+    if file_path is None:
+        return True
+    norm = file_path.replace("\\", "/").lower()
+    base = os.path.basename(norm)
+    if base == ".env" or base.startswith(".env."):
+        return True
+    return base.endswith(_CONFIG_FILE_EXTENSIONS)
+
+
+def _is_benign_credential_rhs(raw_val: str, min_len: int = 6) -> bool:
     """Returns True if a matched credential RHS is an env lookup, variable reference, or placeholder."""
     v = raw_val.strip()
-    if len(v) < 6:
+    if len(v) < min_len:
         return True
     # Prose strings with spaces are not raw credential tokens/passwords
     if " " in v or "\t" in v:
@@ -435,12 +508,32 @@ def _is_benign_credential_rhs(raw_val: str) -> bool:
     return False
 
 
-def scan_secret_content(text: str) -> Optional[str]:
+def _is_literal_like_unquoted_rhs(raw_val: str) -> bool:
     """
-    Scans text content for embedded high-confidence credential/private-key patterns
-    (PEM private keys, AWS access keys, GitHub tokens, sk-* API keys, Slack tokens,
-    Google API keys, and inline credential assignments such as `password = "..."`,
-    `API_KEY = "..."`, `DB_PASSWORD=...`).
+    Returns True if an unquoted RHS looks like a secret literal in a config file rather than
+    a code identifier or attribute chain (e.g. `user_input_password`, `userInput`, `user.password`).
+    """
+    if _is_benign_credential_rhs(raw_val):
+        return False
+    v = raw_val.strip()
+    # Pure alphabetic/underscore identifiers or dotted identifier chains without digits/symbols
+    # (e.g. `user_input_password`, `userInput`, `getpass.getpass`, `user.password`) are code identifiers.
+    parts = v.split(".")
+    if all(p.isidentifier() for p in parts) and not any(ch.isdigit() for ch in v):
+        return False
+    return True
+
+
+def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[str]:
+    """
+    Scans text content for embedded high-confidence credential/private-key patterns:
+    - Token formats: PEM private keys, AWS access keys (`AKIA`/`ASIA`), GitHub tokens (`ghp_`/`github_pat_`),
+      OpenAI/Anthropic keys (`sk-`), Slack tokens (`xox`), Google API keys (`AIza`).
+    - Database URLs with embedded passwords (`postgres://user:pass@host/db`, `mysql://...`, `redis://...`).
+    - Quoted inline credential assignments (`password = "..."`, `API_KEY = "..."`, `AWS_SECRET_ACCESS_KEY = "..."`).
+    - Unquoted inline credential assignments (`DB_PASSWORD=...`, `AWS_SECRET_ACCESS_KEY=...`) in
+      configuration-style files (`.env`, `.ini`, `.cfg`, `.conf`, `.yaml`, `.yml`, `.toml`, `.properties`)
+      where the right-hand side looks like a secret literal rather than a code expression or variable identifier.
     Returns the pattern label if a match is found, or None if clean. Never echoes the secret value.
     """
     if not text:
@@ -448,12 +541,20 @@ def scan_secret_content(text: str) -> Optional[str]:
     for label, pattern in _SECRET_CONTENT_PATTERNS:
         if pattern.search(text):
             return label
+    for m in _DB_URL_PASSWORD_RE.finditer(text):
+        if not _is_benign_credential_rhs(m.group("pw"), min_len=4):
+            return "database_url_password"
     for m in _INLINE_CREDENTIAL_QUOTED_RE.finditer(text):
-        if not _is_benign_credential_rhs(m.group(1)):
+        if _is_non_secret_key_name(m.group("key")):
+            continue
+        if not _is_benign_credential_rhs(m.group("val")):
             return "inline_secret_assignment"
-    for m in _INLINE_CREDENTIAL_UNQUOTED_RE.finditer(text):
-        if not _is_benign_credential_rhs(m.group(1)):
-            return "inline_secret_assignment"
+    if _is_config_file_for_unquoted_secrets(file_path):
+        for m in _INLINE_CREDENTIAL_UNQUOTED_RE.finditer(text):
+            if _is_non_secret_key_name(m.group("key")):
+                continue
+            if _is_literal_like_unquoted_rhs(m.group("val")):
+                return "inline_secret_assignment"
     return None
 
 
@@ -708,8 +809,8 @@ def ingest_file(
     # 8. Sanitize and normalize text
     norm_text = sanitize_text_content(raw_data, max_line_length=max_line_length)
 
-    # 9. Content-based secret scanning (PEM private keys, AWS AKIA/ASIA, GitHub ghp_, sk-*, Slack xox*)
-    secret_match = scan_secret_content(norm_text)
+    # 9. Content-based secret scanning (PEM private keys, AWS AKIA/ASIA, GitHub ghp_, sk-*, Slack xox*, DB URLs, inline assignments)
+    secret_match = scan_secret_content(norm_text, file_path=file_path)
     if secret_match is not None:
         return None, IngestionRejection(
             path=rel_path,

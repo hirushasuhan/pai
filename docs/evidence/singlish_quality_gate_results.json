@@ -4,7 +4,7 @@
   "evaluated_at": "2026-10-11T13:35:46Z",
   "rubric_scale": "0..2 per prompt (25 prompts across code, analyze, docs, forecast, chat)",
   "prompt_provenance": "25 Singlish prompts authored by the owner agent (frozen in research/eval_sets/singlish_quality_gate.json)",
-  "scoring_method": "automated_heuristic (required-facts keyword check + forbidden-term check + Singlish-reply detector; score 1 = required facts in English, score 2 = required facts + Singlish reply or passing sandboxed code execution; calibrated against 12-item sample in docs/evidence/m7_hand_calibration_sample.json approved by owner on 2026-10-11T20:01:48+05:30)",
+  "scoring_method": "automated_heuristic (required-facts keyword check + forbidden-term check + Singlish-reply detector; score 1 = required facts in English, score 2 = required facts + Singlish reply or passing sandboxed code execution; owner accepted the automated heuristic scores in docs/evidence/m7_hand_calibration_sample.json on 2026-10-11T20:01:48+05:30 rather than independently hand-scoring them)",
   "calibration_sample": "docs/evidence/m7_hand_calibration_sample.json",
   "singlish_threshold": 1.2,
   "models": {

@@ -293,30 +293,54 @@ class TestSafeIngestModule(unittest.TestCase):
             self.assertIn(expected_label, rej.message)
             self.assertNotIn(secret_val, rej.message)
 
-        # Inline credential assignment variants (all 5 must be rejected)
+        # Inline credential assignment & DB URL positive variants (quoted in .py, unquoted in .ini/.cfg/.yaml/.toml/.properties)
         inline_variants = [
-            ('password = "S3cr3tP@ssw0rd99!"\n', "inline_secret_assignment"),
-            ('API_KEY = "live_9876543210abcdef"\n', "inline_secret_assignment"),
-            ('DB_PASSWORD=prod_db_pass_2026\n', "inline_secret_assignment"),
-            ("secret_key = 'my_super_secret_jwt_key'\n", "inline_secret_assignment"),
-            ('{"access_token": "tok_live_1234567890abcdef"}\n', "inline_secret_assignment"),
+            ('password = "S3cr3tP@ssw0rd99!"\n', "inline_cred_0.py", "inline_secret_assignment"),
+            ('API_KEY = "live_9876543210abcdef"\n', "inline_cred_1.py", "inline_secret_assignment"),
+            ('DB_PASSWORD=prod_db_pass_2026\n', "inline_cred_2.ini", "inline_secret_assignment"),
+            ("secret_key = 'my_super_secret_jwt_key'\n", "inline_cred_3.py", "inline_secret_assignment"),
+            ('{"access_token": "tok_live_1234567890abcdef"}\n', "inline_cred_4.py", "inline_secret_assignment"),
+            ('AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n', "inline_cred_5.cfg", "inline_secret_assignment"),
+            ('aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"\n', "inline_cred_6.py", "inline_secret_assignment"),
+            ('DATABASE_URL = "postgresql://admin:S3cr3tDbPass99@db.example.com:5432/prod"\n', "inline_cred_7.py", "database_url_password"),
+            ('db_url: mysql://app:MySqlSecret2026@127.0.0.1:3306/shop\n', "inline_cred_8.yaml", "database_url_password"),
+            ('passwd = "r00t_p@ss_2026"\n', "inline_cred_9.toml", "inline_secret_assignment"),
+            ('client_secret=cs_live_9988776655\n', "inline_cred_10.properties", "inline_secret_assignment"),
         ]
-        for idx, (variant_text, expected_label) in enumerate(inline_variants):
-            self.assertEqual(scan_secret_content(variant_text), expected_label, f"Failed on variant {idx}: {variant_text!r}")
-            v_path = os.path.join(self.test_dir, f"inline_cred_{idx}.py")
+        for idx, (variant_text, fname, expected_label) in enumerate(inline_variants):
+            self.assertEqual(
+                scan_secret_content(variant_text, file_path=fname),
+                expected_label,
+                f"Failed on variant {idx} ({fname}): {variant_text!r}",
+            )
+            self.assertEqual(
+                scan_secret_content(variant_text),
+                expected_label,
+                f"Failed standalone scan on variant {idx}: {variant_text!r}",
+            )
+            v_path = os.path.join(self.test_dir, fname)
             with open(v_path, "w", encoding="utf-8") as f:
                 f.write(variant_text)
             v_item, v_rej = ingest_file(v_path, root_path=self.test_dir)
-            self.assertIsNone(v_item)
+            self.assertIsNone(v_item, f"Expected {fname} to be rejected")
             self.assertIsNotNone(v_rej)
             self.assertEqual(v_rej.reason_code, "SECRET_CONTENT")
 
-        # False-positive negative controls (env lookups, placeholders, prose must NOT be rejected)
+        # False-positive negative controls: authentication code, function calls, variable identifiers,
+        # env lookups, placeholders, and prose must NOT be rejected (both standalone and in .py files)
         benign_variants = [
             'Normal documentation about AKIA prefix format (short) and public keys.\n',
             'api_key = os.environ["API_KEY"]\n',
             'db_password = os.environ.get("DB_PASSWORD")\n',
             'secret_key = os.getenv("SECRET_KEY")\n',
+            'password = user_input_password\n',
+            'password = userInput\n',
+            'password = get_password()\n',
+            'password = getpass.getpass()\n',
+            'password = hash_password(raw)\n',
+            'password_hash = bcrypt.hashpw(pw, salt)\n',
+            'api_key = load_key()\n',
+            'password_field = forms.CharField(widget=forms.PasswordInput)\n',
             'password = None\n',
             'password = ""\n',
             'password = "changeme"\n',
@@ -324,9 +348,22 @@ class TestSafeIngestModule(unittest.TestCase):
             'password = "must be at least 8 characters long"\n',
             'API_KEY = "${API_KEY}"\n',
             'DB_PASSWORD=<insert_password>\n',
+            'DATABASE_URL = "postgresql://user:password@localhost:5432/mydb"\n',
         ]
         for benign_text in benign_variants:
-            self.assertIsNone(scan_secret_content(benign_text), f"False positive on: {benign_text!r}")
+            self.assertIsNone(scan_secret_content(benign_text), f"False positive (standalone) on: {benign_text!r}")
+            self.assertIsNone(
+                scan_secret_content(benign_text, file_path="auth.py"),
+                f"False positive (auth.py) on: {benign_text!r}",
+            )
+
+        # Verify a full authentication module in .py ingests cleanly without being dropped
+        auth_py_path = os.path.join(self.test_dir, "auth_module.py")
+        with open(auth_py_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(benign_variants))
+        auth_item, auth_rej = ingest_file(auth_py_path, root_path=self.test_dir)
+        self.assertIsNone(auth_rej)
+        self.assertIsNotNone(auth_item)
 
         # Positive control: benign text file
         clean_path = os.path.join(self.test_dir, "clean_notes.txt")
