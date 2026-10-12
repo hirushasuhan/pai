@@ -201,6 +201,71 @@ class TestPaiCLI(unittest.TestCase):
             if os.path.exists(test_path):
                 os.remove(test_path)
 
+    def test_subcommands_pass_live_budget_to_router_when_model_omitted(self):
+        """
+        Regression test (Dogfooding Finding):
+        When `--model` is omitted on `code`, `analyze`, `docs`, `forecast --question`, and `chat`,
+        each subcommand must pass the live HardwareBudget (`budget.avail_ram_mb is not None`)
+        to `ModelRouter.route` rather than `budget=None`.
+        """
+        import shutil
+        import tempfile
+        from hardware_telemetry import HardwareBudget
+        from router import ModelRouter
+
+        tmp = tempfile.mkdtemp(prefix="pai_cli_route_budget_")
+        repo_dir = os.path.join(tmp, "repo")
+        os.makedirs(repo_dir, exist_ok=True)
+        doc_file = os.path.join(repo_dir, "note.md")
+        with open(doc_file, "w", encoding="utf-8") as f:
+            f.write("# Note\nSome content.\n")
+        csv_file = os.path.join(tmp, "series.csv")
+        with open(csv_file, "w", encoding="utf-8") as f:
+            f.write("date,val\n" + "\n".join(f"2026-01-{i:02d},{100 + i}" for i in range(1, 16)) + "\n")
+
+        mock_budget = HardwareBudget(
+            compute_tier="BALANCED",
+            max_context_bytes=8 * 1024 * 1024,
+            allow_speculation=True,
+            thread_pool_limit=4,
+            throttle_warning="",
+            reasons=[],
+            avail_ram_mb=8192.0,
+        )
+        mock_snap = {"budget": mock_budget, "avail_ram_mb": 8192.0, "total_ram_gb": 16.0}
+        observed_budgets = []
+        orig_route = ModelRouter.route
+
+        def spy_route(router_self, command, *args, **kwargs):
+            observed_budgets.append((command, kwargs.get("budget")))
+            return orig_route(router_self, command, *args, **kwargs)
+
+        try:
+            with (
+                patch("pai.enforce_sandbox_boundary", return_value=None),
+                patch("pai.HardwareTelemetry.get_system_snapshot", return_value=mock_snap),
+                patch.object(ModelRouter, "get_live_resident_model", return_value=None),
+                patch.object(ModelRouter, "route", new=spy_route),
+                patch("pai.call_model_generate", return_value="Mocked model output"),
+            ):
+                for argv in (
+                    ["analyze", repo_dir, "--json"],
+                    ["docs", doc_file, "--json"],
+                    ["forecast", csv_file, "--horizon", "2", "--question", "Trend?", "--json"],
+                    ["chat", "Hello PAI", "--json"],
+                ):
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        rc = main(argv)
+                    self.assertEqual(rc, 0, f"Subcommand {argv[0]} failed without --model: {buf.getvalue()}")
+
+            self.assertEqual(len(observed_budgets), 4)
+            for cmd_name, b in observed_budgets:
+                self.assertIsNotNone(b, f"Subcommand '{cmd_name}' passed budget=None to router.route")
+                self.assertEqual(b.avail_ram_mb, 8192.0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -594,6 +594,173 @@ def append_canonical_example_tests(
         return test_code
 
 
+def format_authenticated_verdict_frame(verdict_payload: Dict[str, Any], hmac_key: str) -> str:
+    """
+    Signs a verdict payload dictionary using HMAC-SHA256 over canonical sorted-keys JSON
+    and wraps it in the single-frame `---PAI_VERDICT_START---` / `---PAI_VERDICT_END---` markers.
+    """
+    payload_without_mac = {k: v for k, v in verdict_payload.items() if k != "mac"}
+    canonical_bytes = json.dumps(payload_without_mac, sort_keys=True).encode("utf-8")
+    mac_sig = hmac.new(hmac_key.encode("utf-8"), canonical_bytes, hashlib.sha256).hexdigest()
+    signed_data = {**payload_without_mac, "mac": mac_sig}
+    return "\n---PAI_VERDICT_START---\n" + json.dumps(signed_data, sort_keys=True) + "\n---PAI_VERDICT_END---\n"
+
+
+def verify_verdict_frame(
+    comb_out: str,
+    parent_nonce: str,
+    parent_hmac_key: str,
+    expected_test_ids: Tuple[str, ...] = (),
+    exit_code: int = 0,
+    res_status: str = "ok",
+) -> Dict[str, Any]:
+    """
+    Verifies a driver stdout stream containing an authenticated verdict frame (ADR-011 H2/H3):
+    1. Enforces strictly 1 `---PAI_VERDICT_START---` and 1 `---PAI_VERDICT_END---` marker.
+    2. Parses the JSON verdict payload.
+    3. Verifies the HMAC-SHA256 signature (`mac`) over canonical sorted-keys JSON.
+    4. Verifies `session_nonce == parent_nonce`.
+    5. Verifies `executed_test_ids` matches `expected_test_ids` (when non-empty).
+    Returns a canonical verification dictionary suitable for golden-vector conformance checks.
+    """
+    start_count = comb_out.count("---PAI_VERDICT_START---")
+    end_count = comb_out.count("---PAI_VERDICT_END---")
+
+    if start_count > 1 or end_count > 1:
+        return {
+            "passed": False,
+            "status": "INTEGRITY_VIOLATION",
+            "error_type": "MultipleVerdictFramesError",
+            "discovered": 0,
+            "executed": 0,
+            "failed": 0,
+            "errors": 1,
+        }
+
+    if start_count != 1 or end_count != 1:
+        status_val = "timeout" if res_status == "timeout" else "ERROR"
+        return {
+            "passed": False,
+            "status": status_val,
+            "error_type": "DriverPreemptedError",
+            "discovered": 0,
+            "executed": 0,
+            "failed": 0,
+            "errors": 1,
+        }
+
+    try:
+        payload = comb_out.split("---PAI_VERDICT_START---", 1)[1].split("---PAI_VERDICT_END---", 1)[0].strip()
+        verdict_data = json.loads(payload)
+        if not isinstance(verdict_data, dict):
+            raise ValueError("Verdict payload must be a JSON object")
+    except Exception:
+        return {
+            "passed": False,
+            "status": "INTEGRITY_VIOLATION",
+            "error_type": "VerdictParseError",
+            "discovered": 0,
+            "executed": 0,
+            "failed": 0,
+            "errors": 1,
+        }
+
+    received_mac = verdict_data.get("mac", "")
+    payload_without_mac = {k: v for k, v in verdict_data.items() if k != "mac"}
+    canonical_bytes = json.dumps(payload_without_mac, sort_keys=True).encode("utf-8")
+    expected_mac = hmac.new(parent_hmac_key.encode("utf-8"), canonical_bytes, hashlib.sha256).hexdigest()
+    mac_valid = bool(
+        isinstance(received_mac, str)
+        and received_mac
+        and hmac.compare_digest(received_mac, expected_mac)
+    )
+
+    discovered = int(verdict_data.get("discovered", 0))
+    executed = int(verdict_data.get("executed", 0))
+    failed_c = int(verdict_data.get("failed", 0))
+    errors_c = int(verdict_data.get("errors", 0))
+
+    if not mac_valid:
+        return {
+            "passed": False,
+            "status": "INTEGRITY_VIOLATION",
+            "error_type": "InvalidHmacSignatureError",
+            "discovered": discovered,
+            "executed": executed,
+            "failed": failed_c,
+            "errors": max(1, errors_c),
+        }
+
+    session_nonce = verdict_data.get("session_nonce")
+    if session_nonce != parent_nonce:
+        return {
+            "passed": False,
+            "status": "INTEGRITY_VIOLATION",
+            "error_type": "InvalidNonceError",
+            "discovered": discovered,
+            "executed": executed,
+            "failed": failed_c,
+            "errors": max(1, errors_c),
+        }
+
+    executed_ids = verdict_data.get("executed_test_ids", [])
+    status_val = verdict_data.get("status", "ERROR" if exit_code != 0 else "PASS")
+    error_type: Optional[str] = None
+
+    if expected_test_ids and set(executed_ids) != set(expected_test_ids):
+        status_val = "ERROR"
+        errors_c = max(1, errors_c)
+        error_type = "TestIdMismatchError"
+
+    if res_status == "timeout":
+        return {
+            "passed": False,
+            "status": "timeout",
+            "error_type": error_type or "TimeoutError",
+            "discovered": discovered,
+            "executed": executed,
+            "failed": failed_c,
+            "errors": errors_c + 1,
+        }
+
+    if status_val == "mutation_error":
+        return {
+            "passed": False,
+            "status": "mutation_error",
+            "error_type": "TestMutationError",
+            "discovered": discovered,
+            "executed": executed,
+            "failed": failed_c,
+            "errors": errors_c,
+        }
+
+    is_pass = (
+        status_val == "PASS"
+        and exit_code == 0
+        and failed_c == 0
+        and errors_c == 0
+        and executed > 0
+        and executed == discovered
+        and session_nonce == parent_nonce
+        and mac_valid
+        and (not expected_test_ids or set(executed_ids) == set(expected_test_ids))
+    )
+    if not is_pass and error_type is None:
+        failures_l = verdict_data.get("failures", [])
+        if failures_l and isinstance(failures_l, list) and isinstance(failures_l[0], dict):
+            error_type = failures_l[0].get("type")
+
+    return {
+        "passed": is_pass,
+        "status": status_val,
+        "error_type": error_type,
+        "discovered": discovered,
+        "executed": executed,
+        "failed": failed_c,
+        "errors": errors_c,
+    }
+
+
 class VerifyLoop:
     """
     Manages frozen test registration, stub family probing,

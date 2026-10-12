@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-12",
+  "platform": "Windows 11 (AMD64) / Python 3.14.0",
+  "ollama_version": "0.35.1",
+  "tasks_count": 5,
+  "initial_run_finding": {
+    "bug_id": "DOGFOOD_BUG_01_SUBCOMMAND_ROUTER_MISSING_LIVE_BUDGET",
+    "symptom": "On the initial dogfooding run without --model, all 5 CLI subcommands (pai code, pai analyze, pai docs, pai forecast) exited with code 5 (ROUTE_REFUSAL: INSUFFICIENT_HEADROOM), even though pai doctor reported 5/6 models eligible under ~3.4 GB available RAM.",
+    "root_cause": "Unlike cmd_route and cmd_doctor, the subcommand handlers cmd_code, cmd_analyze, cmd_docs, cmd_forecast, and cmd_chat in research/pai.py called router.route(...) without passing budget=snap.get('budget') or resident_model=router.get_live_resident_model() (and cmd_code omitted prompt_text=getattr(args, 'task', None)). Because budget was None, ModelRouter.route saw avail_ram_mb=None and failed closed. This had escaped unit tests because E2E tests either passed --model test-model or mocked ModelRouter.route.",
+    "fix": "Updated cmd_code, cmd_analyze, cmd_docs, cmd_forecast, and cmd_chat in research/pai.py to pass budget=snap.get('budget'), resident_model=router.get_live_resident_model(), and prompt_text=..., and added regression test test_subcommands_pass_live_budget_to_router_when_model_omitted in research/tests/test_pai_cli.py."
+  },
+  "results": [
+    {
+      "command": "python research/pai.py code Write a Python function `parse_duration_seconds(spec: str) -> int` that parses a human duration string containing space-separated tokens with units `d` (86400s), `h` (3600s), `m` (60s), and `s` (1s) into total seconds. Leading/trailing whitespace is allowed. Raise `ValueError` if `spec` is empty or whitespace-only, if any token is negative or malformed, or if an unknown unit is used. Example:\n  parse_duration_seconds('1h 30m 15s') -> 5415\n  parse_duration_seconds('2d') -> 172800\n  parse_duration_seconds('45s') -> 45 --out C:\\Users\\hp\\.gemini\\antigravity\\brain\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\scratch\\dogfood_code_1 --json",
+      "exit_code": 0,
+      "wall_time_sec": 29.424,
+      "stdout": "{\n  \"success\": true,\n  \"gate\": \"passed\",\n  \"gate_meaning\": \"Candidate passed model-written tests and specification examples in sandbox (not formal verification; 2/62 benchmark mutants accepted across tuning+holdout due to shared model test/code misconceptions or omitted edge cases).\",\n  \"status\": \"PASS\",\n  \"selected_model\": \"qwen2.5-coder:7b\",\n  \"staged_solution\": \"C:\\\\Users\\\\hp\\\\.gemini\\\\antigravity\\\\brain\\\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\\\scratch\\\\dogfood_code_1\\\\solution.py\",\n  \"staged_tests\": \"C:\\\\Users\\\\hp\\\\.gemini\\\\antigravity\\\\brain\\\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\\\scratch\\\\dogfood_code_1\\\\test_solution.py\",\n  \"candidate_solution\": \"def parse_duration_seconds(spec: str) -> int:\\n    if not spec.strip():\\n        raise ValueError(\\\"Duration specification is empty or whitespace-only\\\")\\n\\n    units = {'d': 86400, 'h': 3600, 'm': 60, 's': 1}\\n    total_seconds = 0\\n\\n    for token in spec.split():\\n        if not token:\\n            continue\\n\\n        if token[0] == '-':\\n            raise ValueError(\\\"Negative values are not allowed\\\")\\n\\n        if token[-1] not in units:\\n            raise ValueError(f\\\"Unknown unit in token: {token}\\\")\\n\\n        value = token[:-1]\\n        if not value.isdigit():\\n            raise ValueError(f\\\"Malformed token: {token}\\\")\\n\\n        total_seconds += int(value) * units[token[-1]]\\n\\n    return total_seconds\",\n  \"test_code\": \"from solution import parse_duration_seconds\\nimport unittest\\n\\nclass TestParseDurationSeconds(unittest.TestCase):\\n    def test_empty_or_whitespace(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('   ')\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('')\\n\\n    def test_valid_durations(self):\\n        self.assertEqual(parse_duration_seconds('1h 30m 15s'), 5415)\\n        self.assertEqual(parse_duration_seconds('2d'), 172800)\\n        self.assertEqual(parse_duration_seconds('45s'), 45)\\n\\n    def test_negative_values(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('-1h')\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h -30m')\\n\\n    def test_malformed_tokens(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h 30m 15')\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h 30m 15z')\\n\\n    def test_unknown_units(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h 30m 15z')\\n\\nif __name__ == '__main__':\\n    unittest.main()\\n\\ndef test_pai_canonical_examples():\\n    from solution import parse_duration_seconds\\n    assert parse_duration_seconds('1h 30m 15s') == 5415\\n    assert parse_duration_seconds('2d') == 172800\\n    assert parse_duration_seconds('45s') == 45\",\n  \"test_hash\": \"642d6547c64bfb972318917785d6333f036c96af511fc758a029dd155145fbed\",\n  \"test_code_preview\": \"from solution import parse_duration_seconds\\nimport unittest\\n\\nclass TestParseDurationSeconds(unittest.TestCase):\\n    def test_empty_or_whitespace(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('   ')\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('')\\n\\n    def test_valid_durations(self):\\n        self.assertEqual(parse_duration_seconds('1h 30m 15s'), 5415)\\n        self.assertEqual(parse_duration_seconds('2d'), 172800)\\n        self.assertEqual(parse_duration_seconds('45s'), 45)\\n\\n    def test_negative_values(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('-1h')\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h -30m')\\n\\n    def test_malformed_tokens(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h 30m 15')\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h 30m 15z')\\n\\n    def test_unknown_units(self):\\n        with self.assertRaises(ValueError):\\n            parse_duration_seconds('1h 30m 15z')\\n\\nif __name__ == '__main__':\\n    unittest.main()\\n\\ndef test_pai_canonical_examples():\\n    from solution import parse_duration_seconds\\n    assert parse_duration_seconds('1h 30m 15s') == 5415\\n    assert parse_duration_seconds('2d') == 172800\\n    assert parse_duration_seconds('45s') == 45\",\n  \"pass_at_1_zero_shot\": true,\n  \"pass_at_1_repair3\": true,\n  \"total_repairs\": 0,\n  \"iterations\": 1,\n  \"temperature\": null,\n  \"seed\": null,\n  \"detail\": \"PASS on zero-shot generation (0 repairs required)\"\n}\n",
+      "stderr": "",
+      "parsed_json": {
+        "success": true,
+        "gate": "passed",
+        "gate_meaning": "Candidate passed model-written tests and specification examples in sandbox (not formal verification; 2/62 benchmark mutants accepted across tuning+holdout due to shared model test/code misconceptions or omitted edge cases).",
+        "status": "PASS",
+        "selected_model": "qwen2.5-coder:7b",
+        "staged_solution": "C:\\Users\\hp\\.gemini\\antigravity\\brain\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\scratch\\dogfood_code_1\\solution.py",
+        "staged_tests": "C:\\Users\\hp\\.gemini\\antigravity\\brain\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\scratch\\dogfood_code_1\\test_solution.py",
+        "candidate_solution": "def parse_duration_seconds(spec: str) -> int:\n    if not spec.strip():\n        raise ValueError(\"Duration specification is empty or whitespace-only\")\n\n    units = {'d': 86400, 'h': 3600, 'm': 60, 's': 1}\n    total_seconds = 0\n\n    for token in spec.split():\n        if not token:\n            continue\n\n        if token[0] == '-':\n            raise ValueError(\"Negative values are not allowed\")\n\n        if token[-1] not in units:\n            raise ValueError(f\"Unknown unit in token: {token}\")\n\n        value = token[:-1]\n        if not value.isdigit():\n            raise ValueError(f\"Malformed token: {token}\")\n\n        total_seconds += int(value) * units[token[-1]]\n\n    return total_seconds",
+        "test_code": "from solution import parse_duration_seconds\nimport unittest\n\nclass TestParseDurationSeconds(unittest.TestCase):\n    def test_empty_or_whitespace(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('   ')\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('')\n\n    def test_valid_durations(self):\n        self.assertEqual(parse_duration_seconds('1h 30m 15s'), 5415)\n        self.assertEqual(parse_duration_seconds('2d'), 172800)\n        self.assertEqual(parse_duration_seconds('45s'), 45)\n\n    def test_negative_values(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('-1h')\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h -30m')\n\n    def test_malformed_tokens(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h 30m 15')\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h 30m 15z')\n\n    def test_unknown_units(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h 30m 15z')\n\nif __name__ == '__main__':\n    unittest.main()\n\ndef test_pai_canonical_examples():\n    from solution import parse_duration_seconds\n    assert parse_duration_seconds('1h 30m 15s') == 5415\n    assert parse_duration_seconds('2d') == 172800\n    assert parse_duration_seconds('45s') == 45",
+        "test_hash": "642d6547c64bfb972318917785d6333f036c96af511fc758a029dd155145fbed",
+        "test_code_preview": "from solution import parse_duration_seconds\nimport unittest\n\nclass TestParseDurationSeconds(unittest.TestCase):\n    def test_empty_or_whitespace(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('   ')\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('')\n\n    def test_valid_durations(self):\n        self.assertEqual(parse_duration_seconds('1h 30m 15s'), 5415)\n        self.assertEqual(parse_duration_seconds('2d'), 172800)\n        self.assertEqual(parse_duration_seconds('45s'), 45)\n\n    def test_negative_values(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('-1h')\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h -30m')\n\n    def test_malformed_tokens(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h 30m 15')\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h 30m 15z')\n\n    def test_unknown_units(self):\n        with self.assertRaises(ValueError):\n            parse_duration_seconds('1h 30m 15z')\n\nif __name__ == '__main__':\n    unittest.main()\n\ndef test_pai_canonical_examples():\n    from solution import parse_duration_seconds\n    assert parse_duration_seconds('1h 30m 15s') == 5415\n    assert parse_duration_seconds('2d') == 172800\n    assert parse_duration_seconds('45s') == 45",
+        "pass_at_1_zero_shot": true,
+        "pass_at_1_repair3": true,
+        "total_repairs": 0,
+        "iterations": 1,
+        "temperature": null,
+        "seed": null,
+        "detail": "PASS on zero-shot generation (0 repairs required)"
+      },
+      "task_id": "dogfood_code_01_english",
+      "category": "code",
+      "description": "English utility function: parse_duration_seconds(spec: str) -> int",
+      "honest_assessment": "PASS (exit=0, gate='passed', 0 repairs, 29.424s). qwen2.5-coder:7b generated a 5-method unittest.TestCase plus the AST-extracted test_pai_canonical_examples, passed the 11-member stub probe, and passed all tests zero-shot inside the Win32 AppContainer + Job Object sandbox."
+    },
+    {
+      "command": "python research/pai.py code Write a Python function `mask_card_pan(pan: str) -> str`. card number string ekak (`pan`) denakota spaces saha hyphens (`-`) ain karala digits witharak thiyeda balanna. Digit gana 12 ta adu nam hari 19 ta wadi nam hari digits nathi characters thibboth `ValueError` raise karanna. Hari nam mul digits 4 saha anthima digits 4 ithuru karala mada thiyena digits okkoma `*` walin replace karala return karanna. Example:\n  mask_card_pan('4111-1111-1111-1234') -> '4111********1234'\n  mask_card_pan('5500 0000 0000 0004') -> '5500********0004' --out C:\\Users\\hp\\.gemini\\antigravity\\brain\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\scratch\\dogfood_code_2 --json",
+      "exit_code": 2,
+      "wall_time_sec": 41.286,
+      "stdout": "{\n  \"success\": false,\n  \"gate\": \"failed\",\n  \"gate_meaning\": \"Candidate passed model-written tests and specification examples in sandbox (not formal verification; 2/62 benchmark mutants accepted across tuning+holdout due to shared model test/code misconceptions or omitted edge cases).\",\n  \"status\": \"FAIL\",\n  \"error\": \"REPAIR_EXHAUSTED\",\n  \"failing_tests\": [\n    \"test_pai_canonical_examples\",\n    \"TestMaskCardPan.test_valid_pan_format\"\n  ],\n  \"unverified_solution_path\": null,\n  \"staged_unverified_solution\": null,\n  \"selected_model\": \"qwen2.5-coder:7b\",\n  \"candidate_solution\": \"import re\\n\\ndef mask_card_pan(pan: str) -> str:\\n    # Check if the input contains only digits and spaces/hyphens\\n    if not re.match(r'^\\\\d[\\\\d\\\\s-]*\\\\d$', pan):\\n        raise ValueError(\\\"Invalid characters in the card number\\\")\\n    \\n    # Check if the length of the card number is 16 digits\\n    if len(re.sub(r'[\\\\s-]', '', pan)) != 16:\\n        raise ValueError(\\\"Invalid length of the card number\\\")\\n    \\n    # Mask the card number\\n    return re.sub(r'(?<=\\\\d{4})\\\\d(?=\\\\d{4})', '*', pan)\",\n  \"test_code\": \"import unittest\\nfrom solution import mask_card_pan\\n\\nclass TestMaskCardPan(unittest.TestCase):\\n    def test_valid_pan_format(self):\\n        self.assertEqual(mask_card_pan('4111-1111-1111-1234'), '4111********1234')\\n        self.assertEqual(mask_card_pan('5500 0000 0000 0004'), '5500********0004')\\n\\n    def test_invalid_pan_length(self):\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('1234-5678-9012')\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('1234-5678-9012-34567')\\n\\n    def test_non_digit_characters(self):\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('4111-1111-1111-123A')\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('5500 0000 0000 000B')\\n\\n    def test_empty_string(self):\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('')\\n\\nif __name__ == '__main__':\\n    unittest.main()\\n\\ndef test_pai_canonical_examples():\\n    from solution import mask_card_pan\\n    assert mask_card_pan('4111-1111-1111-1234') == '4111********1234'\\n    assert mask_card_pan('5500 0000 0000 0004') == '5500********0004'\",\n  \"test_hash\": \"6553e4b4a22083f2d81558d791fab269a674e7837d66827940e3c0f425369a9c\",\n  \"test_code_preview\": \"import unittest\\nfrom solution import mask_card_pan\\n\\nclass TestMaskCardPan(unittest.TestCase):\\n    def test_valid_pan_format(self):\\n        self.assertEqual(mask_card_pan('4111-1111-1111-1234'), '4111********1234')\\n        self.assertEqual(mask_card_pan('5500 0000 0000 0004'), '5500********0004')\\n\\n    def test_invalid_pan_length(self):\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('1234-5678-9012')\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('1234-5678-9012-34567')\\n\\n    def test_non_digit_characters(self):\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('4111-1111-1111-123A')\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('5500 0000 0000 000B')\\n\\n    def test_empty_string(self):\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('')\\n\\nif __name__ == '__main__':\\n    unittest.main()\\n\\ndef test_pai_canonical_examples():\\n    from solution import mask_card_pan\\n    assert mask_card_pan('4111-1111-1111-1234') == '4111********1234'\\n    assert mask_card_pan('5500 0000 0000 0004') == '5500********0004'\",\n  \"pass_at_1_zero_shot\": false,\n  \"pass_at_1_repair3\": false,\n  \"total_repairs\": 3,\n  \"iterations\": 4,\n  \"temperature\": null,\n  \"seed\": null,\n  \"detail\": \"FAIL: Repair loop exhausted after 3 repairs without passing tests\"\n}\n",
+      "stderr": "",
+      "parsed_json": {
+        "success": false,
+        "gate": "failed",
+        "gate_meaning": "Candidate passed model-written tests and specification examples in sandbox (not formal verification; 2/62 benchmark mutants accepted across tuning+holdout due to shared model test/code misconceptions or omitted edge cases).",
+        "status": "FAIL",
+        "error": "REPAIR_EXHAUSTED",
+        "failing_tests": [
+          "test_pai_canonical_examples",
+          "TestMaskCardPan.test_valid_pan_format"
+        ],
+        "unverified_solution_path": null,
+        "staged_unverified_solution": null,
+        "selected_model": "qwen2.5-coder:7b",
+        "candidate_solution": "import re\n\ndef mask_card_pan(pan: str) -> str:\n    # Check if the input contains only digits and spaces/hyphens\n    if not re.match(r'^\\d[\\d\\s-]*\\d$', pan):\n        raise ValueError(\"Invalid characters in the card number\")\n    \n    # Check if the length of the card number is 16 digits\n    if len(re.sub(r'[\\s-]', '', pan)) != 16:\n        raise ValueError(\"Invalid length of the card number\")\n    \n    # Mask the card number\n    return re.sub(r'(?<=\\d{4})\\d(?=\\d{4})', '*', pan)",
+        "test_code": "import unittest\nfrom solution import mask_card_pan\n\nclass TestMaskCardPan(unittest.TestCase):\n    def test_valid_pan_format(self):\n        self.assertEqual(mask_card_pan('4111-1111-1111-1234'), '4111********1234')\n        self.assertEqual(mask_card_pan('5500 0000 0000 0004'), '5500********0004')\n\n    def test_invalid_pan_length(self):\n        with self.assertRaises(ValueError):\\n            mask_card_pan('1234-5678-9012')\\n        with self.assertRaises(ValueError):\\n            mask_card_pan('1234-5678-9012-34567')\n\n    def test_non_digit_characters(self):\n        with self.assertRaises(ValueError):\n            mask_card_pan('4111-1111-1111-123A')\n        with self.assertRaises(ValueError):\n            mask_card_pan('5500 0000 0000 000B')\n\n    def test_empty_string(self):\n        with self.assertRaises(ValueError):\n            mask_card_pan('')\n\nif __name__ == '__main__':\n    unittest.main()\n\ndef test_pai_canonical_examples():\n    from solution import mask_card_pan\n    assert mask_card_pan('4111-1111-1111-1234') == '4111********1234'\n    assert mask_card_pan('5500 0000 0000 0004') == '5500********0004'",
+        "test_hash": "6553e4b4a22083f2d81558d791fab269a674e7837d66827940e3c0f425369a9c",
+        "test_code_preview": "import unittest\nfrom solution import mask_card_pan\n\nclass TestMaskCardPan(unittest.TestCase):\n    def test_valid_pan_format(self):\n        self.assertEqual(mask_card_pan('4111-1111-1111-1234'), '4111********1234')\n        self.assertEqual(mask_card_pan('5500 0000 0000 0004'), '5500********0004')\n\n    def test_invalid_pan_length(self):\n        with self.assertRaises(ValueError):\n            mask_card_pan('1234-5678-9012')\n        with self.assertRaises(ValueError):\n            mask_card_pan('1234-5678-9012-34567')\n\n    def test_non_digit_characters(self):\n        with self.assertRaises(ValueError):\n            mask_card_pan('4111-1111-1111-123A')\n        with self.assertRaises(ValueError):\n            mask_card_pan('5500 0000 0000 000B')\n\n    def test_empty_string(self):\n        with self.assertRaises(ValueError):\n            mask_card_pan('')\n\nif __name__ == '__main__':\n    unittest.main()\n\ndef test_pai_canonical_examples():\n    from solution import mask_card_pan\n    assert mask_card_pan('4111-1111-1111-1234') == '4111********1234'\n    assert mask_card_pan('5500 0000 0000 0004') == '5500********0004'",
+        "pass_at_1_zero_shot": false,
+        "pass_at_1_repair3": false,
+        "total_repairs": 3,
+        "iterations": 4,
+        "temperature": null,
+        "seed": null,
+        "detail": "FAIL: Repair loop exhausted after 3 repairs without passing tests"
+      },
+      "task_id": "dogfood_code_02_singlish",
+      "category": "code",
+      "description": "Singlish utility function: mask_card_pan(pan: str) -> str",
+      "honest_assessment": "FAIL (exit=2, gate='failed', REPAIR_EXHAUSTED after 3 repairs, 41.286s). qwen2.5-coder:7b understood the Singlish prompt well enough to write a valid TestMaskCardPan suite and test_pai_canonical_examples was appended, but the solution generator got stuck on re.sub(r'(?<=\\d{4})\\d(?=\\d{4})', '*', pan) without stripping spaces/hyphens before masking (and checked len != 16 instead of 12..19). The sandbox gate rightly rejected the buggy candidate and refused to stage solution.py."
+    },
+    {
+      "command": "python research/pai.py analyze docs/adr --question What are the main security invariants and sandbox process boundaries defined in ADR-011? --json",
+      "exit_code": 0,
+      "wall_time_sec": 59.545,
+      "stdout": "{\n  \"success\": true,\n  \"target_folder\": \"C:\\\\Users\\\\hp\\\\Documents\\\\GitHub\\\\personal_agentic_ai\\\\docs\\\\adr\",\n  \"selected_model\": \"qwen2.5-coder:7b\",\n  \"route_reason_codes\": [\n    \"STICKY_RESIDENT\",\n    \"UNMEASURED_CLASS\",\n    \"HYSTERESIS_WARM_BYPASS\",\n    \"UNCALIBRATED\"\n  ],\n  \"question\": \"What are the main security invariants and sandbox process boundaries defined in ADR-011?\",\n  \"structure\": {\n    \"total_files\": 12,\n    \"total_bytes\": 46439,\n    \"extensions\": {\n      \".md\": 12\n    },\n    \"directories\": []\n  },\n  \"context_coverage\": {\n    \"total_files\": 12,\n    \"included_files_count\": 8,\n    \"omitted_files_count\": 4,\n    \"included_files\": [\n      \"ADR-002-privacy-controls.md\",\n      \"ADR-006-capabilities-and-taint.md\",\n      \"ADR-001-reasoner-strategy.md\",\n      \"ADR-005-release-trust.md\",\n      \"ADR-009-rust-toolchain-and-unsafe-boundary.md\",\n      \"ADR-004-language-scope.md\",\n      \"README.md\",\n      \"ADR-003-windows-sandbox.md\"\n    ],\n    \"omitted_files\": [\n      \"ADR-007-symbolic-reasoner.md\",\n      \"ADR-010-portability-model-selection-and-cloud-providers.md\",\n      \"ADR-008-local-assistant-and-model-strategy.md\",\n      \"ADR-011-restricted-execution-sandbox.md\"\n    ],\n    \"included_bytes\": 18855,\n    \"omitted_bytes\": 27584,\n    \"char_budget\": 24000\n  },\n  \"entry_points\": [],\n  \"dependencies\": {\n    \"config_files\": [],\n    \"detected_modules\": []\n  },\n  \"risks\": {\n    \"secret_rejections\": [],\n    \"symlink_escapes\": [],\n    \"heuristic_dangerous_patterns\": [],\n    \"heuristic_injection_patterns\": [],\n    \"rejection_counts\": {},\n    \"rejections_capped\": false\n  },\n  \"limits\": {\n    \"max_file_size_bytes\": 1048576,\n    \"max_total_bytes\": 10485760,\n    \"max_file_count\": 500,\n    \"max_depth\": 10,\n    \"max_line_length\": 4096,\n    \"include_junk\": false,\n    \"max_rejections_per_reason\": 20,\n    \"max_total_rejections\": 500,\n    \"secret_deny_patterns\": [\n      \".env\",\n      \".env.*\",\n      \"*.pem\",\n      \"id_rsa*\",\n      \"id_dsa*\",\n      \"id_ecdsa*\",\n      \"id_ed25519*\",\n      \"*.key\",\n      \"*.pfx\",\n      \"*.pkcs12\",\n      \"*.p12\",\n      \"*.jks\",\n      \"*.kdbx\",\n      \"credentials.json\",\n      \"service_account*.json\",\n      \"service-account*.json\",\n      \"service-account.json\",\n      \".kube/config\",\n      \"docker/config.json\",\n      \".docker/config.json\",\n      \".npmrc\",\n      \".netrc\",\n      \".git-credentials\",\n      \".pypirc\",\n      \".htpasswd\",\n      \"*.tfstate\",\n      \"*.tfstate.*\",\n      \"terraform.tfstate*\",\n      \"credentials\",\n      \"config.json\",\n      \"secrets.yaml\",\n      \"secrets.yml\",\n      \"secrets.json\",\n      \"token.txt\",\n      \"*.enc\"\n    ],\n    \"junk_dir_patterns\": [\n      \".git\",\n      \"node_modules\",\n      \"__pycache__\",\n      \".venv\",\n      \"venv\",\n      \"dist\",\n      \"build\",\n      \".tox\",\n      \".idea\",\n      \".vscode\",\n      \"target\",\n      \".pytest_cache\",\n      \".mypy_cache\",\n      \".ruff_cache\",\n      \".coverage\",\n      \"htmlcov\"\n    ]\n  },\n  \"summary\": \"### Direct Answer to User Question:\\nThe main security invariants and sandbox process boundaries defined in ADR-011 are:\\n- **Multi-tier containment**: Tier-1 AST guard, Tier-2 OS sandbox (AppContainer + Job Objects on Windows; bubblewrap/Landlock + rlimits on Linux).\\n- **Startup capability probe**: Ensures the sandbox has the necessary permissions before execution.\\n- **Fail-closed rule**: The sandbox operates in a restricted mode if it cannot verify its capabilities.\\n- **Frozen-test bounded repair (N\\u22643)**: Limits the number of attempts to repair the sandbox if it fails.\\n- **Non-contaminated test evaluation**: Ensures that tests are run in a clean environment.\\n- **Race-free exclusive staging (O_EXCL)**: Prevents concurrent access to the staging area.\\n\\n### Codebase Structure:\\n- **Folder Layout**: The codebase is organized into multiple ADR (Architecture Decision Records) files, each addressing a specific risk or feature.\\n- **File Count**: There are 12 files in total, including ADRs and a README.\\n- **Primary Components**: The primary components include ADRs for various security and functionality decisions, such as privacy controls, capability brokers, and sandbox technologies.\\n\\n### Entry Points:\\n- **Execution Entry Points**: The entry points for execution are primarily through the `main.py` script, which interacts with the `Reasoner` interface and other components.\\n- **Configuration Entry Points**: Configuration is managed through command-line arguments and environment variables, such as `--allow-domain`, `--show-outbound`, and `--offline`.\\n\\n### Dependencies:\\n- **Libraries and Dependencies**: The codebase depends on several libraries, including:\\n  - `serde` and `serde_json` for data serialization.\\n  - `windows-sys` for Windows-specific bindings.\\n  - `hyper` and `rustls` for networking.\\n  - `ed25519` for cryptographic signing.\\n  - `cryptography` for cryptographic operations.\\n\\n### Obvious Risks:\\n- **Unsafe Code**: The codebase contains `unsafe` blocks, which are restricted to specific files (`core/src/win32.rs`) and are accompanied by safety comments.\\n- **Configuration Management**: The configuration management through command-line arguments and environment variables needs careful handling to prevent injection attacks.\\n- **Dependency Management**: The use of third-party libraries, such as `windows-sys` and `cryptography`, requires regular security audits and updates.\\n\\n### Language & Style:\\nThe response is provided in English, using technical terms and identifiers from the codebase. The style is formal and objective, focusing on the architectural and security aspects of the codebase.\"\n}\n",
+      "stderr": "",
+      "parsed_json": {
+        "success": true,
+        "target_folder": "C:\\Users\\hp\\Documents\\GitHub\\personal_agentic_ai\\docs\\adr",
+        "selected_model": "qwen2.5-coder:7b",
+        "route_reason_codes": [
+          "STICKY_RESIDENT",
+          "UNMEASURED_CLASS",
+          "HYSTERESIS_WARM_BYPASS",
+          "UNCALIBRATED"
+        ],
+        "question": "What are the main security invariants and sandbox process boundaries defined in ADR-011?",
+        "structure": {
+          "total_files": 12,
+          "total_bytes": 46439,
+          "extensions": {
+            ".md": 12
+          },
+          "directories": []
+        },
+        "context_coverage": {
+          "total_files": 12,
+          "included_files_count": 8,
+          "omitted_files_count": 4,
+          "included_files": [
+            "ADR-002-privacy-controls.md",
+            "ADR-006-capabilities-and-taint.md",
+            "ADR-001-reasoner-strategy.md",
+            "ADR-005-release-trust.md",
+            "ADR-009-rust-toolchain-and-unsafe-boundary.md",
+            "ADR-004-language-scope.md",
+            "README.md",
+            "ADR-003-windows-sandbox.md"
+          ],
+          "omitted_files": [
+            "ADR-007-symbolic-reasoner.md",
+            "ADR-010-portability-model-selection-and-cloud-providers.md",
+            "ADR-008-local-assistant-and-model-strategy.md",
+            "ADR-011-restricted-execution-sandbox.md"
+          ],
+          "included_bytes": 18855,
+          "omitted_bytes": 27584,
+          "char_budget": 24000
+        },
+        "entry_points": [],
+        "dependencies": {
+          "config_files": [],
+          "detected_modules": []
+        },
+        "risks": {
+          "secret_rejections": [],
+          "symlink_escapes": [],
+          "heuristic_dangerous_patterns": [],
+          "heuristic_injection_patterns": [],
+          "rejection_counts": {},
+          "rejections_capped": false
+        },
+        "limits": {
+          "max_file_size_bytes": 1048576,
+          "max_total_bytes": 10485760,
+          "max_file_count": 500,
+          "max_depth": 10,
+          "max_line_length": 4096,
+          "include_junk": false,
+          "max_rejections_per_reason": 20,
+          "max_total_rejections": 500,
+          "secret_deny_patterns": [
+            ".env",
+            ".env.*",
+            "*.pem",
+            "id_rsa*",
+            "id_dsa*",
+            "id_ecdsa*",
+            "id_ed25519*",
+            "*.key",
+            "*.pfx",
+            "*.pkcs12",
+            "*.p12",
+            "*.jks",
+            "*.kdbx",
+            "credentials.json",
+            "service_account*.json",
+            "service-account*.json",
+            "service-account.json",
+            ".kube/config",
+            "docker/config.json",
+            ".docker/config.json",
+            ".npmrc",
+            ".netrc",
+            ".git-credentials",
+            ".pypirc",
+            ".htpasswd",
+            "*.tfstate",
+            "*.tfstate.*",
+            "terraform.tfstate*",
+            "credentials",
+            "config.json",
+            "secrets.yaml",
+            "secrets.yml",
+            "secrets.json",
+            "token.txt",
+            "*.enc"
+          ],
+          "junk_dir_patterns": [
+            ".git",
+            "node_modules",
+            "__pycache__",
+            ".venv",
+            "venv",
+            "dist",
+            "build",
+            ".tox",
+            ".idea",
+            ".vscode",
+            "target",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".coverage",
+            "htmlcov"
+          ]
+        },
+        "summary": "### Direct Answer to User Question:\nThe main security invariants and sandbox process boundaries defined in ADR-011 are:\n- **Multi-tier containment**: Tier-1 AST guard, Tier-2 OS sandbox (AppContainer + Job Objects on Windows; bubblewrap/Landlock + rlimits on Linux).\n- **Startup capability probe**: Ensures the sandbox has the necessary permissions before execution.\n- **Fail-closed rule**: The sandbox operates in a restricted mode if it cannot verify its capabilities.\n- **Frozen-test bounded repair (N≤3)**: Limits the number of attempts to repair the sandbox if it fails.\n- **Non-contaminated test evaluation**: Ensures that tests are run in a clean environment.\n- **Race-free exclusive staging (O_EXCL)**: Prevents concurrent access to the staging area.\n\n### Codebase Structure:\n- **Folder Layout**: The codebase is organized into multiple ADR (Architecture Decision Records) files, each addressing a specific risk or feature.\n- **File Count**: There are 12 files in total, including ADRs and a README.\n- **Primary Components**: The primary components include ADRs for various security and functionality decisions, such as privacy controls, capability brokers, and sandbox technologies.\n\n### Entry Points:\n- **Execution Entry Points**: The entry points for execution are primarily through the `main.py` script, which interacts with the `Reasoner` interface and other components.\n- **Configuration Entry Points**: Configuration is managed through command-line arguments and environment variables, such as `--allow-domain`, `--show-outbound`, and `--offline`.\n\n### Dependencies:\n- **Libraries and Dependencies**: The codebase depends on several libraries, including:\n  - `serde` and `serde_json` for data serialization.\n  - `windows-sys` for Windows-specific bindings.\n  - `hyper` and `rustls` for networking.\n  - `ed25519` for cryptographic signing.\n  - `cryptography` for cryptographic operations.\n\n### Obvious Risks:\n- **Unsafe Code**: The codebase contains `unsafe` blocks, which are restricted to specific files (`core/src/win32.rs`) and are accompanied by safety comments.\n- **Configuration Management**: The configuration management through command-line arguments and environment variables needs careful handling to prevent injection attacks.\n- **Dependency Management**: The use of third-party libraries, such as `windows-sys` and `cryptography`, requires regular security audits and updates.\n\n### Language & Style:\nThe response is provided in English, using technical terms and identifiers from the codebase. The style is formal and objective, focusing on the architectural and security aspects of the codebase."
+      },
+      "task_id": "dogfood_analyze_01_adr",
+      "category": "analyze",
+      "description": "Analyze docs/adr folder on ADR-011 security invariants and sandbox boundaries",
+      "honest_assessment": "PASS with context-budget rough edge surfaced (exit=0, 59.545s, 12 files / 46,439 bytes). Because docs/adr (46,439 bytes) exceeded the 24,000-char context budget and assemble_untrusted_context sorts files strictly by (bytes_read, path) ascending rather than query relevance, the 8 smallest ADR files (including README.md) were included in full while the 4 largest files — including ADR-011-restricted-execution-sandbox.md itself — were omitted to the manifest. Consequently, the model answered the ADR-011 question using only the summary row for ADR-011 inside docs/adr/README.md."
+    },
+    {
+      "command": "python research/pai.py docs docs/THREAT_MODEL.md --question How are threats T21 (equality hijack) and T22 (worker forged verdict frame) mitigated? --json",
+      "exit_code": 0,
+      "wall_time_sec": 11.773,
+      "stdout": "{\n  \"success\": true,\n  \"target_file\": \"C:\\\\Users\\\\hp\\\\Documents\\\\GitHub\\\\personal_agentic_ai\\\\docs\\\\THREAT_MODEL.md\",\n  \"file_type\": \".md\",\n  \"selected_model\": \"qwen2.5-coder:7b\",\n  \"route_reason_codes\": [\n    \"STICKY_RESIDENT\",\n    \"UNMEASURED_CLASS\",\n    \"HYSTERESIS_WARM_BYPASS\",\n    \"UNCALIBRATED\"\n  ],\n  \"question\": \"How are threats T21 (equality hijack) and T22 (worker forged verdict frame) mitigated?\",\n  \"extract_table\": false,\n  \"coverage\": {\n    \"total_bytes\": 11445,\n    \"included_bytes\": 11445,\n    \"truncated\": false,\n    \"char_budget\": 24000\n  },\n  \"csv_metadata\": null,\n  \"export\": null,\n  \"summary\": \"### Mitigation of Threats T21 (Equality Hijack) and T22 (Worker Forged Verdict Frame)\\n\\n**Threat T21 (Equality Hijack):**\\n- **Mitigation:** The router accepts model names only from an allow-list. Task classes are resolved exclusively from command arguments. The endpoint is verified through a local loopback. Hostile context tests pass in `test_router.py`. User allow-lists strictly filter candidates.\\n\\n**Threat T22 (Worker Forged Verdict Frame):**\\n- **Mitigation:** A config scanner in `config.py` rejects any secrets/credentials in user config, which is tested in `test_config.py`. An OS credential store vault (`pai keys`) is planned for M1d.\"\n}\n",
+      "stderr": "",
+      "parsed_json": {
+        "success": true,
+        "target_file": "C:\\Users\\hp\\Documents\\GitHub\\personal_agentic_ai\\docs\\THREAT_MODEL.md",
+        "file_type": ".md",
+        "selected_model": "qwen2.5-coder:7b",
+        "route_reason_codes": [
+          "STICKY_RESIDENT",
+          "UNMEASURED_CLASS",
+          "HYSTERESIS_WARM_BYPASS",
+          "UNCALIBRATED"
+        ],
+        "question": "How are threats T21 (equality hijack) and T22 (worker forged verdict frame) mitigated?",
+        "extract_table": false,
+        "coverage": {
+          "total_bytes": 11445,
+          "included_bytes": 11445,
+          "truncated": false,
+          "char_budget": 24000
+        },
+        "csv_metadata": null,
+        "export": null,
+        "summary": "### Mitigation of Threats T21 (Equality Hijack) and T22 (Worker Forged Verdict Frame)\n\n**Threat T21 (Equality Hijack):**\n- **Mitigation:** The router accepts model names only from an allow-list. Task classes are resolved exclusively from command arguments. The endpoint is verified through a local loopback. Hostile context tests pass in `test_router.py`. User allow-lists strictly filter candidates.\n\n**Threat T22 (Worker Forged Verdict Frame):**\n- **Mitigation:** A config scanner in `config.py` rejects any secrets/credentials in user config, which is tested in `test_config.py`. An OS credential store vault (`pai keys`) is planned for M1d."
+      },
+      "task_id": "dogfood_docs_01_threat_model",
+      "category": "docs",
+      "description": "Analyze docs/THREAT_MODEL.md on T21 and T22 mitigations",
+      "honest_assessment": "PASS (exit=0, 11.773s, full 11,445 / 11,445 byte coverage). Note on grounding: docs/THREAT_MODEL.md defines T21 as 'Model Routing & Task Class Confusion' and T22 as 'Plaintext Secret Exposure in Config', whereas our question parenthetically mislabeled them as '(equality hijack)' and '(worker forged verdict frame)' (which are in ADR-011). The model stayed grounded in the actual THREAT_MODEL.md rows for T21 and T22 rather than inventing mitigations not in the file, though it repeated the question's parenthetical headings."
+    },
+    {
+      "command": "python research/pai.py forecast C:\\Users\\hp\\.gemini\\antigravity\\brain\\d0e65f81-63af-4ce6-bbbd-bf24f9ae1a12\\scratch\\dogfood_weekly_latency.csv --horizon 4 --question What is the forecasted p95 latency trend over the next 4 weeks and which baseline method had the lowest backtest MAE? --json",
+      "exit_code": 0,
+      "wall_time_sec": 21.229,
+      "stdout": "{\n  \"success\": true,\n  \"status\": \"OK\",\n  \"series_name\": \"dogfood_weekly_latency.csv\",\n  \"total_points\": 24,\n  \"frequency\": \"weekly\",\n  \"date_range\": [\n    \"2026-04-06\",\n    \"2026-09-14\"\n  ],\n  \"data_warnings\": [],\n  \"method_used\": \"Holt Linear Trend (alpha=0.30, beta=0.20)\",\n  \"backtest\": {\n    \"holdout_size\": 4,\n    \"method_name\": \"Holt Linear Trend (alpha=0.30, beta=0.20)\",\n    \"mae\": 1.125,\n    \"rmse\": 1.2736,\n    \"mape\": 0.61,\n    \"naive_mae\": 3.825,\n    \"naive_rmse\": 4.402,\n    \"beated_naive\": true,\n    \"validation_origins\": 3,\n    \"residual_sample_size\": 16,\n    \"uncertainty_notes\": null\n  },\n  \"forecasts\": [\n    {\n      \"step\": 1,\n      \"date\": \"2026-09-21\",\n      \"point\": 189.62,\n      \"lower_80\": 187.73,\n      \"upper_80\": 191.51,\n      \"lower_95\": 186.74,\n      \"upper_95\": 192.51\n    },\n    {\n      \"step\": 2,\n      \"date\": \"2026-09-28\",\n      \"point\": 191.58,\n      \"lower_80\": 188.91,\n      \"upper_80\": 194.24,\n      \"lower_95\": 187.5,\n      \"upper_95\": 195.66\n    },\n    {\n      \"step\": 3,\n      \"date\": \"2026-10-05\",\n      \"point\": 193.53,\n      \"lower_80\": 190.26,\n      \"upper_80\": 196.8,\n      \"lower_95\": 188.53,\n      \"upper_95\": 198.53\n    },\n    {\n      \"step\": 4,\n      \"date\": \"2026-10-12\",\n      \"point\": 195.48,\n      \"lower_80\": 191.71,\n      \"upper_80\": 199.26,\n      \"lower_95\": 189.71,\n      \"upper_95\": 201.25\n    }\n  ],\n  \"summary_narration\": \"Forecast generated for 24 historical observations (weekly frequency).\\nModel selection: 3 rolling-origin validation folds on training history.\\nOut-of-sample evaluation: 4-step holdout (residual sample size N=16). Selected Holt Linear Trend (alpha=0.30, beta=0.20) which outperformed naive baseline by 70.6% on out-of-sample holdout (MAE: 1.12 vs 3.83).\\nProjected next 4 steps: starting at 189.62 ending at 195.48.\",\n  \"disclaimer\": \"Notice: Forecasts are mathematical extrapolations of historical patterns. Unforeseen macroeconomic events, structural shifts, and black swan shocks are not modeled.\",\n  \"question\": \"What is the forecasted p95 latency trend over the next 4 weeks and which baseline method had the lowest backtest MAE?\",\n  \"selected_model\": \"qwen2.5-coder:7b\",\n  \"route_reason_codes\": [\n    \"STICKY_RESIDENT\",\n    \"UNMEASURED_CLASS\",\n    \"HYSTERESIS_WARM_BYPASS\",\n    \"UNCALIBRATED\"\n  ],\n  \"model_explanation\": \"The forecasted p95 latency trend over the next 4 weeks is as follows:\\n\\n- **Week 1 (2026-09-21)**: 186.74 to 192.51\\n- **Week 2 (2026-09-28)**: 187.50 to 195.66\\n- **Week 3 (2026-10-05)**: 188.53 to 198.53\\n- **Week 4 (2026-10-12)**: 189.71 to 201.25\\n\\nThe baseline method used for the backtest was the **Holt Linear Trend (alpha=0.30, beta=0.20)**. This method had a lower backtest MAE compared to the naive baseline. Specifically, the MAE for the Holt Linear Trend method was 1.125, while the naive baseline had an MAE of 3.825. This indicates that the Holt Linear Trend method outperformed the naive baseline by 70.6% on the out-of-sample holdout.\"\n}\n",
+      "stderr": "",
+      "parsed_json": {
+        "success": true,
+        "status": "OK",
+        "series_name": "dogfood_weekly_latency.csv",
+        "total_points": 24,
+        "frequency": "weekly",
+        "date_range": [
+          "2026-04-06",
+          "2026-09-14"
+        ],
+        "data_warnings": [],
+        "method_used": "Holt Linear Trend (alpha=0.30, beta=0.20)",
+        "backtest": {
+          "holdout_size": 4,
+          "method_name": "Holt Linear Trend (alpha=0.30, beta=0.20)",
+          "mae": 1.125,
+          "rmse": 1.2736,
+          "mape": 0.61,
+          "naive_mae": 3.825,
+          "naive_rmse": 4.402,
+          "beated_naive": true,
+          "validation_origins": 3,
+          "residual_sample_size": 16,
+          "uncertainty_notes": null
+        },
+        "forecasts": [
+          {
+            "step": 1,
+            "date": "2026-09-21",
+            "point": 189.62,
+            "lower_80": 187.73,
+            "upper_80": 191.51,
+            "lower_95": 186.74,
+            "upper_95": 192.51
+          },
+          {
+            "step": 2,
+            "date": "2026-09-28",
+            "point": 191.58,
+            "lower_80": 188.91,
+            "upper_80": 194.24,
+            "lower_95": 187.5,
+            "upper_95": 195.66
+          },
+          {
+            "step": 3,
+            "date": "2026-10-05",
+            "point": 193.53,
+            "lower_80": 190.26,
+            "upper_80": 196.8,
+            "lower_95": 188.53,
+            "upper_95": 198.53
+          },
+          {
+            "step": 4,
+            "date": "2026-10-12",
+            "point": 195.48,
+            "lower_80": 191.71,
+            "upper_80": 199.26,
+            "lower_95": 189.71,
+            "upper_95": 201.25
+          }
+        ],
+        "summary_narration": "Forecast generated for 24 historical observations (weekly frequency).\nModel selection: 3 rolling-origin validation folds on training history.\nOut-of-sample evaluation: 4-step holdout (residual sample size N=16). Selected Holt Linear Trend (alpha=0.30, beta=0.20) which outperformed naive baseline by 70.6% on out-of-sample holdout (MAE: 1.12 vs 3.83).\nProjected next 4 steps: starting at 189.62 ending at 195.48.",
+        "disclaimer": "Notice: Forecasts are mathematical extrapolations of historical patterns. Unforeseen macroeconomic events, structural shifts, and black swan shocks are not modeled.",
+        "question": "What is the forecasted p95 latency trend over the next 4 weeks and which baseline method had the lowest backtest MAE?",
+        "selected_model": "qwen2.5-coder:7b",
+        "route_reason_codes": [
+          "STICKY_RESIDENT",
+          "UNMEASURED_CLASS",
+          "HYSTERESIS_WARM_BYPASS",
+          "UNCALIBRATED"
+        ],
+        "model_explanation": "The forecasted p95 latency trend over the next 4 weeks is as follows:\n\n- **Week 1 (2026-09-21)**: 186.74 to 192.51\n- **Week 2 (2026-09-28)**: 187.50 to 195.66\n- **Week 3 (2026-10-05)**: 188.53 to 198.53\n- **Week 4 (2026-10-12)**: 189.71 to 201.25\n\nThe baseline method used for the backtest was the **Holt Linear Trend (alpha=0.30, beta=0.20)**. This method had a lower backtest MAE compared to the naive baseline. Specifically, the MAE for the Holt Linear Trend method was 1.125, while the naive baseline had an MAE of 3.825. This indicates that the Holt Linear Trend method outperformed the naive baseline by 70.6% on the out-of-sample holdout."
+      },
+      "task_id": "dogfood_forecast_01_weekly_latency",
+      "category": "forecast",
+      "description": "Forecast 24-week p95 API latency CSV (horizon=4) with natural-language question",
+      "honest_assessment": "PASS (exit=0, 21.229s). Deterministic Python engine selected Holt Linear Trend (alpha=0.30, beta=0.20), beating the naive baseline by 70.6% on the 4-step holdout (MAE: 1.125 vs 3.825, MAPE: 0.61%), and projected point forecasts 189.62, 191.58, 193.53, 195.48. Rough edge in model_explanation: qwen2.5-coder:7b accurately cited the method, MAE (1.125 vs 3.825), and 70.6% improvement, but listed each week's 95% confidence interval (186.74 to 192.51, etc.) instead of the point estimate (189.62)."
+    }
+  ]
+}

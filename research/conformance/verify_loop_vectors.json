@@ -1,0 +1,646 @@
+{
+ "canonical_example_extraction_cases": [
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert solve([1, 2, 3]) == 6",
+    "assert solve([]) == 0"
+   ],
+   "id": "ex_01_valid_scalar_and_list",
+   "prompt": "Write `solve(items)`.\nExample:\n  solve([1, 2, 3]) -> 6\n  solve([]) -> 0\n"
+  },
+  {
+   "entry_point": "total_cost",
+   "expected_statements": [
+    "p = [10, 20]",
+    "assert total_cost(p, 5) == 35"
+   ],
+   "id": "ex_02_valid_variable_binding",
+   "prompt": "Write `total_cost(prices, tax)`.\nExample:\n  p = [10, 20]\n  total_cost(p, 5) -> 35\n"
+  },
+  {
+   "entry_point": "half",
+   "expected_statements": [
+    "assert isinstance((half(5)), (int, float)) and not isinstance((half(5)), bool) and abs((half(5)) - (2.5)) <= 1e-3"
+   ],
+   "id": "ex_03_valid_exact_float_tolerance",
+   "prompt": "Write `half(x)`.\nExample:\n  half(5) -> 2.5\n"
+  },
+  {
+   "entry_point": "score",
+   "expected_statements": [
+    "assert isinstance((score('abc')), (int, float)) and not isinstance((score('abc')), bool) and isinstance((0), (int, float)) and not isinstance((0), bool) and (score('abc') > 0)",
+    "assert score('abc') == 3"
+   ],
+   "id": "ex_04_valid_comparison_operators",
+   "prompt": "Write `score(s)`.\nExample:\n  score('abc') > 0\n  score('abc') == 3\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_05_rejected_open_call",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(open('/etc/passwd').read()) -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_06_rejected_dunder_import",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(__import__('os').system('id')) -> 0\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_07_rejected_attribute_chain",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(obj.method()) -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_08_rejected_comprehension",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve([i for i in range(5)]) -> 5\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_09_rejected_lambda",
+   "prompt": "Write `solve(fn)`.\nExample:\n  solve(lambda x: x + 1) -> 2\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_10_rejected_ellipsis_expectation",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(10) -> ...\n"
+  },
+  {
+   "entry_point": "ratio",
+   "expected_statements": [],
+   "id": "ex_11_rejected_inexact_float_and_approx_comment",
+   "prompt": "Write `ratio(a, b)`.\nExample:\n  ratio(1, 3) -> 0.33333\n  ratio(2, 3) -> 0.67 # approximately\n"
+  }
+ ],
+ "codec_invalid_envelope_cases": [
+  {
+   "envelope": [
+    1,
+    2,
+    3
+   ],
+   "expected_error": "CodecError",
+   "id": "inv_01_not_a_dict"
+  },
+  {
+   "envelope": {
+    "t": "int"
+   },
+   "expected_error": "CodecError",
+   "id": "inv_02_missing_v_key"
+  },
+  {
+   "envelope": {
+    "t": "custom_object",
+    "v": 123
+   },
+   "expected_error": "CodecError",
+   "id": "inv_03_unknown_tag"
+  },
+  {
+   "envelope": {
+    "t": "int",
+    "v": true
+   },
+   "expected_error": "CodecError",
+   "id": "inv_04_int_with_bool_payload"
+  },
+  {
+   "envelope": {
+    "t": "int",
+    "v": "42"
+   },
+   "expected_error": "CodecError",
+   "id": "inv_05_int_with_str_payload"
+  },
+  {
+   "envelope": {
+    "t": "float",
+    "v": "infinity"
+   },
+   "expected_error": "CodecError",
+   "id": "inv_06_float_invalid_special_str"
+  },
+  {
+   "envelope": {
+    "t": "bytes",
+    "v": "!!!not_valid_base64!!!"
+   },
+   "expected_error": "CodecError",
+   "id": "inv_07_bytes_invalid_base64"
+  },
+  {
+   "envelope": {
+    "t": "set",
+    "v": [
+     {
+      "t": "list",
+      "v": []
+     }
+    ]
+   },
+   "expected_error": "CodecError",
+   "id": "inv_08_set_unhashable_list_element"
+  },
+  {
+   "envelope": {
+    "t": "dict",
+    "v": [
+     [
+      {
+       "t": "list",
+       "v": []
+      },
+      {
+       "t": "int",
+       "v": 1
+      }
+     ]
+    ]
+   },
+   "expected_error": "CodecError",
+   "id": "inv_09_dict_unhashable_list_key"
+  }
+ ],
+ "codec_roundtrip_cases": [
+  {
+   "encoded": {
+    "t": "bool",
+    "v": true
+   },
+   "id": "codec_01_bool_true",
+   "python_type": "bool"
+  },
+  {
+   "encoded": {
+    "t": "bool",
+    "v": false
+   },
+   "id": "codec_02_bool_false",
+   "python_type": "bool"
+  },
+  {
+   "encoded": {
+    "t": "int",
+    "v": 0
+   },
+   "id": "codec_03_int_zero",
+   "python_type": "int"
+  },
+  {
+   "encoded": {
+    "t": "int",
+    "v": -987654321012345
+   },
+   "id": "codec_04_int_negative_large",
+   "python_type": "int"
+  },
+  {
+   "encoded": {
+    "t": "float",
+    "v": 3.14159265
+   },
+   "id": "codec_05_float_regular",
+   "python_type": "float"
+  },
+  {
+   "encoded": {
+    "t": "float",
+    "v": "nan"
+   },
+   "id": "codec_06_float_nan",
+   "python_type": "float"
+  },
+  {
+   "encoded": {
+    "t": "float",
+    "v": "inf"
+   },
+   "id": "codec_07_float_pos_inf",
+   "python_type": "float"
+  },
+  {
+   "encoded": {
+    "t": "float",
+    "v": "-inf"
+   },
+   "id": "codec_08_float_neg_inf",
+   "python_type": "float"
+  },
+  {
+   "encoded": {
+    "t": "str",
+    "v": "PAI \u0dc3\u0dd2\u0d82\u0dc4\u0dbd & English"
+   },
+   "id": "codec_09_str_unicode",
+   "python_type": "str"
+  },
+  {
+   "encoded": {
+    "t": "none",
+    "v": null
+   },
+   "id": "codec_10_none",
+   "python_type": "NoneType"
+  },
+  {
+   "encoded": {
+    "t": "bytes",
+    "v": "AAH+/3BhaS1ycGM="
+   },
+   "id": "codec_11_bytes",
+   "python_type": "bytes"
+  },
+  {
+   "encoded": {
+    "t": "list",
+    "v": [
+     {
+      "t": "int",
+      "v": 1
+     },
+     {
+      "t": "str",
+      "v": "two"
+     },
+     {
+      "t": "bool",
+      "v": true
+     },
+     {
+      "t": "none",
+      "v": null
+     },
+     {
+      "t": "list",
+      "v": [
+       {
+        "t": "float",
+        "v": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   "id": "codec_12_list_nested",
+   "python_type": "list"
+  },
+  {
+   "encoded": {
+    "t": "tuple",
+    "v": [
+     {
+      "t": "int",
+      "v": 1
+     },
+     {
+      "t": "tuple",
+      "v": [
+       {
+        "t": "int",
+        "v": 2
+       },
+       {
+        "t": "int",
+        "v": 3
+       }
+      ]
+     },
+     {
+      "t": "str",
+      "v": "four"
+     }
+    ]
+   },
+   "id": "codec_13_tuple_nested",
+   "python_type": "tuple"
+  },
+  {
+   "encoded": {
+    "t": "set",
+    "v": [
+     {
+      "t": "int",
+      "v": 42
+     }
+    ]
+   },
+   "id": "codec_14_set_singleton",
+   "python_type": "set"
+  },
+  {
+   "encoded": {
+    "t": "frozenset",
+    "v": [
+     {
+      "t": "str",
+      "v": "immutable_item"
+     }
+    ]
+   },
+   "id": "codec_15_frozenset_singleton",
+   "python_type": "frozenset"
+  },
+  {
+   "encoded": {
+    "t": "dict",
+    "v": [
+     [
+      {
+       "t": "tuple",
+       "v": [
+        {
+         "t": "int",
+         "v": 1
+        },
+        {
+         "t": "int",
+         "v": 2
+        }
+       ]
+      },
+      {
+       "t": "str",
+       "v": "coords"
+      }
+     ],
+     [
+      {
+       "t": "int",
+       "v": 99
+      },
+      {
+       "t": "list",
+       "v": [
+        {
+         "t": "bool",
+         "v": true
+        },
+        {
+         "t": "bool",
+         "v": false
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "id": "codec_16_dict_tuple_and_int_keys",
+   "python_type": "dict"
+  },
+  {
+   "encoded": {
+    "t": "dict",
+    "v": [
+     [
+      {
+       "t": "str",
+       "v": "t"
+      },
+      {
+       "t": "str",
+       "v": "tuple"
+      }
+     ],
+     [
+      {
+       "t": "str",
+       "v": "v"
+      },
+      {
+       "t": "list",
+       "v": [
+        {
+         "t": "int",
+         "v": 1
+        },
+        {
+         "t": "int",
+         "v": 2
+        },
+        {
+         "t": "int",
+         "v": 3
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "id": "codec_17_dict_tag_forgery_attempt",
+   "python_type": "dict"
+  }
+ ],
+ "schema_version": 1,
+ "verdict_frame_cases": [
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": null,
+    "errors": 0,
+    "executed": 2,
+    "failed": 0,
+    "passed": true,
+    "status": "PASS"
+   },
+   "expected_test_ids": [
+    "test_basic",
+    "test_pai_canonical_examples"
+   ],
+   "id": "vf_01_valid_pass",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"450d01fbecff899afecdca623a94fe6ebda0d23a53cbf930e5b635fbbbeab834\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 1,
+   "expected": {
+    "discovered": 2,
+    "error_type": "AssertionError",
+    "errors": 0,
+    "executed": 2,
+    "failed": 1,
+    "passed": false,
+    "status": "FAIL"
+   },
+   "expected_test_ids": [
+    "test_basic",
+    "test_pai_canonical_examples"
+   ],
+   "id": "vf_02_valid_fail",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 1, \"failures\": [{\"message\": \"assert 0 == 5\", \"test_id\": \"test_pai_canonical_examples\", \"type\": \"AssertionError\"}], \"mac\": \"05f0a568cc03ea3c68d18d011f6d579579076edb06d27bb69c3e17818717c9e9\", \"passed\": 1, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"message\": \"assert 0 == 5\", \"status\": \"FAIL\", \"type\": \"AssertionError\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"FAIL\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": "InvalidHmacSignatureError",
+    "errors": 1,
+    "executed": 2,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_03_forged_missing_mac",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": "InvalidHmacSignatureError",
+    "errors": 1,
+    "executed": 2,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_04_forged_wrong_hmac_key",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"265cffb617850a513dcc67fc34d390d6fe59852eaf56f8bfe7541f6d045c0082\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": "InvalidHmacSignatureError",
+    "errors": 1,
+    "executed": 2,
+    "failed": 1,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_05_tampered_status_after_signing",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 1, \"failures\": [{\"message\": \"assert 0 == 5\", \"test_id\": \"test_pai_canonical_examples\", \"type\": \"AssertionError\"}], \"mac\": \"05f0a568cc03ea3c68d18d011f6d579579076edb06d27bb69c3e17818717c9e9\", \"passed\": 1, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"message\": \"assert 0 == 5\", \"status\": \"PASS\", \"type\": \"AssertionError\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": "InvalidNonceError",
+    "errors": 1,
+    "executed": 2,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_06_mismatched_session_nonce",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"ecbdfd19e724cdc4f54b7fe976cc0db1e2df494b1809de543654ae15edf14dfc\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 0,
+    "error_type": "MultipleVerdictFramesError",
+    "errors": 1,
+    "executed": 0,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_07_multiple_verdict_frames_injected",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"450d01fbecff899afecdca623a94fe6ebda0d23a53cbf930e5b635fbbbeab834\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n\n\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"450d01fbecff899afecdca623a94fe6ebda0d23a53cbf930e5b635fbbbeab834\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 1,
+   "expected": {
+    "discovered": 0,
+    "error_type": "DriverPreemptedError",
+    "errors": 1,
+    "executed": 0,
+    "failed": 0,
+    "passed": false,
+    "status": "ERROR"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_08_missing_verdict_frame_preempted",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "Candidate printed some debug text and exited early\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 0,
+    "error_type": "VerdictParseError",
+    "errors": 1,
+    "executed": 0,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_09_unparseable_verdict_json",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{not valid json\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": "TestIdMismatchError",
+    "errors": 1,
+    "executed": 2,
+    "failed": 0,
+    "passed": false,
+    "status": "ERROR"
+   },
+   "expected_test_ids": [
+    "test_basic",
+    "test_missing_id"
+   ],
+   "id": "vf_10_mismatched_expected_test_ids",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"450d01fbecff899afecdca623a94fe6ebda0d23a53cbf930e5b635fbbbeab834\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  }
+ ]
+}

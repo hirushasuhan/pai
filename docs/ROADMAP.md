@@ -2,7 +2,7 @@
 
 This roadmap outlines the systematic development of the **Personal Agentic AI (PAI)** from an agile Python research prototype to a fully autonomous, recursive self-improving native intelligence daemon.
 
-_Last reviewed: 2026-10-11. Phase 1 gate closed; Phase 2 slice VS2 (Rust policy conformance) complete and hardened; local assistant and gated own-model tracks added (ADR-008); M2b verification gate frozen at `6218fbc` (English and Singlish one-shot holdouts complete; M2c bridge kept on hold), M3/M4/M5/M7 complete, Phase 1 Python prototype frozen (`pai doctor` end-to-end verified). Risks R1–R7 remediated, R8–R12 mitigated/closed in prototype — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md) and the [ADRs](adr/README.md)._
+_Last reviewed: 2026-10-12. Phase 1 accepted on Linux (`70b6fb3`) and verified on Windows (`pai doctor` 8/8, 424 tests OK [23 skipped], 13/13 eval set hashes locked, 5-task dogfooding pass recorded in `docs/evidence/phase1_windows_dogfooding.json`); Phase 2 slice VS2 (Rust policy conformance) complete and hardened, and Phase 2 golden vectors generated for safe ingestion (`ingest_vectors.json`) and verify-loop framing/codec (`verify_loop_vectors.json`); local assistant and gated own-model tracks added (ADR-008); M2b verification gate frozen at `6218fbc` (English and Singlish one-shot holdouts complete; M2c bridge kept on hold), M3/M4/M5/M7 complete. Risks R1–R7 remediated, R8–R12 mitigated/closed in prototype — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md) and the [ADRs](adr/README.md)._
 
 ---
 

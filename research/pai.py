@@ -1128,7 +1128,13 @@ def cmd_code(args) -> int:
     model_name = getattr(args, "model", None)
     if not model_name:
         router = ModelRouter(load_system_profile=True)
-        decision = router.route("code")
+        snap = HardwareTelemetry().get_system_snapshot()
+        decision = router.route(
+            "code",
+            budget=snap.get("budget"),
+            resident_model=router.get_live_resident_model(),
+            prompt_text=getattr(args, "task", None),
+        )
         if not decision.selected_model:
             if getattr(args, "json", False):
                 print(json.dumps({
@@ -1571,7 +1577,13 @@ def cmd_analyze(args) -> int:
     route_reason_codes: List[str] = ["USER_MODEL_OVERRIDE"]
     if not model_name:
         router = ModelRouter(load_system_profile=True)
-        decision = router.route("analyze", prompt_text=user_question)
+        snap = HardwareTelemetry().get_system_snapshot()
+        decision = router.route(
+            "analyze",
+            budget=snap.get("budget"),
+            resident_model=router.get_live_resident_model(),
+            prompt_text=user_question,
+        )
         route_reason_codes = decision.reason_codes
         if not decision.selected_model:
             if getattr(args, "json", False):
@@ -2141,7 +2153,13 @@ def cmd_docs(args) -> int:
     route_reason_codes: List[str] = ["USER_MODEL_OVERRIDE"]
     if not model_name:
         router = ModelRouter(load_system_profile=True)
-        decision = router.route("docs", prompt_text=user_question)
+        snap = HardwareTelemetry().get_system_snapshot()
+        decision = router.route(
+            "docs",
+            budget=snap.get("budget"),
+            resident_model=router.get_live_resident_model(),
+            prompt_text=user_question,
+        )
         route_reason_codes = decision.reason_codes
         if not decision.selected_model:
             if getattr(args, "json", False):
@@ -2335,7 +2353,13 @@ def cmd_forecast(args) -> int:
     if user_question:
         if not model_name:
             router = ModelRouter(load_system_profile=True)
-            decision = router.route("forecast", prompt_text=user_question)
+            snap = HardwareTelemetry().get_system_snapshot()
+            decision = router.route(
+                "forecast",
+                budget=snap.get("budget"),
+                resident_model=router.get_live_resident_model(),
+                prompt_text=user_question,
+            )
             route_reason_codes = decision.reason_codes
             if not decision.selected_model:
                 if getattr(args, "json", False):
@@ -2454,8 +2478,11 @@ def cmd_chat(args) -> int:
 
     if not model_name:
         router = ModelRouter(load_system_profile=True)
+        snap = HardwareTelemetry().get_system_snapshot()
         decision = router.route(
             "chat",
+            budget=snap.get("budget"),
+            resident_model=router.get_live_resident_model(),
             prompt_text=user_prompt,
             gemma4_opt_in=gemma_opt,
         )
