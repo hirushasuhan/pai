@@ -19,6 +19,7 @@ from ingest import (
     DEFAULT_SECRET_DENY_PATTERNS,
     UNTRUSTED_BEGIN_MARKER,
     UNTRUSTED_END_MARKER,
+    assemble_untrusted_context,
     format_untrusted_context,
     get_ingest_limits,
     ingest_file,
@@ -535,6 +536,50 @@ class TestSafeIngestModule(unittest.TestCase):
         self.assertIsNotNone(item)
         self.assertIn("sys.exit(99)", item.text)
         self.assertIn("def invalid_syntax(:", item.text)
+
+    def test_assemble_untrusted_context_question_overlap_ranking(self):
+        """
+        Phase 1.1 (3a): When a user question is provided to assemble_untrusted_context,
+        files whose filename/path and content overlap with the question (e.g., ADR-011)
+        must be ranked ahead of smaller unrelated files so the target file is included
+        within char_budget while preserving the complete manifest and omitted_files list.
+        """
+        small_files = {
+            "ADR-001-reasoner.md": "# ADR-001\n" + ("Unrelated reasoner notes.\n" * 40),
+            "ADR-002-privacy.md": "# ADR-002\n" + ("Unrelated privacy notes.\n" * 40),
+            "ADR-003-sandbox.md": "# ADR-003\n" + ("Windows sandbox notes.\n" * 40),
+            "README.md": "# ADR Index\n- ADR-011: Restricted Execution Sandbox\n",
+        }
+        for name, body in small_files.items():
+            with open(os.path.join(self.test_dir, name), "w", encoding="utf-8") as f:
+                f.write(body)
+
+        adr011_body = (
+            "# ADR-011: Restricted Execution Sandbox\n"
+            + ("Detailed restricted execution sandbox threat model guarantees.\n" * 60)
+        )
+        with open(
+            os.path.join(self.test_dir, "ADR-011-restricted-execution-sandbox.md"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write(adr011_body)
+
+        rep = ingest_folder(self.test_dir)
+        question = "Summarize the threat model and the restricted execution sandbox guarantees in ADR-011"
+
+        # Without question: size-first ordering omits the larger ADR-011 file under a 5000-char budget
+        no_q = assemble_untrusted_context(rep, char_budget=5000, nonce="n1", question=None)
+        self.assertIn("ADR-011-restricted-execution-sandbox.md", no_q.omitted_files)
+
+        # With question: ADR-011-restricted-execution-sandbox.md is ranked first and included!
+        with_q = assemble_untrusted_context(rep, char_budget=5000, nonce="n1", question=question)
+        self.assertEqual(with_q.included_files[0], "ADR-011-restricted-execution-sandbox.md")
+        self.assertNotIn("ADR-011-restricted-execution-sandbox.md", with_q.omitted_files)
+        self.assertEqual(
+            len(with_q.included_files) + len(with_q.omitted_files),
+            len(rep.items),
+        )
 
 
 if __name__ == "__main__":

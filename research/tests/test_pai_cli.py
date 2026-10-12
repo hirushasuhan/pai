@@ -266,6 +266,240 @@ class TestPaiCLI(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_all_subcommands_without_model_against_local_stub_server_unmocked_router(self):
+        """
+        Phase 1.1 (1): End-to-end integration test running every CLI subcommand
+        (`code`, `analyze`, `docs`, `forecast`, `chat`) WITHOUT `--model` and
+        WITHOUT mocking `ModelRouter` or `HardwareTelemetry`, against a live local
+        HTTP stub server implementing `/api/tags`, `/api/ps`, and `/api/generate`.
+        """
+        import shutil
+        import tempfile
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        recorded_requests = []
+
+        class StubOllamaHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass  # Silence HTTP server logs during test output
+
+            def do_GET(self):
+                recorded_requests.append(("GET", self.path))
+                if self.path == "/api/version":
+                    raw = json.dumps({"version": "0.35.1-stub"}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                elif self.path == "/api/tags":
+                    payload = {
+                        "models": [
+                            {"name": "qwen2.5-coder:7b"},
+                            {"name": "qwen2.5-coder:1.5b"},
+                            {"name": "llama3.2:3b"},
+                        ]
+                    }
+                    raw = json.dumps(payload).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                elif self.path == "/api/ps":
+                    # Report qwen2.5-coder:1.5b as warm resident so routing succeeds
+                    # deterministically even on low-RAM CI containers (>= 512 MB free).
+                    payload = {"models": [{"name": "qwen2.5-coder:1.5b"}]}
+                    raw = json.dumps(payload).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                body_bytes = self.rfile.read(length) if length > 0 else b"{}"
+                body = json.loads(body_bytes.decode("utf-8"))
+                recorded_requests.append(("POST", self.path, body.get("model")))
+                if self.path == "/api/generate":
+                    prompt_text = body.get("prompt", "")
+                    if "test engineer" in prompt_text.lower() or "write a python `unittest` test suite" in prompt_text.lower():
+                        resp_text = (
+                            "import unittest\n"
+                            "from solution import add\n\n"
+                            "class TestAdd(unittest.TestCase):\n"
+                            "    def test_add_values(self):\n"
+                            "        self.assertEqual(add(2, 3), 5)\n"
+                            "        self.assertEqual(add(-4, 1), -3)\n"
+                            "        self.assertEqual(add(0, 0), 0)\n"
+                            "        self.assertEqual(add(10, 25), 35)\n"
+                        )
+                    elif "add(a: int, b: int)" in prompt_text:
+                        resp_text = "def add(a: int, b: int) -> int:\n    return a + b\n"
+                    else:
+                        resp_text = "Stub explanation: point forecasts are 116.00 and 117.00."
+                    raw = json.dumps({"response": resp_text, "done": True}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), StubOllamaHandler)
+        port = server.server_address[1]
+        server_url = f"http://127.0.0.1:{port}"
+        srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        srv_thread.start()
+
+        tmp = tempfile.mkdtemp(prefix="pai_stub_e2e_")
+        repo_dir = os.path.join(tmp, "repo")
+        code_out_dir = os.path.join(tmp, "code_out")
+        os.makedirs(repo_dir, exist_ok=True)
+        doc_file = os.path.join(repo_dir, "ADR-011-restricted-execution-sandbox.md")
+        with open(doc_file, "w", encoding="utf-8") as f:
+            f.write("# ADR-011\nRestricted execution sandbox threat model guarantees.\n")
+        csv_file = os.path.join(tmp, "series.csv")
+        with open(csv_file, "w", encoding="utf-8") as f:
+            f.write("date,val\n" + "\n".join(f"2026-01-{i:02d},{100 + i}" for i in range(1, 16)) + "\n")
+
+        old_url = os.environ.get("PAI_MODEL_URL")
+        os.environ["PAI_MODEL_URL"] = server_url
+        try:
+            # Verify /api/tags against the stub server
+            tag_probe = probe_ollama_server(server_url)
+            self.assertTrue(tag_probe["reachable"])
+            self.assertIn("qwen2.5-coder:7b", tag_probe["models"])
+
+            subcommand_runs = [
+                (
+                    "code",
+                    [
+                        "code",
+                        "Write a Python function `add(a: int, b: int) -> int` that returns the sum of a and b.\nExample:\n  add(2, 3) -> 5",
+                        "--out",
+                        code_out_dir,
+                        "--json",
+                    ],
+                ),
+                (
+                    "analyze",
+                    [
+                        "analyze",
+                        repo_dir,
+                        "--question",
+                        "Summarize the threat model in ADR-011",
+                        "--json",
+                    ],
+                ),
+                (
+                    "docs",
+                    [
+                        "docs",
+                        doc_file,
+                        "--question",
+                        "What does ADR-011 cover?",
+                        "--json",
+                    ],
+                ),
+                (
+                    "forecast",
+                    [
+                        "forecast",
+                        csv_file,
+                        "--horizon",
+                        "2",
+                        "--question",
+                        "What are the point forecasts?",
+                        "--json",
+                    ],
+                ),
+                (
+                    "chat",
+                    [
+                        "chat",
+                        "Hello local assistant",
+                        "--json",
+                    ],
+                ),
+            ]
+
+            for name, argv in subcommand_runs:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = main(argv)
+                self.assertEqual(
+                    rc,
+                    0,
+                    f"Unmocked subcommand '{name}' failed (rc={rc}): {buf.getvalue()}",
+                )
+                payload = json.loads(buf.getvalue())
+                self.assertTrue(payload.get("success"), f"Subcommand '{name}' payload not success: {payload}")
+                self.assertIsNotNone(payload.get("selected_model"), f"Subcommand '{name}' missing selected_model")
+
+            post_Endpoints = [r for r in recorded_requests if r[0] == "POST" and r[1] == "/api/generate"]
+            self.assertGreaterEqual(len(post_Endpoints), 6)
+        finally:
+            if old_url is None:
+                os.environ.pop("PAI_MODEL_URL", None)
+            else:
+                os.environ["PAI_MODEL_URL"] = old_url
+            server.shutdown()
+            server.server_close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_verify_forecast_explanation_numbers_and_label(self):
+        """
+        Phase 1.1 (3b): Verifies that `verify_forecast_explanation_numbers` catches
+        when `model_explanation` cites confidence interval bounds (`372.45`, `387.45`, `402.45`)
+        instead of point forecasts (`355`, `370`, `385`), and passes when point forecasts are cited.
+        """
+        from pai import MODEL_EXPLANATION_LABEL, verify_forecast_explanation_numbers
+
+        report_dict = {
+            "total_points": 24,
+            "horizon": 3,
+            "backtest": {
+                "holdout_size": 3,
+                "mae": 5.0,
+                "rmse": 6.1,
+                "naive_mae": 15.0,
+            },
+            "forecasts": [
+                {"step": 1, "date": "2026-10-01", "point": 355.0, "lower_80": 337.55, "upper_80": 372.45, "lower_95": 328.0, "upper_95": 382.0},
+                {"step": 2, "date": "2026-10-08", "point": 370.0, "lower_80": 352.55, "upper_80": 387.45, "lower_95": 343.0, "upper_95": 397.0},
+                {"step": 3, "date": "2026-10-15", "point": 385.0, "lower_80": 367.55, "upper_80": 402.45, "lower_95": 358.0, "upper_95": 412.0},
+            ],
+        }
+
+        # Case 1: Model confuses 80% CI upper bounds with point forecasts
+        bad_exp = "The forecasted values for the next 3 steps are 372.45, 387.45, and 402.45."
+        chk_bad = verify_forecast_explanation_numbers(bad_exp, report_dict)
+        self.assertEqual(chk_bad["label"], MODEL_EXPLANATION_LABEL)
+        self.assertFalse(chk_bad["verified"])
+        self.assertTrue(chk_bad["ci_bounds_cited_without_point_forecasts"])
+        self.assertEqual(chk_bad["cited_point_forecasts"], [])
+        self.assertEqual(chk_bad["cited_ci_bounds"], [372.45, 387.45, 402.45])
+        self.assertTrue(len(chk_bad["warnings"]) >= 1)
+
+        # Case 2: Model cites actual point forecasts accurately
+        good_exp = (
+            "For 2026-10-01 to 2026-10-15, the point forecasts are 355.00, 370.00, and 385.00 "
+            "(with 80% upper bounds 372.45, 387.45, 402.45 and backtest MAE 5.0 vs Naive 15.0)."
+        )
+        chk_good = verify_forecast_explanation_numbers(good_exp, report_dict)
+        self.assertTrue(chk_good["verified"])
+        self.assertFalse(chk_good["ci_bounds_cited_without_point_forecasts"])
+        self.assertEqual(chk_good["cited_point_forecasts"], [355.0, 370.0, 385.0])
+        self.assertEqual(chk_good["unmatched_numbers"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

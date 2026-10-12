@@ -23,6 +23,7 @@ import json
 import math
 import os
 import platform
+import re
 import statistics
 import subprocess
 import sys
@@ -113,6 +114,7 @@ def probe_ollama_server(base_url: str = "http://127.0.0.1:11434") -> Dict[str, A
         "reachable": False,
         "endpoint": base_url,
         "version": None,
+        "models": [],
         "resident_models": [],
     }
 
@@ -124,6 +126,21 @@ def probe_ollama_server(base_url: str = "http://127.0.0.1:11434") -> Dict[str, A
             out["version"] = data.get("version")
             out["reachable"] = True
     except Exception:
+        pass
+
+    try:
+        # Check installed models (/api/tags)
+        t_req = urllib.request.Request(f"{base_url}/api/tags")
+        with urllib.request.urlopen(t_req, timeout=1.0) as resp:
+            data = json.loads(resp.read().decode())
+            out["reachable"] = True
+            for m in data.get("models", []):
+                if isinstance(m, dict) and m.get("name"):
+                    out["models"].append(m["name"])
+    except Exception:
+        pass
+
+    if not out["reachable"]:
         return out
 
     try:
@@ -1603,9 +1620,14 @@ def cmd_analyze(args) -> int:
     if not getattr(args, "json", False):
         print(f"Analyzing codebase with model '{model_name}'...")
 
-    # 4. Prompt assembly with complete file manifest and unforgeable nonce envelope
+    # 4. Prompt assembly with complete file manifest, deterministic question ranking, and unforgeable nonce envelope
     nonce = generate_envelope_nonce()
-    assembly = assemble_untrusted_context(report, char_budget=24000, nonce=nonce)
+    assembly = assemble_untrusted_context(
+        report,
+        char_budget=24000,
+        nonce=nonce,
+        question=user_question,
+    )
     context_text = assembly.text
 
     task_line = (
@@ -2280,6 +2302,113 @@ def cmd_docs(args) -> int:
     return 0
 
 
+MODEL_EXPLANATION_LABEL = "model explanation, may contain errors"
+
+
+def verify_forecast_explanation_numbers(
+    explanation: str,
+    report_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Checks numbers cited in an LLM forecast explanation against the deterministic
+    forecast report figures. Flags unrecognized numbers and cases where confidence
+    interval bounds (e.g., upper_80) are cited without the actual point forecasts.
+    """
+    if not explanation:
+        return {
+            "label": MODEL_EXPLANATION_LABEL,
+            "verified": True,
+            "cited_point_forecasts": [],
+            "cited_ci_bounds": [],
+            "unmatched_numbers": [],
+            "ci_bounds_cited_without_point_forecasts": False,
+            "warnings": [],
+        }
+
+    # Remove ISO dates (YYYY-MM-DD) and percentage literals (80%, 95%) before scanning numbers
+    cleaned = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", " ", explanation)
+    cleaned = re.sub(r"\b(?:80|95|100)(?:\.0+)?%", " ", cleaned)
+
+    point_vals: List[float] = []
+    ci_vals: List[float] = []
+    for fc in report_dict.get("forecasts", []):
+        if isinstance(fc, dict):
+            if "point" in fc and fc["point"] is not None:
+                point_vals.append(float(fc["point"]))
+            for k in ("lower_80", "upper_80", "lower_95", "upper_95"):
+                if k in fc and fc[k] is not None:
+                    ci_vals.append(float(fc[k]))
+
+    metric_vals: List[float] = []
+    bt = report_dict.get("backtest") or {}
+    if isinstance(bt, dict):
+        for k in ("mae", "rmse", "naive_mae", "mape", "holdout_size"):
+            if bt.get(k) is not None:
+                metric_vals.append(float(bt[k]))
+        if bt.get("naive_mae") and bt.get("mae") is not None and float(bt["naive_mae"]) > 0:
+            impr = (float(bt["naive_mae"]) - float(bt["mae"])) / float(bt["naive_mae"]) * 100.0
+            metric_vals.append(impr)
+
+    meta_ints = {
+        int(report_dict.get("total_points", 0) or 0),
+        int(report_dict.get("horizon", 0) or 0),
+        int(bt.get("holdout_size", 0) or 0) if isinstance(bt, dict) else 0,
+        80,
+        95,
+    }
+    for idx in range(1, int(report_dict.get("horizon", 0) or 0) + 1):
+        meta_ints.add(idx)
+
+    def _matches_any(val: float, targets: List[float], tol: float = 0.15) -> bool:
+        return any(abs(val - t) <= tol for t in targets)
+
+    cited_points: List[float] = []
+    cited_ci: List[float] = []
+    unmatched: List[float] = []
+
+    for m in re.finditer(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?(?![A-Za-z0-9_])", cleaned):
+        raw_tok = m.group(0)
+        try:
+            val = float(raw_tok)
+        except ValueError:
+            continue
+        # Skip small structural integers (step numbers, horizon, total_points, 80, 95)
+        if "." not in raw_tok and int(val) in meta_ints and not _matches_any(val, point_vals, tol=0.01):
+            continue
+        if _matches_any(val, point_vals):
+            if val not in cited_points:
+                cited_points.append(val)
+        elif _matches_any(val, ci_vals):
+            if val not in cited_ci:
+                cited_ci.append(val)
+        elif _matches_any(val, metric_vals):
+            continue
+        else:
+            if val not in unmatched:
+                unmatched.append(val)
+
+    ci_without_points = bool(cited_ci and not cited_points)
+    warnings: List[str] = []
+    if ci_without_points:
+        warnings.append(
+            "Model explanation cited confidence-interval bounds without citing the deterministic point forecasts."
+        )
+    if unmatched:
+        warnings.append(
+            f"Model explanation contains numbers not matching deterministic report figures: {unmatched}"
+        )
+
+    return {
+        "label": MODEL_EXPLANATION_LABEL,
+        "verified": (len(unmatched) == 0 and not ci_without_points),
+        "cited_point_forecasts": cited_points,
+        "cited_ci_bounds": cited_ci,
+        "unmatched_numbers": unmatched,
+        "ci_bounds_cited_without_point_forecasts": ci_without_points,
+        "warnings": warnings,
+    }
+
+
 def cmd_forecast(args) -> int:
     enforce_sandbox_boundary()
     if not getattr(args, "json", False):
@@ -2348,6 +2477,7 @@ def cmd_forecast(args) -> int:
     user_question = getattr(args, "question", None)
     model_name = getattr(args, "model", None)
     model_explanation: Optional[str] = None
+    model_explanation_check: Optional[Dict[str, Any]] = None
     route_reason_codes: Optional[List[str]] = None
 
     if user_question:
@@ -2378,9 +2508,14 @@ def cmd_forecast(args) -> int:
         else:
             route_reason_codes = ["USER_MODEL_OVERRIDE"]
 
+        report_dict = report.to_dict()
+        point_summary_lines = [
+            f"  Step {f.step} ({f.date}): point={f.point:.2f} (80% CI: [{f.lower_80:.2f}, {f.upper_80:.2f}], 95% CI: [{f.lower_95:.2f}, {f.upper_95:.2f}])"
+            for f in report.forecasts
+        ]
         nonce = generate_envelope_nonce()
         wrapped_fc = wrap_untrusted_envelope(
-            json.dumps(report.to_dict(), indent=2),
+            json.dumps(report_dict, indent=2),
             header=f"Deterministic Forecast Report: {report.series_name}",
             nonce=nonce,
         )
@@ -2389,10 +2524,14 @@ def cmd_forecast(args) -> int:
             f"Answer the user's question based strictly on the deterministic Python forecast report below: '{user_question}'\n\n"
             "=== SECURITY DIRECTIVES ===\n"
             f"1. The forecast report below is enclosed in delimiters with nonce [{nonce}].\n"
-            "2. Do NOT invent or alter any forecast numbers, intervals, MAE/RMSE metrics, or dates; cite the exact deterministic values.\n\n"
+            "2. Do NOT invent or alter any forecast numbers, intervals, MAE/RMSE metrics, or dates; cite the exact deterministic values.\n"
+            "3. Always cite the exact `point` forecast values first. Never confuse `lower_80`/`upper_80` or `lower_95`/`upper_95` interval bounds with the `point` forecast.\n\n"
+            "Exact Point Forecasts Summary:\n"
+            + "\n".join(point_summary_lines)
+            + "\n\n"
             f"{wrapped_fc}\n\n"
             "Instructions for Output:\n"
-            "- Explain the forecast, selected method, backtest MAE vs Naive, and uncertainty intervals accurately.\n"
+            "- Explain the point forecasts (`point`), selected method, backtest MAE vs Naive, and uncertainty intervals accurately.\n"
             "- Language & Style: Reply in the same language and style as the user's question (if Singlish or Sinhala, reply in natural Singlish or Sinhala; otherwise reply in English), while keeping all numbers, dates, method names, and metric identifiers exact.\n"
         )
         try:
@@ -2404,6 +2543,10 @@ def cmd_forecast(args) -> int:
                 seed=getattr(args, "seed", 42),
             )
             model_explanation = raw_exp.strip()
+            model_explanation_check = verify_forecast_explanation_numbers(
+                model_explanation,
+                report_dict,
+            )
         except Exception as e:
             is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
             if getattr(args, "json", False):
@@ -2423,6 +2566,8 @@ def cmd_forecast(args) -> int:
             out_dict["question"] = user_question
             out_dict["selected_model"] = model_name
             out_dict["route_reason_codes"] = route_reason_codes
+            out_dict["model_explanation_label"] = MODEL_EXPLANATION_LABEL
+            out_dict["model_explanation_check"] = model_explanation_check
             out_dict["model_explanation"] = model_explanation
         print(json.dumps(out_dict, indent=2))
         return 0
@@ -2449,8 +2594,11 @@ def cmd_forecast(args) -> int:
     print(f"\n{report.summary_narration}\n")
     if model_explanation:
         print("-" * 65)
-        print(f"MODEL EXPLANATION ({model_name}):")
+        print(f"MODEL EXPLANATION ({model_name}) [{MODEL_EXPLANATION_LABEL}]:")
         print(sanitize_terminal_output(model_explanation))
+        if model_explanation_check and model_explanation_check.get("warnings"):
+            for w in model_explanation_check["warnings"]:
+                print(f"Notice: {w}")
         print("-" * 65)
     print(f"{report.disclaimer}\n")
     return 0

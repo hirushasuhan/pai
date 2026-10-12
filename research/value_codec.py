@@ -34,7 +34,25 @@ class EqualityHijackError(CodecError):
 
 
 MAX_RECURSION_DEPTH = 32
+MAX_COLLECTION_LENGTH = 1_000
 MAX_ITEM_COUNT = 50_000
+MIN_INT64 = -(1 << 63)       # -9223372036854775808
+MAX_INT64 = (1 << 63) - 1    #  9223372036854775807
+
+
+def get_codec_policy() -> Dict[str, Any]:
+    """Returns the canonical codec policy limits and rules for conformance vectors."""
+    return {
+        "max_recursion_depth": MAX_RECURSION_DEPTH,
+        "max_collection_length": MAX_COLLECTION_LENGTH,
+        "max_item_count": MAX_ITEM_COUNT,
+        "min_int64": MIN_INT64,
+        "max_int64": MAX_INT64,
+        "strict_envelope_keys": ["t", "v"],
+        "reject_duplicate_dict_keys": True,
+        "reject_duplicate_set_elements": True,
+        "reject_bool_for_int_or_float": True,
+    }
 
 
 class _ItemCounter:
@@ -58,8 +76,9 @@ def encode_value(
 ) -> Dict[str, Any]:
     """
     Encodes a Python value into a tagged envelope dict: {'t': tag, 'v': payload}.
-    Enforces exact builtin types. Rejects subclasses, custom objects, and unhandled types
-    with EqualityHijackError.
+    Enforces exact builtin types, signed 64-bit integer bounds, recursion depth <= 32,
+    and collection length <= MAX_COLLECTION_LENGTH. Rejects subclasses, custom objects,
+    and unhandled types with EqualityHijackError.
     """
     if counter is None:
         counter = _ItemCounter()
@@ -75,6 +94,10 @@ def encode_value(
         return {"t": "bool", "v": val}
 
     if t is int:
+        if val < MIN_INT64 or val > MAX_INT64:
+            raise CodecError(
+                f"Integer out of signed 64-bit range [{MIN_INT64}, {MAX_INT64}]: {val}"
+            )
         return {"t": "int", "v": val}
 
     if t is float:
@@ -93,7 +116,7 @@ def encode_value(
     if t is bytes:
         return {"t": "bytes", "v": base64.b64encode(val).decode("ascii")}
 
-    # 2. Containers with cycle detection
+    # 2. Containers with cycle detection and collection length limits
     if seen_ids is None:
         seen_ids = set()
 
@@ -103,6 +126,12 @@ def encode_value(
 
     seen_ids.add(val_id)
     try:
+        if t in (list, tuple, set, frozenset, dict):
+            if len(val) > MAX_COLLECTION_LENGTH:
+                raise CodecError(
+                    f"Codec item limit exceeded: collection length {len(val)} > {MAX_COLLECTION_LENGTH}"
+                )
+
         if t is list:
             return {
                 "t": "list",
@@ -144,16 +173,31 @@ def encode_value(
     )
 
 
-def decode_value(envelope: Any, depth: int = 0) -> Any:
+def decode_value(
+    envelope: Any,
+    depth: int = 0,
+    counter: Optional[_ItemCounter] = None,
+) -> Any:
     """
     Decodes a tagged envelope dict into the target Python builtin object.
-    Raises CodecError on malformed envelopes or unknown tags.
+    Raises CodecError on malformed envelopes, extra keys, out-of-range i64 integers,
+    recursion depth > 32, collection length > MAX_COLLECTION_LENGTH, duplicate dict/set keys,
+    or unknown tags.
     """
+    if counter is None:
+        counter = _ItemCounter()
+    counter.increment()
+
     if depth > MAX_RECURSION_DEPTH:
         raise CodecError(f"Codec recursion depth limit exceeded: {MAX_RECURSION_DEPTH}")
 
-    if not isinstance(envelope, dict) or "t" not in envelope or "v" not in envelope:
-        raise CodecError("Malformed envelope: must be a dict containing 't' and 'v' keys")
+    if (
+        type(envelope) is not dict
+        or len(envelope) != 2
+        or "t" not in envelope
+        or "v" not in envelope
+    ):
+        raise CodecError("Malformed envelope: must be a dict containing strictly 't' and 'v' keys")
 
     tag = envelope["t"]
     val = envelope["v"]
@@ -161,6 +205,10 @@ def decode_value(envelope: Any, depth: int = 0) -> Any:
     if tag == "int":
         if type(val) is not int or type(val) is bool:
             raise CodecError(f"Invalid payload for tag 'int': {val!r}")
+        if val < MIN_INT64 or val > MAX_INT64:
+            raise CodecError(
+                f"Integer out of signed 64-bit range [{MIN_INT64}, {MAX_INT64}]: {val}"
+            )
         return val
 
     if tag == "bool":
@@ -195,49 +243,84 @@ def decode_value(envelope: Any, depth: int = 0) -> Any:
         if type(val) is not str:
             raise CodecError(f"Invalid payload for tag 'bytes': {val!r}")
         try:
-            return base64.b64decode(val.encode("ascii"))
+            return base64.b64decode(val.encode("ascii"), validate=True)
         except Exception as e:
             raise CodecError(f"Failed to decode base64 bytes: {e}") from e
 
     if tag == "list":
         if type(val) is not list:
             raise CodecError(f"Invalid payload for tag 'list': {val!r}")
-        return [decode_value(x, depth + 1) for x in val]
+        if len(val) > MAX_COLLECTION_LENGTH:
+            raise CodecError(
+                f"Codec item limit exceeded: list length {len(val)} > {MAX_COLLECTION_LENGTH}"
+            )
+        return [decode_value(x, depth + 1, counter) for x in val]
 
     if tag == "tuple":
         if type(val) is not list:
             raise CodecError(f"Invalid payload for tag 'tuple': {val!r}")
-        return tuple(decode_value(x, depth + 1) for x in val)
+        if len(val) > MAX_COLLECTION_LENGTH:
+            raise CodecError(
+                f"Codec item limit exceeded: tuple length {len(val)} > {MAX_COLLECTION_LENGTH}"
+            )
+        return tuple(decode_value(x, depth + 1, counter) for x in val)
 
     if tag == "set":
         if type(val) is not list:
             raise CodecError(f"Invalid payload for tag 'set': {val!r}")
+        if len(val) > MAX_COLLECTION_LENGTH:
+            raise CodecError(
+                f"Codec item limit exceeded: set length {len(val)} > {MAX_COLLECTION_LENGTH}"
+            )
         try:
-            return {decode_value(x, depth + 1) for x in val}
+            res_set = set()
+            for x in val:
+                item = decode_value(x, depth + 1, counter)
+                if item in res_set:
+                    raise CodecError(f"Duplicate element in set envelope: {item!r}")
+                res_set.add(item)
+            return res_set
         except TypeError as te:
             raise CodecError(f"Unhashable element in set: {te}") from te
 
     if tag == "frozenset":
         if type(val) is not list:
             raise CodecError(f"Invalid payload for tag 'frozenset': {val!r}")
+        if len(val) > MAX_COLLECTION_LENGTH:
+            raise CodecError(
+                f"Codec item limit exceeded: frozenset length {len(val)} > {MAX_COLLECTION_LENGTH}"
+            )
         try:
-            return frozenset(decode_value(x, depth + 1) for x in val)
+            res_set = set()
+            for x in val:
+                item = decode_value(x, depth + 1, counter)
+                if item in res_set:
+                    raise CodecError(f"Duplicate element in frozenset envelope: {item!r}")
+                res_set.add(item)
+            return frozenset(res_set)
         except TypeError as te:
             raise CodecError(f"Unhashable element in frozenset: {te}") from te
 
     if tag == "dict":
         if type(val) is not list:
             raise CodecError(f"Invalid payload for tag 'dict': {val!r}")
+        if len(val) > MAX_COLLECTION_LENGTH:
+            raise CodecError(
+                f"Codec item limit exceeded: dict length {len(val)} > {MAX_COLLECTION_LENGTH}"
+            )
         res = {}
         for pair in val:
             if type(pair) is not list or len(pair) != 2:
                 raise CodecError(f"Invalid dict entry pair: {pair!r}")
-            k = decode_value(pair[0], depth + 1)
-            v = decode_value(pair[1], depth + 1)
+            k = decode_value(pair[0], depth + 1, counter)
+            v = decode_value(pair[1], depth + 1, counter)
             try:
+                if k in res:
+                    raise CodecError(f"Duplicate key in dict envelope: {k!r}")
                 res[k] = v
             except TypeError as te:
                 raise CodecError(f"Unhashable key in dict: {te}") from te
         return res
 
     raise CodecError(f"Unknown codec tag: {tag!r}")
+

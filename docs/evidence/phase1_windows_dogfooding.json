@@ -4,11 +4,13 @@
   "platform": "Windows 11 (AMD64) / Python 3.14.0",
   "ollama_version": "0.35.1",
   "tasks_count": 5,
+  "task_provenance": "agent_selected_and_executed_not_owner_tasks",
+  "provenance_note": "All 5 tasks in this file were chosen and executed by the agent, not authored by the project owner. They served as an initial end-to-end smoke/real-use check that caught DOGFOOD_BUG_01 and two rough edges (fixed in Phase 1.1: pai analyze question-overlap ranking and pai forecast model_explanation number checking/labeling). Owner-authored dogfooding tasks (3-5 real tasks from the owner's daily workflow) remain open to be recorded separately.",
   "initial_run_finding": {
     "bug_id": "DOGFOOD_BUG_01_SUBCOMMAND_ROUTER_MISSING_LIVE_BUDGET",
     "symptom": "On the initial dogfooding run without --model, all 5 CLI subcommands (pai code, pai analyze, pai docs, pai forecast) exited with code 5 (ROUTE_REFUSAL: INSUFFICIENT_HEADROOM), even though pai doctor reported 5/6 models eligible under ~3.4 GB available RAM.",
     "root_cause": "Unlike cmd_route and cmd_doctor, the subcommand handlers cmd_code, cmd_analyze, cmd_docs, cmd_forecast, and cmd_chat in research/pai.py called router.route(...) without passing budget=snap.get('budget') or resident_model=router.get_live_resident_model() (and cmd_code omitted prompt_text=getattr(args, 'task', None)). Because budget was None, ModelRouter.route saw avail_ram_mb=None and failed closed. This had escaped unit tests because E2E tests either passed --model test-model or mocked ModelRouter.route.",
-    "fix": "Updated cmd_code, cmd_analyze, cmd_docs, cmd_forecast, and cmd_chat in research/pai.py to pass budget=snap.get('budget'), resident_model=router.get_live_resident_model(), and prompt_text=..., and added regression test test_subcommands_pass_live_budget_to_router_when_model_omitted in research/tests/test_pai_cli.py."
+    "fix": "Updated cmd_code, cmd_analyze, cmd_docs, cmd_forecast, and cmd_chat in research/pai.py to pass budget=snap.get('budget'), resident_model=router.get_live_resident_model(), and prompt_text=..., and added both unit and unmocked-router local-stub HTTP integration tests in research/tests/test_pai_cli.py."
   },
   "results": [
     {

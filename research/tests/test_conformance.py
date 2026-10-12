@@ -18,7 +18,7 @@ from ingest import (
     wrap_untrusted_envelope,
 )
 from net_guard import UrlRejected, validate_url
-from value_codec import CodecError, decode_value, encode_value
+from value_codec import CodecError, decode_value, encode_value, get_codec_policy
 from verify_loop import extract_example_assertions, verify_verdict_frame
 
 DIR = conformance.OUT_DIR
@@ -59,11 +59,18 @@ class Vectors(unittest.TestCase):
         for c in vec["junk_dir_cases"]:
             self.assertEqual(is_junk_dir(c["dirname"]), c["expected"], c["dirname"])
         for c in vec["secret_content_cases"]:
+            joined_text = "".join(c["text_parts"])
             self.assertEqual(
-                scan_secret_content(c["text"], file_path=c["file_path"]),
+                scan_secret_content(joined_text, file_path=c["file_path"]),
                 c["expected"],
                 c["id"],
             )
+            # Ensure individual stored pieces do not trigger secret scanners at rest
+            for part in c["text_parts"]:
+                self.assertIsNone(
+                    scan_secret_content(part, file_path=c["file_path"]),
+                    f"Piecewise fragment in {c['id']} triggered secret scanner at rest: {part!r}",
+                )
         for c in vec["sanitize_terminal_cases"]:
             self.assertEqual(sanitize_terminal_output(c["input"]), c["expected"], c["id"])
         for c in vec["sanitize_text_cases"]:
@@ -86,8 +93,23 @@ class Vectors(unittest.TestCase):
                 c["id"],
             )
 
+        # Verify that neither ingest_vectors.json nor conformance.py triggers scan_secret_content at rest
+        with open(os.path.join(DIR, "ingest_vectors.json"), encoding="utf-8") as f:
+            raw_json = f.read()
+        self.assertIsNone(
+            scan_secret_content(raw_json, file_path="research/conformance/ingest_vectors.json"),
+            "ingest_vectors.json must not contain contiguous secret-shaped literals at rest",
+        )
+        with open(conformance.__file__, encoding="utf-8") as f:
+            raw_py = f.read()
+        self.assertIsNone(
+            scan_secret_content(raw_py, file_path="research/conformance.py"),
+            "conformance.py must not contain contiguous secret-shaped literals at rest",
+        )
+
     def test_verify_loop_vectors_match_the_code(self):
         vec = load("verify_loop_vectors.json")
+        self.assertEqual(vec["codec_policy"], get_codec_policy())
         for c in vec["codec_roundtrip_cases"]:
             decoded = decode_value(c["encoded"])
             self.assertEqual(type(decoded).__name__, c["python_type"], c["id"])
@@ -104,6 +126,7 @@ class Vectors(unittest.TestCase):
                 c["parent_nonce"],
                 c["parent_hmac_key"],
                 expected_test_ids=tuple(c["expected_test_ids"]),
+                expected_test_hash=c.get("expected_test_hash"),
                 exit_code=c["exit_code"],
                 res_status=c["res_status"],
             )

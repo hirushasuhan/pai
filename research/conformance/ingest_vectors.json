@@ -248,157 +248,223 @@
    "expected": "pem_private_key",
    "file_path": "keys/ embedded.txt",
    "id": "pos_01_pem_private_key",
-   "text": "Header\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n"
+   "text_parts": [
+    "Header\n-----BEGIN RSA ",
+    "PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA ",
+    "PRIVATE KEY-----\n"
+   ]
   },
   {
    "expected": "aws_access_key",
    "file_path": "src/aws_client.py",
    "id": "pos_02_aws_access_key",
-   "text": "AWS_KEY = 'AKIAIOSFODNN7EXAMPLE'\n"
+   "text_parts": [
+    "AWS_KEY = 'AKIA",
+    "IOSFODNN7EXAMPLE'\n"
+   ]
   },
   {
    "expected": "github_token",
    "file_path": "src/deploy.py",
    "id": "pos_03_github_pat",
-   "text": "token = 'ghp_1234567890abcdefghijklmnopqrstuvwxyz'\n"
+   "text_parts": [
+    "token = 'ghp_",
+    "1234567890abcdefghijklmnopqrstuvwxyz'\n"
+   ]
   },
   {
    "expected": "api_secret_key",
    "file_path": "src/llm.py",
    "id": "pos_04_openai_sk_key",
-   "text": "client_key = 'sk-proj-1234567890abcdefghijklmnop'\n"
+   "text_parts": [
+    "client_key = 'sk-",
+    "proj-1234567890abcdefghijklmnop'\n"
+   ]
   },
   {
    "expected": "slack_token",
    "file_path": "src/notify.py",
    "id": "pos_05_slack_bot_token",
-   "text": "SLACK_BOT = 'xoxb-123456789012-1234567890123-abcdef123456'\n"
+   "text_parts": [
+    "SLACK_BOT = 'xoxb-",
+    "123456789012-1234567890123-abcdef123456'\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/maps.js",
    "id": "pos_06_google_api_key",
-   "text": "const key = 'AIzaSyA1234567890abcdefghijklmnopqrstuvw';\n"
+   "text_parts": [
+    "const key = 'AIza",
+    "SyA1234567890abcdefghijklmnopqrstuvw';\n"
+   ]
   },
   {
    "expected": "inline_secret_assignment",
    "file_path": "src/auth.py",
    "id": "pos_07_quoted_code_password",
-   "text": "password = \"SuperSecret99!_prod\"\n"
+   "text_parts": [
+    "password = \"",
+    "SuperSecret99!_prod\"\n"
+   ]
   },
   {
    "expected": "inline_secret_assignment",
    "file_path": "fixtures/token_response.json",
    "id": "pos_08_json_access_token",
-   "text": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_live_tok\"}\n"
+   "text_parts": [
+    "{\"access_token\": \"",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_live_tok\"}\n"
+   ]
   },
   {
    "expected": "database_url_password",
    "file_path": "src/settings.py",
    "id": "pos_09_database_url_password",
-   "text": "DATABASE_URL = \"postgresql://app_user:ProdDbPass99!@db.internal:5432/main\"\n"
+   "text_parts": [
+    "DATABASE_URL = \"postgresql://app_user:",
+    "ProdDbPass99!@db.internal:5432/main\"\n"
+   ]
   },
   {
    "expected": "inline_secret_assignment",
    "file_path": "config/app.env",
    "id": "pos_10_aws_secret_access_key_env",
-   "text": "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+   "text_parts": [
+    "AWS_SECRET_ACCESS_KEY=",
+    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+   ]
   },
   {
    "expected": "inline_secret_assignment",
    "file_path": "config/app.ini",
    "id": "pos_11a_unquoted_ini_password",
-   "text": "[database]\ndb_password = MyUnquotedIniPass99!\n"
+   "text_parts": [
+    "[database]\ndb_password = ",
+    "MyUnquotedIniPass99!\n"
+   ]
   },
   {
    "expected": "inline_secret_assignment",
    "file_path": "config/service.yaml",
    "id": "pos_11b_unquoted_yaml_api_key",
-   "text": "service:\n  api_key: prod_live_987654321_secret\n"
+   "text_parts": [
+    "service:\n  api_key: ",
+    "prod_live_987654321_secret\n"
+   ]
   },
   {
    "expected": "inline_secret_assignment",
    "file_path": "config/settings.toml",
    "id": "pos_11c_quoted_toml_jwt_secret",
-   "text": "jwt_secret = \"TomlQuotedSecret99!\"\n"
+   "text_parts": [
+    "jwt_secret = \"",
+    "TomlQuotedSecret99!\"\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_01_code_get_password_call",
-   "text": "password = get_password()\n"
+   "text_parts": [
+    "password = get_password()\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_02_code_getpass_call",
-   "text": "password = getpass.getpass()\n"
+   "text_parts": [
+    "password = getpass.getpass()\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_03_code_hash_password_call",
-   "text": "password = hash_password(raw)\n"
+   "text_parts": [
+    "password = hash_password(raw)\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_04_code_bcrypt_hashpw",
-   "text": "password_hash = bcrypt.hashpw(pw, salt)\n"
+   "text_parts": [
+    "password_hash = bcrypt.hashpw(pw, salt)\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_05_code_load_key_call",
-   "text": "api_key = load_key()\n"
+   "text_parts": [
+    "api_key = load_key()\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_06_code_user_input_password_var",
-   "text": "password = user_input_password\n"
+   "text_parts": [
+    "password = user_input_password\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_07_code_camel_case_identifier",
-   "text": "password = userInput\n"
+   "text_parts": [
+    "password = userInput\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/forms.py",
    "id": "neg_08_code_django_password_input_widget",
-   "text": "password_field = forms.CharField(widget=forms.PasswordInput)\n"
+   "text_parts": [
+    "password_field = forms.CharField(widget=forms.PasswordInput)\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/settings.py",
    "id": "neg_09_placeholder_db_url_postgres",
-   "text": "DATABASE_URL = \"postgresql://postgres:postgres@localhost:5432/dev\"\n"
+   "text_parts": [
+    "DATABASE_URL = \"postgresql://postgres:postgres@localhost:5432/dev\"\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/settings.py",
    "id": "neg_10_placeholder_db_url_changeme",
-   "text": "DATABASE_URL = \"postgresql://user:changeme@localhost:5432/dev\"\n"
+   "text_parts": [
+    "DATABASE_URL = \"postgresql://user:changeme@localhost:5432/dev\"\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "config/app.yaml",
    "id": "neg_11_env_var_interpolation",
-   "text": "db_password: ${DB_PASSWORD}\n"
+   "text_parts": [
+    "db_password: ${DB_PASSWORD}\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "config/app.ini",
    "id": "neg_12_changeme_placeholder",
-   "text": "password = changeme\n"
+   "text_parts": [
+    "password = changeme\n"
+   ]
   },
   {
    "expected": null,
    "file_path": "src/client.py",
    "id": "neg_13_os_environ_lookup",
-   "text": "api_key = os.environ[\"API_KEY\"]\n"
+   "text_parts": [
+    "api_key = os.environ[\"API_KEY\"]\n"
+   ]
   }
  ],
  "secret_file_cases": [

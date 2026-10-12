@@ -400,17 +400,18 @@ class ModelRouter:
         cmd_clean = command.strip().lower()
         return COMMAND_TO_TASK_CLASS.get(cmd_clean, None)
 
-    def get_live_resident_model(self, base_url: str = "http://127.0.0.1:11434") -> Optional[str]:
+    def get_live_resident_model(self, base_url: Optional[str] = None) -> Optional[str]:
         """
         Queries the model server (/api/ps) and returns the verified resident model
         matching the allowed candidate catalog.
         Enforces local loopback check on base_url to prevent SSRF / probing.
         Uses exact name matching and priority resolution for multiple loaded models.
         """
-        parts = urllib.parse.urlsplit(base_url)
+        url = base_url or os.environ.get("PAI_MODEL_URL", "http://127.0.0.1:11434")
+        parts = urllib.parse.urlsplit(url)
         hostname = (parts.hostname or "").lower()
         if hostname not in ("127.0.0.1", "localhost", "::1", "[::1]"):
-            raise ValueError(f"base_url must be local loopback, got '{base_url}'")
+            raise ValueError(f"base_url must be local loopback, got '{url}'")
 
         try:
             ps_url = f"{parts.scheme}://{parts.netloc}/api/ps"

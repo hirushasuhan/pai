@@ -1646,3 +1646,20 @@ Reviewer decision: Phase 1 is accepted on Linux subject to the owner's Windows r
    - Added `format_authenticated_verdict_frame` and `verify_verdict_frame` to [`research/verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py#L597-L760) and generated [`research/conformance/verify_loop_vectors.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/conformance/verify_loop_vectors.json): **17** `codec_roundtrip_cases` (primitives, `-0.0`, `NaN`, `±Infinity`, `bytes`, `tuple`, `set`, `frozenset`, non-string-key dicts, and user dicts containing `__pai_type__` tag-forgery keys), **9** `codec_invalid_envelope_cases`, **10** `verdict_frame_cases` (valid frame + missing frame, multiple frames, unauthenticated frame, invalid HMAC, nonce mismatch, test-suite hash mismatch, missing discovered test IDs, failing test IDs, status!=PASS), and **11** `canonical_example_extraction_cases` (valid example blocks + rejected `open()`, `__import__`, attribute chains, comprehensions, `lambda`, `...`, `≈`).
    - Verified by `test_ingest_vectors_match_the_code` and `test_verify_loop_vectors_match_the_code` in [`research/tests/test_conformance.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/tests/test_conformance.py).
 
+
+
+### Addendum (05c9739): Windows run, dogfooding, Phase 2 golden vectors (2026-10-12)
+Linux, HEAD 05c9739, working tree clean before this addendum, 424 tests OK (13 skipped). The Windows run (doctor 8 of 8, 424 tests with 23 skipped, 13 of 13 hash checks) is the owner agent's report; the reviewer did not run it.
+
+Verified:
+- The CLI budget fix: `pai docs` without `--model` now passes the router (model selected); the only failure on the reviewer's machine is the missing local model server. The five subcommands pass the live budget and resident model at the call sites listed in `pai.py`.
+- The ingest and verify-loop golden vectors regenerate byte-identically from the Python reference and are deterministic across two calls.
+
+Findings:
+1. The budget defect shows that all five subcommands were refused in real use while every end-to-end test passed, because the tests either passed a model name or mocked the router. A test that runs each subcommand without a model against a small local stub of the model server (no mocks of the router) is needed.
+2. The dogfooding tasks were chosen and run by the owner agent, not by the owner; they are useful as a first real-use check but are not the owner's own tasks.
+3. Rough edges found by the dogfooding run, accepted as defects: (a) `pai analyze` fills the 24,000-character context with the smallest files first, so a question about one file can leave that file out as omitted; files should be ranked by overlap with the question (file names first), deterministically, with the omitted list kept; (b) the model explanation in `pai forecast` quoted interval bounds as the point forecasts; figures in the explanation must be checked against the computed figures or the explanation must be marked as unverified text.
+4. Vectors: the file lists secret-shaped strings (AWS example key, GitHub token shape, Slack token shape, PEM header) as literal text in `ingest_vectors.json`; they can trip secret scanners on the remote. Build them at run time from pieces. The report lists a test-suite hash mismatch case for the verdict frame; the file has no such case (10 cases, none for hash mismatch).
+5. Vector gaps for the Rust decoder: nesting deeper than 32, a very large integer (outside 64 bits), a float with a boolean payload, an envelope with extra keys, duplicate dictionary keys, a very long list; the Rust port needs an explicit policy and a vector for each.
+
+Reviewer decision: Phase 1 is closed. Findings 3(a) and 3(b) go to a Phase 1.1 fix list that runs in parallel with Phase 2.

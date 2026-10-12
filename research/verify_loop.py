@@ -613,6 +613,7 @@ def verify_verdict_frame(
     expected_test_ids: Tuple[str, ...] = (),
     exit_code: int = 0,
     res_status: str = "ok",
+    expected_test_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Verifies a driver stdout stream containing an authenticated verdict frame (ADR-011 H2/H3):
@@ -620,7 +621,8 @@ def verify_verdict_frame(
     2. Parses the JSON verdict payload.
     3. Verifies the HMAC-SHA256 signature (`mac`) over canonical sorted-keys JSON.
     4. Verifies `session_nonce == parent_nonce`.
-    5. Verifies `executed_test_ids` matches `expected_test_ids` (when non-empty).
+    5. Verifies `test_hash == expected_test_hash` (when `expected_test_hash` is provided) or `status == 'mutation_error'`.
+    6. Verifies `executed_test_ids` matches `expected_test_ids` (when non-empty).
     Returns a canonical verification dictionary suitable for golden-vector conformance checks.
     """
     start_count = comb_out.count("---PAI_VERDICT_START---")
@@ -679,6 +681,18 @@ def verify_verdict_frame(
     executed = int(verdict_data.get("executed", 0))
     failed_c = int(verdict_data.get("failed", 0))
     errors_c = int(verdict_data.get("errors", 0))
+    status_val = verdict_data.get("status", "ERROR" if exit_code != 0 else "PASS")
+
+    if status_val == "mutation_error":
+        return {
+            "passed": False,
+            "status": "mutation_error",
+            "error_type": "TestMutationError",
+            "discovered": discovered,
+            "executed": executed,
+            "failed": failed_c,
+            "errors": max(1, errors_c),
+        }
 
     if not mac_valid:
         return {
@@ -703,8 +717,18 @@ def verify_verdict_frame(
             "errors": max(1, errors_c),
         }
 
+    if expected_test_hash is not None and verdict_data.get("test_hash") != expected_test_hash:
+        return {
+            "passed": False,
+            "status": "mutation_error",
+            "error_type": "TestMutationError",
+            "discovered": discovered,
+            "executed": executed,
+            "failed": failed_c,
+            "errors": max(1, errors_c),
+        }
+
     executed_ids = verdict_data.get("executed_test_ids", [])
-    status_val = verdict_data.get("status", "ERROR" if exit_code != 0 else "PASS")
     error_type: Optional[str] = None
 
     if expected_test_ids and set(executed_ids) != set(expected_test_ids):
@@ -723,17 +747,6 @@ def verify_verdict_frame(
             "errors": errors_c + 1,
         }
 
-    if status_val == "mutation_error":
-        return {
-            "passed": False,
-            "status": "mutation_error",
-            "error_type": "TestMutationError",
-            "discovered": discovered,
-            "executed": executed,
-            "failed": failed_c,
-            "errors": errors_c,
-        }
-
     is_pass = (
         status_val == "PASS"
         and exit_code == 0
@@ -743,6 +756,7 @@ def verify_verdict_frame(
         and executed == discovered
         and session_nonce == parent_nonce
         and mac_valid
+        and (expected_test_hash is None or verdict_data.get("test_hash") == expected_test_hash)
         and (not expected_test_ids or set(executed_ids) == set(expected_test_ids))
     )
     if not is_pass and error_type is None:

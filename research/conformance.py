@@ -35,7 +35,16 @@ from ingest import (
     wrap_untrusted_envelope,
 )
 from net_guard import UrlRejected, validate_url
-from value_codec import CodecError, decode_value, encode_value
+from value_codec import (
+    MAX_COLLECTION_LENGTH,
+    MAX_INT64,
+    MAX_RECURSION_DEPTH,
+    MIN_INT64,
+    CodecError,
+    decode_value,
+    encode_value,
+    get_codec_policy,
+)
 from verify_loop import (
     extract_example_assertions,
     format_authenticated_verdict_frame,
@@ -190,7 +199,8 @@ def ingest_vectors() -> Dict[str, Any]:
     - Secret filename & directory screening (`is_secret_file`)
     - Junk directory screening (`is_junk_dir`)
     - Content-based secret scanning (`scan_secret_content(text, file_path)`) across all 11 positive
-      classes and 13 negative controls (including code expressions, placeholder DB URLs, and env lookups)
+      classes and 13 negative controls (stored piecewise via `text_parts` and joined at runtime
+      so static repository secret scanners are never triggered)
     - Terminal output sanitization (`sanitize_terminal_output`)
     - Text content normalization & line truncation (`sanitize_text_content`)
     - Header sanitization (`sanitize_header`)
@@ -272,148 +282,154 @@ def ingest_vectors() -> Dict[str, Any]:
         for d in junk_dir_inputs
     ]
 
-    secret_content_inputs: List[Tuple[str, Optional[str], str]] = [
-        # 11 Positive probes
+    # Secret-shaped test inputs are stored as `text_parts` lists whose individual pieces
+    # are non-matching prefixes/suffixes, joined at runtime via "".join(text_parts).
+    secret_content_inputs: List[Tuple[str, str, List[str]]] = [
+        # 11 Positive probes (split into inert pieces at rest)
         (
             "pos_01_pem_private_key",
             "keys/ embedded.txt",
-            "Header\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n",
+            [
+                "Header\n-----BEGIN RSA ",
+                "PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA ",
+                "PRIVATE KEY-----\n",
+            ],
         ),
         (
             "pos_02_aws_access_key",
             "src/aws_client.py",
-            "AWS_KEY = 'AKIAIOSFODNN7EXAMPLE'\n",
+            ["AWS_KEY = 'AKIA", "IOSFODNN7EXAMPLE'\n"],
         ),
         (
             "pos_03_github_pat",
             "src/deploy.py",
-            "token = 'ghp_1234567890abcdefghijklmnopqrstuvwxyz'\n",
+            ["token = 'ghp_", "1234567890abcdefghijklmnopqrstuvwxyz'\n"],
         ),
         (
             "pos_04_openai_sk_key",
             "src/llm.py",
-            "client_key = 'sk-proj-1234567890abcdefghijklmnop'\n",
+            ["client_key = 'sk-", "proj-1234567890abcdefghijklmnop'\n"],
         ),
         (
             "pos_05_slack_bot_token",
             "src/notify.py",
-            "SLACK_BOT = 'xoxb-123456789012-1234567890123-abcdef123456'\n",
+            ["SLACK_BOT = 'xoxb-", "123456789012-1234567890123-abcdef123456'\n"],
         ),
         (
             "pos_06_google_api_key",
             "src/maps.js",
-            "const key = 'AIzaSyA1234567890abcdefghijklmnopqrstuvw';\n",
+            ["const key = 'AIza", "SyA1234567890abcdefghijklmnopqrstuvw';\n"],
         ),
         (
             "pos_07_quoted_code_password",
             "src/auth.py",
-            'password = "SuperSecret99!_prod"\n',
+            ['password = "', 'SuperSecret99!_prod"\n'],
         ),
         (
             "pos_08_json_access_token",
             "fixtures/token_response.json",
-            '{"access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_live_tok"}\n',
+            ['{"access_token": "', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_live_tok"}\n'],
         ),
         (
             "pos_09_database_url_password",
             "src/settings.py",
-            'DATABASE_URL = "postgresql://app_user:ProdDbPass99!@db.internal:5432/main"\n',
+            ['DATABASE_URL = "postgresql://app_user:', 'ProdDbPass99!@db.internal:5432/main"\n'],
         ),
         (
             "pos_10_aws_secret_access_key_env",
             "config/app.env",
-            "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+            ["AWS_SECRET_ACCESS_KEY=", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"],
         ),
         (
             "pos_11a_unquoted_ini_password",
             "config/app.ini",
-            "[database]\ndb_password = MyUnquotedIniPass99!\n",
+            ["[database]\ndb_password = ", "MyUnquotedIniPass99!\n"],
         ),
         (
             "pos_11b_unquoted_yaml_api_key",
             "config/service.yaml",
-            "service:\n  api_key: prod_live_987654321_secret\n",
+            ["service:\n  api_key: ", "prod_live_987654321_secret\n"],
         ),
         (
             "pos_11c_quoted_toml_jwt_secret",
             "config/settings.toml",
-            'jwt_secret = "TomlQuotedSecret99!"\n',
+            ['jwt_secret = "', 'TomlQuotedSecret99!"\n'],
         ),
         # Negative controls (must return None)
         (
             "neg_01_code_get_password_call",
             "src/auth.py",
-            "password = get_password()\n",
+            ["password = get_password()\n"],
         ),
         (
             "neg_02_code_getpass_call",
             "src/auth.py",
-            "password = getpass.getpass()\n",
+            ["password = getpass.getpass()\n"],
         ),
         (
             "neg_03_code_hash_password_call",
             "src/auth.py",
-            "password = hash_password(raw)\n",
+            ["password = hash_password(raw)\n"],
         ),
         (
             "neg_04_code_bcrypt_hashpw",
             "src/auth.py",
-            "password_hash = bcrypt.hashpw(pw, salt)\n",
+            ["password_hash = bcrypt.hashpw(pw, salt)\n"],
         ),
         (
             "neg_05_code_load_key_call",
             "src/auth.py",
-            "api_key = load_key()\n",
+            ["api_key = load_key()\n"],
         ),
         (
             "neg_06_code_user_input_password_var",
             "src/auth.py",
-            "password = user_input_password\n",
+            ["password = user_input_password\n"],
         ),
         (
             "neg_07_code_camel_case_identifier",
             "src/auth.py",
-            "password = userInput\n",
+            ["password = userInput\n"],
         ),
         (
             "neg_08_code_django_password_input_widget",
             "src/forms.py",
-            "password_field = forms.CharField(widget=forms.PasswordInput)\n",
+            ["password_field = forms.CharField(widget=forms.PasswordInput)\n"],
         ),
         (
             "neg_09_placeholder_db_url_postgres",
             "src/settings.py",
-            'DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/dev"\n',
+            ['DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/dev"\n'],
         ),
         (
             "neg_10_placeholder_db_url_changeme",
             "src/settings.py",
-            'DATABASE_URL = "postgresql://user:changeme@localhost:5432/dev"\n',
+            ['DATABASE_URL = "postgresql://user:changeme@localhost:5432/dev"\n'],
         ),
         (
             "neg_11_env_var_interpolation",
             "config/app.yaml",
-            "db_password: ${DB_PASSWORD}\n",
+            ["db_password: ${DB_PASSWORD}\n"],
         ),
         (
             "neg_12_changeme_placeholder",
             "config/app.ini",
-            "password = changeme\n",
+            ["password = changeme\n"],
         ),
         (
             "neg_13_os_environ_lookup",
             "src/client.py",
-            'api_key = os.environ["API_KEY"]\n',
+            ['api_key = os.environ["API_KEY"]\n'],
         ),
     ]
     secret_content_cases = [
         {
             "id": cid,
             "file_path": fp,
-            "text": txt,
-            "expected": scan_secret_content(txt, file_path=fp),
+            "text_parts": parts,
+            "expected": scan_secret_content("".join(parts), file_path=fp),
         }
-        for cid, fp, txt in secret_content_inputs
+        for cid, fp, parts in secret_content_inputs
     ]
 
     sanitize_terminal_inputs = [
@@ -500,15 +516,32 @@ def ingest_vectors() -> Dict[str, Any]:
     }
 
 
+def _build_nested_list_value(depth: int) -> Any:
+    val: Any = 1
+    for _ in range(depth):
+        val = [val]
+    return val
+
+
+def _build_nested_list_envelope(depth: int) -> Dict[str, Any]:
+    env: Dict[str, Any] = {"t": "int", "v": 1}
+    for _ in range(depth):
+        env = {"t": "list", "v": [env]}
+    return env
+
+
 def verify_loop_vectors() -> Dict[str, Any]:
     """
     Generates Phase 2 verify-loop golden vectors from the Python reference implementation:
     - Tagged RPC value codec (`encode_value` / `decode_value` across primitives, special floats,
-      bytes, tuples, sets, frozensets, non-string-key dicts, nested collections, and tag-forgery dicts)
-    - Malformed/hostile codec envelopes rejected with `CodecError`
+      bytes, tuples, sets, frozensets, non-string-key dicts, nested collections, tag-forgery dicts,
+      depth-32 boundary, and signed 64-bit integer boundaries)
+    - Malformed/hostile codec envelopes rejected with `CodecError` (including depth > 32,
+      integers outside i64, float with bool payload, extra envelope keys, duplicate dict keys,
+      and lists exceeding MAX_COLLECTION_LENGTH)
     - Authenticated verdict framing (`format_authenticated_verdict_frame` / `verify_verdict_frame`)
       covering valid HMAC-SHA256 frames, tampered payloads, forged keys, mismatched nonces,
-      multiple injected frames, preempted missing frames, and mismatched test IDs
+      multiple injected frames, preempted missing frames, mismatched test IDs, and test_suite_hash_mismatch
     - AST canonical example extraction (`extract_example_assertions`) covering allowed literals
       vs rejected `open()`, `__import__`, attribute chains, comprehensions, lambdas, ellipsis, and inexact floats
     """
@@ -530,6 +563,9 @@ def verify_loop_vectors() -> Dict[str, Any]:
         ("codec_15_frozenset_singleton", frozenset({"immutable_item"})),
         ("codec_16_dict_tuple_and_int_keys", {(1, 2): "coords", 99: [True, False]}),
         ("codec_17_dict_tag_forgery_attempt", {"t": "tuple", "v": [1, 2, 3]}),
+        ("codec_18_nested_depth_32_boundary", _build_nested_list_value(MAX_RECURSION_DEPTH)),
+        ("codec_19_int64_max", MAX_INT64),
+        ("codec_20_int64_min", MIN_INT64),
     ]
     codec_roundtrip_cases = [
         {
@@ -553,6 +589,28 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "inv_09_dict_unhashable_list_key",
             {"t": "dict", "v": [[{"t": "list", "v": []}, {"t": "int", "v": 1}]]},
         ),
+        (
+            "inv_10_nesting_depth_33_exceeded",
+            _build_nested_list_envelope(MAX_RECURSION_DEPTH + 1),
+        ),
+        ("inv_11_int_above_i64_max", {"t": "int", "v": MAX_INT64 + 1}),
+        ("inv_12_int_below_i64_min", {"t": "int", "v": MIN_INT64 - 1}),
+        ("inv_13_float_with_bool_payload", {"t": "float", "v": True}),
+        ("inv_14_envelope_with_extra_keys", {"t": "int", "v": 42, "extra": "unexpected"}),
+        (
+            "inv_15_dict_duplicate_keys",
+            {
+                "t": "dict",
+                "v": [
+                    [{"t": "str", "v": "dup"}, {"t": "int", "v": 1}],
+                    [{"t": "str", "v": "dup"}, {"t": "int", "v": 2}],
+                ],
+            },
+        ),
+        (
+            "inv_16_very_long_list_exceeding_limit",
+            {"t": "list", "v": [{"t": "int", "v": 0}] * (MAX_COLLECTION_LENGTH + 1)},
+        ),
     ]
     codec_invalid_envelope_cases = []
     for cid, env in codec_invalid_envelopes:
@@ -571,6 +629,8 @@ def verify_loop_vectors() -> Dict[str, Any]:
     nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     hmac_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
     wrong_key = "1111111111111111111111111111111111111111111111111111111111111111"
+    expected_suite_hash = "aaaa0000111122223333444455556666777788889999aaaabbbbccccddddeeee"
+    mutated_suite_hash = "bbbb9999888877776666555544443333222211110000ffffeeeeddddccccbbbb"
 
     pass_payload = {
         "session_nonce": nonce,
@@ -586,6 +646,7 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "test_pai_canonical_examples": {"status": "PASS"},
         },
         "failures": [],
+        "test_hash": expected_suite_hash,
     }
     fail_payload = {
         "session_nonce": nonce,
@@ -601,6 +662,11 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "test_pai_canonical_examples": {"status": "FAIL", "type": "AssertionError", "message": "assert 0 == 5"},
         },
         "failures": [{"test_id": "test_pai_canonical_examples", "type": "AssertionError", "message": "assert 0 == 5"}],
+        "test_hash": expected_suite_hash,
+    }
+    mutated_hash_payload = {
+        **pass_payload,
+        "test_hash": mutated_suite_hash,
     }
 
     valid_pass_stdout = format_authenticated_verdict_frame(pass_payload, hmac_key)
@@ -619,18 +685,20 @@ def verify_loop_vectors() -> Dict[str, Any]:
     multiple_frames_stdout = valid_pass_stdout + "\n" + valid_pass_stdout
     missing_frame_stdout = "Candidate printed some debug text and exited early\n"
     unparseable_json_stdout = "\n---PAI_VERDICT_START---\n{not valid json\n---PAI_VERDICT_END---\n"
+    mutated_hash_stdout = format_authenticated_verdict_frame(mutated_hash_payload, hmac_key)
 
     verdict_raw_cases = [
-        ("vf_01_valid_pass", valid_pass_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), 0, "ok"),
-        ("vf_02_valid_fail", valid_fail_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), 1, "ok"),
-        ("vf_03_forged_missing_mac", forged_no_mac_stdout, nonce, hmac_key, ("test_basic",), 0, "ok"),
-        ("vf_04_forged_wrong_hmac_key", forged_wrong_key_stdout, nonce, hmac_key, ("test_basic",), 0, "ok"),
-        ("vf_05_tampered_status_after_signing", tampered_after_sign_stdout, nonce, hmac_key, ("test_basic",), 0, "ok"),
-        ("vf_06_mismatched_session_nonce", wrong_nonce_stdout, nonce, hmac_key, ("test_basic",), 0, "ok"),
-        ("vf_07_multiple_verdict_frames_injected", multiple_frames_stdout, nonce, hmac_key, ("test_basic",), 0, "ok"),
-        ("vf_08_missing_verdict_frame_preempted", missing_frame_stdout, nonce, hmac_key, ("test_basic",), 1, "ok"),
-        ("vf_09_unparseable_verdict_json", unparseable_json_stdout, nonce, hmac_key, ("test_basic",), 0, "ok"),
-        ("vf_10_mismatched_expected_test_ids", valid_pass_stdout, nonce, hmac_key, ("test_basic", "test_missing_id"), 0, "ok"),
+        ("vf_01_valid_pass", valid_pass_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), expected_suite_hash, 0, "ok"),
+        ("vf_02_valid_fail", valid_fail_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), expected_suite_hash, 1, "ok"),
+        ("vf_03_forged_missing_mac", forged_no_mac_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_04_forged_wrong_hmac_key", forged_wrong_key_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_05_tampered_status_after_signing", tampered_after_sign_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_06_mismatched_session_nonce", wrong_nonce_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_07_multiple_verdict_frames_injected", multiple_frames_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_08_missing_verdict_frame_preempted", missing_frame_stdout, nonce, hmac_key, ("test_basic",), None, 1, "ok"),
+        ("vf_09_unparseable_verdict_json", unparseable_json_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_10_mismatched_expected_test_ids", valid_pass_stdout, nonce, hmac_key, ("test_basic", "test_missing_id"), expected_suite_hash, 0, "ok"),
+        ("vf_11_test_suite_hash_mismatch", mutated_hash_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), expected_suite_hash, 0, "ok"),
     ]
     verdict_frame_cases = [
         {
@@ -639,6 +707,7 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "parent_nonce": p_nonce,
             "parent_hmac_key": p_key,
             "expected_test_ids": list(exp_ids),
+            "expected_test_hash": exp_hash,
             "exit_code": ex_code,
             "res_status": r_stat,
             "expected": verify_verdict_frame(
@@ -646,11 +715,12 @@ def verify_loop_vectors() -> Dict[str, Any]:
                 p_nonce,
                 p_key,
                 expected_test_ids=exp_ids,
+                expected_test_hash=exp_hash,
                 exit_code=ex_code,
                 res_status=r_stat,
             ),
         }
-        for cid, out_s, p_nonce, p_key, exp_ids, ex_code, r_stat in verdict_raw_cases
+        for cid, out_s, p_nonce, p_key, exp_ids, exp_hash, ex_code, r_stat in verdict_raw_cases
     ]
 
     example_extraction_inputs = [
@@ -722,6 +792,7 @@ def verify_loop_vectors() -> Dict[str, Any]:
 
     return {
         "schema_version": 1,
+        "codec_policy": get_codec_policy(),
         "codec_roundtrip_cases": codec_roundtrip_cases,
         "codec_invalid_envelope_cases": codec_invalid_envelope_cases,
         "verdict_frame_cases": verdict_frame_cases,

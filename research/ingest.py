@@ -605,16 +605,96 @@ def wrap_untrusted_envelope(
     return "\n".join(lines)
 
 
+_QUESTION_STOP_WORDS: Set[str] = {
+    "what", "are", "the", "main", "and", "in", "of", "to", "for", "how",
+    "is", "with", "from", "that", "this", "does", "why", "which", "when",
+    "where", "who", "by", "on", "at", "an", "as", "be", "or", "it", "can",
+    "explain", "describe", "tell", "me", "about", "defined", "used",
+    "ekak", "eke", "eka", "gana", "monawada", "kohomada", "kiyanna", "thiyena",
+}
+
+
+def _extract_question_tokens(question: Optional[str]) -> Tuple[List[str], List[str]]:
+    """
+    Extracts deterministic lowercase compound identifiers (e.g. 'adr-011', 'ingest.py', '011')
+    and individual word tokens from a user question for context file ranking.
+    """
+    if not question or not question.strip():
+        return [], []
+    q_lower = question.lower()
+    # Compound tokens with hyphens, underscores, or dots (e.g. adr-011, verify_loop.py)
+    compound_raw = re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)+", q_lower)
+    word_raw = re.findall(r"[a-z0-9]{2,}", q_lower)
+
+    compounds: List[str] = []
+    seen_c: Set[str] = set()
+    for c in compound_raw:
+        if c not in seen_c:
+            seen_c.add(c)
+            compounds.append(c)
+    for w in word_raw:
+        if any(ch.isdigit() for ch in w) and w not in seen_c:
+            seen_c.add(w)
+            compounds.append(w)
+
+    words: List[str] = []
+    seen_w: Set[str] = set()
+    for w in word_raw:
+        if w not in _QUESTION_STOP_WORDS and w not in seen_w:
+            seen_w.add(w)
+            words.append(w)
+
+    return compounds, words
+
+
+def _question_overlap_sort_key(
+    item: IngestedItem,
+    compounds: List[str],
+    words: List[str],
+) -> Tuple[int, int, int, int, str]:
+    """
+    Returns a deterministic sort key ranking files by question overlap:
+    1. File name / path compound & identifier token matches (descending)
+    2. File name / path word token matches (descending)
+    3. File content token matches (descending)
+    4. File size in bytes (ascending tie-breaker)
+    5. Relative file path (ascending tie-breaker)
+    """
+    if not compounds and not words:
+        return (0, 0, 0, item.bytes_read, item.path)
+
+    norm_path = item.path.replace("\\", "/").lower()
+    base_name = os.path.basename(norm_path)
+    text_lower = item.text.lower()
+
+    fname_compound_hits = sum(1 for c in compounds if c in base_name or c in norm_path)
+    fname_word_hits = sum(1 for w in words if w in base_name or w in norm_path)
+    content_hits = sum(1 for c in compounds if c in text_lower) + sum(
+        1 for w in words if w in text_lower
+    )
+
+    return (
+        -fname_compound_hits,
+        -fname_word_hits,
+        -content_hits,
+        item.bytes_read,
+        item.path,
+    )
+
+
 def assemble_untrusted_context(
     report: IngestionReport,
     char_budget: int = 32_000,
     nonce: Optional[str] = None,
     include_manifest: bool = True,
+    question: Optional[str] = None,
 ) -> UntrustedContextAssembly:
     """
     Assembles ingested items into an untrusted-data envelope block respecting a character budget.
     Includes a complete file manifest so the model has visibility into the entire codebase layout,
-    tracks included vs omitted files and bytes, and applies cryptographic nonces.
+    ranks files deterministically by question overlap (file names first, then content overlap,
+    then size/path tie-breaker), tracks included vs omitted files and bytes, and applies
+    cryptographic nonces.
     """
     run_nonce = nonce or generate_envelope_nonce()
     manifest_lines = []
@@ -637,7 +717,11 @@ def assemble_untrusted_context(
     effective_budget = max(0, char_budget - manifest_cost)
     current_chars = 0
 
-    ordered_items = sorted(report.items, key=lambda it: (it.bytes_read, it.path))
+    compounds, words = _extract_question_tokens(question)
+    ordered_items = sorted(
+        report.items,
+        key=lambda it: _question_overlap_sort_key(it, compounds, words),
+    )
     for item in ordered_items:
         clean_item_path = sanitize_header(item.path)
         item_header = f"File: {clean_item_path} (SHA-256: {item.sha256[:16]}...)"
@@ -685,9 +769,15 @@ def format_untrusted_context(
     report: IngestionReport,
     char_budget: int = 32_000,
     nonce: Optional[str] = None,
+    question: Optional[str] = None,
 ) -> str:
     """Convenience helper returning assembled context text."""
-    return assemble_untrusted_context(report, char_budget=char_budget, nonce=nonce).text
+    return assemble_untrusted_context(
+        report,
+        char_budget=char_budget,
+        nonce=nonce,
+        question=question,
+    ).text
 
 
 # -----------------------------------------------------------------------------
