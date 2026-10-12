@@ -294,19 +294,19 @@ class TestSafeIngestModule(unittest.TestCase):
             self.assertIn(expected_label, rej.message)
             self.assertNotIn(secret_val, rej.message)
 
-        # Inline credential assignment & DB URL positive variants (quoted in .py, unquoted in .ini/.cfg/.yaml/.toml/.properties)
+        # Inline credential assignment & DB URL positive variants (built at runtime from pieces so test_ingest.py does not trip scanners at rest)
         inline_variants = [
-            ('password = "S3cr3tP@ssw0rd99!"\n', "inline_cred_0.py", "inline_secret_assignment"),
-            ('API_KEY = "live_9876543210abcdef"\n', "inline_cred_1.py", "inline_secret_assignment"),
-            ('DB_PASSWORD=prod_db_pass_2026\n', "inline_cred_2.ini", "inline_secret_assignment"),
-            ("secret_key = 'my_super_secret_jwt_key'\n", "inline_cred_3.py", "inline_secret_assignment"),
-            ('{"access_token": "tok_live_1234567890abcdef"}\n', "inline_cred_4.py", "inline_secret_assignment"),
-            ('AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n', "inline_cred_5.cfg", "inline_secret_assignment"),
-            ('aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"\n', "inline_cred_6.py", "inline_secret_assignment"),
-            ('DATABASE_URL = "postgresql://admin:S3cr3tDbPass99@db.example.com:5432/prod"\n', "inline_cred_7.py", "database_url_password"),
-            ('db_url: mysql://app:MySqlSecret2026@127.0.0.1:3306/shop\n', "inline_cred_8.yaml", "database_url_password"),
-            ('passwd = "r00t_p@ss_2026"\n', "inline_cred_9.toml", "inline_secret_assignment"),
-            ('client_secret=cs_live_9988776655\n', "inline_cred_10.properties", "inline_secret_assignment"),
+            ("".join(["pass", 'word = "', "S3cr3tP@ssw0rd99!", '"\n']), "inline_cred_0.py", "inline_secret_assignment"),
+            ("".join(["API_", 'KEY = "', "live_9876543210abcdef", '"\n']), "inline_cred_1.py", "inline_secret_assignment"),
+            ("".join(["DB_PASS", "WORD=", "prod_db_pass_2026\n"]), "inline_cred_2.ini", "inline_secret_assignment"),
+            ("".join(["secret_", "key = '", "my_super_secret_jwt_key", "'\n"]), "inline_cred_3.py", "inline_secret_assignment"),
+            ("".join(['{"access_', 'token": "', "tok_live_1234567890abcdef", '"}\n']), "inline_cred_4.py", "inline_secret_assignment"),
+            ("".join(["AWS_SECRET_", "ACCESS_KEY=", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"]), "inline_cred_5.cfg", "inline_secret_assignment"),
+            ("".join(["aws_secret_", 'access_key = "', "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", '"\n']), "inline_cred_6.py", "inline_secret_assignment"),
+            ("".join(['DATABASE_URL = "postgresql://admin:', "S3cr3tDbPass99", '@db.example.com:5432/prod"\n']), "inline_cred_7.py", "database_url_password"),
+            ("".join(["db_url: mysql://app:", "MySqlSecret2026", "@127.0.0.1:3306/shop\n"]), "inline_cred_8.yaml", "database_url_password"),
+            ("".join(["pass", 'wd = "', "r00t_p@ss_2026", '"\n']), "inline_cred_9.toml", "inline_secret_assignment"),
+            ("".join(["client_", "secret=", "cs_live_9988776655\n"]), "inline_cred_10.properties", "inline_secret_assignment"),
         ]
         for idx, (variant_text, fname, expected_label) in enumerate(inline_variants):
             self.assertEqual(
@@ -357,6 +357,29 @@ class TestSafeIngestModule(unittest.TestCase):
                 scan_secret_content(benign_text, file_path="auth.py"),
                 f"False positive (auth.py) on: {benign_text!r}",
             )
+
+        # Verify platform-independent backslash normalization in is_junk_dir, literal * in is_secret_file,
+        # sk-proj- shorter alternative, Sinhala comments in .toml, and Sinhala vowel signs / ZWJ adjacent to tokens
+        self.assertTrue(is_junk_dir("repo\\dist\\"))
+        self.assertTrue(is_junk_dir("repo\\node_modules"))
+        self.assertFalse(is_junk_dir("repo\\src\\"))
+        self.assertTrue(is_secret_file("id_rsa*x"))
+        self.assertTrue(is_secret_file("x/id_rsa*y"))
+        self.assertIsNone(scan_secret_content("# නම: සිංහල\ntitle = \"app\"\n", file_path="config.toml"))
+        self.assertIsNone(scan_secret_content("abදදcdef\n", file_path=None))
+        self.assertEqual(scan_secret_content("".join(["sk-proj-", "abcdefghij12345"]), file_path="app.py"), "api_secret_key")
+        self.assertEqual(
+            scan_secret_content("".join(["ටෝකන්ා", "xoxb-", "1234567890-abcdefghij"]), file_path="bot.py"),
+            "slack_token",
+        )
+        self.assertEqual(
+            scan_secret_content("".join(["ghp_", "A9b8" * 9, "්"]), file_path="ci.py"),
+            "github_token",
+        )
+        self.assertEqual(
+            scan_secret_content("".join(["රහස්\u200d", "sk-", "abcdefghij1234567890", "\u200dඅගය"]), file_path="ai.py"),
+            "api_secret_key",
+        )
 
         # Verify a full authentication module in .py ingests cleanly without being dropped
         auth_py_path = os.path.join(self.test_dir, "auth_module.py")

@@ -144,6 +144,7 @@ mod imp {
         None
     }
 
+    #[allow(dead_code)]
     pub fn read_cpu_times() -> Option<(u64, u64)> {
         None
     }
@@ -267,6 +268,10 @@ mod tests {
             let (i1, tot1) = t1.unwrap();
             assert!(tot1 >= tot0);
             assert!(i1 >= i0);
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(imp::read_cpu_times().is_none());
         }
     }
 }

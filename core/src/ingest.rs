@@ -1,8 +1,18 @@
 //! Safe Ingestion & Output Sanitization Module (Phase 2 Slice 1, ADR-011)
 //!
-//! Pure safe Rust (`#![deny(unsafe_code)]`) implementation of the PAI safe ingestion
-//! and sanitization specification (`research/ingest.py`), verified against
-//! `research/conformance/ingest_vectors.json` and differential fuzzing.
+//! Pure safe Rust (`#![forbid(unsafe_code)]`) implementation of the string-level
+//! PAI safe-ingestion, secret-scanning, terminal/text/header sanitization, and
+//! nonce-envelope primitives (`get_ingest_limits`, `is_secret_file`, `is_junk_dir`,
+//! `scan_secret_content`, `sanitize_terminal_output`, `sanitize_text_content`,
+//! `sanitize_header`, `defang_envelope_markers`, `wrap_untrusted_envelope`),
+//! verified against `research/conformance/ingest_vectors.json` and multi-seed
+//! differential fuzzing against `research/ingest.py`.
+//!
+//! Scope note (Phase 2 Slice 1): Filesystem traversal, path/symlink boundary
+//! checks, and size/count quota enforcement (`ingest_file`, `ingest_folder`,
+//! `assemble_untrusted_context`) remain in Python (`research/ingest.py`).
+
+#![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -52,14 +62,8 @@ pub const DEFAULT_SECRET_DENY_PATTERNS: &[&str] = &[
     "*.enc",
 ];
 
-pub const DEFAULT_SENSITIVE_DIRS: &[&str] = &[
-    ".aws",
-    ".ssh",
-    ".gnupg",
-    ".docker",
-    "docker",
-    ".kube",
-];
+pub const DEFAULT_SENSITIVE_DIRS: &[&str] =
+    &[".aws", ".ssh", ".gnupg", ".docker", "docker", ".kube"];
 
 pub const DEFAULT_JUNK_DIR_PATTERNS: &[&str] = &[
     ".git",
@@ -131,13 +135,13 @@ fn fnmatch_simple(text: &str, pat: &str) -> bool {
     let mut star_ti = 0usize;
 
     while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            ti += 1;
-            pi += 1;
-        } else if pi < p.len() && p[pi] == '*' {
+        if pi < p.len() && p[pi] == '*' {
             star_pi = Some(pi);
             pi += 1;
             star_ti = ti;
+        } else if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
         } else if let Some(spi) = star_pi {
             pi = spi + 1;
             star_ti += 1;
@@ -176,10 +180,7 @@ pub fn is_secret_file(file_path: &str) -> bool {
         if pat_lower.contains('/') {
             let slash_pat = format!("/{}", pat_lower);
             let wild_pat = format!("*{}*", pat_lower);
-            if norm == pat_lower
-                || norm.ends_with(&slash_pat)
-                || fnmatch_simple(&norm, &wild_pat)
-            {
+            if norm == pat_lower || norm.ends_with(&slash_pat) || fnmatch_simple(&norm, &wild_pat) {
                 return true;
             }
         }
@@ -190,18 +191,20 @@ pub fn is_secret_file(file_path: &str) -> bool {
 
 /// Returns `true` if `dirname` matches any junk directory pattern.
 pub fn is_junk_dir(dirname: &str) -> bool {
-    let trimmed = dirname.trim_end_matches(['/', '\\']);
-    let base = trimmed
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let norm = dirname.replace('\\', "/");
+    let trimmed = norm.trim_end_matches('/');
+    let base = trimmed.rsplit('/').next().unwrap_or("").to_lowercase();
     for pat in DEFAULT_JUNK_DIR_PATTERNS {
         if fnmatch_simple(&base, &pat.to_lowercase()) {
             return true;
         }
     }
     false
+}
+
+/// Matches Python Unicode `\s` and `str.strip()` whitespace characters (Unicode `White_Space` plus C0 separators `\x1c`..=`\x1f`).
+fn is_python_space(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\x1c'..='\x1f')
 }
 
 fn is_c0_control_char(c: char) -> bool {
@@ -232,8 +235,7 @@ fn strip_osc_sequences(input: &str) -> String {
         let is_8bit_osc = chars[i] == '\u{009d}';
         if is_7bit_osc || is_8bit_osc {
             i += if is_7bit_osc { 2 } else { 1 };
-            while i < chars.len()
-                && !matches!(chars[i], '\x07' | '\x1b' | '\u{009c}' | '\r' | '\n')
+            while i < chars.len() && !matches!(chars[i], '\x07' | '\x1b' | '\u{009c}' | '\r' | '\n')
             {
                 i += 1;
             }
@@ -336,56 +338,69 @@ pub fn sanitize_text_content(raw_utf8: &str, max_line_length: usize) -> String {
     capped_lines.join("\n")
 }
 
-/// Replaces single-line `---\s*UNTRUSTED DATA (BEGIN|END).*?---` occurrences with `[STRIPPED_MARKER]`.
-fn replace_untrusted_marker_variations_in_line(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
+/// Replaces `---\s*UNTRUSTED DATA (BEGIN|END).*?---` occurrences with `[STRIPPED_MARKER]` using character-safe indexing.
+fn replace_untrusted_marker_variations(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let begin_kw: &[char] = &[
+        'U', 'N', 'T', 'R', 'U', 'S', 'T', 'E', 'D', ' ', 'D', 'A', 'T', 'A', ' ', 'B', 'E', 'G',
+        'I', 'N',
+    ];
+    let end_kw: &[char] = &[
+        'U', 'N', 'T', 'R', 'U', 'S', 'T', 'E', 'D', ' ', 'D', 'A', 'T', 'A', ' ', 'E', 'N', 'D',
+    ];
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
 
-    while let Some(pos) = rest.find("---") {
-        out.push_str(&rest[..pos]);
-        let after_dashes = &rest[pos + 3..];
-        let trimmed = after_dashes.trim_start_matches(|c: char| c.is_whitespace());
-        let after_kw = if let Some(rem) = trimmed.strip_prefix("UNTRUSTED DATA BEGIN") {
-            Some(rem)
-        } else {
-            trimmed.strip_prefix("UNTRUSTED DATA END")
-        };
+    while i < chars.len() {
+        if i + 3 <= chars.len() && chars[i] == '-' && chars[i + 1] == '-' && chars[i + 2] == '-' {
+            let mut k = i + 3;
+            while k < chars.len() && is_python_space(chars[k]) {
+                k += 1;
+            }
+            let kw_end =
+                if k + begin_kw.len() <= chars.len() && &chars[k..k + begin_kw.len()] == begin_kw {
+                    Some(k + begin_kw.len())
+                } else if k + end_kw.len() <= chars.len() && &chars[k..k + end_kw.len()] == end_kw {
+                    Some(k + end_kw.len())
+                } else {
+                    None
+                };
 
-        if let Some(rem_after_kw) = after_kw {
-            if let Some(end_dashes) = rem_after_kw.find("---") {
-                out.push_str("[STRIPPED_MARKER]");
-                rest = &rem_after_kw[end_dashes + 3..];
-                continue;
+            if let Some(mut m) = kw_end {
+                let mut found_end: Option<usize> = None;
+                while m < chars.len() && chars[m] != '\n' {
+                    if m + 3 <= chars.len()
+                        && chars[m] == '-'
+                        && chars[m + 1] == '-'
+                        && chars[m + 2] == '-'
+                    {
+                        found_end = Some(m + 3);
+                        break;
+                    }
+                    m += 1;
+                }
+                if let Some(next_i) = found_end {
+                    out.push_str("[STRIPPED_MARKER]");
+                    i = next_i;
+                    continue;
+                }
             }
         }
-
-        // Not a complete marker match at `pos`; emit one `-` and continue scanning
-        out.push('-');
-        rest = &rest[pos + 1..];
+        out.push(chars[i]);
+        i += 1;
     }
 
-    out.push_str(rest);
     out
-}
-
-fn replace_untrusted_marker_variations(text: &str) -> String {
-    let lines: Vec<String> = text
-        .split('\n')
-        .map(replace_untrusted_marker_variations_in_line)
-        .collect();
-    lines.join("\n")
 }
 
 /// Sanitizes header/path string: replaces newlines with spaces, strips C0 controls, and defangs markers.
 pub fn sanitize_header(header: &str) -> String {
-    let h = header
-        .replace("\r\n", " ")
-        .replace(['\r', '\n'], " ");
+    let h = header.replace("\r\n", " ").replace(['\r', '\n'], " ");
     let h_clean: String = h.chars().filter(|&c| !is_c0_control_char(c)).collect();
     let h_defanged = replace_untrusted_marker_variations(&h_clean)
         .replace(UNTRUSTED_BEGIN_MARKER, "[STRIPPED_MARKER]")
         .replace(UNTRUSTED_END_MARKER, "[STRIPPED_MARKER]");
-    h_defanged.trim().to_string()
+    h_defanged.trim_matches(is_python_space).to_string()
 }
 
 /// Replaces embedded envelope markers and nonce occurrences to prevent delimiter hijacking.
@@ -549,8 +564,9 @@ const BENIGN_CREDENTIAL_PREFIXES: &[&str] = &[
     "input_",
 ];
 
+/// Matches ASCII word characters (`[A-Za-z0-9_]`), identical to Python `\w` / `\b` with `re.ASCII`.
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 fn has_pem_private_key(text: &str) -> bool {
@@ -614,8 +630,7 @@ fn has_github_token(text: &str) -> bool {
         }
         // Check github_pat_[A-Za-z0-9_]{22,}\b
         let pat_prefix: &[char] = &['g', 'i', 't', 'h', 'u', 'b', '_', 'p', 'a', 't', '_'];
-        if i + pat_prefix.len() + 22 <= chars.len()
-            && &chars[i..i + pat_prefix.len()] == pat_prefix
+        if i + pat_prefix.len() + 22 <= chars.len() && &chars[i..i + pat_prefix.len()] == pat_prefix
         {
             let mut j = i + pat_prefix.len();
             while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
@@ -633,34 +648,39 @@ fn has_github_token(text: &str) -> bool {
 
 fn has_api_secret_key(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
+    let prefixes: &[&[char]] = &[
+        &['p', 'r', 'o', 'j', '-'],
+        &['a', 'n', 't', '-', 'a', 'p', 'i', '0', '3', '-'],
+        &[],
+    ];
     for i in 0..chars.len() {
         if i > 0 && is_word_char(chars[i - 1]) {
             continue;
         }
         if i + 3 <= chars.len() && chars[i] == 's' && chars[i + 1] == 'k' && chars[i + 2] == '-' {
-            let rest: String = chars[i + 3..].iter().collect();
-            let after_opt = if let Some(r) = rest.strip_prefix("proj-") {
-                r
-            } else if let Some(r) = rest.strip_prefix("ant-api03-") {
-                r
-            } else {
-                &rest[..]
-            };
-            let r_chars: Vec<char> = after_opt.chars().collect();
-            let mut j = 0usize;
-            while j < r_chars.len()
-                && (r_chars[j].is_ascii_alphanumeric() || r_chars[j] == '_' || r_chars[j] == '-')
-            {
-                j += 1;
-            }
-            // Backtrack over trailing '-' if needed so the match ends at a word boundary `\b`
-            while j >= 20 {
-                let end_is_word = is_word_char(r_chars[j - 1]);
-                let next_is_word = j < r_chars.len() && is_word_char(r_chars[j]);
-                if end_is_word != next_is_word {
-                    return true;
+            let after_sk = &chars[i + 3..];
+            for prefix in prefixes {
+                if after_sk.len() < prefix.len() || &after_sk[..prefix.len()] != *prefix {
+                    continue;
                 }
-                j -= 1;
+                let r_chars = &after_sk[prefix.len()..];
+                let mut j = 0usize;
+                while j < r_chars.len()
+                    && (r_chars[j].is_ascii_alphanumeric()
+                        || r_chars[j] == '_'
+                        || r_chars[j] == '-')
+                {
+                    j += 1;
+                }
+                // Backtrack over trailing '-' if needed so the match ends at an ASCII word boundary `\b`
+                while j >= 20 {
+                    let end_is_word = is_word_char(r_chars[j - 1]);
+                    let next_is_word = j < r_chars.len() && is_word_char(r_chars[j]);
+                    if end_is_word != next_is_word {
+                        return true;
+                    }
+                    j -= 1;
+                }
             }
         }
     }
@@ -723,7 +743,7 @@ fn has_google_api_key(text: &str) -> bool {
 }
 
 fn is_non_secret_key_name(key_name: &str) -> bool {
-    let k = key_name.trim().to_lowercase();
+    let k = key_name.trim_matches(is_python_space).to_lowercase();
     NON_SECRET_KEY_SUFFIXES.iter().any(|s| k.ends_with(s))
 }
 
@@ -740,7 +760,7 @@ fn is_config_file_for_unquoted_secrets(file_path: Option<&str>) -> bool {
 }
 
 fn is_benign_credential_rhs(raw_val: &str, min_len: usize) -> bool {
-    let v = raw_val.trim();
+    let v = raw_val.trim_matches(is_python_space);
     if v.chars().count() < min_len {
         return true;
     }
@@ -769,50 +789,53 @@ fn is_benign_credential_rhs(raw_val: &str, min_len: usize) -> bool {
     false
 }
 
-fn is_python_identifier(s: &str) -> bool {
+fn is_ascii_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
         return false;
     };
-    if !(first.is_alphabetic() || first == '_') {
+    if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }
-    chars.all(|c| c.is_alphanumeric() || c == '_')
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn is_literal_like_unquoted_rhs(raw_val: &str) -> bool {
     if is_benign_credential_rhs(raw_val, 6) {
         return false;
     }
-    let v = raw_val.trim();
+    let v = raw_val.trim_matches(is_python_space);
     let parts: Vec<&str> = v.split('.').collect();
-    if parts.iter().all(|p| is_python_identifier(p)) && !v.chars().any(|c| c.is_ascii_digit()) {
+    if parts.iter().all(|p| is_ascii_identifier(p)) && !v.chars().any(|c| c.is_ascii_digit()) {
         return false;
     }
     true
 }
 
 fn is_cred_key_part(key: &str) -> bool {
-    if key.is_empty()
-        || !key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    let k_chars: Vec<char> = key.chars().map(|c| c.to_ascii_lowercase()).collect();
+    if k_chars.is_empty()
+        || !k_chars
+            .iter()
+            .all(|&c| c.is_ascii_alphanumeric() || c == '_')
     {
         return false;
     }
-    let k_low = key.to_lowercase();
     for &core in CRED_CORE_KEYS {
-        let mut search_from = 0usize;
-        while let Some(rel_idx) = k_low[search_from..].find(core) {
-            let idx = search_from + rel_idx;
-            let end_idx = idx + core.len();
-            let left_ok = idx == 0 || k_low.as_bytes()[idx - 1] == b'_';
-            let right_ok = end_idx == k_low.len()
-                || (k_low.as_bytes()[end_idx] == b'_' && end_idx + 1 < k_low.len());
-            if left_ok && right_ok {
-                return true;
+        let core_chars: Vec<char> = core.chars().collect();
+        if k_chars.len() < core_chars.len() {
+            continue;
+        }
+        for idx in 0..=k_chars.len() - core_chars.len() {
+            if k_chars[idx..idx + core_chars.len()] == core_chars[..] {
+                let end_idx = idx + core_chars.len();
+                let left_ok = idx == 0 || k_chars[idx - 1] == '_';
+                let right_ok = end_idx == k_chars.len()
+                    || (k_chars[end_idx] == '_' && end_idx + 1 < k_chars.len());
+                if left_ok && right_ok {
+                    return true;
+                }
             }
-            search_from = idx + 1;
         }
     }
     false
@@ -851,54 +874,79 @@ fn is_valid_db_scheme(scheme: &str) -> bool {
 }
 
 fn has_database_url_password(text: &str) -> bool {
-    let mut search_from = 0usize;
-    while let Some(rel) = text[search_from..].find("://") {
-        let sep_idx = search_from + rel;
-        // Walk backwards from `sep_idx` over `[A-Za-z0-9_+]` to find scheme
-        let prefix = &text[..sep_idx];
-        let scheme_len: usize = prefix
-            .chars()
-            .rev()
-            .take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '+')
-            .map(|c| c.len_utf8())
-            .sum();
-        let scheme_start = sep_idx - scheme_len;
-        let word_boundary_ok = scheme_start == 0
-            || !prefix[..scheme_start]
-                .chars()
-                .next_back()
-                .is_some_and(is_word_char);
-        let scheme = &text[scheme_start..sep_idx];
-        if word_boundary_ok && is_valid_db_scheme(scheme) {
-            let after_sep = &text[sep_idx + 3..];
-            // Parse user: `[^/\s:@\"']*:`
-            let user_end = after_sep
-                .find(|c: char| matches!(c, '/' | ':' | '@' | '"' | '\'') || c.is_whitespace());
-            if let Some(u_idx) = user_end {
-                if after_sep.as_bytes()[u_idx] == b':' {
-                    let after_colon = &after_sep[u_idx + 1..];
-                    let pw_end = after_colon
-                        .find(|c: char| matches!(c, '/' | '@' | '"' | '\'') || c.is_whitespace());
-                    if let Some(p_idx) = pw_end {
-                        if after_colon.as_bytes()[p_idx] == b'@' {
-                            let pw = &after_colon[..p_idx];
-                            let after_at = &after_colon[p_idx + 1..];
-                            let host_has_char = after_at
-                                .chars()
-                                .next()
-                                .is_some_and(|c| !matches!(c, '/' | '"' | '\'') && !c.is_whitespace());
-                            if pw.chars().count() >= 4
-                                && host_has_char
-                                && !is_benign_credential_rhs(pw, 4)
-                            {
-                                return true;
-                            }
-                        }
-                    }
-                }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 10 {
+        return false;
+    }
+    for sep_idx in 0..=chars.len().saturating_sub(3) {
+        if !(chars[sep_idx] == ':' && chars[sep_idx + 1] == '/' && chars[sep_idx + 2] == '/') {
+            continue;
+        }
+        // Walk backwards from `sep_idx` over `[A-Za-z0-9_]` to find candidate scheme starts
+        let mut s1 = sep_idx;
+        while s1 > 0 && (chars[s1 - 1].is_ascii_alphanumeric() || chars[s1 - 1] == '_') {
+            s1 -= 1;
+        }
+        let mut candidates = Vec::with_capacity(2);
+        if s1 > 0 && chars[s1 - 1] == '+' {
+            let mut s2 = s1 - 1;
+            while s2 > 0 && (chars[s2 - 1].is_ascii_alphanumeric() || chars[s2 - 1] == '_') {
+                s2 -= 1;
+            }
+            if s2 < s1 - 1 {
+                candidates.push(s2);
             }
         }
-        search_from = sep_idx + 3;
+        if s1 < sep_idx {
+            candidates.push(s1);
+        }
+
+        let scheme_matched = candidates.into_iter().any(|start| {
+            let word_boundary_ok = start == 0 || !is_word_char(chars[start - 1]);
+            let scheme: String = chars[start..sep_idx].iter().collect();
+            word_boundary_ok && is_valid_db_scheme(&scheme)
+        });
+
+        if !scheme_matched {
+            continue;
+        }
+
+        // Parse user: `[^/\s:@\"']*:`
+        let mut u = sep_idx + 3;
+        while u < chars.len()
+            && !matches!(chars[u], '/' | ':' | '@' | '"' | '\'')
+            && !is_python_space(chars[u])
+        {
+            u += 1;
+        }
+        if u >= chars.len() || chars[u] != ':' {
+            continue;
+        }
+
+        // Parse pw: `[^/\s@\"']{4,}@`
+        let pw_start = u + 1;
+        let mut p = pw_start;
+        while p < chars.len()
+            && !matches!(chars[p], '/' | '@' | '"' | '\'')
+            && !is_python_space(chars[p])
+        {
+            p += 1;
+        }
+        if p >= chars.len() || chars[p] != '@' || p - pw_start < 4 {
+            continue;
+        }
+
+        // Parse host: `[^/\s\"']+`
+        let host_start = p + 1;
+        if host_start < chars.len()
+            && !matches!(chars[host_start], '/' | '"' | '\'')
+            && !is_python_space(chars[host_start])
+        {
+            let pw: String = chars[pw_start..p].iter().collect();
+            if !is_benign_credential_rhs(&pw, 4) {
+                return true;
+            }
+        }
     }
     false
 }
@@ -907,7 +955,8 @@ fn has_quoted_inline_credential(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0usize;
     while i < chars.len() {
-        let boundary_ok = i == 0 || matches!(chars[i - 1], ',' | '{') || chars[i - 1].is_whitespace();
+        let boundary_ok =
+            i == 0 || matches!(chars[i - 1], ',' | '{') || is_python_space(chars[i - 1]);
         if !boundary_ok {
             i += 1;
             continue;
@@ -916,9 +965,9 @@ fn has_quoted_inline_credential(text: &str) -> bool {
         // Optional `export\s+`
         if j + 7 <= chars.len() {
             let maybe_export: String = chars[j..j + 6].iter().collect();
-            if maybe_export.eq_ignore_ascii_case("export") && chars[j + 6].is_whitespace() {
+            if maybe_export.eq_ignore_ascii_case("export") && is_python_space(chars[j + 6]) {
                 j += 6;
-                while j < chars.len() && chars[j].is_whitespace() {
+                while j < chars.len() && is_python_space(chars[j]) {
                     j += 1;
                 }
             }
@@ -947,16 +996,11 @@ fn has_quoted_inline_credential(text: &str) -> bool {
                 if j < chars.len() && (chars[j] == '"' || chars[j] == '\'') {
                     j += 1;
                     let val_start = j;
-                    while j < chars.len()
-                        && !matches!(chars[j], '"' | '\'' | '\r' | '\n')
-                    {
+                    while j < chars.len() && !matches!(chars[j], '"' | '\'' | '\r' | '\n') {
                         j += 1;
                     }
                     let val_len = j - val_start;
-                    if j < chars.len()
-                        && (chars[j] == '"' || chars[j] == '\'')
-                        && val_len >= 6
-                    {
+                    if j < chars.len() && (chars[j] == '"' || chars[j] == '\'') && val_len >= 6 {
                         let val: String = chars[val_start..j].iter().collect();
                         if !is_non_secret_key_name(&key) && !is_benign_credential_rhs(&val, 6) {
                             return true;
@@ -971,52 +1015,69 @@ fn has_quoted_inline_credential(text: &str) -> bool {
 }
 
 fn has_unquoted_inline_credential(text: &str) -> bool {
-    for raw_line in text.split('\n') {
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        let mut rest = line.trim_start_matches([' ', '\t']);
-        if rest.len() >= 7
-            && rest[..6].eq_ignore_ascii_case("export")
-            && matches!(rest.as_bytes()[6], b' ' | b'\t')
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (line_idx, &raw_line) in lines.iter().enumerate() {
+        let line = if line_idx + 1 < lines.len() {
+            raw_line.strip_suffix('\r').unwrap_or(raw_line)
+        } else {
+            raw_line
+        };
+        let chars: Vec<char> = line.chars().collect();
+        let mut idx = 0usize;
+        while idx < chars.len() && matches!(chars[idx], ' ' | '\t') {
+            idx += 1;
+        }
+        if idx + 7 <= chars.len() {
+            let maybe_export: String = chars[idx..idx + 6].iter().collect();
+            if maybe_export.eq_ignore_ascii_case("export") && matches!(chars[idx + 6], ' ' | '\t') {
+                idx += 6;
+                while idx < chars.len() && matches!(chars[idx], ' ' | '\t') {
+                    idx += 1;
+                }
+            }
+        }
+        let key_start = idx;
+        while idx < chars.len() && (chars[idx].is_ascii_alphanumeric() || chars[idx] == '_') {
+            idx += 1;
+        }
+        if idx == key_start {
+            continue;
+        }
+        let key: String = chars[key_start..idx].iter().collect();
+        if !is_cred_key_part(&key) {
+            continue;
+        }
+        while idx < chars.len() && matches!(chars[idx], ' ' | '\t') {
+            idx += 1;
+        }
+        if idx >= chars.len() || !matches!(chars[idx], '=' | ':') {
+            continue;
+        }
+        idx += 1;
+        while idx < chars.len() && matches!(chars[idx], ' ' | '\t') {
+            idx += 1;
+        }
+        let val_start = idx;
+        while idx < chars.len()
+            && !is_python_space(chars[idx])
+            && !matches!(
+                chars[idx],
+                '#' | '"' | '\'' | '\r' | '\n' | '(' | ')' | ';' | ',' | '[' | ']' | '{' | '}'
+            )
         {
-            rest = rest[6..].trim_start_matches([' ', '\t']);
+            idx += 1;
         }
-        let key_len: usize = rest
-            .chars()
-            .take_while(|&c| c.is_ascii_alphanumeric() || c == '_')
-            .map(|c| c.len_utf8())
-            .sum();
-        if key_len == 0 {
+        if idx - val_start < 6 {
             continue;
         }
-        let key = &rest[..key_len];
-        if !is_cred_key_part(key) {
+        let val: String = chars[val_start..idx].iter().collect();
+        while idx < chars.len() && matches!(chars[idx], ' ' | '\t') {
+            idx += 1;
+        }
+        if idx < chars.len() && (chars[idx] != '#' || chars[idx..].contains(&'\r')) {
             continue;
         }
-        rest = rest[key_len..].trim_start_matches([' ', '\t']);
-        if !(rest.starts_with('=') || rest.starts_with(':')) {
-            continue;
-        }
-        rest = rest[1..].trim_start_matches([' ', '\t']);
-        let val_len: usize = rest
-            .chars()
-            .take_while(|&c| {
-                !c.is_whitespace()
-                    && !matches!(
-                        c,
-                        '#' | '"' | '\'' | '\r' | '\n' | '(' | ')' | ';' | ',' | '[' | ']' | '{' | '}'
-                    )
-            })
-            .map(|c| c.len_utf8())
-            .sum();
-        let val = &rest[..val_len];
-        if val.chars().count() < 6 {
-            continue;
-        }
-        let trailing = rest[val_len..].trim_start_matches([' ', '\t']);
-        if !(trailing.is_empty() || trailing.starts_with('#')) {
-            continue;
-        }
-        if !is_non_secret_key_name(key) && is_literal_like_unquoted_rhs(val) {
+        if !is_non_secret_key_name(&key) && is_literal_like_unquoted_rhs(&val) {
             return true;
         }
     }
@@ -1070,12 +1131,18 @@ mod tests {
         assert!(is_secret_file(".env.example"));
         assert!(is_secret_file("keys/id_ed25519"));
         assert!(is_secret_file("~/.aws/credentials"));
+        // Literal '*' in path must still match pattern '*' in glob matcher (Finding 2)
+        assert!(is_secret_file("id_rsa*x"));
+        assert!(is_secret_file("x/id_rsa*y"));
         assert!(!is_secret_file("src/main.rs"));
         assert!(!is_secret_file("docs/env_setup.md"));
 
         assert!(is_junk_dir(".git"));
         assert!(is_junk_dir("node_modules"));
         assert!(is_junk_dir("__pycache__"));
+        assert!(is_junk_dir("repo\\dist\\"));
+        assert!(is_junk_dir("repo\\node_modules"));
+        assert!(!is_junk_dir("repo\\src\\"));
         assert!(!is_junk_dir("src"));
     }
 
@@ -1089,22 +1156,272 @@ mod tests {
             Some("src/file.py\r\nInjected: 1"),
             "abc",
         );
-        assert!(wrapped.starts_with("--- UNTRUSTED DATA BEGIN [abc] ---\nSource: src/file.py Injected: 1\n"));
+        assert!(wrapped
+            .starts_with("--- UNTRUSTED DATA BEGIN [abc] ---\nSource: src/file.py Injected: 1\n"));
         assert!(wrapped.contains("payload [STRIPPED_MARKER] here"));
         assert!(wrapped.ends_with("\n--- UNTRUSTED DATA END [abc] ---"));
     }
 
     #[test]
-    fn test_secret_content_scanner_runtime_pieces() {
+    fn test_secret_content_scanner_runtime_pieces_and_regressions() {
         let pem = ["-----BEGIN ", "OPENSSH PRIVATE KEY-----\nAAA"].concat();
-        assert_eq!(scan_secret_content(&pem, Some("key.txt")), Some("pem_private_key"));
+        assert_eq!(
+            scan_secret_content(&pem, Some("key.txt")),
+            Some("pem_private_key")
+        );
 
-        let db_url = ["postgresql://app:", "s3cr3tPass99", "@db.internal:5432/prod"].concat();
-        assert_eq!(scan_secret_content(&db_url, Some("settings.py")), Some("database_url_password"));
+        let db_url = [
+            "postgresql://app:",
+            "s3cr3tPass99",
+            "@db.internal:5432/prod",
+        ]
+        .concat();
+        assert_eq!(
+            scan_secret_content(&db_url, Some("settings.py")),
+            Some("database_url_password")
+        );
+
+        // Finding 1: Multi-byte Sinhala lines in config files or with file_path=None must never panic
+        assert_eq!(
+            scan_secret_content("# නම: සිංහල\n", Some("config.toml")),
+            None
+        );
+        assert_eq!(scan_secret_content("abදදcdef", None), None);
+
+        // Finding 3: sk-proj- / sk-ant-api03- shorter alternative backtracking
+        let sk_short_proj = ["sk-", "proj-abcdefghij12345"].concat();
+        assert_eq!(
+            scan_secret_content(&sk_short_proj, Some("app.py")),
+            Some("api_secret_key")
+        );
+        let sk_short_ant = ["sk-", "ant-api03-abcdefghij"].concat();
+        assert_eq!(
+            scan_secret_content(&sk_short_ant, Some("app.py")),
+            Some("api_secret_key")
+        );
+
+        // Finding 4: Sinhala text / combining marks / ZWJ adjacent to secret tokens
+        let aws_tok = ["AKIA", "IOSFODNN7EXAMPLE"].concat();
+        assert_eq!(
+            scan_secret_content(&format!("යතුර:{}අගය", aws_tok), Some("notes.py")),
+            Some("aws_access_key")
+        );
+        assert_eq!(
+            scan_secret_content(&format!("ා{}්", aws_tok), Some("notes.py")),
+            Some("aws_access_key")
+        );
+        assert_eq!(
+            scan_secret_content(&format!("\u{200d}{}\u{200d}", aws_tok), Some("notes.py")),
+            Some("aws_access_key")
+        );
 
         // Benign code patterns must not be flagged
-        assert_eq!(scan_secret_content("password = get_password()\n", Some("auth.py")), None);
-        assert_eq!(scan_secret_content("password = user_input_password\n", Some("auth.py")), None);
+        assert_eq!(
+            scan_secret_content("password = get_password()\n", Some("auth.py")),
+            None
+        );
+        assert_eq!(
+            scan_secret_content("password = user_input_password\n", Some("auth.py")),
+            None
+        );
+    }
+
+    /// Deterministic PRNG (xorshift64*) for no-panic property testing across arbitrary Unicode inputs.
+    struct XorShift64(u64);
+
+    impl XorShift64 {
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn next_usize(&mut self, bound: usize) -> usize {
+            (self.next_u64() as usize) % bound
+        }
+    }
+
+    #[test]
+    fn test_no_panic_random_unicode_property() {
+        let special_pool: &[char] = &[
+            // Sinhala letters, independent vowels, and dependent vowel signs / virama
+            'අ',
+            'ආ',
+            'ඇ',
+            'ඉ',
+            'ඊ',
+            'උ',
+            'එ',
+            'ඔ',
+            'ක',
+            'ග',
+            'ච',
+            'ජ',
+            'ට',
+            'ඩ',
+            'ණ',
+            'ත',
+            'ද',
+            'න',
+            'ප',
+            'බ',
+            'ම',
+            'ය',
+            'ර',
+            'ල',
+            'ව',
+            'ශ',
+            'ෂ',
+            'ස',
+            'හ',
+            'ළ',
+            'ෆ',
+            '\u{0dca}',
+            '\u{0dcf}',
+            '\u{0dd0}',
+            '\u{0dd2}',
+            '\u{0dd3}',
+            '\u{0dd4}',
+            '\u{0dd6}',
+            '\u{0dd8}',
+            '\u{0dd9}',
+            '\u{0dda}',
+            '\u{0ddc}',
+            '\u{0ddd}',
+            '\u{0dde}',
+            '\u{0ddf}',
+            // Zero-width joiners, non-joiners, BOM, bidi controls
+            '\u{200b}',
+            '\u{200c}',
+            '\u{200d}',
+            '\u{feff}',
+            '\u{061c}',
+            '\u{200e}',
+            '\u{200f}',
+            '\u{202a}',
+            '\u{202e}',
+            '\u{2066}',
+            '\u{2069}',
+            // C0/C1 controls, ANSI CSI/OSC bytes
+            '\x00',
+            '\x07',
+            '\x08',
+            '\t',
+            '\n',
+            '\x0b',
+            '\x0c',
+            '\r',
+            '\x1b',
+            '\x1c',
+            '\x1d',
+            '\x1e',
+            '\x1f',
+            '\x7f',
+            '\u{0080}',
+            '\u{009b}',
+            '\u{009c}',
+            '\u{009d}',
+            '\u{009f}',
+            // ASCII syntax, wildcards, delimiters, quotes, multi-plane emojis & symbols
+            '*',
+            '?',
+            '/',
+            '\\',
+            '.',
+            ':',
+            '=',
+            '#',
+            '"',
+            '\'',
+            '-',
+            '_',
+            '+',
+            '@',
+            '[',
+            ']',
+            '{',
+            '}',
+            '(',
+            ')',
+            ',',
+            ';',
+            'a',
+            'z',
+            'A',
+            'Z',
+            '0',
+            '9',
+            'é',
+            'ß',
+            'Ж',
+            '中',
+            '🚀',
+            '🧪',
+            '\u{10ffff}',
+        ];
+        let fragments: &[&str] = &[
+            "# නම: සිංහල",
+            "abදදcdef",
+            "export ",
+            "password=",
+            "api_key:",
+            "postgresql://",
+            "mongodb+srv://",
+            "sk-proj-",
+            "sk-ant-api03-",
+            "AKIA",
+            "ghp_",
+            "github_pat_",
+            "xoxb-",
+            "AIza",
+            "--- UNTRUSTED DATA BEGIN ---",
+            "--- UNTRUSTED DATA END ---",
+            "id_rsa*x",
+            ".env.",
+            "\x1b[31m",
+            "\x1b]0;title\x07",
+        ];
+        let file_paths: &[Option<&str>] = &[
+            None,
+            Some("config.toml"),
+            Some(".env"),
+            Some("src/auth.py"),
+            Some("සිංහල/ගොනුව.yaml"),
+            Some("repo\\dist\\id_rsa*x"),
+        ];
+
+        for seed in [1u64, 42, 1337, 9001, 20261012] {
+            let mut rng = XorShift64(seed);
+            for _ in 0..1000 {
+                let len = rng.next_usize(96);
+                let mut s = String::new();
+                while s.chars().count() < len {
+                    let mode = rng.next_usize(10);
+                    if mode < 5 {
+                        s.push(special_pool[rng.next_usize(special_pool.len())]);
+                    } else if mode < 8 {
+                        s.push_str(fragments[rng.next_usize(fragments.len())]);
+                    } else {
+                        // Arbitrary Unicode scalar value across BMP and supplementary planes
+                        let code = (rng.next_u64() as u32) % 0x11_0000;
+                        if let Some(ch) = char::from_u32(code) {
+                            s.push(ch);
+                        }
+                    }
+                }
+                let fp = file_paths[rng.next_usize(file_paths.len())];
+                let _ = scan_secret_content(&s, fp);
+                let _ = sanitize_terminal_output(&s);
+                let _ = sanitize_text_content(&s, 32);
+                let _ = sanitize_header(&s);
+                let _ = is_secret_file(&s);
+                let _ = is_junk_dir(&s);
+                let _ = defang_envelope_markers(&s, Some("nonce123"));
+                let _ = wrap_untrusted_envelope(&s, fp, "nonce123");
+            }
+        }
     }
 }
-

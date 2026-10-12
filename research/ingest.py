@@ -332,11 +332,11 @@ def is_secret_file(
 
 _SECRET_CONTENT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("pem_private_key", re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----")),
-    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("github_token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
-    ("api_secret_key", re.compile(r"\bsk-(?:proj-|ant-api03-)?[A-Za-z0-9_-]{20,}\b")),
-    ("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
-    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", re.ASCII)),
+    ("github_token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b", re.ASCII)),
+    ("api_secret_key", re.compile(r"\bsk-(?:proj-|ant-api03-)?[A-Za-z0-9_-]{20,}\b", re.ASCII)),
+    ("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b", re.ASCII)),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b", re.ASCII)),
 )
 
 _CRED_KEY_PART = (
@@ -396,7 +396,7 @@ _DB_URL_PASSWORD_RE = re.compile(
     r"\b(?:postgres(?:ql)?(?:\+[a-z0-9_]+)?|mysql(?:\+[a-z0-9_]+)?|mariadb(?:\+[a-z0-9_]+)?|"
     r"mongodb(?:\+srv)?|redis(?:s)?|amqp(?:s)?|mssql(?:\+[a-z0-9_]+)?)://"
     r"[^/\s:@\"']*:(?P<pw>[^/\s@\"']{4,})@[^/\s\"']+",
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 _BENIGN_CREDENTIAL_VALUES = frozenset({
@@ -516,10 +516,10 @@ def _is_literal_like_unquoted_rhs(raw_val: str) -> bool:
     if _is_benign_credential_rhs(raw_val):
         return False
     v = raw_val.strip()
-    # Pure alphabetic/underscore identifiers or dotted identifier chains without digits/symbols
+    # Pure ASCII alphabetic/underscore identifiers or dotted identifier chains without digits/symbols
     # (e.g. `user_input_password`, `userInput`, `getpass.getpass`, `user.password`) are code identifiers.
     parts = v.split(".")
-    if all(p.isidentifier() for p in parts) and not any(ch.isdigit() for ch in v):
+    if all(p.isascii() and p.isidentifier() for p in parts) and not any(ch in "0123456789" for ch in v):
         return False
     return True
 
@@ -559,8 +559,9 @@ def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[
 
 
 def is_junk_dir(dirname: str, junk_patterns: Tuple[str, ...] = DEFAULT_JUNK_DIR_PATTERNS) -> bool:
-    """Returns True if dirname matches any junk directory pattern."""
-    base = os.path.basename(dirname.rstrip("/\\")).lower()
+    """Returns True if dirname matches any junk directory pattern (platform-independent)."""
+    norm = dirname.replace("\\", "/").rstrip("/")
+    base = norm.rsplit("/", 1)[-1].lower()
     for pat in junk_patterns:
         if fnmatch.fnmatch(base, pat.lower()):
             return True

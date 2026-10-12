@@ -2313,6 +2313,10 @@ def verify_forecast_explanation_numbers(
     Checks numbers cited in an LLM forecast explanation against the deterministic
     forecast report figures. Flags unrecognized numbers and cases where confidence
     interval bounds (e.g., upper_80) are cited without the actual point forecasts.
+
+    Known limitation: number matching uses a fixed absolute tolerance (`tol = 0.15`),
+    which is strict for large-magnitude series (e.g., 10,000+) where integer rounding
+    exceeds 0.15, and loose for small-magnitude series near 1.0 where 0.15 is ~15%.
     """
     if not explanation:
         return {

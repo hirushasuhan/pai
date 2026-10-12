@@ -120,6 +120,16 @@ class Vectors(unittest.TestCase):
                 scan_secret_content(raw_rs, file_path="core/src/ingest.rs"),
                 "core/src/ingest.rs must not contain contiguous secret-shaped literals at rest",
             )
+        test_ingest_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "test_ingest.py",
+        )
+        with open(test_ingest_path, encoding="utf-8") as f:
+            raw_test_ingest = f.read()
+        self.assertIsNone(
+            scan_secret_content(raw_test_ingest, file_path="research/tests/test_ingest.py"),
+            "test_ingest.py must not contain contiguous secret-shaped literals at rest",
+        )
 
     def test_verify_loop_vectors_match_the_code(self):
         vec = load("verify_loop_vectors.json")

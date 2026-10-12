@@ -189,87 +189,138 @@ fn validate_ingest_cases(
 
     for c in secret_file_cases {
         total += 1;
-        let got = is_secret_file(&c.path);
-        if got != c.expected {
-            eprintln!(
-                "INGEST SECRET_FILE MISMATCH for '{}': expected {}, got {}",
-                c.path, c.expected, got
-            );
-            failed += 1;
+        match std::panic::catch_unwind(|| is_secret_file(&c.path)) {
+            Ok(got) if got == c.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "INGEST SECRET_FILE MISMATCH for '{}': expected {}, got {}",
+                    c.path, c.expected, got
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!("INGEST SECRET_FILE PANIC for '{}'", c.path);
+                failed += 1;
+            }
         }
     }
 
     for c in junk_dir_cases {
         total += 1;
-        let got = is_junk_dir(&c.dirname);
-        if got != c.expected {
-            eprintln!(
-                "INGEST JUNK_DIR MISMATCH for '{}': expected {}, got {}",
-                c.dirname, c.expected, got
-            );
-            failed += 1;
+        match std::panic::catch_unwind(|| is_junk_dir(&c.dirname)) {
+            Ok(got) if got == c.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "INGEST JUNK_DIR MISMATCH for '{}': expected {}, got {}",
+                    c.dirname, c.expected, got
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!("INGEST JUNK_DIR PANIC for '{}'", c.dirname);
+                failed += 1;
+            }
         }
     }
 
     for c in secret_content_cases {
         total += 1;
         let joined = c.text_parts.concat();
-        let got = scan_secret_content(&joined, c.file_path.as_deref()).map(|s| s.to_string());
-        if got != c.expected {
-            eprintln!(
-                "INGEST SECRET_CONTENT MISMATCH for '{}' (path={:?}): expected {:?}, got {:?}",
-                c.id, c.file_path, c.expected, got
-            );
-            failed += 1;
+        let fp = c.file_path.as_deref();
+        match std::panic::catch_unwind(|| scan_secret_content(&joined, fp).map(|s| s.to_string())) {
+            Ok(got) if got == c.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "INGEST SECRET_CONTENT MISMATCH for '{}' (path={:?}): expected {:?}, got {:?}",
+                    c.id, c.file_path, c.expected, got
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!(
+                    "INGEST SECRET_CONTENT PANIC for '{}' (path={:?})",
+                    c.id, c.file_path
+                );
+                failed += 1;
+            }
         }
     }
 
     for c in sanitize_terminal_cases {
         total += 1;
-        let got = sanitize_terminal_output(&c.input);
-        if got != c.expected {
-            eprintln!(
-                "INGEST SANITIZE_TERMINAL MISMATCH for '{}':\n  expected: {:?}\n  got:      {:?}",
-                c.id, c.expected, got
-            );
-            failed += 1;
+        match std::panic::catch_unwind(|| sanitize_terminal_output(&c.input)) {
+            Ok(got) if got == c.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "INGEST SANITIZE_TERMINAL MISMATCH for '{}':\n  expected: {:?}\n  got:      {:?}",
+                    c.id, c.expected, got
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!("INGEST SANITIZE_TERMINAL PANIC for '{}'", c.id);
+                failed += 1;
+            }
         }
     }
 
     for c in sanitize_text_cases {
         total += 1;
-        let got = sanitize_text_content(&c.raw_utf8, c.max_line_length);
-        if got != c.expected {
-            eprintln!(
-                "INGEST SANITIZE_TEXT MISMATCH for '{}':\n  expected: {:?}\n  got:      {:?}",
-                c.id, c.expected, got
-            );
-            failed += 1;
+        match std::panic::catch_unwind(|| sanitize_text_content(&c.raw_utf8, c.max_line_length)) {
+            Ok(got) if got == c.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "INGEST SANITIZE_TEXT MISMATCH for '{}':\n  expected: {:?}\n  got:      {:?}",
+                    c.id, c.expected, got
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!("INGEST SANITIZE_TEXT PANIC for '{}'", c.id);
+                failed += 1;
+            }
         }
     }
 
     for c in sanitize_header_cases {
         total += 1;
-        let got = sanitize_header(&c.header);
-        if got != c.expected {
-            eprintln!(
-                "INGEST SANITIZE_HEADER MISMATCH for '{}':\n  expected: {:?}\n  got:      {:?}",
-                c.id, c.expected, got
-            );
-            failed += 1;
+        match std::panic::catch_unwind(|| sanitize_header(&c.header)) {
+            Ok(got) if got == c.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "INGEST SANITIZE_HEADER MISMATCH for '{}':\n  expected: {:?}\n  got:      {:?}",
+                    c.id, c.expected, got
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!("INGEST SANITIZE_HEADER PANIC for '{}'", c.id);
+                failed += 1;
+            }
         }
     }
 
     for c in envelope_cases {
         total += 1;
-        let got_defanged = defang_envelope_markers(&c.content, Some(&c.nonce));
-        let got_env = wrap_untrusted_envelope(&c.content, c.header.as_deref(), &c.nonce);
-        if got_defanged != c.expected_defanged || got_env != c.expected_envelope {
-            eprintln!(
-                "INGEST ENVELOPE MISMATCH for '{}':\n  expected_defanged: {:?}\n  got_defanged:      {:?}\n  expected_env: {:?}\n  got_env:      {:?}",
-                c.id, c.expected_defanged, got_defanged, c.expected_envelope, got_env
-            );
-            failed += 1;
+        let res = std::panic::catch_unwind(|| {
+            let got_defanged = defang_envelope_markers(&c.content, Some(&c.nonce));
+            let got_env = wrap_untrusted_envelope(&c.content, c.header.as_deref(), &c.nonce);
+            (got_defanged, got_env)
+        });
+        match res {
+            Ok((got_defanged, got_env))
+                if got_defanged == c.expected_defanged && got_env == c.expected_envelope => {}
+            Ok((got_defanged, got_env)) => {
+                eprintln!(
+                    "INGEST ENVELOPE MISMATCH for '{}':\n  expected_defanged: {:?}\n  got_defanged:      {:?}\n  expected_env: {:?}\n  got_env:      {:?}",
+                    c.id, c.expected_defanged, got_defanged, c.expected_envelope, got_env
+                );
+                failed += 1;
+            }
+            Err(_) => {
+                eprintln!("INGEST ENVELOPE PANIC for '{}'", c.id);
+                failed += 1;
+            }
         }
     }
 
@@ -330,31 +381,46 @@ pub fn run_differential_validation(path: &Path) -> Result<(usize, usize, usize),
 
     let mut tier_failed = 0;
     for (idx, case) in dataset.tier_cases.iter().enumerate() {
-        let got = calculate_budget(
-            case.input.avail_ram_mb,
-            case.input.memory_load_pct,
-            case.input.cpu_load_pct,
-            case.input.battery.clone(),
-            case.input.cpu_cores,
-        );
-        if got != case.expected {
-            eprintln!(
-                "DIFF TIER MISMATCH at index {}:\n  Input: {:?}\n  Expected: {:?}\n  Actual:   {:?}",
-                idx, case.input, case.expected, got
-            );
-            tier_failed += 1;
+        let res = std::panic::catch_unwind(|| {
+            calculate_budget(
+                case.input.avail_ram_mb,
+                case.input.memory_load_pct,
+                case.input.cpu_load_pct,
+                case.input.battery.clone(),
+                case.input.cpu_cores,
+            )
+        });
+        match res {
+            Ok(got) if got == case.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "DIFF TIER MISMATCH at index {}:\n  Input: {:?}\n  Expected: {:?}\n  Actual:   {:?}",
+                    idx, case.input, case.expected, got
+                );
+                tier_failed += 1;
+            }
+            Err(_) => {
+                eprintln!("DIFF TIER PANIC at index {}: Input: {:?}", idx, case.input);
+                tier_failed += 1;
+            }
         }
     }
 
     let mut url_failed = 0;
     for (idx, case) in dataset.url_cases.iter().enumerate() {
-        let got = evaluate_url(&case.url);
-        if got != case.expected {
-            eprintln!(
-                "DIFF URL MISMATCH at index {}:\n  URL: {:?}\n  Expected: {}\n  Actual:   {}",
-                idx, case.url, case.expected, got
-            );
-            url_failed += 1;
+        match std::panic::catch_unwind(|| evaluate_url(&case.url)) {
+            Ok(got) if got == case.expected => {}
+            Ok(got) => {
+                eprintln!(
+                    "DIFF URL MISMATCH at index {}:\n  URL: {:?}\n  Expected: {}\n  Actual:   {}",
+                    idx, case.url, case.expected, got
+                );
+                url_failed += 1;
+            }
+            Err(_) => {
+                eprintln!("DIFF URL PANIC at index {}: URL: {:?}", idx, case.url);
+                url_failed += 1;
+            }
         }
     }
 
@@ -374,7 +440,11 @@ pub fn run_differential_validation(path: &Path) -> Result<(usize, usize, usize),
             tier_failed, url_failed, ingest_failed
         ))
     } else {
-        Ok((dataset.tier_cases.len(), dataset.url_cases.len(), ingest_count))
+        Ok((
+            dataset.tier_cases.len(),
+            dataset.url_cases.len(),
+            ingest_count,
+        ))
     }
 }
 
@@ -421,8 +491,17 @@ mod tests {
     fn test_ingest_vectors_conformance() {
         let dir = find_conformance_dir();
         let path = dir.join("ingest_vectors.json");
-        assert!(path.exists(), "ingest_vectors.json must exist at {}", path.display());
-        let count = run_ingest_conformance(&path).expect("Ingest vectors must pass with 0 failures");
-        assert_eq!(count, 99, "Must run all 99 ingest vector cases (got {})", count);
+        assert!(
+            path.exists(),
+            "ingest_vectors.json must exist at {}",
+            path.display()
+        );
+        let count =
+            run_ingest_conformance(&path).expect("Ingest vectors must pass with 0 failures");
+        assert_eq!(
+            count, 112,
+            "Must run all 112 ingest vector cases (got {})",
+            count
+        );
     }
 }

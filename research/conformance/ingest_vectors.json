@@ -83,6 +83,14 @@
    "expected": true
   },
   {
+   "dirname": "repo\\dist\\",
+   "expected": true
+  },
+  {
+   "dirname": "repo\\node_modules",
+   "expected": true
+  },
+  {
    "dirname": "src",
    "expected": false
   },
@@ -104,6 +112,10 @@
   },
   {
    "dirname": "target_helpers",
+   "expected": false
+  },
+  {
+   "dirname": "repo\\src\\",
    "expected": false
   }
  ],
@@ -363,6 +375,66 @@
    ]
   },
   {
+   "expected": "api_secret_key",
+   "file_path": "src/llm.py",
+   "id": "pos_12_sk_proj_short_alt",
+   "text_parts": [
+    "sk-proj-",
+    "abcdefghij12345"
+   ]
+  },
+  {
+   "expected": "api_secret_key",
+   "file_path": "src/llm.py",
+   "id": "pos_13_sk_ant_short_alt",
+   "text_parts": [
+    "sk-ant-api03-",
+    "abcdefghij"
+   ]
+  },
+  {
+   "expected": "slack_token",
+   "file_path": "src/bot.py",
+   "id": "pos_14_sinhala_vowel_sign_before_slack",
+   "text_parts": [
+    "\u0da7\u0ddd\u0d9a\u0db1\u0dca\u0dcf",
+    "xoxb-",
+    "1234567890-abcdefghij"
+   ]
+  },
+  {
+   "expected": "github_token",
+   "file_path": "src/ci.py",
+   "id": "pos_15_sinhala_virama_after_ghp",
+   "text_parts": [
+    "ghp_",
+    "1234567890abcdefghijklmnopqrstuvwxyz",
+    "\u0dca"
+   ]
+  },
+  {
+   "expected": "api_secret_key",
+   "file_path": "src/ai.py",
+   "id": "pos_16_zwj_adjacent_to_sk",
+   "text_parts": [
+    "\u0dbb\u0dc4\u0dc3\u0dca\u200d",
+    "sk-",
+    "abcdefghij1234567890",
+    "\u200d\u0d85\u0d9c\u0dba"
+   ]
+  },
+  {
+   "expected": "github_token",
+   "file_path": "src/ci.py",
+   "id": "pos_17_sinhala_vowel_adjacent_to_github_pat",
+   "text_parts": [
+    "\u0dd2",
+    "github_pat_",
+    "11ABCDEFG0123456789abcdef_xyz",
+    "\u0dcf"
+   ]
+  },
+  {
    "expected": null,
    "file_path": "src/auth.py",
    "id": "neg_01_code_get_password_call",
@@ -464,6 +536,22 @@
    "id": "neg_13_os_environ_lookup",
    "text_parts": [
     "api_key = os.environ[\"API_KEY\"]\n"
+   ]
+  },
+  {
+   "expected": null,
+   "file_path": "config/settings.toml",
+   "id": "neg_14_sinhala_comment_in_toml",
+   "text_parts": [
+    "# \u0db1\u0db8: \u0dc3\u0dd2\u0d82\u0dc4\u0dbd\ntitle = \"app\"\n"
+   ]
+  },
+  {
+   "expected": null,
+   "file_path": null,
+   "id": "neg_15_sinhala_short_line_no_path",
+   "text_parts": [
+    "ab\u0daf\u0dafcdef\n"
    ]
   }
  ],
@@ -591,6 +679,14 @@
   {
    "expected": true,
    "path": "backup.enc"
+  },
+  {
+   "expected": true,
+   "path": "id_rsa*x"
+  },
+  {
+   "expected": true,
+   "path": "x/id_rsa*y"
   },
   {
    "expected": false,
