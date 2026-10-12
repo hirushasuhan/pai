@@ -2317,7 +2317,7 @@ def verify_forecast_explanation_numbers(
     if not explanation:
         return {
             "label": MODEL_EXPLANATION_LABEL,
-            "verified": True,
+            "numbers_match_report": True,
             "cited_point_forecasts": [],
             "cited_ci_bounds": [],
             "unmatched_numbers": [],
@@ -2400,7 +2400,7 @@ def verify_forecast_explanation_numbers(
 
     return {
         "label": MODEL_EXPLANATION_LABEL,
-        "verified": (len(unmatched) == 0 and not ci_without_points),
+        "numbers_match_report": (len(unmatched) == 0 and not ci_without_points),
         "cited_point_forecasts": cited_points,
         "cited_ci_bounds": cited_ci,
         "unmatched_numbers": unmatched,

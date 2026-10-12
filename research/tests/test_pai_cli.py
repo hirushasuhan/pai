@@ -483,7 +483,7 @@ class TestPaiCLI(unittest.TestCase):
         bad_exp = "The forecasted values for the next 3 steps are 372.45, 387.45, and 402.45."
         chk_bad = verify_forecast_explanation_numbers(bad_exp, report_dict)
         self.assertEqual(chk_bad["label"], MODEL_EXPLANATION_LABEL)
-        self.assertFalse(chk_bad["verified"])
+        self.assertFalse(chk_bad["numbers_match_report"])
         self.assertTrue(chk_bad["ci_bounds_cited_without_point_forecasts"])
         self.assertEqual(chk_bad["cited_point_forecasts"], [])
         self.assertEqual(chk_bad["cited_ci_bounds"], [372.45, 387.45, 402.45])
@@ -495,7 +495,7 @@ class TestPaiCLI(unittest.TestCase):
             "(with 80% upper bounds 372.45, 387.45, 402.45 and backtest MAE 5.0 vs Naive 15.0)."
         )
         chk_good = verify_forecast_explanation_numbers(good_exp, report_dict)
-        self.assertTrue(chk_good["verified"])
+        self.assertTrue(chk_good["numbers_match_report"])
         self.assertFalse(chk_good["ci_bounds_cited_without_point_forecasts"])
         self.assertEqual(chk_good["cited_point_forecasts"], [355.0, 370.0, 385.0])
         self.assertEqual(chk_good["unmatched_numbers"], [])

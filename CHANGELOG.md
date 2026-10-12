@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.1] — 2026-10-12 — Phase 1.1 Fixes, Conformance Vector Hardening & Phase 2 Slice 1 (Rust Safe Ingestion)
+
+### Phase 1.1 Fixes (`research/pai.py`, `research/ingest.py`, `research/tests/test_pai_cli.py`, `docs/evidence/phase1_windows_dogfooding.json`)
+- **Unmocked-Router Stub Server Integration Test**: Added `test_all_subcommands_without_model_against_local_stub_server_unmocked_router` in `research/tests/test_pai_cli.py` running `pai code`, `pai analyze`, `pai docs`, `pai forecast`, and `pai chat` end-to-end without `--model` and without mocking `ModelRouter` or `HardwareTelemetry` against a local `ThreadingHTTPServer` stub (`/api/version`, `/api/tags`, `/api/ps`, `/api/generate`).
+- **Dogfooding Provenance Note**: Recorded `task_provenance: "agent_selected_and_executed_not_owner_tasks"` and `provenance_note` in `docs/evidence/phase1_windows_dogfooding.json`.
+- **Deterministic Question-Overlap File Ranking in `pai analyze`**: Added `_extract_question_tokens` and `_question_overlap_sort_key` in `research/ingest.py` and wired `question=args.question` into `assemble_untrusted_context` in `cmd_analyze` (`research/pai.py`), sorting files deterministically by `(-fname_compound_hits, -fname_word_hits, -content_hits, item.bytes_read, item.path)` while keeping omitted files in the manifest.
+- **`pai forecast` Model Explanation Number Verification & Label**: Added `MODEL_EXPLANATION_LABEL = "model explanation, may contain errors"` and `verify_forecast_explanation_numbers(explanation, report_dict)` in `research/pai.py`, tagging explanations as `"verified_against_computed_report"` or `"unverified_contains_unmatched_numbers"` with `"unmatched_numbers"` and printing `[UNVERIFIED: model cited number(s) ... not in computed forecast table]` in CLI text output when any non-trivial number in the explanation is absent from the computed forecast report.
+
+### Conformance Vector Hardening (`research/conformance.py`, `research/value_codec.py`, `research/verify_loop.py`)
+- **Runtime Piece Construction for Secret-Scan Vectors**: Replaced contiguous secret-shaped literals in `research/conformance/ingest_vectors.json` and `research/conformance.py` with `"text_parts"` arrays joined at runtime; verified in `test_conformance.py` that `scan_secret_content` returns `None` at rest on `ingest_vectors.json`, `conformance.py`, and `core/src/ingest.rs`.
+- **Verdict Frame `test_suite_hash_mismatch` Check & Vector**: Added `expected_test_hash` check to `verify_verdict_frame` (`research/verify_loop.py`) and added vector `vf_11_test_suite_hash_mismatch` in `research/conformance/verify_loop_vectors.json`.
+- **Explicit Rust Decoder Edge-Case Policy & Vectors**: Added `MIN_INT64`, `MAX_INT64`, `MAX_COLLECTION_LENGTH = 1000`, `get_codec_policy()`, strict 2-key envelope check (`{"t", "v"}`), and duplicate dict/set key rejection in `research/value_codec.py`, plus boundary/invalid vectors (`codec_18`–`codec_20`, `inv_10`–`inv_16`) in `research/conformance/verify_loop_vectors.json`.
+
+### Phase 2 Slice 1: Rust Safe Ingestion (`core/src/ingest.rs`, `core/src/conformance.rs`, `core/src/main.rs`)
+- **Pure Safe Rust Implementation (`core/src/ingest.rs`)**: Implemented `IngestLimits`, `get_ingest_limits`, `is_secret_file`, `is_junk_dir`, `sanitize_terminal_output`, `sanitize_text_content`, `sanitize_header`, `defang_envelope_markers`, `wrap_untrusted_envelope`, and `scan_secret_content` in pure safe Rust (`#![deny(unsafe_code)]`, 0 external regex crates).
+- **Golden Conformance & Differential Fuzzing**: Wired `run_ingest_conformance` and 7 ingest fuzz categories into `pai-core` (`--conformance`, `--fuzz`) and `research/conformance.py`. Verified 100% parity across all `99` ingest vector cases + `limits` (`0` failures) and `23,331` differential fuzz cases (`0` mismatches).
+
 ## [0.8.0] — 2026-10-11 — Phase 1 Python Prototype Freeze, M7 Singlish Quality Gate, Singlish Holdout & Open-Item Hardening
 
 ### One-Shot Singlish Holdout Evaluation (`code_21`–`code_30`, Frozen Gate `6218fbc`)

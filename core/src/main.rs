@@ -157,10 +157,10 @@ fn main() {
         }
 
         match run_differential_validation(file) {
-            Ok((tier_count, url_count)) => {
+            Ok((tier_count, url_count, ingest_count)) => {
                 println!(
-                    "Differential validation SUCCESS: {} tier cases, {} URL cases compared (0 mismatches).",
-                    tier_count, url_count
+                    "Differential validation SUCCESS: {} tier cases, {} URL cases, {} ingest cases compared (0 mismatches).",
+                    tier_count, url_count, ingest_count
                 );
             }
             Err(err) => {
@@ -181,10 +181,10 @@ fn main() {
         }
 
         match run_all_conformance(Path::new(dir)) {
-            Ok((tier_count, url_count)) => {
+            Ok((tier_count, url_count, ingest_count)) => {
                 println!(
-                    "Conformance SUCCESS: {} tier vectors, {} URL vectors passed (0 failures).",
-                    tier_count, url_count
+                    "Conformance SUCCESS: {} tier vectors, {} URL vectors, {} ingest vectors passed (0 failures).",
+                    tier_count, url_count, ingest_count
                 );
             }
             Err(err) => {

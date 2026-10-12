@@ -4,6 +4,7 @@
 #![deny(unsafe_code)]
 
 pub mod conformance;
+pub mod ingest;
 pub mod tier;
 pub mod url_policy;
 pub mod win32;

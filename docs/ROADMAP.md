@@ -2,7 +2,7 @@
 
 This roadmap outlines the systematic development of the **Personal Agentic AI (PAI)** from an agile Python research prototype to a fully autonomous, recursive self-improving native intelligence daemon.
 
-_Last reviewed: 2026-10-12. Phase 1 accepted on Linux (`70b6fb3`) and verified on Windows (`pai doctor` 8/8, 424 tests OK [23 skipped], 13/13 eval set hashes locked, 5-task dogfooding pass recorded in `docs/evidence/phase1_windows_dogfooding.json`); Phase 2 slice VS2 (Rust policy conformance) complete and hardened, and Phase 2 golden vectors generated for safe ingestion (`ingest_vectors.json`) and verify-loop framing/codec (`verify_loop_vectors.json`); local assistant and gated own-model tracks added (ADR-008); M2b verification gate frozen at `6218fbc` (English and Singlish one-shot holdouts complete; M2c bridge kept on hold), M3/M4/M5/M7 complete. Risks R1–R7 remediated, R8–R12 mitigated/closed in prototype — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md) and the [ADRs](adr/README.md)._
+_Last reviewed: 2026-10-12. Phase 1 closed by reviewer at `05c9739`; Phase 1.1 fixes completed (`0d0f553`: unmocked-router stub integration test, deterministic question-overlap file ranking in `pai analyze`, model explanation number verification in `pai forecast`, runtime piece construction in `ingest_vectors.json`, and Rust codec/verdict-frame vector hardening); Phase 2 Slice 1 (`core/src/ingest.rs` safe ingestion in pure safe Rust) complete and verified against 99 golden ingest vectors + `limits` and 23,331 differential fuzz cases with 0 mismatches; M2b verification gate frozen at `6218fbc` (English and Singlish one-shot holdouts complete; M2c bridge kept on hold), M3/M4/M5/M7 complete. Risks R1–R7 remediated, R8–R12 mitigated/closed in prototype — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md) and the [ADRs](adr/README.md)._
 
 ---
 
@@ -18,6 +18,7 @@ gantt
     Exit gate: sandbox, local model, CI, signing (done) :done, 2026-10-06, 2026-10-07
     section Phase 2: Native layers
     VS2 Rust tier + URL policy conformance (done)     :done, 2026-10-06, 2026-10-07
+    Phase 2 Slice 1: Rust safe ingestion (done)       :done, 2026-10-12, 2026-10-12
     VS3 Rust Win32 telemetry + parity (ADR-009)       :active, 2026-10-08, 2026-11-05
     C++ GPU/NPU probe (VS4, reduced charter)          :2026-11-05, 2026-11-30
     section Track L: Local assistant (ADR-008)
@@ -82,8 +83,8 @@ All must be true before Phase 2 starts:
 
 ---
 
-## 📍 Phase 2: Native layers — Rust policy core (VS2 done), Win32 telemetry (VS3), C++ probe (VS4)
-_Status 2026-10-07: the Rust slice VS2 was completed first (see Phase 3 section); the C++ daemon below has not been started and is now sequenced after VS3 (ADR-004, ADR-009)._
+## 📍 Phase 2: Native layers — Rust policy core (VS2 done), Rust safe ingestion (Slice 1 done), Win32 telemetry (VS3), C++ probe (VS4)
+_Status 2026-10-12: the Rust slice VS2 (tier + URL policy) and Phase 2 Slice 1 (`core/src/ingest.rs` safe ingestion, secret scanning, terminal/text/header sanitization, and cryptographic nonce envelopes) are complete and verified against Python golden vectors and differential fuzzing. Next up after Slice 1 review is Slice 2 (Rust verify-loop framing and tagged value codec)._
 
 **Objective**: Native low-level Windows daemon for hardware telemetry (reduced C++ charter, ADR-004) and a time-boxed spike to confirm Rust as the network layer.
 
@@ -103,17 +104,17 @@ Adopt a local open-weights model behind the `Reasoner` interface (Option A); a c
 
 ### Deliverables & Vertical Slices
 - **Vertical Slice 2 (VS2) — Stateless Core & Policy Conformance (COMPLETE)**:
-  - Pure Rust implementations of resource tier policy (`src/tier.rs`) and outbound URL policy with Canonical Blocked CIDRs (`src/url_policy.rs`).
-  - Zero unsafe code blocks (`unsafe = 0`), zero network crate dependencies (strictly `serde` + `serde_json` + `std::net`).
+  - Pure Rust implementations of resource tier policy (`src/tier.rs`), outbound URL policy with Canonical Blocked CIDRs (`src/url_policy.rs`), and Phase 2 Slice 1 safe ingestion (`src/ingest.rs`).
+  - Zero unsafe code blocks (`unsafe = 0` in `tier.rs`, `url_policy.rs`, and `ingest.rs`), zero network or regex crate dependencies (strictly `serde` + `serde_json` + `std::net`).
   - Fake telemetry removed from skeleton per ADR-004.
-  - Passes 200 tier vectors and 87 URL vectors (28 baseline + 45 edge cases + 14 IPv6-transition and port-format cases added in the 2026-10-07 hardening).
+  - Passes 200 tier vectors, 87 URL vectors, and 99 ingest vectors + `limits` parity check (`pai-core --conformance`).
   - Hardening found by independent review (commit `70fd7f6`): IPv6 transition/embedded-IPv4 prefixes (NAT64 `64:ff9b::/96`, `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/23`, IPv4-compatible `::/96`, SIIT, site-local `fec0::/10`) and `192.88.99.0/24` are blocked; leading-zero ports are rejected. Lesson recorded: a differential fuzzer proves two implementations agree, not that the shared policy table is complete — adversarial vectors from an independent source are required.
-  - Differential fuzz testing (`python conformance.py --fuzz 10000 --seed 42`): 10,000 cases with 0 mismatches between Python and Rust.
+  - Differential fuzz testing (`python research/conformance.py --fuzz 10000 --seed 42`): 5,000 tier cases, 5,000 URL cases, and 23,331 ingest cases compared with 0 mismatches between Python and Rust.
   - Windows CI job verifying `cargo fmt`, `cargo clippy -D warnings`, `cargo test`, and drift checking.
 - **VS2 Exit Criteria (Gate to VS3)**:
-  - [x] Tier vectors (200) and URL vectors (87) pass 100% in Rust (`pai-core --conformance`).
-  - [x] Differential fuzzer passes 10,000 cases with 0 mismatches.
-  - [x] No `unsafe` blocks and no fake telemetry in Rust core.
+  - [x] Tier vectors (200), URL vectors (87), and ingest vectors (99 + `limits`) pass 100% in Rust (`pai-core --conformance`).
+  - [x] Differential fuzzer passes 33,331 total cases (5,000 tier + 5,000 URL + 23,331 ingest) with 0 mismatches.
+  - [x] No `unsafe` blocks and no fake telemetry in Rust policy/ingest core.
   - [x] Windows CI workflow includes dedicated Rust job.
   - [x] `core/README.md` and `core/Cargo.lock` updated and committed.
 - **Vertical Slice 3 (VS3) — Native telemetry first, then the full cycle in Rust** (entry decisions in ADR-009, proposed):
