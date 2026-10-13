@@ -43,6 +43,10 @@ from verify_loop import (
     verify_verdict_frame as py_verify_verdict_frame,
 )
 
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 logger = logging.getLogger("pai.core_bridge")
 
 PAI_USE_RUST_CORE = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
@@ -51,10 +55,65 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16 MiB
 
 _CORE_BIN_CACHE: Optional[str] = None
 
+_SHADOW_DISCREPANCIES: List[Dict[str, Any]] = []
+
+
+class CoreBridgeUnavailableError(RuntimeError):
+    """Raised when PAI_USE_RUST_CORE is requested but pai-core binary is unavailable or cannot execute."""
+    pass
+
+
+def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
+    """Records a shadow discrepancy for visibility in run reports and pai doctor."""
+    rec = {
+        "timestamp": time.time(),
+        "op": op,
+        "detail": detail,
+        **extra,
+    }
+    _SHADOW_DISCREPANCIES.append(rec)
+    logger.warning("[SHADOW DISCREPANCY] op=%s: %s", op, detail)
+
+
+def get_shadow_discrepancy_count() -> int:
+    """Returns the total number of recorded shadow discrepancies."""
+    return len(_SHADOW_DISCREPANCIES)
+
+
+def get_shadow_discrepancies() -> List[Dict[str, Any]]:
+    """Returns a copy of all recorded shadow discrepancies."""
+    return list(_SHADOW_DISCREPANCIES)
+
+
+def reset_shadow_discrepancies() -> None:
+    """Resets the recorded shadow discrepancies."""
+    _SHADOW_DISCREPANCIES.clear()
+
+
+def compute_repo_vectors_hash() -> str:
+    """Computes SHA-256 over canonical conformance vector files in the repository."""
+    import hashlib
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conformance")
+    vector_files = [
+        "tier_policy_vectors.json",
+        "url_policy_vectors.json",
+        "ingest_vectors.json",
+        "verify_loop_vectors.json",
+    ]
+    h = hashlib.sha256()
+    for vf in vector_files:
+        p = os.path.join(base_dir, vf)
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                h.update(vf.encode("utf-8"))
+                h.update(f.read())
+    return h.hexdigest()
+
 
 def check_handshake(binary_path: str) -> Dict[str, Any]:
     """
-    Performs handshake with pai-core binary, verifying protocol and platform compatibility.
+    Performs handshake with pai-core binary, verifying protocol, platform,
+    vector count, and compiled vector set hash.
     """
     req_json = json.dumps({"op": "handshake"})
     try:
@@ -67,24 +126,34 @@ def check_handshake(binary_path: str) -> Dict[str, Any]:
             timeout=5,
         )
     except Exception as exc:
-        raise RuntimeError(f"Failed to execute '{binary_path}' for handshake: {exc}") from exc
+        raise CoreBridgeUnavailableError(f"Failed to execute '{binary_path}' for handshake: {exc}") from exc
 
     if proc.returncode != 0:
         err_msg = proc.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"pai-core handshake failed with exit code {proc.returncode}: {err_msg}")
+        raise CoreBridgeUnavailableError(f"pai-core handshake failed with exit code {proc.returncode}: {err_msg}")
 
     stdout_str = proc.stdout.decode("utf-8", errors="replace").strip()
     try:
         resp = json.loads(stdout_str)
     except Exception as exc:
-        raise RuntimeError(f"pai-core handshake returned invalid JSON: {stdout_str[:100]}") from exc
+        raise CoreBridgeUnavailableError(f"pai-core handshake returned invalid JSON: {stdout_str[:100]}") from exc
 
     if not isinstance(resp, dict) or resp.get("status") != "ok":
-        raise RuntimeError(f"pai-core handshake rejected: {resp}")
+        raise CoreBridgeUnavailableError(f"pai-core handshake rejected: {resp}")
 
     result = resp.get("result", {})
     if not isinstance(result, dict) or result.get("protocol_version") != 1:
-        raise RuntimeError(f"Incompatible pai-core protocol version: {result}")
+        raise CoreBridgeUnavailableError(f"Incompatible pai-core protocol version: {result}")
+
+    # Verify compiled vector-set hash against current repo vector files
+    repo_vectors_hash = compute_repo_vectors_hash()
+    binary_vectors_hash = result.get("conformance_vectors_hash")
+    if binary_vectors_hash != repo_vectors_hash:
+        raise CoreBridgeUnavailableError(
+            f"pai-core binary was built with outdated vector set or source: "
+            f"binary={binary_vectors_hash} vs repo={repo_vectors_hash}. "
+            f"Run `cargo build --release --manifest-path core/Cargo.toml`."
+        )
 
     return result
 
@@ -126,7 +195,7 @@ def find_core_binary() -> str:
         except Exception as e:
             logger.debug("PATH candidate %s failed handshake: %s", on_path, e)
 
-    raise FileNotFoundError(
+    raise CoreBridgeUnavailableError(
         f"Could not find compatible '{bin_name}' binary in core/target/{{release,debug}} or on PATH. "
         "Run `cargo build --release --manifest-path core/Cargo.toml` on this platform first."
     )
@@ -368,8 +437,14 @@ def verify_verdict_frame(
     try:
         raw_bridge_res = call_core_bridge("verify_verdict_frame", **bridge_kwargs)
         bridge_res = _validate_verdict_result_shape(raw_bridge_res)
+    except CoreBridgeUnavailableError:
+        raise
     except Exception as exc:
-        logger.warning("Rust core bridge verify_verdict_frame failed: %s", exc)
+        record_shadow_discrepancy(
+            "verify_verdict_frame",
+            f"Bridge invocation exception: {exc}",
+            exception=type(exc).__name__,
+        )
         return {
             "passed": False,
             "status": "INTEGRITY_VIOLATION",
@@ -381,10 +456,11 @@ def verify_verdict_frame(
         }
 
     if bridge_res != py_res:
-        logger.warning(
-            "Verdict mismatch between Python reference and Rust core bridge: py=%r, rust=%r",
-            py_res,
-            bridge_res,
+        record_shadow_discrepancy(
+            "verify_verdict_frame",
+            f"Verdict mismatch between Python reference and Rust bridge: py={py_res!r} vs rust={bridge_res!r}",
+            py_res=py_res,
+            rust_res=bridge_res,
         )
         return {
             "passed": False,
@@ -403,11 +479,11 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
     """
     Extracts canonical assertions from example docstring section.
     When PAI_USE_RUST_CORE is active:
-    - Runs in shadow mode comparing Rust bridge output directly with Python reference
-    - Re-parses every single returned statement with ast.parse
-    - Defensively validates that every statement is an assert or assignment
-    - Rejects any malformed or non-conforming statement
-    - Refuses (returns empty list) on any differential mismatch
+    - Runs in shadow mode where Python reference remains authoritative (returned).
+    - If pai-core binary is unavailable or fails handshake, raises CoreBridgeUnavailableError.
+    - Re-parses every single returned statement from Rust with ast.parse.
+    - Defensively validates that every statement is an assert or assignment.
+    - If Rust differs from Python or bridge call throws, records the discrepancy in a counter and returns Python assertions.
     """
     py_stmts = py_extract_example_assertions(prompt, entry_point=entry_point)
     if not PAI_USE_RUST_CORE:
@@ -419,18 +495,27 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
 
     try:
         raw_stmts = call_core_bridge("extract_example_assertions", **kwargs)
+    except CoreBridgeUnavailableError:
+        raise
     except Exception as exc:
-        logger.warning("Rust core bridge extract_example_assertions failed: %s", exc)
-        return []
+        record_shadow_discrepancy(
+            "extract_example_assertions",
+            f"Bridge invocation exception: {exc}",
+            exception=type(exc).__name__,
+        )
+        return py_stmts
 
     if not isinstance(raw_stmts, list):
-        raise TypeError(f"extract_example_assertions expected list from bridge, got {type(raw_stmts).__name__}")
+        record_shadow_discrepancy(
+            "extract_example_assertions",
+            f"Bridge returned non-list: {type(raw_stmts).__name__}",
+        )
+        return py_stmts
 
     verified_stmts: List[str] = []
     for s in raw_stmts:
         if not isinstance(s, str):
             continue
-        # Re-parse statement with ast.parse
         try:
             tree = ast.parse(s)
             if len(tree.body) != 1:
@@ -448,11 +533,12 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
         rust_final = verified_stmts
 
     if rust_final != py_stmts:
-        logger.warning(
-            "Example assertion mismatch between Python reference and Rust core bridge: py=%r, rust=%r",
-            py_stmts,
-            rust_final,
+        record_shadow_discrepancy(
+            "extract_example_assertions",
+            f"Example assertion mismatch: py={py_stmts!r} vs rust={rust_final!r}",
+            py_stmts=py_stmts,
+            rust_stmts=rust_final,
         )
-        return []
 
-    return rust_final
+    # In shadow mode, Python reference is authoritative!
+    return py_stmts

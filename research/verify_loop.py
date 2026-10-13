@@ -428,6 +428,24 @@ def _is_safe_literal(
     return False
 
 
+def _is_safe_numeric_literal(node: ast.AST, allowed_vars: Set[str]) -> bool:
+    """
+    Returns True only if node is a safe numeric literal (int or float, but NOT bool,
+    and NOT containers, strings, bytes, or None). For variables in allowed_vars,
+    returns True only if the identifier is valid.
+    """
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool):
+            return False
+        return isinstance(node.value, (int, float))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)) and not isinstance(node.operand.value, bool):
+            return True
+    if allowed_vars and isinstance(node, ast.Name) and node.id in allowed_vars and _is_valid_example_identifier(node.id):
+        return True
+    return False
+
+
 def _is_safe_entry_call(node: ast.AST, entry_point: str, allowed_vars: Set[str]) -> bool:
     """
     Returns True only if `node` is a direct call `entry_point(...)` where every
@@ -612,12 +630,16 @@ def extract_example_assertions(
                     if isinstance(expr_ast, ast.Compare) and len(expr_ast.ops) == 1 and len(expr_ast.comparators) == 1:
                         left_node = expr_ast.left
                         right_node = expr_ast.comparators[0]
-                        left_ok = _is_safe_entry_call(left_node, entry_point, allowed_vars) or _is_safe_literal(left_node, allowed_vars, allow_inexact_floats=False)
-                        right_ok = _is_safe_entry_call(right_node, entry_point, allowed_vars) or _is_safe_literal(right_node, allowed_vars, allow_inexact_floats=False)
                         has_entry_call = _is_safe_entry_call(left_node, entry_point, allowed_vars) or _is_safe_entry_call(right_node, entry_point, allowed_vars)
-                        if not (left_ok and right_ok and has_entry_call):
+                        if not has_entry_call:
                             continue
                         if isinstance(expr_ast.ops[0], (ast.Gt, ast.Lt, ast.GtE, ast.LtE)):
+                            left_is_call = _is_safe_entry_call(left_node, entry_point, allowed_vars)
+                            right_is_call = _is_safe_entry_call(right_node, entry_point, allowed_vars)
+                            left_ok = left_is_call or _is_safe_numeric_literal(left_node, allowed_vars)
+                            right_ok = right_is_call or _is_safe_numeric_literal(right_node, allowed_vars)
+                            if not (left_ok and right_ok):
+                                continue
                             lhs = ast.get_source_segment(clean_blk, left_node)
                             rhs = ast.get_source_segment(clean_blk, right_node)
                             if lhs and rhs:
@@ -630,6 +652,10 @@ def extract_example_assertions(
                                     break
                                 continue
                         elif isinstance(expr_ast.ops[0], ast.Eq):
+                            left_ok = _is_safe_entry_call(left_node, entry_point, allowed_vars) or _is_safe_literal(left_node, allowed_vars, allow_inexact_floats=False)
+                            right_ok = _is_safe_entry_call(right_node, entry_point, allowed_vars) or _is_safe_literal(right_node, allowed_vars, allow_inexact_floats=False)
+                            if not (left_ok and right_ok):
+                                continue
                             candidate = f"assert {clean_blk}"
                             if not _try_append(candidate):
                                 break

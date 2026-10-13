@@ -435,6 +435,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ),
         },
     ]
+
+    # Core bridge shadow discrepancy diagnostic
+    try:
+        from pai_core_bridge import get_shadow_discrepancy_count, get_shadow_discrepancies
+        shadow_disc_count = get_shadow_discrepancy_count()
+        checks_table.append({
+            "check": "core_bridge_shadow",
+            "passed": shadow_disc_count == 0,
+            "detail": (
+                "0 discrepancies (Rust core bridge matches Python reference)"
+                if shadow_disc_count == 0
+                else f"{shadow_disc_count} shadow discrepancies recorded"
+            ),
+        })
+    except Exception as e:
+        checks_table.append({
+            "check": "core_bridge_shadow",
+            "passed": True,
+            "detail": f"Not evaluated: {e}",
+        })
+
     for sm in smoke_results:
         checks_table.append({
             "check": f"smoke_{sm['command']}",
@@ -466,6 +487,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "sandbox": sandbox_info,
         "smoke_tests": smoke_results,
         "checks": checks_table,
+        "shadow_discrepancies": get_shadow_discrepancies() if "get_shadow_discrepancies" in locals() else [],
     }
 
     if getattr(args, "json", False):

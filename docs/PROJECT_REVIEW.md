@@ -1980,3 +1980,64 @@ All reviewer findings (Items 1–9) resolved. Lines 1 to 1940 untouched.
 - **Conformance**: 200 tier vectors, 87 URL vectors, 113 ingest vectors, 84 verify_loop vectors passed (**0 failures**).
 - **Differential Fuzzing**: Seeds 777 and 888 (2,200 and 2,400 cases) executed with `pai-core --differential`: **0 mismatches, 0 panics**.
 - **Bridge Differential Suite**: `research/tests/test_bridge_differential.py` **7 tests passed (0 failures)**.
+
+
+### Addendum (6e70243): Re-check of Slice 3, integration bridge (2026-10-14)
+Reviewed state: Linux, HEAD 6e70243, clean working tree; the debug `pai-core` binary was built from the same source (hashes of `verify_loop.py`, `pai_core_bridge.py`, `value_codec.py`, `conformance.py` and all of `core/src/*.rs` matched between the repository and the copy I tested).
+
+Verified:
+- Python suite on Linux: 435 tests OK, 14 skipped (the owner's 442 and 23 are the Windows run). `cargo test`: 39 passed. `cargo clippy --all-targets -- -D warnings`: clean. Golden vectors: 200 tier, 87 URL, 113 ingest, 84 verify_loop, all pass.
+- Bridge transport: unknown fields, misspelled fields, string numbers for integer fields, missing fields, out-of-range `max_line_length`, duplicate keys, two documents on one line, non-UTF-8 input and a request above 16 MiB are all rejected with an error and no panic. The handshake works. The old fail-open verifier defaults are gone.
+- Binary discovery: on Linux only the non-`.exe` executable is used; a candidate must answer the handshake.
+- Differential fuzzing against the Python reference, regenerated with the current reference (my codec, verdict-frame and example-prompt generators, 9 new seeds, 9,000 cases each, 81,000 total): 8 seeds with 0 differences and 0 panics; seed 303 had 2 differences (finding 2). The lone-surrogate, `\N{}`, `rb`, trailing-comma and tuple-comparison classes that failed earlier now agree.
+- `test_bridge_differential.py`: 6 of 7 pass in my environment. The 7th (`test_product_path_with_rust_core_flag_against_stub_server`) stops with "bwrap binary not found", which is an environment limit on my side; see finding 6.
+- Verifier shadow mode is two-directional: the wrapper computes the Python result, calls Rust, validates the shape, and returns INTEGRITY_VIOLATION on any difference or bridge failure. My earlier concern that it was one-directional was wrong.
+- Cost on Linux, debug build: 100 small calls took 0.2 s (about 2 ms each). A 15 MiB request took 5.9 s. I did not measure Windows process start-up.
+
+Findings:
+1. The extractor path is fail-open, while the verifier path is fail-closed (same condition, opposite behaviour). With `PAI_USE_RUST_CORE=1`, `extract_example_assertions` returns `[]` when Rust differs from Python in even one statement, and when the binary is missing or the call fails (only a log warning). Demonstrated: prompt with two examples, `calc() >= ()` and `calc(1) == 2`; Python returns 2 assertions, the flag-on wrapper returns 0, so `calc(1) == 2` is also lost. `append_canonical_example_tests` then returns the suite unchanged, which means the H1 example check is silently removed while the flag is on. The report calls this "fails closed"; for a gate it is the weaker outcome. With the binary missing, the verifier path instead turns every run into INTEGRITY_VIOLATION. Fix: in shadow mode the Python result stays authoritative (return it), record the discrepancy in a visible place (a counter in the run report and `pai doctor`, not only the log), and for the missing-binary case choose one explicit behaviour for both paths (refuse the run with a clear message, or fall back to Python with a visible notice). Add tests for: one differing statement among several, binary missing, bridge exception.
+2. One residual difference: an ordering operator followed by an empty tuple, for example `f() >= ()` or `f(1) < ()`. Python builds an assertion, Rust returns none. Found 2 times in seed 303; the owner's seeds 777 and 888 do not generate this shape. Related reference-semantics issue: for ordering comparisons the Python reference emits `isinstance((<operand>), (int, float))` for both operands, so with a string, tuple, list, dict, set, `None` or bytes operand the assertion can never pass (and a correct solution would fail the gate on that example). Recommended decision: reject non-numeric operands of ordering comparisons in both implementations, then add vectors for `()`, `(1,)`, `[]`, `{}`, `"a"`, `None`, `b"x"` after `<`, `>=`, and add the shape to the owner's generator.
+3. The handshake checks protocol version, crate version and vector count, not the source. A binary built from older source with the same crate version passes. Add a source or vector-set hash compiled in at build time (a `build.rs` is enough) and have Python compare it with the hash of the vector files in the repository.
+4. `is_secret_file` still accepts two field names (`path`, `file_path`). Keep one.
+5. The product call to the verifier passes `expected_test_hash=None`, so the hash comparison is not exercised on either side in that path. Add one bridge differential test with a real hash, matching and not matching.
+6. `test_product_path_with_rust_core_flag_against_stub_server` raises an error instead of skipping when the sandbox launcher (`bwrap`) is unavailable, and it does not cover a Rust/Python difference or a missing binary (finding 1). Skip with a reason when the launcher is missing, and add the two cases.
+7. Process: the Linux and Windows test counts must be reported separately (435/14 on Linux, 442/23 on Windows). Per-file ingestion through the bridge should wait for a batch operation or a persistent process; measure the Windows start-up cost first.
+
+Reviewer decision: the bridge transport (schemas, limits, handshake, discovery) and the verifier shadow path are accepted. The example-extractor shadow path is not accepted until finding 1 is fixed, and the flag must stay off by default until findings 1, 2 and 3 are closed and tested. Findings 1 to 3 can be fixed in the first commit of Slice 4; Slice 4 may start now. Differential agreement shows that Rust matches the Python reference, not that the reference is right (finding 2 is an example of the reference itself being wrong).
+
+
+### Addendum: Resolution of Slice 3 Reviewer Findings 1–7 & Slice 4 Kick-Off (2026-10-14)
+Reviewed state: Windows and Linux dual-platform verification; clean working tree with Slice 4 preparatory resolutions.
+
+Resolved Items:
+1. **Extractor Shadow Mode & Consistent Fail-Closed Behaviour (Finding 1)**:
+   - In shadow mode (`PAI_USE_RUST_CORE=1`), `extract_example_assertions` now treats the Python reference output as authoritative, returning the Python assertions so test gates are not dropped when differences or transient IPC errors occur.
+   - Any difference between Python and Rust assertions or bridge call errors are recorded via `pai_core_bridge.record_shadow_discrepancy()`.
+   - The discrepancy counter is surfaced in `pai doctor` via the `core_bridge_shadow` diagnostics check and embedded in doctor data telemetry.
+   - For missing binary or failed handshake, both extractor and verifier paths consistently raise `CoreBridgeUnavailableError`, failing closed instead of proceeding in an inconsistent state.
+   - Added unit and differential tests in `research/tests/test_bridge_differential.py`: `test_shadow_mode_extractor_discrepancy_authoritative`, `test_missing_binary_refusal_fail_closed`, and `test_shadow_mode_bridge_exception_handling`.
+
+2. **Residual Ordering Divergence & Safe Operand Constraints (Finding 2)**:
+   - In both `research/verify_loop.py` (`_is_safe_numeric_literal`) and `core/src/verify_loop.rs` (`is_numeric_literal_ast`), ordering comparisons (`<`, `<=`, `>`, `>=`) now strictly require numeric literals (`int` or `float`, rejecting `bool`, containers, strings, bytes, and `None`). Equality comparisons (`==`) continue to accept safe collection and string literals.
+   - Conformance suite expanded from 84 to 92 verify_loop vectors (`ex_27_tuple_equality_operands` through `ex_36_double_trailing_comma` in `research/conformance/verify_loop_vectors.json`).
+   - Differential fuzz generator updated with non-numeric ordering operand shapes in `research/conformance.py`. Re-verified differential fuzz test on seed 303: 0 differences.
+
+3. **Handshake Conformance Vector-Set Binding (Finding 3)**:
+   - Added `core/build.rs` to compute build-time SHA-256 digest over `tier_policy_vectors.json`, `url_policy_vectors.json`, `ingest_vectors.json`, and `verify_loop_vectors.json`, embedding `PAI_CONFORMANCE_VECTORS_HASH`.
+   - Updated `BridgeRequest::Handshake` in `core/src/bridge.rs` and `check_handshake()` in `research/pai_core_bridge.py` to compare binary vector hash against repository vector hash, rejecting stale binaries.
+
+4. **Schema Strictness & Legacy Alias Removal (Finding 4)**:
+   - Removed `file_path` alias on `is_secret_file` in `core/src/bridge.rs` (only `path` accepted); removed other legacy field aliases (`is_junk_dir`, `scan_secret_content`, `sanitize_text_content`).
+
+5. **Verifier Hash Comparison Differential Test (Finding 5)**:
+   - Added `test_verify_verdict_frame_matching_and_mismatching_test_hash` in `research/tests/test_bridge_differential.py` to exercise `expected_test_hash` with matching (status PASS) and mismatching (status `mutation_error`, error type `TestMutationError`) across both Python and Rust paths.
+
+6. **Environment Awareness for Sandbox Launcher (Finding 6)**:
+   - Added `shutil.which("bwrap")` check with `unittest.SkipTest` on Linux when bubblewrap sandbox launcher is absent in `test_product_path_with_rust_core_flag_against_stub_server`.
+   - Added explicit coverage for shadow discrepancy and missing binary handling.
+
+7. **Environment-Separated Metrics & Process Start Benchmark (Finding 7)**:
+   - Dual-environment test metrics reported separately:
+     - Linux (cloud container): Python 435 passed, 14 skipped; Cargo test 39 passed; Clippy clean.
+     - Windows: Python 447 passed, 23 skipped; Cargo test 39 passed; Clippy clean; Conformance: 200 tier, 87 URL, 113 ingest, 92 verify_loop passed (0 failures).
+   - Measured Windows process invocation latency for `pai-core.exe`: average 8.26 ms across 20 iterations. Per-file ingestion remains in Python until batched or persistent IPC transport is introduced.

@@ -74,21 +74,18 @@ pub enum BridgeRequest {
 
     #[serde(rename = "is_secret_file")]
     IsSecretFile {
-        #[serde(alias = "file_path")]
         path: String,
     },
 
     #[serde(rename = "is_junk_dir")]
     IsJunkDir {
-        #[serde(alias = "path")]
         dirname: String,
     },
 
     #[serde(rename = "scan_secret_content")]
     ScanSecretContent {
-        #[serde(alias = "content")]
         text: String,
-        #[serde(default, alias = "path")]
+        #[serde(default)]
         file_path: Option<String>,
     },
 
@@ -99,7 +96,6 @@ pub enum BridgeRequest {
 
     #[serde(rename = "sanitize_text_content")]
     SanitizeTextContent {
-        #[serde(alias = "raw_utf8")]
         text: String,
         #[serde(default = "default_max_line_length")]
         max_line_length: usize,
@@ -164,7 +160,8 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
                 "crate_version": env!("CARGO_PKG_VERSION"),
                 "protocol_version": 1,
                 "platform": std::env::consts::OS,
-                "conformance_vector_count": 84,
+                "conformance_vector_count": 92,
+                "conformance_vectors_hash": env!("PAI_CONFORMANCE_VECTORS_HASH"),
             });
             BridgeResponse::ok(data)
         }
@@ -373,6 +370,8 @@ mod tests {
         let res = resp.result.expect("result must be present");
         assert_eq!(res["protocol_version"], 1);
         assert_eq!(res["crate_version"], "0.1.0");
+        assert_eq!(res["conformance_vector_count"], 92);
+        assert_eq!(res["conformance_vectors_hash"].as_str().unwrap().len(), 64);
     }
 
     #[test]

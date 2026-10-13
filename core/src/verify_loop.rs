@@ -3620,6 +3620,29 @@ fn is_safe_literal_ast(
     }
 }
 
+fn is_numeric_literal_ast(
+    node: &PyAstNode,
+    allowed_vars: Option<&BTreeSet<String>>,
+) -> bool {
+    match &node.kind {
+        PyAstKind::Int(v) => *v <= (i64::MAX as u64),
+        PyAstKind::Float(f) => f.is_finite(),
+        PyAstKind::Unary { is_neg, operand } => match &operand.kind {
+            PyAstKind::Int(v) => {
+                if *is_neg {
+                    *v <= (i64::MAX as u64) + 1
+                } else {
+                    *v <= (i64::MAX as u64)
+                }
+            }
+            PyAstKind::Float(f) => f.is_finite(),
+            _ => false,
+        },
+        PyAstKind::Name(name) => allowed_vars.is_some_and(|vars| vars.contains(name)),
+        _ => false,
+    }
+}
+
 fn is_safe_entry_call_ast(
     node: &PyAstNode,
     entry_point: &str,
@@ -3864,33 +3887,41 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
                 ..
             }) = parse_py_eval(&clean_blk)
             {
-                let left_ok = is_safe_entry_call_ast(&left, &ep, &allowed_vars)
-                    || is_safe_literal_ast(&left, Some(&allowed_vars), false, 0);
-                let right_ok = is_safe_entry_call_ast(&right, &ep, &allowed_vars)
-                    || is_safe_literal_ast(&right, Some(&allowed_vars), false, 0);
                 let has_entry_call = is_safe_entry_call_ast(&left, &ep, &allowed_vars)
                     || is_safe_entry_call_ast(&right, &ep, &allowed_vars);
-                if left_ok && right_ok && has_entry_call {
+                if has_entry_call {
                     match op {
                         PyCmpOp::Gt | PyCmpOp::Lt | PyCmpOp::GtE | PyCmpOp::LtE => {
-                            if let (Some(lhs), Some(rhs)) = (
-                                clean_blk.get(left.start..left.end),
-                                clean_blk.get(right.start..right.end),
-                            ) {
-                                let clean_lhs = strip_outer_parens(lhs);
-                                let clean_rhs = strip_outer_parens(rhs);
-                                if !clean_lhs.is_empty() && !clean_rhs.is_empty() {
-                                    statements.push(format!(
-                                        "assert isinstance(({}), (int, float)) and not isinstance(({}), bool) and isinstance(({}), (int, float)) and not isinstance(({}), bool) and ({})",
-                                        clean_lhs, clean_lhs, clean_rhs, clean_rhs, clean_blk
-                                    ));
-                                    continue;
+                            let left_is_call = is_safe_entry_call_ast(&left, &ep, &allowed_vars);
+                            let right_is_call = is_safe_entry_call_ast(&right, &ep, &allowed_vars);
+                            let left_ok = left_is_call || is_numeric_literal_ast(&left, Some(&allowed_vars));
+                            let right_ok = right_is_call || is_numeric_literal_ast(&right, Some(&allowed_vars));
+                            if left_ok && right_ok {
+                                if let (Some(lhs), Some(rhs)) = (
+                                    clean_blk.get(left.start..left.end),
+                                    clean_blk.get(right.start..right.end),
+                                ) {
+                                    let clean_lhs = strip_outer_parens(lhs);
+                                    let clean_rhs = strip_outer_parens(rhs);
+                                    if !clean_lhs.is_empty() && !clean_rhs.is_empty() {
+                                        statements.push(format!(
+                                            "assert isinstance(({}), (int, float)) and not isinstance(({}), bool) and isinstance(({}), (int, float)) and not isinstance(({}), bool) and ({})",
+                                            clean_lhs, clean_lhs, clean_rhs, clean_rhs, clean_blk
+                                        ));
+                                        continue;
+                                    }
                                 }
                             }
                         }
                         PyCmpOp::Eq => {
-                            statements.push(format!("assert {}", clean_blk));
-                            continue;
+                            let left_ok = is_safe_entry_call_ast(&left, &ep, &allowed_vars)
+                                || is_safe_literal_ast(&left, Some(&allowed_vars), false, 0);
+                            let right_ok = is_safe_entry_call_ast(&right, &ep, &allowed_vars)
+                                || is_safe_literal_ast(&right, Some(&allowed_vars), false, 0);
+                            if left_ok && right_ok {
+                                statements.push(format!("assert {}", clean_blk));
+                                continue;
+                            }
                         }
                     }
                 }

@@ -309,6 +309,9 @@ class TestBridgeDifferential(unittest.TestCase):
         2. Test execution and verdict verification in sandbox via Rust core bridge
         3. Clean end-to-end pass (exit code 0).
         """
+        if sys.platform.startswith("linux") and shutil.which("bwrap") is None:
+            raise unittest.SkipTest("bwrap binary not found; sandbox execution unsupported in this Linux environment")
+
         class StubHandler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 if self.path == "/api/tags":
@@ -419,6 +422,124 @@ class TestBridgeDifferential(unittest.TestCase):
                 os.environ.pop("OLLAMA_BASE_URL", None)
 
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_handshake_conformance_vectors_hash(self):
+        """Verifies that the compiled binary's conformance_vectors_hash matches the repository."""
+        bin_path = find_core_binary()
+        handshake = pai_core_bridge.check_handshake(bin_path)
+        self.assertEqual(handshake["protocol_version"], 1)
+        self.assertEqual(handshake["crate_version"], "0.1.0")
+        self.assertEqual(handshake["conformance_vector_count"], 92)
+        expected_hash = pai_core_bridge.compute_repo_vectors_hash()
+        self.assertEqual(handshake["conformance_vectors_hash"], expected_hash)
+
+    def test_verify_verdict_frame_matching_and_mismatching_test_hash(self):
+        """Exercises verify_verdict_frame with matching and mismatching expected_test_hash on both paths."""
+        from verify_loop import format_authenticated_verdict_frame
+
+        nonce = "test_nonce_hash_123"
+        key = "test_key_hash_456"
+        matching_hash = "a" * 64
+        mismatching_hash = "b" * 64
+
+        payload = {
+            "session_nonce": nonce,
+            "status": "PASS",
+            "passed": 2,
+            "failed": 0,
+            "errors": 0,
+            "discovered": 2,
+            "executed": 2,
+            "failures": [],
+            "executed_test_ids": ["test_1", "test_2"],
+            "test_hash": matching_hash,
+        }
+        stdout = format_authenticated_verdict_frame(payload, key)
+
+        for use_rust in (False, True):
+            pai_core_bridge.PAI_USE_RUST_CORE = use_rust
+            try:
+                # 1. Matching hash -> PASS
+                res_match = verify_verdict_frame(
+                    stdout,
+                    nonce,
+                    key,
+                    expected_test_ids=("test_1", "test_2"),
+                    expected_test_hash=matching_hash,
+                    exit_code=0,
+                    res_status="ok",
+                )
+                self.assertTrue(res_match["passed"], f"Expected pass when hash matches (use_rust={use_rust})")
+                self.assertEqual(res_match["status"], "PASS")
+
+                # 2. Mismatching hash -> FAIL / INTEGRITY_VIOLATION
+                res_mismatch = verify_verdict_frame(
+                    stdout,
+                    nonce,
+                    key,
+                    expected_test_ids=("test_1", "test_2"),
+                    expected_test_hash=mismatching_hash,
+                    exit_code=0,
+                    res_status="ok",
+                )
+                self.assertFalse(res_mismatch["passed"], f"Expected fail when hash mismatches (use_rust={use_rust})")
+                self.assertEqual(res_mismatch["status"], "mutation_error")
+                self.assertEqual(res_mismatch["error_type"], "TestMutationError")
+            finally:
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+
+    def test_shadow_mode_extractor_discrepancy_authoritative(self):
+        """Verifies that in shadow mode, Python reference remains authoritative and discrepancy is recorded."""
+        from unittest import mock
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        try:
+            # Mock bridge returning a divergent assertion
+            with mock.patch("pai_core_bridge.call_core_bridge", return_value=["assert solve(1) == 999"]):
+                prompt = "Write `solve(x)`.\nExample:\n  solve(1) -> 2\n"
+                stmts = extract_example_assertions(prompt, entry_point="solve")
+                # Authoritative Python reference must be returned (not the divergent mock)
+                self.assertEqual(stmts, ["assert solve(1) == 2"])
+                # Discrepancy counter must be incremented
+                self.assertGreaterEqual(pai_core_bridge.get_shadow_discrepancy_count(), 1)
+                discrepancies = pai_core_bridge.get_shadow_discrepancies()
+                self.assertTrue(any(d["op"] == "extract_example_assertions" for d in discrepancies))
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_missing_binary_refusal_fail_closed(self):
+        """Verifies that when PAI_USE_RUST_CORE=1 and binary is missing, both paths refuse fail-closed."""
+        from unittest import mock
+
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        try:
+            with mock.patch("pai_core_bridge.find_core_binary", side_effect=pai_core_bridge.CoreBridgeUnavailableError("missing")):
+                # Extractor refuses
+                with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
+                    extract_example_assertions("Write `solve(x)`.\nExample:\n  solve(1) -> 2\n", entry_point="solve")
+                # Verifier refuses
+                with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
+                    verify_verdict_frame("stdout", "nonce", "key")
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+
+    def test_shadow_mode_bridge_exception_handling(self):
+        """Verifies that bridge exceptions in shadow mode record discrepancies and preserve Python assertions."""
+        from unittest import mock
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        try:
+            with mock.patch("pai_core_bridge.call_core_bridge", side_effect=RuntimeError("simulated IPC failure")):
+                prompt = "Write `solve(x)`.\nExample:\n  solve(1) -> 2\n"
+                stmts = extract_example_assertions(prompt, entry_point="solve")
+                self.assertEqual(stmts, ["assert solve(1) == 2"])
+                self.assertGreaterEqual(pai_core_bridge.get_shadow_discrepancy_count(), 1)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
 
 
 if __name__ == "__main__":

@@ -184,17 +184,65 @@
   {
    "entry_point": "solve",
    "expected_statements": [
-    "assert isinstance((solve((1, 2))), (int, float)) and not isinstance((solve((1, 2))), bool) and isinstance(((1, 2)), (int, float)) and not isinstance(((1, 2)), bool) and (solve((1, 2)) > (1, 2))"
+    "assert solve((1, 2)) == (1, 2)"
    ],
-   "id": "ex_27_tuple_comparison_operands",
+   "id": "ex_27_tuple_equality_operands",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve((1, 2)) == (1, 2)\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_28_rejected_tuple_ordering",
    "prompt": "Write `solve(x)`.\nExample:\n  solve((1, 2)) > (1, 2)\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_29_rejected_empty_tuple_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) >= ()\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_30_rejected_single_tuple_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) < (1,)\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_31_rejected_list_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) >= []\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_32_rejected_dict_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) < {}\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_33_rejected_string_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) >= 'a'\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_34_rejected_none_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) < None\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_35_rejected_bytes_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) >= b'x'\n"
   },
   {
    "entry_point": "solve",
    "expected_statements": [
     "assert solve(1) == 1"
    ],
-   "id": "ex_28_double_trailing_comma",
+   "id": "ex_36_double_trailing_comma",
    "prompt": "Write `solve(x)`.\nExample:\n  solve(1) -> 1,,\n"
   }
  ],
