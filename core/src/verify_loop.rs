@@ -1953,13 +1953,37 @@ fn is_forbidden_example_name(name: &str) -> bool {
 }
 
 fn is_ident_start(c: char) -> bool {
-    c == '_' || c.is_alphabetic()
+    if c.is_ascii_alphabetic() || c == '_' {
+        return true;
+    }
+    let cp = c as u32;
+    if (0x0D80..=0x0DFF).contains(&cp) {
+        return c.is_alphabetic();
+    }
+    false
 }
 
 fn is_ident_continue(c: char) -> bool {
-    c == '_'
-        || c.is_alphanumeric()
-        || matches!(c as u32, 0x0300..=0x036F | 0x0D82..=0x0DDF | 0x200C..=0x200D)
+    if c.is_ascii_alphanumeric() || c == '_' {
+        return true;
+    }
+    let cp = c as u32;
+    if (0x0D80..=0x0DFF).contains(&cp) {
+        return c.is_alphabetic()
+            || matches!(
+                cp,
+                0x0D81..=0x0D83
+                    | 0x0DCA
+                    | 0x0DCF..=0x0DD6
+                    | 0x0DD8..=0x0DDF
+                    | 0x0DE6..=0x0DEF
+                    | 0x0DF2..=0x0DF3
+            );
+    }
+    if matches!(cp, 0x200C | 0x200D) {
+        return true;
+    }
+    false
 }
 
 fn is_valid_identifier(s: &str) -> bool {
@@ -2306,6 +2330,9 @@ fn is_python_keyword(ident: &str) -> bool {
 }
 
 fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
+    if src.contains('\0') {
+        return Err(());
+    }
     let bytes = src.as_bytes();
     let mut pos = 0;
     let mut tokens = Vec::new();
@@ -2326,7 +2353,7 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
             let is_rb = matches!((b1, b2), (b'r' | b'R', b'b' | b'B') | (b'b' | b'B', b'r' | b'R'));
             if is_rb && matches!(b3, b'\'' | b'"') {
                 pos += 2;
-                let _ = consume_py_quoted_string(src, &mut pos)?;
+                let _ = consume_py_quoted_string(src, &mut pos, true)?;
                 tokens.push(PyTok {
                     kind: PyTokKind::BytesLit,
                     start,
@@ -2341,8 +2368,9 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
             let next_b = bytes.get(pos + 1).copied();
             if matches!(next_b, Some(b'\'' | b'"')) {
                 let is_bytes = matches!(b, b'b' | b'B');
+                let is_raw = matches!(b, b'r' | b'R');
                 pos += 1;
-                let content = consume_py_quoted_string(src, &mut pos)?;
+                let content = consume_py_quoted_string(src, &mut pos, is_raw)?;
                 let kind = if is_bytes {
                     PyTokKind::BytesLit
                 } else {
@@ -2359,7 +2387,7 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
 
         match b {
             b'\'' | b'"' => {
-                let content = consume_py_quoted_string(src, &mut pos)?;
+                let content = consume_py_quoted_string(src, &mut pos, false)?;
                 tokens.push(PyTok {
                     kind: PyTokKind::Str(content),
                     start,
@@ -2539,7 +2567,7 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
     Ok(tokens)
 }
 
-fn consume_py_quoted_string(src: &str, pos: &mut usize) -> Result<String, ()> {
+fn consume_py_quoted_string(src: &str, pos: &mut usize, is_raw: bool) -> Result<String, ()> {
     let bytes = src.as_bytes();
     let q = bytes.get(*pos).copied().ok_or(())?;
     let is_triple = bytes.get(*pos..*pos + 3) == Some(&[q, q, q]);
@@ -2561,28 +2589,170 @@ fn consume_py_quoted_string(src: &str, pos: &mut usize) -> Result<String, ()> {
         }
 
         let b = bytes.get(*pos).copied().ok_or(())?;
+        if is_raw {
+            if b == b'\\' {
+                let next_b = bytes.get(*pos + 1).copied();
+                if next_b == Some(q) {
+                    out.push('\\');
+                    out.push(q as char);
+                    *pos += 2;
+                    continue;
+                }
+            }
+            let tail = src.get(*pos..).ok_or(())?;
+            let ch = tail.chars().next().ok_or(())?;
+            if ch == '\0' {
+                return Err(());
+            }
+            if !is_triple && (ch == '\n' || ch == '\r') {
+                return Err(());
+            }
+            out.push(ch);
+            *pos += ch.len_utf8();
+            continue;
+        }
+
         if b == b'\\' {
             *pos += 1;
-            let tail = src.get(*pos..).ok_or(())?;
-            let esc_ch = tail.chars().next().ok_or(())?;
-            *pos += esc_ch.len_utf8();
-            match esc_ch {
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                '\\' => out.push('\\'),
-                '\'' => out.push('\''),
-                '"' => out.push('"'),
-                c => {
+            let esc_b = bytes.get(*pos).copied().ok_or(())?;
+            match esc_b {
+                b'\n' => {
+                    *pos += 1;
+                }
+                b'\r' => {
+                    *pos += 1;
+                    if bytes.get(*pos) == Some(&b'\n') {
+                        *pos += 1;
+                    }
+                }
+                b'n' => {
+                    *pos += 1;
+                    out.push('\n');
+                }
+                b'r' => {
+                    *pos += 1;
+                    out.push('\r');
+                }
+                b't' => {
+                    *pos += 1;
+                    out.push('\t');
+                }
+                b'\\' => {
+                    *pos += 1;
                     out.push('\\');
-                    out.push(c);
+                }
+                b'\'' => {
+                    *pos += 1;
+                    out.push('\'');
+                }
+                b'"' => {
+                    *pos += 1;
+                    out.push('"');
+                }
+                b'a' => {
+                    *pos += 1;
+                    out.push('\x07');
+                }
+                b'b' => {
+                    *pos += 1;
+                    out.push('\x08');
+                }
+                b'f' => {
+                    *pos += 1;
+                    out.push('\x0c');
+                }
+                b'v' => {
+                    *pos += 1;
+                    out.push('\x0b');
+                }
+                b'0'..=b'7' => {
+                    let mut val = 0u32;
+                    let mut digits = 0;
+                    while digits < 3 {
+                        if let Some(&oct_b) = bytes.get(*pos) {
+                            if matches!(oct_b, b'0'..=b'7') {
+                                val = val * 8 + (oct_b - b'0') as u32;
+                                *pos += 1;
+                                digits += 1;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                    if val == 0 {
+                        return Err(());
+                    }
+                    let ch = char::from_u32(val).ok_or(())?;
+                    out.push(ch);
+                }
+                b'x' => {
+                    *pos += 1;
+                    let h1 = bytes.get(*pos).copied().ok_or(())?;
+                    let h2 = bytes.get(*pos + 1).copied().ok_or(())?;
+                    if !h1.is_ascii_hexdigit() || !h2.is_ascii_hexdigit() {
+                        return Err(());
+                    }
+                    *pos += 2;
+                    let hex_bytes = [h1, h2];
+                    let hex_slice = std::str::from_utf8(&hex_bytes).map_err(|_| ())?;
+                    let hex_val = u8::from_str_radix(hex_slice, 16).map_err(|_| ())?;
+                    if hex_val == 0 {
+                        return Err(());
+                    }
+                    out.push(hex_val as char);
+                }
+                b'u' => {
+                    *pos += 1;
+                    let slice = bytes.get(*pos..*pos + 4).ok_or(())?;
+                    if !slice.iter().all(|c| c.is_ascii_hexdigit()) {
+                        return Err(());
+                    }
+                    *pos += 4;
+                    let hex_str = std::str::from_utf8(slice).map_err(|_| ())?;
+                    let cp = u32::from_str_radix(hex_str, 16).map_err(|_| ())?;
+                    if cp == 0 || (0xD800..=0xDFFF).contains(&cp) {
+                        return Err(());
+                    }
+                    let ch = char::from_u32(cp).ok_or(())?;
+                    out.push(ch);
+                }
+                b'U' => {
+                    *pos += 1;
+                    let slice = bytes.get(*pos..*pos + 8).ok_or(())?;
+                    if !slice.iter().all(|c| c.is_ascii_hexdigit()) {
+                        return Err(());
+                    }
+                    *pos += 8;
+                    let hex_str = std::str::from_utf8(slice).map_err(|_| ())?;
+                    let cp = u32::from_str_radix(hex_str, 16).map_err(|_| ())?;
+                    if cp == 0 || cp > 0x10FFFF || (0xD800..=0xDFFF).contains(&cp) {
+                        return Err(());
+                    }
+                    let ch = char::from_u32(cp).ok_or(())?;
+                    out.push(ch);
+                }
+                b'N' => {
+                    return Err(());
+                }
+                _ => {
+                    let tail = src.get(*pos..).ok_or(())?;
+                    let esc_ch = tail.chars().next().ok_or(())?;
+                    *pos += esc_ch.len_utf8();
+                    out.push('\\');
+                    out.push(esc_ch);
                 }
             }
         } else {
             let tail = src.get(*pos..).ok_or(())?;
             let ch = tail.chars().next().ok_or(())?;
-            if !is_triple && (ch == '\n' || ch == '\r') {
-                return Err(());
+            if (ch as u32) < 0x20 {
+                if ch == '\t' {
+                    // allowed
+                } else if is_triple && (ch == '\n' || ch == '\r') {
+                    // allowed in triple-quoted string
+                } else {
+                    return Err(());
+                }
             }
             out.push(ch);
             *pos += ch.len_utf8();
@@ -3380,7 +3550,8 @@ fn is_safe_literal_ast(
         return false;
     }
     match &node.kind {
-        PyAstKind::Bool | PyAstKind::None | PyAstKind::Str(_) | PyAstKind::Bytes => true,
+        PyAstKind::Bool | PyAstKind::None | PyAstKind::Bytes => true,
+        PyAstKind::Str(s) => !s.contains('\0'),
         PyAstKind::Int(v) => *v <= (i64::MAX as u64),
         PyAstKind::OutOfRangeInt => false,
         PyAstKind::Float(f) => {
@@ -3487,6 +3658,71 @@ fn is_scalar_float_ast(node: &PyAstNode) -> bool {
     }
 }
 
+fn strip_outer_parens(mut s: &str) -> &str {
+    loop {
+        let trimmed = s.trim();
+        if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
+            return trimmed;
+        }
+        let bytes = trimmed.as_bytes();
+        let mut depth = 0;
+        let mut closes_at_end = false;
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut escaped = false;
+        let mut has_top_level_comma = false;
+        for (i, &b) in bytes.iter().enumerate() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if b == b'\\' && (in_single_quote || in_double_quote) {
+                escaped = true;
+                continue;
+            }
+            if in_single_quote {
+                if b == b'\'' {
+                    in_single_quote = false;
+                }
+                continue;
+            }
+            if in_double_quote {
+                if b == b'"' {
+                    in_double_quote = false;
+                }
+                continue;
+            }
+            match b {
+                b'\'' => in_single_quote = true,
+                b'"' => in_double_quote = true,
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        if i == bytes.len() - 1 {
+                            closes_at_end = true;
+                        }
+                        break;
+                    }
+                }
+                b',' if depth == 1 => {
+                    has_top_level_comma = true;
+                }
+                _ => {}
+            }
+        }
+        if closes_at_end && !has_top_level_comma {
+            if let Some(inner) = trimmed.get(1..trimmed.len() - 1) {
+                s = inner;
+            } else {
+                return trimmed;
+            }
+        } else {
+            return trimmed;
+        }
+    }
+}
+
 /// Deterministically extracts canonical example statements and assertions from a task prompt's
 /// `Example:` or `Examples:` docstring section (ADR-011 H1).
 pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Vec<String> {
@@ -3578,11 +3814,18 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
         if !comment_part.is_empty() && has_approx_marker(&comment_part) {
             continue;
         }
-        let trimmed = clean_blk.trim_end();
-        if let Some(stripped) = trimmed.strip_suffix(',') {
-            clean_blk = stripped.trim_end().to_string();
+        let mut trimmed = clean_blk.trim_end();
+        while let Some(stripped) = trimmed.strip_suffix(',') {
+            trimmed = stripped.trim_end();
         }
+        clean_blk = trimmed.to_string();
         if clean_blk.is_empty() {
+            continue;
+        }
+        if clean_blk.contains('\0') || clean_blk.contains(r"\N{") {
+            continue;
+        }
+        if clean_blk.chars().any(|c| (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r') {
             continue;
         }
 
@@ -3634,10 +3877,12 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
                                 clean_blk.get(left.start..left.end),
                                 clean_blk.get(right.start..right.end),
                             ) {
-                                if !lhs.is_empty() && !rhs.is_empty() {
+                                let clean_lhs = strip_outer_parens(lhs);
+                                let clean_rhs = strip_outer_parens(rhs);
+                                if !clean_lhs.is_empty() && !clean_rhs.is_empty() {
                                     statements.push(format!(
                                         "assert isinstance(({}), (int, float)) and not isinstance(({}), bool) and isinstance(({}), (int, float)) and not isinstance(({}), bool) and ({})",
-                                        lhs, lhs, rhs, rhs, clean_blk
+                                        clean_lhs, clean_lhs, clean_rhs, clean_rhs, clean_blk
                                     ));
                                     continue;
                                 }
@@ -3921,6 +4166,57 @@ mod tests {
         }
         let stmts = extract_example_assertions(&prompt, Some("solve"));
         assert_eq!(stmts.len(), MAX_EXTRACTED_STATEMENTS);
+    }
+
+    #[test]
+    fn test_greater_than_paren_rhs() {
+        let prompt = "Example:\n  solve(1) > (1)";
+        let stmts = extract_example_assertions(prompt, Some("solve"));
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(
+            stmts[0],
+            "assert isinstance((solve(1)), (int, float)) and not isinstance((solve(1)), bool) and isinstance((1), (int, float)) and not isinstance((1), bool) and (solve(1) > (1))"
+        );
+    }
+
+    #[test]
+    fn test_rejected_string_escapes_and_nul() {
+        // Truncated \x
+        let p1 = "Example:\n  solve('\\x4') -> 1";
+        assert!(extract_example_assertions(p1, Some("solve")).is_empty());
+
+        // Out-of-range \U
+        let p2 = "Example:\n  solve('\\U00110000') -> 1";
+        assert!(extract_example_assertions(p2, Some("solve")).is_empty());
+
+        // Named escape \N
+        let p3 = "Example:\n  solve('\\N{SPACE}') -> 1";
+        assert!(extract_example_assertions(p3, Some("solve")).is_empty());
+
+        // Escaped \0 and \x00
+        let p4 = "Example:\n  solve('\\0') -> 1";
+        assert!(extract_example_assertions(p4, Some("solve")).is_empty());
+        let p5 = "Example:\n  solve('\\x00') -> 1";
+        assert!(extract_example_assertions(p5, Some("solve")).is_empty());
+
+        // Raw control character (e.g. \x01)
+        let p6 = "Example:\n  solve('\x01') -> 1";
+        assert!(extract_example_assertions(p6, Some("solve")).is_empty());
+    }
+
+    #[test]
+    fn test_rejected_fullwidth_and_compat_identifiers() {
+        // Fullwidth open
+        let p1 = "def \u{ff4f}pen(n):\nExample:\n  \u{ff4f}pen(1) -> 2";
+        assert!(extract_example_assertions(p1, None).is_empty());
+
+        // Fullwidth eval
+        let p2 = "def \u{ff45}val(n):\nExample:\n  \u{ff45}val(1) -> 2";
+        assert!(extract_example_assertions(p2, None).is_empty());
+
+        // Superscript squared in identifier
+        let p3 = "def solve\u{00b2}(n):\nExample:\n  solve\u{00b2}(1) -> 2";
+        assert!(extract_example_assertions(p3, None).is_empty());
     }
 }
 

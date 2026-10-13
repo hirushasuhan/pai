@@ -3,6 +3,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod bridge;
 pub mod conformance;
 pub mod ingest;
 pub mod tier;

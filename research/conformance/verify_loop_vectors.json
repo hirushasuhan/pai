@@ -124,6 +124,78 @@
    ],
    "id": "ex_17_sinhala_entry_point",
    "prompt": "def \u0dc3\u0dd2\u0d82\u0dc4\u0dbd(n):\nExample:\n  \u0dc3\u0dd2\u0d82\u0dc4\u0dbd(1) -> 2\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert isinstance((solve(1)), (int, float)) and not isinstance((solve(1)), bool) and isinstance((1), (int, float)) and not isinstance((1), bool) and (solve(1) > (1))"
+   ],
+   "id": "ex_18_greater_than_paren_rhs",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) > (1)\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_19_rejected_truncated_hex",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve('\\x4') -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_20_rejected_out_of_range_unicode",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve('\\U00110000') -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_21_rejected_named_escape",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve('\\N{SPACE}') -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_22_rejected_nul_escape",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve('\\0') -> 1\n  solve('\\x00') -> 1\n"
+  },
+  {
+   "entry_point": "",
+   "expected_statements": [],
+   "id": "ex_23_rejected_fullwidth_identifier",
+   "prompt": "def \uff4fpen(n):\nExample:\n  \uff4fpen(1) -> 2\n"
+  },
+  {
+   "entry_point": "",
+   "expected_statements": [],
+   "id": "ex_24_rejected_compat_identifier",
+   "prompt": "def solve\u00b2(n):\nExample:\n  solve\u00b2(1) -> 2\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_25_rejected_raw_control_char",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve('\u0001') -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_26_rejected_lone_surrogate_escape",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve('\\ud800') -> 1\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert isinstance((solve((1, 2))), (int, float)) and not isinstance((solve((1, 2))), bool) and isinstance(((1, 2)), (int, float)) and not isinstance(((1, 2)), bool) and (solve((1, 2)) > (1, 2))"
+   ],
+   "id": "ex_27_tuple_comparison_operands",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve((1, 2)) > (1, 2)\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert solve(1) == 1"
+   ],
+   "id": "ex_28_double_trailing_comma",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) -> 1,,\n"
   }
  ],
  "codec_invalid_envelope_cases": [

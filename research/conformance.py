@@ -904,6 +904,61 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "සිංහල",
             "def සිංහල(n):\nExample:\n  සිංහල(1) -> 2\n",
         ),
+        (
+            "ex_18_greater_than_paren_rhs",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) > (1)\n",
+        ),
+        (
+            "ex_19_rejected_truncated_hex",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve('\\x4') -> 1\n",
+        ),
+        (
+            "ex_20_rejected_out_of_range_unicode",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve('\\U00110000') -> 1\n",
+        ),
+        (
+            "ex_21_rejected_named_escape",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve('\\N{SPACE}') -> 1\n",
+        ),
+        (
+            "ex_22_rejected_nul_escape",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve('\\0') -> 1\n  solve('\\x00') -> 1\n",
+        ),
+        (
+            "ex_23_rejected_fullwidth_identifier",
+            "",
+            "def \uff4fpen(n):\nExample:\n  \uff4fpen(1) -> 2\n",
+        ),
+        (
+            "ex_24_rejected_compat_identifier",
+            "",
+            "def solve\u00b2(n):\nExample:\n  solve\u00b2(1) -> 2\n",
+        ),
+        (
+            "ex_25_rejected_raw_control_char",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve('\x01') -> 1\n",
+        ),
+        (
+            "ex_26_rejected_lone_surrogate_escape",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve('\\ud800') -> 1\n",
+        ),
+        (
+            "ex_27_tuple_comparison_operands",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve((1, 2)) > (1, 2)\n",
+        ),
+        (
+            "ex_28_double_trailing_comma",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) -> 1,,\n",
+        ),
     ]
     canonical_example_extraction_cases = [
         {
@@ -1545,7 +1600,10 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
         })
 
         # 3. Canonical example extraction case (valid + hostile/edge ASTs)
-        ep_choice = rng.choice(["solve", "calc_total", "score", "සිංහල", "", "_private", "open"])
+        ep_choice = rng.choice([
+            "solve", "calc_total", "score", "සිංහල", "", "_private", "open",
+            "\uff4fpen", "\uff45val", "solve\u00b2", "\u00aa", "\u2177", "a\u00b7b",
+        ])
         header_choice = rng.choice([
             "Write `solve(x)`.\n",
             "Implement `def calc_total(items, tax):`\n",
@@ -1554,6 +1612,9 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
             "Write `සිංහල(x)`.\n",
             "Write function `සිංහල`.\n",
             "Task description in සිංහල.\n",
+            "def \uff4fpen(x):\n",
+            "def \uff45val(x):\n",
+            "def solve\u00b2(x):\n",
         ])
         marker_choice = rng.choice(["Example:\n", "Examples:\n"])
         sample_ex_lines = [
@@ -1572,15 +1633,30 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
             "  solve(1) -> float('-inf')",
             "  solve(1) -> float('nan')",
             "  solve(1) > -(1)",
+            "  solve(1) > (1)",
+            "  solve(2) > ((2))",
             "  solve(2) > -(1.5)",
             "  solve(3) >= -(0)",
             "  solve(4) < -(10)",
+            "  solve('\\x4') -> 1",
+            "  solve('\\U00110000') -> 1",
+            "  solve('\\N{SPACE}') -> 1",
+            "  solve('\\0') -> 1",
+            "  solve('\\x00') -> 1",
+            "  solve('\x01') -> 1",
+            "  \uff4fpen(1) -> 2",
+            "  \uff45val(1) -> 2",
+            "  solve\u00b2(1) -> 2",
             "  solve(rb'x') -> 1",
             "  solve(br'hello') -> 2",
             "  solve(b'abc') -> 3",
             "  solve(1) -> 1,",
+            "  solve(1) -> 1,,",
+            "  solve(2) -> 2  , ,",
             "  solve(2) -> 2 ,",
             "  solve(3) -> 3   ,",
+            "  solve('\\ud800') -> 1",
+            "  solve((1, 2)) > (1, 2)",
             "  සිංහල(1) -> 2",
             "  සිංහල(10) > 0",
             "  සිංහල(rb'test') -> 5",

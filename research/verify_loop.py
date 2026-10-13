@@ -325,6 +325,25 @@ def _split_code_and_comment(text: str) -> Tuple[str, str]:
     return text.strip(), ""
 
 
+def _is_valid_example_identifier(s: str) -> bool:
+    if not isinstance(s, str) or not s or not s.isidentifier():
+        return False
+    for ch in s:
+        cp = ord(ch)
+        if (
+            ("a" <= ch <= "z")
+            or ("A" <= ch <= "Z")
+            or ("0" <= ch <= "9")
+            or ch == "_"
+            or (0x0D80 <= cp <= 0x0DFF)
+            or cp == 0x200C
+            or cp == 0x200D
+        ):
+            continue
+        return False
+    return True
+
+
 def _is_safe_literal(
     node: ast.AST,
     allowed_vars: Optional[Set[str]] = None,
@@ -351,6 +370,11 @@ def _is_safe_literal(
                 return False
             if not allow_inexact_floats and round(node.value, 2) != node.value:
                 return False
+        if isinstance(node.value, str):
+            if "\0" in node.value or any(0xD800 <= ord(c) <= 0xDFFF for c in node.value):
+                return False
+        if isinstance(node.value, bytes) and b"\0" in node.value:
+            return False
         return isinstance(node.value, (int, float, str, bytes, bool, type(None)))
 
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
@@ -398,7 +422,7 @@ def _is_safe_literal(
             for k, v in zip(node.keys, node.values)
         )
 
-    if allowed_vars and isinstance(node, ast.Name) and node.id in allowed_vars:
+    if allowed_vars and isinstance(node, ast.Name) and node.id in allowed_vars and _is_valid_example_identifier(node.id):
         return True
 
     return False
@@ -409,11 +433,11 @@ def _is_safe_entry_call(node: ast.AST, entry_point: str, allowed_vars: Set[str])
     Returns True only if `node` is a direct call `entry_point(...)` where every
     positional and keyword argument is a safe literal, literal container, or allowed variable.
     """
-    if not entry_point or entry_point.startswith("_") or entry_point in _FORBIDDEN_EXAMPLE_NAMES:
+    if not entry_point or entry_point.startswith("_") or entry_point in _FORBIDDEN_EXAMPLE_NAMES or not _is_valid_example_identifier(entry_point):
         return False
     if not isinstance(node, ast.Call):
         return False
-    if not isinstance(node.func, ast.Name) or node.func.id != entry_point:
+    if not isinstance(node.func, ast.Name) or node.func.id != entry_point or not _is_valid_example_identifier(node.func.id):
         return False
     if len(node.args) > MAX_COLLECTION_LENGTH or len(node.keywords) > MAX_COLLECTION_LENGTH:
         return False
@@ -436,7 +460,7 @@ def _infer_entry_point(prompt: str, section: str) -> Optional[str]:
     ):
         matches = [
             m for m in re.findall(pat, header)
-            if m.isidentifier() and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+            if _is_valid_example_identifier(m) and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
         ]
         if matches:
             return matches[0]
@@ -444,7 +468,7 @@ def _infer_entry_point(prompt: str, section: str) -> Optional[str]:
     sec_matches = [
         m
         for m in re.findall(r"^\s*`?([^\s()`,]+)`?\s*\(", section, re.MULTILINE)
-        if m.isidentifier() and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+        if _is_valid_example_identifier(m) and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
     ]
     if sec_matches:
         return sec_matches[0]
@@ -477,7 +501,7 @@ def extract_example_assertions(
 
     if not entry_point:
         entry_point = _infer_entry_point(prompt, section)
-    if not entry_point or entry_point.startswith("_") or entry_point in _FORBIDDEN_EXAMPLE_NAMES:
+    if not entry_point or entry_point.startswith("_") or entry_point in _FORBIDDEN_EXAMPLE_NAMES or not _is_valid_example_identifier(entry_point):
         return []
 
     lines = section.splitlines()
@@ -529,9 +553,17 @@ def extract_example_assertions(
         if not clean_blk:
             continue
         clean_blk = clean_blk.rstrip()
-        if clean_blk.endswith(","):
+        while clean_blk.endswith(","):
             clean_blk = clean_blk[:-1].rstrip()
         if not clean_blk:
+            continue
+        if "\0" in clean_blk or r"\N{" in clean_blk:
+            continue
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in clean_blk):
+            continue
+        if re.search(r"\\[uU][dD][89a-fA-F][0-9a-fA-F]{2,6}", clean_blk):
+            continue
+        if any(ord(c) < 32 and c not in ("\t", "\n", "\r") for c in clean_blk):
             continue
 
         # Skip lines marked as approximate in comments
@@ -617,6 +649,7 @@ def extract_example_assertions(
                             not var_name.startswith("_")
                             and var_name != entry_point
                             and var_name not in _FORBIDDEN_EXAMPLE_NAMES
+                            and _is_valid_example_identifier(var_name)
                             and _is_safe_literal(assign_node.value, allowed_vars, allow_inexact_floats=False)
                         ):
                             allowed_vars.add(var_name)
@@ -652,7 +685,7 @@ def append_canonical_example_tests(
     if not ep:
         imp_matches = [
             m for m in re.findall(r"\bfrom\s+solution\s+import\s+([^\s(),]+)", test_code)
-            if m.isidentifier() and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+            if _is_valid_example_identifier(m) and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
         ]
         if imp_matches:
             ep = imp_matches[0]
@@ -660,7 +693,11 @@ def append_canonical_example_tests(
     if not ep:
         return test_code
 
-    stmts = extract_example_assertions(task_prompt, entry_point=ep)
+    if os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes"):
+        import pai_core_bridge
+        stmts = pai_core_bridge.extract_example_assertions(task_prompt, entry_point=ep)
+    else:
+        stmts = extract_example_assertions(task_prompt, entry_point=ep)
     if not stmts:
         return test_code
 
@@ -1716,6 +1753,40 @@ else:
                     detail=f"Execution failed without verdict framing (status: {res.status})",
                     wall_time_sec=res.wall_time_sec,
                 )
+
+            if os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes"):
+                import pai_core_bridge
+                bridge_verdict = pai_core_bridge.verify_verdict_frame(
+                    comb_out=comb_out,
+                    parent_nonce=parent_nonce,
+                    parent_hmac_key=parent_hmac_key,
+                    expected_test_ids=tuple(frozen_suite.expected_test_ids) if frozen_suite and frozen_suite.expected_test_ids else (),
+                    exit_code=res.exit_code,
+                    res_status=res.status,
+                    expected_test_hash=None,
+                )
+                if not bridge_verdict.get("passed", False):
+                    v_stat = bridge_verdict.get("status", "INTEGRITY_VIOLATION")
+                    v_err = bridge_verdict.get("error_type") or "BridgeIntegrityViolation"
+                    if v_stat in ("INTEGRITY_VIOLATION", "mutation_error"):
+                        return TestExecutionResult(
+                            passed=False,
+                            status=v_stat,
+                            exit_code=res.exit_code,
+                            discovered=bridge_verdict.get("discovered", 0),
+                            executed=bridge_verdict.get("executed", 0),
+                            failed=bridge_verdict.get("failed", 0),
+                            errors=max(1, bridge_verdict.get("errors", 0)),
+                            failures=[{
+                                "test_id": "<integrity>",
+                                "type": v_err,
+                                "message": f"Bridge verdict verification rejected output: {v_err}",
+                            }],
+                            stdout=comb_out,
+                            stderr=res.stderr,
+                            detail=f"INTEGRITY_VIOLATION: Bridge rejected verdict ({v_err})",
+                            wall_time_sec=res.wall_time_sec,
+                        )
 
             # Exactly one verdict frame is present: extract payload
             verdict_data: Dict[str, Any] = {}

@@ -23,6 +23,7 @@ fn print_help() {
     println!("    --conformance <DIR>      Run tier and URL policy conformance vectors from DIR");
     println!("                             (defaults to ../research/conformance if omitted)");
     println!("    --differential <FILE>    Run differential fuzz validation dataset from FILE");
+    println!("    --bridge, --json-bridge  Run JSON-in/JSON-out IPC bridge reading stdin, writing stdout");
     println!("    --telemetry              Query and display host hardware telemetry (Win32)");
     println!("    --json                   Emit JSON output (used with --telemetry)");
     println!("    --help, -h               Print this help message and exit");
@@ -88,6 +89,7 @@ fn main() {
     let mut differential_file: Option<PathBuf> = None;
     let mut telemetry_mode = false;
     let mut json_output = false;
+    let mut bridge_mode = false;
 
     while i < args.len() {
         match args[i].as_str() {
@@ -98,6 +100,9 @@ fn main() {
             "--version" | "-v" => {
                 println!("pai-core 0.1.0");
                 return;
+            }
+            "--bridge" | "--json-bridge" => {
+                bridge_mode = true;
             }
             "--telemetry" => {
                 telemetry_mode = true;
@@ -129,6 +134,14 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    if bridge_mode {
+        if let Err(e) = pai_core::bridge::run_bridge() {
+            eprintln!("Error running bridge: {}", e);
+            process::exit(1);
+        }
+        return;
     }
 
     if telemetry_mode {
