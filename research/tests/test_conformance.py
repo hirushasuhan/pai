@@ -18,7 +18,7 @@ from ingest import (
     wrap_untrusted_envelope,
 )
 from net_guard import UrlRejected, validate_url
-from value_codec import CodecError, decode_value, encode_value, get_codec_policy
+from value_codec import CodecError, decode_envelope_json, decode_value, encode_value, get_codec_policy
 from verify_loop import extract_example_assertions, verify_verdict_frame
 
 DIR = conformance.OUT_DIR
@@ -106,20 +106,21 @@ class Vectors(unittest.TestCase):
             scan_secret_content(raw_py, file_path="research/conformance.py"),
             "conformance.py must not contain contiguous secret-shaped literals at rest",
         )
-        rust_ingest_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "..",
-            "core",
-            "src",
-            "ingest.rs",
-        )
-        if os.path.exists(rust_ingest_path):
-            with open(rust_ingest_path, encoding="utf-8") as f:
-                raw_rs = f.read()
-            self.assertIsNone(
-                scan_secret_content(raw_rs, file_path="core/src/ingest.rs"),
-                "core/src/ingest.rs must not contain contiguous secret-shaped literals at rest",
+        for rust_rel in ("ingest.rs", "verify_loop.rs"):
+            rust_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "..",
+                "core",
+                "src",
+                rust_rel,
             )
+            if os.path.exists(rust_path):
+                with open(rust_path, encoding="utf-8") as f:
+                    raw_rs = f.read()
+                self.assertIsNone(
+                    scan_secret_content(raw_rs, file_path=f"core/src/{rust_rel}"),
+                    f"core/src/{rust_rel} must not contain contiguous secret-shaped literals at rest",
+                )
         test_ingest_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "test_ingest.py",
@@ -139,6 +140,8 @@ class Vectors(unittest.TestCase):
             self.assertEqual(type(decoded).__name__, c["python_type"], c["id"])
             re_encoded = encode_value(decoded)
             self.assertEqual(re_encoded, c["encoded"], c["id"])
+            decoded_from_json = decode_envelope_json(json.dumps(c["encoded"]))
+            self.assertEqual(encode_value(decoded_from_json), c["encoded"], c["id"])
             if isinstance(decoded, float) and math.isnan(decoded):
                 self.assertEqual(c["encoded"]["v"], "nan")
         for c in vec["codec_invalid_envelope_cases"]:

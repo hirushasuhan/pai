@@ -41,6 +41,7 @@ from value_codec import (
     MAX_RECURSION_DEPTH,
     MIN_INT64,
     CodecError,
+    decode_envelope_json,
     decode_value,
     encode_value,
     get_codec_policy,
@@ -466,6 +467,11 @@ def ingest_vectors() -> Dict[str, Any]:
             None,
             ["abදදcdef\n"],
         ),
+        (
+            "neg_16_non_ascii_casefold_long_s_password",
+            "src/auth.py",
+            ['pas\u017fword = "', 'SuperSecret99!_prod"\n'],
+        ),
     ]
     secret_content_cases = [
         {
@@ -656,6 +662,24 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "inv_16_very_long_list_exceeding_limit",
             {"t": "list", "v": [{"t": "int", "v": 0}] * (MAX_COLLECTION_LENGTH + 1)},
         ),
+        (
+            "inv_17_set_duplicate_elements",
+            {"t": "set", "v": [{"t": "int", "v": 7}, {"t": "int", "v": 7}]},
+        ),
+        (
+            "inv_18_frozenset_duplicate_numeric_equiv",
+            {"t": "frozenset", "v": [{"t": "int", "v": 1}, {"t": "bool", "v": True}]},
+        ),
+        (
+            "inv_19_dict_duplicate_float_int_keys",
+            {
+                "t": "dict",
+                "v": [
+                    [{"t": "int", "v": 1}, {"t": "str", "v": "a"}],
+                    [{"t": "float", "v": 1.0}, {"t": "str", "v": "b"}],
+                ],
+            },
+        ),
     ]
     codec_invalid_envelope_cases = []
     for cid, env in codec_invalid_envelopes:
@@ -731,6 +755,26 @@ def verify_loop_vectors() -> Dict[str, Any]:
     missing_frame_stdout = "Candidate printed some debug text and exited early\n"
     unparseable_json_stdout = "\n---PAI_VERDICT_START---\n{not valid json\n---PAI_VERDICT_END---\n"
     mutated_hash_stdout = format_authenticated_verdict_frame(mutated_hash_payload, hmac_key)
+    reversed_markers_stdout = (
+        "\n---PAI_VERDICT_END---\n"
+        + json.dumps(pass_payload, sort_keys=True)
+        + "\n---PAI_VERDICT_START---\n"
+    )
+    duplicate_json_key_stdout = (
+        "\n---PAI_VERDICT_START---\n"
+        '{"discovered": 2, "errors": 0, "executed": 2, "failed": 0, "passed": 2, "status": "FAIL", "status": "PASS"}'
+        "\n---PAI_VERDICT_END---\n"
+    )
+    non_ascii_mac_stdout = (
+        "\n---PAI_VERDICT_START---\n"
+        + json.dumps({**pass_payload, "mac": "සිංහල_mac_value"}, sort_keys=True)
+        + "\n---PAI_VERDICT_END---\n"
+    )
+    malformed_field_types_stdout = (
+        "\n---PAI_VERDICT_START---\n"
+        '{"discovered": "two", "errors": 0, "executed": 2, "failed": 0, "mac": "abcd", "passed": 2, "status": "PASS"}'
+        "\n---PAI_VERDICT_END---\n"
+    )
 
     verdict_raw_cases = [
         ("vf_01_valid_pass", valid_pass_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), expected_suite_hash, 0, "ok"),
@@ -744,6 +788,10 @@ def verify_loop_vectors() -> Dict[str, Any]:
         ("vf_09_unparseable_verdict_json", unparseable_json_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
         ("vf_10_mismatched_expected_test_ids", valid_pass_stdout, nonce, hmac_key, ("test_basic", "test_missing_id"), expected_suite_hash, 0, "ok"),
         ("vf_11_test_suite_hash_mismatch", mutated_hash_stdout, nonce, hmac_key, ("test_basic", "test_pai_canonical_examples"), expected_suite_hash, 0, "ok"),
+        ("vf_12_reversed_verdict_markers", reversed_markers_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_13_duplicate_json_key_in_verdict", duplicate_json_key_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_14_non_ascii_mac_in_verdict", non_ascii_mac_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
+        ("vf_15_malformed_verdict_field_types", malformed_field_types_stdout, nonce, hmac_key, ("test_basic",), None, 0, "ok"),
     ]
     verdict_frame_cases = [
         {
@@ -823,6 +871,11 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "ex_11_rejected_inexact_float_and_approx_comment",
             " ratio",
             "Write `ratio(a, b)`.\nExample:\n  ratio(1, 3) -> 0.33333\n  ratio(2, 3) -> 0.67 # approximately\n",
+        ),
+        (
+            "ex_12_int64_boundaries_and_overflow",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(9223372036854775807) -> -9223372036854775808\n  solve(9223372036854775808) -> 0\n  solve(0) -> -9223372036854775809\n",
         ),
     ]
     canonical_example_extraction_cases = [
@@ -1027,6 +1080,8 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
         "secret_key", "aws_secret_access_key", "access_token", "auth_token",
         "jwt_secret", "export_password", "password_hash", "password_field",
         "api_key_validator", "password_policy", "normal_variable",
+        "pas\u017fword", "db_pas\u017fword", "ap\u0130_key", "ap\u0131_key",
+        "secret_\u212aey", "access_to\u212aen",
     ]
     sample_cred_vals = [
         "SuperSecret99!_live", "ProdDbPass99!xyz", "changeme", "postgres",
@@ -1188,6 +1243,292 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
             "expected_envelope": wrap_untrusted_envelope(body, header=hdr, nonce=nonce),
         })
 
+    # Fuzz Verify-Loop cases (Slice 2):
+    # 1. Tagged value codec raw JSON envelopes (valid recursive values + structural/type/bound mutations)
+    # 2. Authenticated verdict frames (valid HMAC-SHA256 frames + signature/nonce/hash/marker/JSON mutations)
+    # 3. Canonical example extraction prompts (valid literals/containers/comparisons + hostile/edge ASTs)
+    verify_fuzz_count = max(200, num_cases // 3)
+    codec_envelope_json_cases = []
+    verdict_frame_fuzz_cases = []
+    example_extraction_fuzz_cases = []
+
+    def _gen_random_py_val(depth: int = 0, hashable_only: bool = False) -> Any:
+        if depth >= 3:
+            choices = ["bool", "int", "float", "str", "none", "bytes"]
+        elif hashable_only:
+            choices = ["bool", "int", "float", "str", "none", "bytes", "tuple", "frozenset"]
+        else:
+            choices = ["bool", "int", "float", "str", "none", "bytes", "list", "tuple", "set", "frozenset", "dict"]
+        kind_t = rng.choice(choices)
+        if kind_t == "bool":
+            return rng.choice([True, False])
+        if kind_t == "int":
+            return rng.choice([0, 1, -1, 42, -999999, MAX_INT64, MIN_INT64, rng.randint(-10000, 10000)])
+        if kind_t == "float":
+            return rng.choice([0.0, -0.0, 1.0, -2.5, 3.14159265, float("nan"), float("inf"), float("-inf")])
+        if kind_t == "str":
+            return rng.choice(["", "hello", "සිංහල\u200dා", "t", "v", "line1\nline2", "🚀✨"])
+        if kind_t == "none":
+            return None
+        if kind_t == "bytes":
+            blen = rng.randint(0, 12)
+            return bytes(rng.getrandbits(8) for _ in range(blen))
+        if kind_t == "list":
+            return [_gen_random_py_val(depth + 1, False) for _ in range(rng.randint(0, 4))]
+        if kind_t == "tuple":
+            return tuple(_gen_random_py_val(depth + 1, hashable_only) for _ in range(rng.randint(0, 3)))
+        if kind_t == "set":
+            s: set = set()
+            for _ in range(rng.randint(0, 3)):
+                elt = _gen_random_py_val(depth + 1, True)
+                if not (isinstance(elt, float) and elt != elt):
+                    s.add(elt)
+            return s
+        if kind_t == "frozenset":
+            fs: set = set()
+            for _ in range(rng.randint(0, 3)):
+                elt = _gen_random_py_val(depth + 1, True)
+                if not (isinstance(elt, float) and elt != elt):
+                    fs.add(elt)
+            return frozenset(fs)
+        d: Dict[Any, Any] = {}
+        for _ in range(rng.randint(0, 3)):
+            k = _gen_random_py_val(depth + 1, True)
+            if not (isinstance(k, float) and k != k):
+                d[k] = _gen_random_py_val(depth + 1, False)
+        return d
+
+    hostile_codec_raw_jsons = [
+        '{"t": "int", "t": "int", "v": 1}',
+        '{"t": "int", "v": 1, "v": 2}',
+        '{"t": "int", "v": 1, "extra": null}',
+        '{"t": "int"}',
+        '{"v": 1}',
+        '{}',
+        '[]',
+        '"not_an_object"',
+        '{"t": "unknown_tag", "v": 1}',
+        '{"t": 123, "v": 1}',
+        '{"t": "int", "v": true}',
+        '{"t": "int", "v": false}',
+        '{"t": "int", "v": 1.0}',
+        '{"t": "int", "v": -0.0}',
+        '{"t": "int", "v": 9223372036854775808}',
+        '{"t": "int", "v": -9223372036854775809}',
+        '{"t": "int", "v": 999999999999999999999999999999}',
+        '{"t": "float", "v": true}',
+        '{"t": "float", "v": "NaN"}',
+        '{"t": "float", "v": "Infinity"}',
+        '{"t": "float", "v": "+inf"}',
+        '{"t": "float", "v": 1e500}',
+        '{"t": "none", "v": 0}',
+        '{"t": "bool", "v": 1}',
+        '{"t": "str", "v": 123}',
+        '{"t": "bytes", "v": "abc"}',
+        '{"t": "bytes", "v": "===a"}',
+        '{"t": "bytes", "v": "AA=A"}',
+        '{"t": "bytes", "v": "සිංහල"}',
+        '{"t": "set", "v": [{"t": "int", "v": 1}, {"t": "bool", "v": true}]}',
+        '{"t": "set", "v": [{"t": "int", "v": 0}, {"t": "bool", "v": false}]}',
+        '{"t": "set", "v": [{"t": "int", "v": 1}, {"t": "float", "v": 1.0}]}',
+        '{"t": "set", "v": [{"t": "int", "v": 0}, {"t": "float", "v": -0.0}]}',
+        '{"t": "frozenset", "v": [{"t": "int", "v": 1}, {"t": "float", "v": 1.0}]}',
+        '{"t": "frozenset", "v": [{"t": "tuple", "v": [{"t": "int", "v": 1}]}, {"t": "tuple", "v": [{"t": "bool", "v": true}]}]}',
+        '{"t": "dict", "v": [[{"t": "int", "v": 1}, {"t": "str", "v": "a"}], [{"t": "bool", "v": true}, {"t": "str", "v": "b"}]]}',
+        '{"t": "dict", "v": [[{"t": "int", "v": 1}, {"t": "str", "v": "a"}], [{"t": "float", "v": 1.0}, {"t": "str", "v": "b"}]]}',
+        '{"t": "dict", "v": [[{"t": "int", "v": 9007199254740993}, {"t": "int", "v": 1}], [{"t": "float", "v": 9007199254740992.0}, {"t": "int", "v": 2}]]}',
+        '{"t": "set", "v": [{"t": "list", "v": []}]}',
+        '{"t": "set", "v": [{"t": "tuple", "v": [{"t": "list", "v": []}]}]}',
+        '{"t": "dict", "v": [[{"t": "set", "v": []}, {"t": "int", "v": 1}]]}',
+        '{"t": "dict", "v": [[{"t": "int", "v": 1}]]}',
+        '{"t": "str", "v": "\\ud800"}',
+        '{"t": "str", "v": "unterminated}',
+        json.dumps(_build_nested_list_envelope(MAX_RECURSION_DEPTH)),
+        json.dumps(_build_nested_list_envelope(MAX_RECURSION_DEPTH + 1)),
+    ]
+
+    for idx in range(verify_fuzz_count):
+        # 1. Codec raw JSON envelope case
+        if rng.random() < 0.45:
+            val = _gen_random_py_val(0, False)
+            raw_json = json.dumps(encode_value(val), sort_keys=rng.choice([True, False]))
+            if rng.random() < 0.20:
+                # Mutate valid JSON slightly
+                mut_choice = rng.random()
+                if mut_choice < 0.25:
+                    raw_json = raw_json.replace('"t":', '"t": "int", "t":', 1)
+                elif mut_choice < 0.50:
+                    raw_json = raw_json.replace('"int"', '"bool"', 1)
+                elif mut_choice < 0.75:
+                    raw_json = raw_json[:-1] + ', "extra": 1}'
+                else:
+                    raw_json = raw_json[: max(1, len(raw_json) // 2)]
+        else:
+            raw_json = rng.choice(hostile_codec_raw_jsons)
+
+        try:
+            decoded = decode_envelope_json(raw_json)
+            re_enc_json = json.dumps(encode_value(decoded), sort_keys=True)
+            exp_ok = True
+            exp_py_type = type(decoded).__name__
+        except CodecError:
+            exp_ok = False
+            exp_py_type = None
+            re_enc_json = None
+
+        codec_envelope_json_cases.append({
+            "id": f"fuzz_codec_json_{idx}",
+            "raw_json": raw_json,
+            "expected_ok": exp_ok,
+            "expected_python_type": exp_py_type,
+            "expected_re_encoded_json": re_enc_json,
+        })
+
+        # 2. Verdict frame case (valid + mutated)
+        p_nonce = f"{rng.getrandbits(128):032x}"
+        p_key = f"{rng.getrandbits(128):032x}"
+        exp_hash = f"{rng.getrandbits(128):032x}" if rng.random() < 0.7 else None
+        exp_ids = rng.choice([
+            ["test_one"],
+            ["test_basic", "test_pai_canonical_examples"],
+            [],
+        ])
+        disc = rng.choice([0, 1, 2, 3])
+        exec_c = disc if rng.random() < 0.8 else max(0, disc - 1)
+        fail_c = rng.choice([0, 0, 1])
+        err_c = rng.choice([0, 0, 1])
+        status_s = rng.choice(["PASS", "FAIL", "ERROR", "mutation_error"])
+        exit_c = rng.choice([0, 0, 1])
+        res_st = rng.choice(["ok", "ok", "ok", "timeout"])
+
+        base_payload: Dict[str, Any] = {
+            "session_nonce": p_nonce if rng.random() < 0.85 else "00" * 16,
+            "status": status_s,
+            "discovered": disc,
+            "executed": exec_c,
+            "passed": max(0, exec_c - fail_c - err_c),
+            "failed": fail_c,
+            "errors": err_c,
+            "executed_test_ids": exp_ids if rng.random() < 0.8 else ["test_other"],
+            "failures": (
+                [{"test_id": "test_one", "type": rng.choice(["AssertionError", "ValueError"]), "message": "සිංහල assert 1 == 2"}]
+                if fail_c > 0
+                else []
+            ),
+            "test_hash": (exp_hash if rng.random() < 0.85 else "ff" * 16) if exp_hash else "aa" * 16,
+        }
+        sign_key = p_key if rng.random() < 0.85 else "11" * 16
+        stdout_frame = format_authenticated_verdict_frame(base_payload, sign_key)
+
+        v_mut = rng.random()
+        if v_mut < 0.12:
+            # Tamper payload after signing
+            stdout_frame = stdout_frame.replace(f'"status": "{status_s}"', '"status": "PASS"')
+        elif v_mut < 0.22:
+            # Duplicate JSON key inside frame
+            stdout_frame = (
+                "\n---PAI_VERDICT_START---\n"
+                '{"discovered": 1, "errors": 0, "executed": 1, "failed": 0, "passed": 1, "status": "FAIL", "status": "PASS"}'
+                "\n---PAI_VERDICT_END---\n"
+            )
+        elif v_mut < 0.30:
+            # Reversed markers
+            stdout_frame = (
+                "\n---PAI_VERDICT_END---\n"
+                + json.dumps(base_payload, sort_keys=True)
+                + "\n---PAI_VERDICT_START---\n"
+            )
+        elif v_mut < 0.38:
+            # Multiple frames
+            stdout_frame = stdout_frame + "\n" + stdout_frame
+        elif v_mut < 0.46:
+            # Missing frame / preempted
+            stdout_frame = "user debug output සිංහල\n---PAI_VERDICT_START_PARTIAL\n"
+        elif v_mut < 0.54:
+            # Non-ASCII or non-string MAC or bad count type
+            bad_variant = rng.choice([
+                json.dumps({**base_payload, "mac": "සිංහල"}, sort_keys=True),
+                json.dumps({**base_payload, "mac": 12345}, sort_keys=True),
+                json.dumps({**base_payload, "discovered": True, "mac": "aa" * 32}, sort_keys=True),
+                json.dumps({**base_payload, "discovered": -1, "mac": "aa" * 32}, sort_keys=True),
+                '{"discovered": 1.5, "status": "PASS", "mac": "abcd"}',
+                "{malformed json",
+            ])
+            stdout_frame = f"\n---PAI_VERDICT_START---\n{bad_variant}\n---PAI_VERDICT_END---\n"
+        elif v_mut < 0.65:
+            # Prefix and suffix logs around valid frame
+            stdout_frame = f"Debug log line 1 සිංහල\r\n{stdout_frame}\nTrailing log\n"
+
+        expected_verdict = verify_verdict_frame(
+            stdout_frame,
+            p_nonce,
+            p_key,
+            expected_test_ids=tuple(exp_ids),
+            expected_test_hash=exp_hash,
+            exit_code=exit_c,
+            res_status=res_st,
+        )
+        verdict_frame_fuzz_cases.append({
+            "id": f"fuzz_vf_{idx}",
+            "stdout": stdout_frame,
+            "parent_nonce": p_nonce,
+            "parent_hmac_key": p_key,
+            "expected_test_ids": exp_ids,
+            "expected_test_hash": exp_hash,
+            "exit_code": exit_c,
+            "res_status": res_st,
+            "expected": expected_verdict,
+        })
+
+        # 3. Canonical example extraction case (valid + hostile/edge ASTs)
+        ep_choice = rng.choice(["solve", "calc_total", "score", "", "_private", "open"])
+        header_choice = rng.choice([
+            "Write `solve(x)`.\n",
+            "Implement `def calc_total(items, tax):`\n",
+            "Write function `score`.\n",
+            "Task description in සිංහල.\n",
+        ])
+        marker_choice = rng.choice(["Example:\n", "Examples:\n"])
+        sample_ex_lines = [
+            "  solve([1, 2, 3]) -> 6",
+            "  solve([]) -> 0",
+            "  solve('සිංහල') -> 'සිංහල'",
+            "  solve(5) -> 2.5",
+            "  solve(5) -> -1.25",
+            "  solve(1, 3) -> 0.33333",
+            "  solve(2, 3) -> 0.67 # approximately",
+            "  solve(2, 3) -> 0.67 # ~0.67",
+            "  solve(9223372036854775807) -> -9223372036854775808",
+            "  solve(9223372036854775808) -> 0",
+            "  solve(0) -> -9223372036854775809",
+            "  solve(1) -> float('inf')",
+            "  solve(1) -> float('-inf')",
+            "  solve(1) -> float('nan')",
+            "  p = [10, 20]",
+            "  total_cost(p, 5) -> 35",
+            "  calc_total([1, 2], tax=5) -> 8",
+            "  score('abc') > 0",
+            "  score('abc') == 3",
+            "  0 <= score('x') < 10",
+            "  solve(\n    [1, 2],\n    3\n  ) -> 6",
+            "  solve(open('/etc/passwd').read()) -> 1",
+            "  solve(__import__('os').system('id')) -> 0",
+            "  solve([i for i in range(4)]) -> 4",
+            "  solve(lambda x: x) -> 1",
+            "  solve(10) -> ...",
+            "Note: constraints follow",
+        ]
+        chosen_lines = "\n".join(rng.choices(sample_ex_lines, k=rng.randint(1, 4))) + "\n"
+        prompt_str = f"{header_choice}{marker_choice}{chosen_lines}"
+        ep_arg = ep_choice if ep_choice else None
+        expected_stmts = extract_example_assertions(prompt_str, entry_point=ep_arg)
+        example_extraction_fuzz_cases.append({
+            "id": f"fuzz_ex_{idx}",
+            "entry_point": ep_choice,
+            "prompt": prompt_str,
+            "expected_statements": expected_stmts,
+        })
+
     return {
         "tier_cases": tier_cases,
         "url_cases": url_cases,
@@ -1200,6 +1541,11 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
             "sanitize_header_cases": sanitize_header_cases,
             "envelope_cases": envelope_cases,
         },
+        "verify_loop_cases": {
+            "codec_envelope_json_cases": codec_envelope_json_cases,
+            "verdict_frame_cases": verdict_frame_fuzz_cases,
+            "example_extraction_cases": example_extraction_fuzz_cases,
+        },
     }
 
 
@@ -1211,9 +1557,10 @@ def run_differential_test(num_cases: int, seed: int) -> int:
 
     core_dir = os.path.join(os.path.dirname(HERE), "core")
     ingest_total = sum(len(v) for v in dataset["ingest_cases"].values())
+    verify_loop_total = sum(len(v) for v in dataset["verify_loop_cases"].values())
     print(
         f"Generated {len(dataset['tier_cases'])} tier, {len(dataset['url_cases'])} URL, "
-        f"and {ingest_total} ingest fuzz inputs (seed={seed})."
+        f"{ingest_total} ingest, and {verify_loop_total} verify_loop fuzz inputs (seed={seed})."
     )
     print("Running differential verification in pai-core...")
 

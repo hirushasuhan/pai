@@ -76,6 +76,14 @@
    "expected_statements": [],
    "id": "ex_11_rejected_inexact_float_and_approx_comment",
    "prompt": "Write `ratio(a, b)`.\nExample:\n  ratio(1, 3) -> 0.33333\n  ratio(2, 3) -> 0.67 # approximately\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert solve(9223372036854775807) == -9223372036854775808"
+   ],
+   "id": "ex_12_int64_boundaries_and_overflow",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(9223372036854775807) -> -9223372036854775808\n  solve(9223372036854775808) -> 0\n  solve(0) -> -9223372036854775809\n"
   }
  ],
  "codec_invalid_envelope_cases": [
@@ -4414,6 +4422,69 @@
    },
    "expected_error": "CodecError",
    "id": "inv_16_very_long_list_exceeding_limit"
+  },
+  {
+   "envelope": {
+    "t": "set",
+    "v": [
+     {
+      "t": "int",
+      "v": 7
+     },
+     {
+      "t": "int",
+      "v": 7
+     }
+    ]
+   },
+   "expected_error": "CodecError",
+   "id": "inv_17_set_duplicate_elements"
+  },
+  {
+   "envelope": {
+    "t": "frozenset",
+    "v": [
+     {
+      "t": "int",
+      "v": 1
+     },
+     {
+      "t": "bool",
+      "v": true
+     }
+    ]
+   },
+   "expected_error": "CodecError",
+   "id": "inv_18_frozenset_duplicate_numeric_equiv"
+  },
+  {
+   "envelope": {
+    "t": "dict",
+    "v": [
+     [
+      {
+       "t": "int",
+       "v": 1
+      },
+      {
+       "t": "str",
+       "v": "a"
+      }
+     ],
+     [
+      {
+       "t": "float",
+       "v": 1.0
+      },
+      {
+       "t": "str",
+       "v": "b"
+      }
+     ]
+    ]
+   },
+   "expected_error": "CodecError",
+   "id": "inv_19_dict_duplicate_float_int_keys"
   }
  ],
  "codec_policy": {
@@ -5119,6 +5190,90 @@
    "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
    "res_status": "ok",
    "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"5859ec344987dbc33e25700fd3c7237aa0dac2b390c7cad1e826a60b516762e0\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\", \"test_hash\": \"bbbb9999888877776666555544443333222211110000ffffeeeeddddccccbbbb\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 0,
+    "error_type": "VerdictParseError",
+    "errors": 1,
+    "executed": 0,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_hash": null,
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_12_reversed_verdict_markers",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_END---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\", \"test_hash\": \"aaaa0000111122223333444455556666777788889999aaaabbbbccccddddeeee\"}\n---PAI_VERDICT_START---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 0,
+    "error_type": "VerdictParseError",
+    "errors": 1,
+    "executed": 0,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_hash": null,
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_13_duplicate_json_key_in_verdict",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"failed\": 0, \"passed\": 2, \"status\": \"FAIL\", \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 2,
+    "error_type": "InvalidHmacSignatureError",
+    "errors": 1,
+    "executed": 2,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_hash": null,
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_14_non_ascii_mac_in_verdict",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": 2, \"errors\": 0, \"executed\": 2, \"executed_test_ids\": [\"test_basic\", \"test_pai_canonical_examples\"], \"failed\": 0, \"failures\": [], \"mac\": \"\\u0dc3\\u0dd2\\u0d82\\u0dc4\\u0dbd_mac_value\", \"passed\": 2, \"per_test_outcomes\": {\"test_basic\": {\"status\": \"PASS\"}, \"test_pai_canonical_examples\": {\"status\": \"PASS\"}}, \"session_nonce\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"status\": \"PASS\", \"test_hash\": \"aaaa0000111122223333444455556666777788889999aaaabbbbccccddddeeee\"}\n---PAI_VERDICT_END---\n"
+  },
+  {
+   "exit_code": 0,
+   "expected": {
+    "discovered": 0,
+    "error_type": "VerdictParseError",
+    "errors": 1,
+    "executed": 0,
+    "failed": 0,
+    "passed": false,
+    "status": "INTEGRITY_VIOLATION"
+   },
+   "expected_test_hash": null,
+   "expected_test_ids": [
+    "test_basic"
+   ],
+   "id": "vf_15_malformed_verdict_field_types",
+   "parent_hmac_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "parent_nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+   "res_status": "ok",
+   "stdout": "\n---PAI_VERDICT_START---\n{\"discovered\": \"two\", \"errors\": 0, \"executed\": 2, \"failed\": 0, \"mac\": \"abcd\", \"passed\": 2, \"status\": \"PASS\"}\n---PAI_VERDICT_END---\n"
   }
  ]
 }

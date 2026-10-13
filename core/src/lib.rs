@@ -7,4 +7,5 @@ pub mod conformance;
 pub mod ingest;
 pub mod tier;
 pub mod url_policy;
+pub mod verify_loop;
 pub mod win32;

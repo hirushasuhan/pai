@@ -1231,6 +1231,125 @@ def compact_number_formatter(n):
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
 
+    def test_decode_envelope_json_strict_policy_and_canonical_set_order(self):
+        import json
+        from value_codec import CodecError, decode_envelope_json, decode_value, encode_value
+
+        # Canonical set and frozenset element ordering is deterministic
+        enc_set = encode_value({"b", "a", "c"})
+        self.assertEqual(
+            enc_set,
+            {
+                "t": "set",
+                "v": [
+                    {"t": "str", "v": "a"},
+                    {"t": "str", "v": "b"},
+                    {"t": "str", "v": "c"},
+                ],
+            },
+        )
+        self.assertEqual(decode_envelope_json(json.dumps(enc_set)), {"a", "b", "c"})
+
+        # Duplicate JSON keys rejected in raw JSON envelope
+        with self.assertRaises(CodecError):
+            decode_envelope_json('{"t": "int", "t": "int", "v": 1}')
+
+        # Out-of-range i64 rejected in raw JSON envelope
+        with self.assertRaises(CodecError):
+            decode_envelope_json('{"t": "int", "v": 9223372036854775808}')
+
+        # Bare NaN/Infinity JSON literals rejected (must use string "nan"/"inf" inside float tag)
+        with self.assertRaises(CodecError):
+            decode_envelope_json('{"t": "float", "v": NaN}')
+
+        # Duplicate elements in set / frozenset envelope rejected
+        with self.assertRaises(CodecError):
+            decode_value({"t": "set", "v": [{"t": "int", "v": 1}, {"t": "int", "v": 1}]})
+        with self.assertRaises(CodecError):
+            decode_value({"t": "frozenset", "v": [{"t": "int", "v": 1}, {"t": "float", "v": 1.0}]})
+
+        # Duplicate numeric-equivalent keys in dict envelope rejected (1 vs 1.0 vs True)
+        with self.assertRaises(CodecError):
+            decode_value(
+                {
+                    "t": "dict",
+                    "v": [
+                        [{"t": "int", "v": 1}, {"t": "str", "v": "a"}],
+                        [{"t": "float", "v": 1.0}, {"t": "str", "v": "b"}],
+                    ],
+                }
+            )
+
+    def test_verify_verdict_frame_hardened_rejections(self):
+        from verify_loop import format_authenticated_verdict_frame, verify_verdict_frame
+
+        nonce = "nonce123"
+        key = "key456"
+        start_marker = "---PAI_VERDICT_START---"
+        end_marker = "---PAI_VERDICT_END---"
+
+        # 1. Reversed markers (END before START) must be rejected without crashing
+        reversed_stdout = f"{end_marker}\n{{}}\n{start_marker}"
+        res_rev = verify_verdict_frame(reversed_stdout, nonce, key, expected_test_ids=("test_a",))
+        self.assertFalse(res_rev["passed"])
+        self.assertEqual(res_rev["status"], "INTEGRITY_VIOLATION")
+        self.assertEqual(res_rev["error_type"], "VerdictParseError")
+
+        # 2. Duplicate JSON keys inside verdict payload must be rejected
+        dup_stdout = (
+            f"{start_marker}\n"
+            '{"status": "passed", "status": "failed", "session_nonce": "nonce123", "mac": "00"}\n'
+            f"{end_marker}"
+        )
+        res_dup = verify_verdict_frame(dup_stdout, nonce, key, expected_test_ids=("test_a",))
+        self.assertFalse(res_dup["passed"])
+        self.assertEqual(res_dup["status"], "INTEGRITY_VIOLATION")
+        self.assertEqual(res_dup["error_type"], "VerdictParseError")
+
+        # 3. Non-ASCII MAC string must be rejected cleanly without raising ValueError
+        valid_frame = format_authenticated_verdict_frame(
+            {
+                "status": "passed",
+                "session_nonce": nonce,
+                "test_hash": "h1",
+                "discovered": 1,
+                "executed": 1,
+                "executed_test_ids": ["test_a"],
+                "failures": [],
+            },
+            key,
+        )
+        non_ascii_stdout = valid_frame.replace('"mac": "', '"mac": "\u0d9a\u0dd2')
+        res_mac = verify_verdict_frame(non_ascii_stdout, nonce, key, expected_test_ids=("test_a",))
+        self.assertFalse(res_mac["passed"])
+        self.assertEqual(res_mac["status"], "INTEGRITY_VIOLATION")
+        self.assertEqual(res_mac["error_type"], "InvalidHmacSignatureError")
+
+        # 4. Boolean count (True instead of int 1) must be rejected
+        bool_count_stdout = (
+            f"{start_marker}\n"
+            '{"status": "passed", "session_nonce": "nonce123", "discovered": true, "executed": 1, "mac": "00"}\n'
+            f"{end_marker}"
+        )
+        res_bt = verify_verdict_frame(bool_count_stdout, nonce, key, expected_test_ids=("test_a",))
+        self.assertFalse(res_bt["passed"])
+        self.assertEqual(res_bt["status"], "INTEGRITY_VIOLATION")
+        self.assertEqual(res_bt["error_type"], "VerdictParseError")
+
+    def test_extract_example_assertions_i64_and_depth_bounds(self):
+        from verify_loop import extract_example_assertions
+
+        prompt = (
+            "Examples:\n"
+            "  f(9223372036854775807) == -9223372036854775808\n"
+            "  f(9223372036854775808) == 0\n"
+            "  f(1) == 9223372036854775808\n"
+        )
+        stmts = extract_example_assertions(prompt, entry_point="f")
+        self.assertEqual(len(stmts), 1)
+        self.assertIn("9223372036854775807", stmts[0])
+
 
 if __name__ == "__main__":
     unittest.main()
+

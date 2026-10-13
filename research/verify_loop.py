@@ -30,6 +30,7 @@ import hashlib
 import hmac
 import inspect
 import json
+import math
 import os
 import re
 import secrets
@@ -46,9 +47,23 @@ _CURR_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CURR_DIR not in sys.path:
     sys.path.insert(0, _CURR_DIR)
 
-from value_codec import CodecError, EqualityHijackError, decode_value, encode_value
+from value_codec import (
+    MAX_COLLECTION_LENGTH,
+    MAX_INT64,
+    MAX_ITEM_COUNT,
+    MAX_RECURSION_DEPTH,
+    MIN_INT64,
+    CodecError,
+    EqualityHijackError,
+    decode_value,
+    encode_value,
+)
 
 from sandbox import get_sandbox, is_sandbox_supported
+
+MAX_VERDICT_STREAM_BYTES = 1_048_576
+MAX_VERDICT_FRAME_BYTES = 262_144
+MAX_VERDICT_COUNT_VALUE = 1_000_000
 
 
 class TestMutationError(RuntimeError):
@@ -312,6 +327,7 @@ def _is_safe_literal(
     node: ast.AST,
     allowed_vars: Optional[Set[str]] = None,
     allow_inexact_floats: bool = True,
+    depth: int = 0,
 ) -> bool:
     """
     Returns True only if `node` is a safe literal (int, float, str, bytes, bool, None),
@@ -319,18 +335,38 @@ def _is_safe_literal(
     or a reference to a previously validated local variable in `allowed_vars`.
     Strictly rejects Ellipsis (...), arbitrary function/method calls, attributes, subscripts, etc.
     """
+    if depth > MAX_RECURSION_DEPTH:
+        return False
+
     if isinstance(node, ast.Constant):
         if node.value is Ellipsis:
             return False
+        if isinstance(node.value, int) and not isinstance(node.value, bool):
+            if node.value < MIN_INT64 or node.value > MAX_INT64:
+                return False
         if isinstance(node.value, float) and not isinstance(node.value, bool):
+            if not math.isfinite(node.value):
+                return False
             if not allow_inexact_floats and round(node.value, 2) != node.value:
                 return False
         return isinstance(node.value, (int, float, str, bytes, bool, type(None)))
 
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)) and not isinstance(node.operand.value, bool):
-            if isinstance(node.operand.value, float) and not allow_inexact_floats and round(node.operand.value, 2) != node.operand.value:
-                return False
+        if (
+            isinstance(node.operand, ast.Constant)
+            and isinstance(node.operand.value, (int, float))
+            and not isinstance(node.operand.value, bool)
+        ):
+            op_val = node.operand.value
+            if isinstance(op_val, int):
+                signed_val = -op_val if isinstance(node.op, ast.USub) else op_val
+                if signed_val < MIN_INT64 or signed_val > MAX_INT64:
+                    return False
+            elif isinstance(op_val, float):
+                if not math.isfinite(op_val):
+                    return False
+                if not allow_inexact_floats and round(op_val, 2) != op_val:
+                    return False
             return True
         return False
 
@@ -346,13 +382,17 @@ def _is_safe_literal(
         return True
 
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return all(_is_safe_literal(elt, allowed_vars, allow_inexact_floats) for elt in node.elts)
+        if len(node.elts) > MAX_COLLECTION_LENGTH:
+            return False
+        return all(_is_safe_literal(elt, allowed_vars, allow_inexact_floats, depth + 1) for elt in node.elts)
 
     if isinstance(node, ast.Dict):
+        if len(node.keys) > MAX_COLLECTION_LENGTH:
+            return False
         return all(
             k is not None
-            and _is_safe_literal(k, allowed_vars, allow_inexact_floats)
-            and _is_safe_literal(v, allowed_vars, allow_inexact_floats)
+            and _is_safe_literal(k, allowed_vars, allow_inexact_floats, depth + 1)
+            and _is_safe_literal(v, allowed_vars, allow_inexact_floats, depth + 1)
             for k, v in zip(node.keys, node.values)
         )
 
@@ -372,6 +412,8 @@ def _is_safe_entry_call(node: ast.AST, entry_point: str, allowed_vars: Set[str])
     if not isinstance(node, ast.Call):
         return False
     if not isinstance(node.func, ast.Name) or node.func.id != entry_point:
+        return False
+    if len(node.args) > MAX_COLLECTION_LENGTH or len(node.keywords) > MAX_COLLECTION_LENGTH:
         return False
     for arg in node.args:
         if not _is_safe_literal(arg, allowed_vars, allow_inexact_floats=True):
@@ -418,7 +460,11 @@ def extract_example_assertions(
       expectations (>2 decimal places like `0.333`) are skipped; exact scalar float expectations
       are compared with a tolerance (`1e-3`).
     """
-    if not prompt or ("Example:" not in prompt and "Examples:" not in prompt):
+    if not isinstance(prompt, str) or not prompt:
+        return []
+    if len(prompt.encode("utf-8", errors="surrogatepass")) > MAX_VERDICT_STREAM_BYTES:
+        return []
+    if "Example:" not in prompt and "Examples:" not in prompt:
         return []
 
     marker = "Example:" if "Example:" in prompt else "Examples:"
@@ -498,7 +544,7 @@ def extract_example_assertions(
                 else:
                     statements.append(f"assert {expr} == {expected}")
                 continue
-            except SyntaxError:
+            except (SyntaxError, ValueError, TypeError, OverflowError, RecursionError, MemoryError):
                 continue
 
         # Pattern 2: Direct comparison assertion: e.g. `call(...) > 0` or `call(...) == ...`
@@ -527,7 +573,7 @@ def extract_example_assertions(
                         elif isinstance(expr_ast.ops[0], ast.Eq):
                             statements.append(f"assert {clean_blk}")
                             continue
-                except SyntaxError:
+                except (SyntaxError, ValueError, TypeError, OverflowError, RecursionError, MemoryError):
                     continue
 
         # Pattern 3: Variable assignment: `var = <safe_literal_or_container>`
@@ -547,7 +593,7 @@ def extract_example_assertions(
                             allowed_vars.add(var_name)
                             statements.append(clean_blk)
                             continue
-            except SyntaxError:
+            except (SyntaxError, ValueError, TypeError, OverflowError, RecursionError, MemoryError):
                 continue
 
     if not any(s.startswith("assert ") for s in statements):
@@ -606,6 +652,101 @@ def format_authenticated_verdict_frame(verdict_payload: Dict[str, Any], hmac_key
     return "\n---PAI_VERDICT_START---\n" + json.dumps(signed_data, sort_keys=True) + "\n---PAI_VERDICT_END---\n"
 
 
+def _reject_verdict_json_constant(const_str: str) -> Any:
+    raise ValueError(f"Non-standard JSON constant in verdict payload: {const_str!r}")
+
+
+def _reject_verdict_json_float(float_str: str) -> Any:
+    raise ValueError(f"Float literal not permitted in verdict payload: {float_str!r}")
+
+
+def _parse_verdict_json_int(int_str: str) -> int:
+    if len(int_str) > 32:
+        raise ValueError("Integer literal in verdict payload exceeds digit limit")
+    val = int(int_str)
+    if val < MIN_INT64 or val > MAX_INT64:
+        raise ValueError(f"Integer literal in verdict payload out of i64 range: {val}")
+    return val
+
+
+def _reject_duplicate_verdict_json_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    if len(pairs) > MAX_COLLECTION_LENGTH:
+        raise ValueError("Verdict JSON object exceeds maximum collection length")
+    res: Dict[str, Any] = {}
+    for k, v in pairs:
+        k.encode("utf-8")
+        if k in res:
+            raise ValueError(f"Duplicate key in verdict JSON object: {k!r}")
+        res[k] = v
+    return res
+
+
+def _validate_verdict_json_structure(root: Any) -> None:
+    if type(root) is not dict:
+        raise ValueError("Verdict payload must be a JSON object")
+    stack: List[Tuple[Any, int]] = [(root, 0)]
+    node_count = 0
+    while stack:
+        node, depth = stack.pop()
+        node_count += 1
+        if node_count > MAX_ITEM_COUNT:
+            raise ValueError("Verdict JSON exceeds maximum item count")
+        if depth > MAX_RECURSION_DEPTH:
+            raise ValueError("Verdict JSON exceeds maximum recursion depth")
+        t = type(node)
+        if t is dict:
+            if len(node) > MAX_COLLECTION_LENGTH:
+                raise ValueError("Verdict JSON object exceeds maximum collection length")
+            for k, v in node.items():
+                if type(k) is not str:
+                    raise ValueError("Verdict JSON object keys must be strings")
+                k.encode("utf-8")
+                node_count += 1
+                if node_count > MAX_ITEM_COUNT:
+                    raise ValueError("Verdict JSON exceeds maximum item count")
+                stack.append((v, depth + 1))
+        elif t is list:
+            if len(node) > MAX_COLLECTION_LENGTH:
+                raise ValueError("Verdict JSON array exceeds maximum collection length")
+            for elt in node:
+                stack.append((elt, depth + 1))
+        elif t is str:
+            node.encode("utf-8")
+        elif t in (bool, type(None)):
+            pass
+        elif t is int:
+            if node < MIN_INT64 or node > MAX_INT64:
+                raise ValueError("Verdict JSON integer out of i64 bounds")
+        else:
+            raise ValueError(f"Unsupported value type in verdict JSON: {t.__name__}")
+
+    for count_key in ("discovered", "executed", "passed", "failed", "errors"):
+        if count_key in root:
+            cval = root[count_key]
+            if type(cval) is not int or cval < 0 or cval > MAX_VERDICT_COUNT_VALUE:
+                raise ValueError(f"Invalid verdict count field {count_key!r}: {cval!r}")
+
+    if "status" in root and type(root["status"]) is not str:
+        raise ValueError("Verdict 'status' field must be a string")
+    if "mac" in root and type(root["mac"]) is not str:
+        raise ValueError("Verdict 'mac' field must be a string")
+    if "session_nonce" in root and root["session_nonce"] is not None and type(root["session_nonce"]) is not str:
+        raise ValueError("Verdict 'session_nonce' field must be a string or null")
+    if "test_hash" in root and root["test_hash"] is not None and type(root["test_hash"]) is not str:
+        raise ValueError("Verdict 'test_hash' field must be a string or null")
+    if "executed_test_ids" in root:
+        ids = root["executed_test_ids"]
+        if type(ids) is not list or any(type(x) is not str for x in ids):
+            raise ValueError("Verdict 'executed_test_ids' must be a list of strings")
+    if "failures" in root:
+        fl = root["failures"]
+        if type(fl) is not list or any(type(item) is not dict for item in fl):
+            raise ValueError("Verdict 'failures' must be a list of objects")
+        for item in fl:
+            if "type" in item and item["type"] is not None and type(item["type"]) is not str:
+                raise ValueError("Failure entry 'type' must be a string or null")
+
+
 def verify_verdict_frame(
     comb_out: str,
     parent_nonce: str,
@@ -617,16 +758,31 @@ def verify_verdict_frame(
 ) -> Dict[str, Any]:
     """
     Verifies a driver stdout stream containing an authenticated verdict frame (ADR-011 H2/H3):
-    1. Enforces strictly 1 `---PAI_VERDICT_START---` and 1 `---PAI_VERDICT_END---` marker.
-    2. Parses the JSON verdict payload.
-    3. Verifies the HMAC-SHA256 signature (`mac`) over canonical sorted-keys JSON.
+    1. Enforces stream size <= MAX_VERDICT_STREAM_BYTES (1 MiB) and strictly 1
+       `---PAI_VERDICT_START---` and 1 `---PAI_VERDICT_END---` marker in valid order.
+    2. Parses the JSON verdict payload with strict bounds (no duplicate keys, no floats/NaN,
+       depth <= 32, collection length <= 1000, item count <= 50000) and validates field types.
+    3. Verifies the HMAC-SHA256 signature (`mac`) over canonical sorted-keys JSON in constant time.
     4. Verifies `session_nonce == parent_nonce`.
     5. Verifies `test_hash == expected_test_hash` (when `expected_test_hash` is provided) or `status == 'mutation_error'`.
     6. Verifies `executed_test_ids` matches `expected_test_ids` (when non-empty).
     Returns a canonical verification dictionary suitable for golden-vector conformance checks.
     """
-    start_count = comb_out.count("---PAI_VERDICT_START---")
-    end_count = comb_out.count("---PAI_VERDICT_END---")
+    if not isinstance(comb_out, str) or len(comb_out.encode("utf-8", errors="surrogatepass")) > MAX_VERDICT_STREAM_BYTES:
+        return {
+            "passed": False,
+            "status": "INTEGRITY_VIOLATION",
+            "error_type": "VerdictParseError",
+            "discovered": 0,
+            "executed": 0,
+            "failed": 0,
+            "errors": 1,
+        }
+
+    start_marker = "---PAI_VERDICT_START---"
+    end_marker = "---PAI_VERDICT_END---"
+    start_count = comb_out.count(start_marker)
+    end_count = comb_out.count(end_marker)
 
     if start_count > 1 or end_count > 1:
         return {
@@ -652,10 +808,22 @@ def verify_verdict_frame(
         }
 
     try:
-        payload = comb_out.split("---PAI_VERDICT_START---", 1)[1].split("---PAI_VERDICT_END---", 1)[0].strip()
-        verdict_data = json.loads(payload)
-        if not isinstance(verdict_data, dict):
-            raise ValueError("Verdict payload must be a JSON object")
+        start_idx = comb_out.find(start_marker)
+        end_idx = comb_out.find(end_marker)
+        payload_start = start_idx + len(start_marker)
+        if end_idx < payload_start:
+            raise ValueError("End marker precedes start marker")
+        payload = comb_out[payload_start:end_idx].strip()
+        if len(payload.encode("utf-8")) > MAX_VERDICT_FRAME_BYTES:
+            raise ValueError("Verdict payload exceeds maximum frame byte limit")
+        verdict_data = json.loads(
+            payload,
+            object_pairs_hook=_reject_duplicate_verdict_json_keys,
+            parse_constant=_reject_verdict_json_constant,
+            parse_float=_reject_verdict_json_float,
+            parse_int=_parse_verdict_json_int,
+        )
+        _validate_verdict_json_structure(verdict_data)
     except Exception:
         return {
             "passed": False,
@@ -674,7 +842,8 @@ def verify_verdict_frame(
     mac_valid = bool(
         isinstance(received_mac, str)
         and received_mac
-        and hmac.compare_digest(received_mac, expected_mac)
+        and received_mac.isascii()
+        and hmac.compare_digest(received_mac.encode("ascii"), expected_mac.encode("ascii"))
     )
 
     discovered = int(verdict_data.get("discovered", 0))

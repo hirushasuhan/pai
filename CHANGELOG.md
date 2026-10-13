@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.2] — 2026-10-12 — Phase 2 Slice 1 Follow-Up (`re.ASCII` Inline Credential Parity) & Phase 2 Slice 2 (Rust Verify-Loop Framing & Tagged Value Codec)
+
+### Phase 2 Slice 1 Follow-Up (`research/ingest.py`, `research/conformance.py`, `research/tests/test_ingest.py`)
+- **ASCII-Only Case-Insensitive Matching on Inline Credential Regexes**: Added `re.ASCII` to `_INLINE_CREDENTIAL_QUOTED_RE` and `_INLINE_CREDENTIAL_UNQUOTED_RE` in `research/ingest.py` so non-ASCII Unicode characters that case-fold to ASCII under Unicode rules (`ſ` `\u017f`, `İ` `\u0130`, `ı` `\u0131`, Kelvin sign `\u212a`) do not false-positive as ASCII credential keywords (`password`, `api_key`, `secret_key`), matching Rust `eq_ignore_ascii_case`.
+- **Golden Vector & Differential Fuzz Coverage**: Added `neg_16_non_ascii_casefold_long_s_password` to `research/conformance/ingest_vectors.json` (`113` ingest cases total), added Unicode case-folding variants to `sample_cred_keys` in `generate_fuzz_dataset`, and added `test_scan_secret_content_ascii_only_casefold` in `research/tests/test_ingest.py`.
+
+### Phase 2 Slice 2: Rust Verify-Loop Framing & Tagged Value Codec (`core/src/verify_loop.rs`, `research/value_codec.py`, `research/verify_loop.py`, `research/conformance.py`)
+- **Scope Boundary**: `core/src/verify_loop.rs` ports the verify-loop trust-boundary primitives under `#![forbid(unsafe_code)]`: the tagged JSON value codec (`CodecPolicy`, `PaiValue`, `encode_value`, `decode_value`, `decode_envelope_json`), constant-time HMAC-SHA256 verdict frame formatting and verification (`format_authenticated_verdict_frame`, `verify_verdict_frame`), and bounded canonical example assertion extraction (`extract_example_assertions`). Subprocess orchestration, AST static analysis (`ast_guard`), test suite assembly (`prepare_test_suite`), and the repair loop remain in Python (`research/verify_loop.py`) in Slice 2.
+- **Strict RFC 8259 JSON Parser & Codec Policy Enforcement**:
+  - Implemented `StrictJson` + `parse_strict_json` in `core/src/verify_loop.rs` and `decode_envelope_json` in `research/value_codec.py` enforcing a `1 MiB` byte cap (`MAX_ENCODED_JSON_BYTES = 1_048_576`), recursion depth $\le 32$, collection length $\le 1,000$, total item count $\le 50,000$, signed 64-bit integer bounds (`[-9223372036854775808, 9223372036854775807]`), rejection of bare `NaN`/`Infinity` JSON literals, and rejection of duplicate keys in any raw JSON object.
+  - Enforced strict 2-key envelopes (`{"t", "v"}`), duplicate `dict` key and duplicate `set`/`frozenset` element rejection under Python key equality (`1 == 1.0 == True`, `0 == 0.0 == False`, `-0.0 == 0.0`), canonical `set`/`frozenset` element sorting in `encode_value`, and strict RFC 4648 padded base64 decoding for `bytes`.
+- **Constant-Time HMAC-SHA256 Verdict Frame Verification**:
+  - Implemented pure-Rust SHA-256, HMAC-SHA256, and constant-time digest comparison (`constant_time_eq`) in `core/src/verify_loop.rs`.
+  - Hardened `verify_verdict_frame` in both Python and Rust with explicit input bounds (`MAX_VERDICT_STREAM_BYTES = 1_048_576`, `MAX_VERDICT_FRAME_BYTES = 262_144`), marker order validation (`end_idx >= payload_start`), duplicate JSON key rejection, non-ASCII MAC rejection, and strict field type validation (`vf_12`–`vf_15`).
+- **Bounded Canonical Example Assertion Extraction**:
+  - Implemented a bounded recursive-descent Python literal expression parser in `core/src/verify_loop.rs` (`MAX_RECURSION_DEPTH = 32`, `MAX_COLLECTION_LENGTH = 1_000`, `i64` integer bounds, finite float formatting matching Python `repr`), and aligned `_is_safe_literal` in `research/verify_loop.py` (`ex_12_int64_boundaries_and_overflow`).
+- **No-Panic Property Test & 7-Seed Mutation Differential Fuzzing**:
+  - Added `test_no_panic_random_bytes_and_json_property` in `core/src/verify_loop.rs` testing `verify_verdict_frame`, `decode_envelope_json`, and `extract_example_assertions` over `5,000+` deterministic random byte streams, arbitrary Unicode strings, and mutated JSON envelopes/frames.
+  - Extended `generate_fuzz_dataset` in `research/conformance.py` with mutation-based `verify_loop_cases` (`3,333` codec envelope JSON cases, `3,333` verdict frame cases, and `3,333` example extraction cases per seed) and verified across **7 seeds (`42`, `9001`, `1337`, `20261012`, `555`, `777`, `31337`)** — `43,330` cases per seed (`303,310` total cases) with **`0` mismatches and `0` panics**.
+
 ## [0.8.1] — 2026-10-12 — Phase 1.1 Fixes, Conformance Vector Hardening & Phase 2 Slice 1 (Rust Safe-Ingestion String Primitives)
 
 ### Phase 1.1 Fixes (`research/pai.py`, `research/ingest.py`, `research/tests/test_pai_cli.py`, `docs/evidence/phase1_windows_dogfooding.json`)

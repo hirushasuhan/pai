@@ -83,8 +83,8 @@ All must be true before Phase 2 starts:
 
 ---
 
-## 📍 Phase 2: Native layers — Rust policy core (VS2 done), Rust safe-ingestion string primitives (Slice 1), Win32 telemetry (VS3), C++ probe (VS4)
-_Status 2026-10-12: the Rust slice VS2 (tier + URL policy) and Phase 2 Slice 1 (`core/src/ingest.rs` string-level safe-ingestion, secret-scanning, terminal/text/header sanitization, and cryptographic nonce-envelope primitives; file/folder traversal `ingest_file`, `ingest_folder`, and `assemble_untrusted_context` remain in Python `research/ingest.py`) are implemented and verified against 112 Python golden vectors, a 5,000-case random Unicode no-panic property test, and multi-seed differential fuzzing (`--fuzz 10000` across seeds `42`, `9001`, `1337`, `20261012`). Next up after Slice 1 acceptance is Slice 2 (Rust verify-loop framing and tagged value codec)._
+## 📍 Phase 2: Native layers — Rust policy core (VS2 done), Rust safe-ingestion string primitives (Slice 1 done), Rust verify-loop & tagged value codec (Slice 2), Win32 telemetry (VS3), C++ probe (VS4)
+_Status 2026-10-12: the Rust slice VS2 (tier + URL policy), Phase 2 Slice 1 (`core/src/ingest.rs` string-level safe-ingestion, secret-scanning with `re.ASCII` on all credential regexes, terminal/text/header sanitization, and cryptographic nonce-envelope primitives; file/folder traversal `ingest_file`, `ingest_folder`, and `assemble_untrusted_context` remain in Python `research/ingest.py`), and Phase 2 Slice 2 (`core/src/verify_loop.rs` tagged RPC value codec `encode_value`/`decode_value`/`decode_envelope_json`, constant-time HMAC-SHA256 verdict frame verification `verify_verdict_frame`, and bounded canonical example assertion extraction `extract_example_assertions`; subprocess orchestration, `ast_guard`, `prepare_test_suite`, and the repair loop remain in Python `research/verify_loop.py`) are implemented and verified against 200 tier vectors, 87 URL vectors, 113 ingest vectors, and 66 verify-loop vectors, 5,000+ case deterministic no-panic property tests in `ingest.rs` and `verify_loop.rs`, and multi-seed differential fuzzing (`--fuzz 10000` across 7 seeds `42`, `9001`, `1337`, `20261012`, `555`, `777`, `31337` — 43,330 cases per seed, 303,310 total cases, 0 mismatches, 0 panics)._
 
 **Objective**: Native low-level Windows daemon for hardware telemetry (reduced C++ charter, ADR-004) and a time-boxed spike to confirm Rust as the network layer.
 
@@ -103,18 +103,18 @@ _Status 2026-10-12: the Rust slice VS2 (tier + URL policy) and Phase 2 Slice 1 (
 Adopt a local open-weights model behind the `Reasoner` interface (Option A); a custom architecture is a parallel research track that must beat the adopted model on a fixed evaluation to replace it (Option B). The Python `LocalLLMReasoner` already exercises the contract; owner to confirm and choose the model by 2026-11-10.
 
 ### Deliverables & Vertical Slices
-- **Vertical Slice 2 (VS2) & Phase 2 Slice 1 — Stateless Core, Policy Conformance & String-Level Safe Ingestion**:
-  - Pure Rust implementations of resource tier policy (`src/tier.rs`), outbound URL policy with Canonical Blocked CIDRs (`src/url_policy.rs`), and Phase 2 Slice 1 string-level safe-ingestion primitives (`src/ingest.rs`; filesystem traversal `ingest_file`, `ingest_folder`, and `assemble_untrusted_context` remain in Python `research/ingest.py`).
-  - Zero unsafe code blocks (`unsafe = 0` in `tier.rs`, `url_policy.rs`, and `ingest.rs` with `#![forbid(unsafe_code)]`), zero byte-slice indexing in `ingest.rs`, zero network or regex crate dependencies (strictly `serde` + `serde_json` + `std::net`).
+- **Vertical Slice 2 (VS2), Phase 2 Slice 1 & Phase 2 Slice 2 — Stateless Core, Policy Conformance, String-Level Safe Ingestion & Verify-Loop Primitives**:
+  - Pure Rust implementations of resource tier policy (`src/tier.rs`), outbound URL policy with Canonical Blocked CIDRs (`src/url_policy.rs`), Phase 2 Slice 1 string-level safe-ingestion primitives (`src/ingest.rs`; filesystem traversal `ingest_file`, `ingest_folder`, and `assemble_untrusted_context` remain in Python `research/ingest.py`), and Phase 2 Slice 2 verify-loop & tagged value codec primitives (`src/verify_loop.rs`: `encode_value`, `decode_value`, `decode_envelope_json`, constant-time HMAC-SHA256 `verify_verdict_frame`, and `extract_example_assertions`; subprocess orchestration, `ast_guard`, and the repair loop remain in Python `research/verify_loop.py`).
+  - Zero unsafe code blocks (`unsafe = 0` in `tier.rs`, `url_policy.rs`, `ingest.rs`, and `verify_loop.rs` with `#![forbid(unsafe_code)]`), zero network or regex crate dependencies (strictly `serde` + `serde_json` + `std::net`).
   - Fake telemetry removed from skeleton per ADR-004.
-  - Passes 200 tier vectors, 87 URL vectors, and 112 ingest vectors + `limits` parity check (`pai-core --conformance`).
+  - Passes 200 tier vectors, 87 URL vectors, 113 ingest vectors + `limits`, and 66 verify-loop vectors + `codec_policy` parity check (`pai-core --conformance`).
   - Hardening found by independent review (commit `70fd7f6`): IPv6 transition/embedded-IPv4 prefixes (NAT64 `64:ff9b::/96`, `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/23`, IPv4-compatible `::/96`, SIIT, site-local `fec0::/10`) and `192.88.99.0/24` are blocked; leading-zero ports are rejected. Lesson recorded: a differential fuzzer proves two implementations agree, not that the shared policy table is complete — adversarial vectors from an independent source are required.
-  - Multi-seed differential fuzz testing (`python research/conformance.py --fuzz 10000` across seeds `42`, `9001`, `1337`, `20261012`): 5,000 tier cases, 5,000 URL cases, and 23,331 widened mixed-script/Sinhala/combining-mark/wildcard/backtracking ingest cases per seed compared with 0 mismatches between Python and Rust, plus a 5,000-case random Unicode no-panic property test in `core/src/ingest.rs`.
+  - Multi-seed differential fuzz testing (`python research/conformance.py --fuzz 10000` across 7 seeds `42`, `9001`, `1337`, `20261012`, `555`, `777`, `31337`): 5,000 tier cases, 5,000 URL cases, 23,331 ingest cases, and 9,999 verify-loop cases (43,330 cases per seed; 303,310 total cases) compared with 0 mismatches and 0 panics between Python and Rust, plus 5,000+ case deterministic no-panic property tests in `core/src/ingest.rs` and `core/src/verify_loop.rs`.
   - Windows CI job verifying `cargo fmt`, `cargo clippy -D warnings`, `cargo test`, and drift checking.
-- **VS2 Exit Criteria (Gate to VS3)**:
-  - [x] Tier vectors (200), URL vectors (87), and ingest vectors (112 + `limits`) pass 100% in Rust (`pai-core --conformance`).
-  - [x] Multi-seed differential fuzzer passes 33,331 cases per seed (5,000 tier + 5,000 URL + 23,331 ingest) across seeds `42`, `9001`, `1337`, `20261012` with 0 mismatches.
-  - [x] No `unsafe` blocks and no fake telemetry in Rust policy/ingest core.
+- **VS2 / Phase 2 Slices 1–2 Exit Criteria (Gate to VS3)**:
+  - [x] Tier vectors (200), URL vectors (87), ingest vectors (113 + `limits`), and verify-loop vectors (66 + `codec_policy`) pass 100% in Rust (`pai-core --conformance`).
+  - [x] Multi-seed differential fuzzer passes 43,330 cases per seed (5,000 tier + 5,000 URL + 23,331 ingest + 9,999 verify-loop) across 7 seeds (`42`, `9001`, `1337`, `20261012`, `555`, `777`, `31337`) with 0 mismatches and 0 panics.
+  - [x] No `unsafe` blocks and no fake telemetry in Rust policy/ingest/verify-loop core.
   - [x] Windows CI workflow includes dedicated Rust job.
   - [x] `core/README.md` and `core/Cargo.lock` updated and committed.
 - **Vertical Slice 3 (VS3) — Native telemetry first, then the full cycle in Rust** (entry decisions in ADR-009, proposed):

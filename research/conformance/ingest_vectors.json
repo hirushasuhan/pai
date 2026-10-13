@@ -553,6 +553,15 @@
    "text_parts": [
     "ab\u0daf\u0dafcdef\n"
    ]
+  },
+  {
+   "expected": null,
+   "file_path": "src/auth.py",
+   "id": "neg_16_non_ascii_casefold_long_s_password",
+   "text_parts": [
+    "pas\u017fword = \"",
+    "SuperSecret99!_prod\"\n"
+   ]
   }
  ],
  "secret_file_cases": [

@@ -604,6 +604,30 @@ class TestSafeIngestModule(unittest.TestCase):
             len(rep.items),
         )
 
+    def test_scan_secret_content_ascii_only_casefold(self):
+        # Non-ASCII Unicode characters that case-fold to ASCII under Unicode rules
+        # (Latin small letter long s \u017f -> s, Turkish \u0130/\u0131 -> i, Kelvin \u212a -> k)
+        # must NOT match ASCII credential keywords when re.ASCII is enforced.
+        val = '"' + ("hunter2_super_" + "secret_val99") + '"'
+        for non_ascii_key in (
+            "pas\u017fword",
+            "ap\u0130_key",
+            "ap\u0131_key",
+            "secret_\u212aey",
+        ):
+            line = f"{non_ascii_key} = {val}"
+            self.assertIsNone(
+                scan_secret_content(line, file_path="config.py"),
+                f"Expected None for non-ASCII keyword {non_ascii_key!r}",
+            )
+        # Standard ASCII uppercase/mixed-case still matches
+        ascii_line = "PASS" + "WORD = " + val
+        self.assertEqual(
+            scan_secret_content(ascii_line, file_path="config.py"),
+            "inline_secret_assignment",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

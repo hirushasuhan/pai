@@ -19,6 +19,7 @@ Security Guarantees:
 from __future__ import annotations
 
 import base64
+import json
 import math
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -36,6 +37,7 @@ class EqualityHijackError(CodecError):
 MAX_RECURSION_DEPTH = 32
 MAX_COLLECTION_LENGTH = 1_000
 MAX_ITEM_COUNT = 50_000
+MAX_ENCODED_JSON_BYTES = 1_048_576
 MIN_INT64 = -(1 << 63)       # -9223372036854775808
 MAX_INT64 = (1 << 63) - 1    #  9223372036854775807
 
@@ -145,15 +147,19 @@ def encode_value(
             }
 
         if t is set:
+            encoded_items = [encode_value(x, depth + 1, counter, seen_ids) for x in val]
+            encoded_items.sort(key=lambda item: json.dumps(item, sort_keys=True))
             return {
                 "t": "set",
-                "v": [encode_value(x, depth + 1, counter, seen_ids) for x in val],
+                "v": encoded_items,
             }
 
         if t is frozenset:
+            encoded_items = [encode_value(x, depth + 1, counter, seen_ids) for x in val]
+            encoded_items.sort(key=lambda item: json.dumps(item, sort_keys=True))
             return {
                 "t": "frozenset",
-                "v": [encode_value(x, depth + 1, counter, seen_ids) for x in val],
+                "v": encoded_items,
             }
 
         if t is dict:
@@ -226,12 +232,25 @@ def decode_value(
                 return float("-inf")
             raise CodecError(f"Invalid float special string: {val}")
         if type(val) in (int, float) and type(val) is not bool:
-            return float(val)
+            if type(val) is int and (val < MIN_INT64 or val > MAX_INT64):
+                raise CodecError(
+                    f"Integer payload for tag 'float' out of signed 64-bit range [{MIN_INT64}, {MAX_INT64}]: {val}"
+                )
+            fval = float(val)
+            if not math.isfinite(fval):
+                raise CodecError(
+                    f"Non-finite numeric float payload must use canonical string ('nan', 'inf', '-inf'): {val!r}"
+                )
+            return fval
         raise CodecError(f"Invalid payload for tag 'float': {val!r}")
 
     if tag == "str":
         if type(val) is not str:
             raise CodecError(f"Invalid payload for tag 'str': {val!r}")
+        try:
+            val.encode("utf-8")
+        except UnicodeEncodeError as uee:
+            raise CodecError(f"String payload contains invalid UTF-8 / lone surrogate: {uee}") from uee
         return val
 
     if tag == "none":
@@ -323,4 +342,105 @@ def decode_value(
         return res
 
     raise CodecError(f"Unknown codec tag: {tag!r}")
+
+
+def _reject_json_constant(const_str: str) -> Any:
+    raise CodecError(f"Non-standard JSON constant rejected: {const_str!r}")
+
+
+def _parse_bounded_json_int(int_str: str) -> int:
+    if len(int_str) > 32:
+        raise CodecError("JSON integer literal exceeds maximum digit length")
+    val = int(int_str)
+    if val < MIN_INT64 or val > MAX_INT64:
+        raise CodecError(f"JSON integer out of signed 64-bit range [{MIN_INT64}, {MAX_INT64}]: {val}")
+    return val
+
+
+def _parse_bounded_json_float(float_str: str) -> float:
+    fval = float(float_str)
+    if not math.isfinite(fval):
+        raise CodecError(f"JSON float literal overflowed to non-finite value: {float_str!r}")
+    return fval
+
+
+def _reject_duplicate_json_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    res: Dict[str, Any] = {}
+    for k, v in pairs:
+        try:
+            k.encode("utf-8")
+        except UnicodeEncodeError as uee:
+            raise CodecError(f"JSON key contains lone surrogate: {uee}") from uee
+        if k in res:
+            raise CodecError(f"Duplicate key in JSON object: {k!r}")
+        res[k] = v
+    return res
+
+
+def _validate_envelope_json_tree(root: Any, max_depth: int = 128, max_nodes: int = 200_000) -> None:
+    stack: List[Tuple[Any, int]] = [(root, 0)]
+    nodes = 0
+    while stack:
+        node, depth = stack.pop()
+        nodes += 1
+        if nodes > max_nodes:
+            raise CodecError(f"JSON node count limit exceeded: {max_nodes}")
+        if depth > max_depth:
+            raise CodecError(f"JSON nesting depth limit exceeded: {max_depth}")
+        t = type(node)
+        if t is dict:
+            for k, v in node.items():
+                nodes += 1
+                if nodes > max_nodes:
+                    raise CodecError(f"JSON node count limit exceeded: {max_nodes}")
+                stack.append((v, depth + 1))
+        elif t is list:
+            for elt in node:
+                stack.append((elt, depth + 1))
+        elif t is str:
+            try:
+                node.encode("utf-8")
+            except UnicodeEncodeError as uee:
+                raise CodecError(f"JSON string contains lone surrogate: {uee}") from uee
+
+
+def decode_envelope_json(raw_json: str) -> Any:
+    """
+    Parses a raw JSON string into a tagged envelope and decodes it via `decode_value`.
+    Enforces:
+    - Byte size <= MAX_ENCODED_JSON_BYTES (1 MiB)
+    - Strict RFC 8259 JSON (no NaN/Infinity constants, no lone surrogates)
+    - No duplicate keys in any JSON object
+    - Signed 64-bit integer bounds and finite float literals
+    - All `decode_value` policy rules (depth <= 32, collection length <= 1000, item count <= 50000)
+    """
+    if type(raw_json) is not str:
+        raise CodecError("Envelope JSON input must be a string")
+    try:
+        raw_bytes = raw_json.encode("utf-8")
+    except UnicodeEncodeError as uee:
+        raise CodecError(f"Envelope JSON is not valid UTF-8: {uee}") from uee
+
+    if len(raw_bytes) > MAX_ENCODED_JSON_BYTES:
+        raise CodecError(
+            f"Envelope JSON exceeds maximum byte size ({len(raw_bytes)} > {MAX_ENCODED_JSON_BYTES})"
+        )
+
+    try:
+        envelope = json.loads(
+            raw_json,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
+            parse_int=_parse_bounded_json_int,
+            parse_float=_parse_bounded_json_float,
+        )
+        _validate_envelope_json_tree(envelope)
+    except CodecError:
+        raise
+    except (ValueError, RecursionError) as e:
+        raise CodecError(f"Failed to parse envelope JSON: {e}") from e
+
+    return decode_value(envelope)
+
+
 

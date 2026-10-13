@@ -384,12 +384,12 @@ _CONFIG_FILE_EXTENSIONS: Tuple[str, ...] = (
 
 _INLINE_CREDENTIAL_QUOTED_RE = re.compile(
     rf"""(?:^|[\s,{{])(?:export\s+)?["']?(?P<key>{_CRED_KEY_PART})["']?[ \t]*(?:=|:)[ \t]*["'](?P<val>[^"'\r\n]{{6,}})["']""",
-    re.IGNORECASE | re.MULTILINE,
+    re.IGNORECASE | re.MULTILINE | re.ASCII,
 )
 
 _INLINE_CREDENTIAL_UNQUOTED_RE = re.compile(
     rf"""(?:^|\n)[ \t]*(?:export[ \t]+)?(?P<key>{_CRED_KEY_PART})[ \t]*(?:=|:)[ \t]*(?P<val>[^\s#"'\r\n();,\[\]{{}}]{{6,}})[ \t]*(?:#[^\r\n]*)?(?=\r?\n|$)""",
-    re.IGNORECASE,
+    re.IGNORECASE | re.ASCII,
 )
 
 _DB_URL_PASSWORD_RE = re.compile(
