@@ -2041,3 +2041,34 @@ Resolved Items:
      - Linux (cloud container): Python 435 passed, 14 skipped; Cargo test 39 passed; Clippy clean.
      - Windows: Python 447 passed, 23 skipped; Cargo test 39 passed; Clippy clean; Conformance: 200 tier, 87 URL, 113 ingest, 92 verify_loop passed (0 failures).
    - Measured Windows process invocation latency for `pai-core.exe`: average 8.26 ms across 20 iterations. Per-file ingestion remains in Python until batched or persistent IPC transport is introduced.
+
+### Addendum: Slice 4 Implementation — Ed25519 Signature Verification & Signed-Release Updater (2026-10-14)
+Reviewed state: Windows and Linux dual-platform verification; clean working tree with Slice 4 implementation.
+
+Implemented Scope:
+1. **Pure-Rust Ed25519 Signature Verification (`core/src/ed25519.rs`)**:
+   - Zero-unsafe, pure Rust FIPS 180-4 SHA-512 implementation (`sha512`).
+   - Constant-time Curve25519 field arithmetic modulo $p = 2^{255} - 19$ with canonical limb reduction.
+   - Modulo $q$ (group order $L$) 512-bit reduction via binary long division, rejecting malleable $s \ge L$ signatures (RFC 8032 Section 5.1.7).
+   - Point decompression with strict $y < p$ canonical validation.
+   - Twisted Edwards curve point operations in extended coordinates $(X, Y, Z, T)$.
+   - Verified against RFC 8032 Test Vector 1 and cross-checked against reference vectors.
+
+2. **Signed-Release Verification (`core/src/updater.rs`)**:
+   - Manifest validation against trust root with pinned Constitution SHA-256 digest.
+   - Version syntax parsing (`^\d+\.\d+\.\d+$`) and anti-rollback monotonic counter check.
+   - Comprehensive path traversal defenses (rejecting leading slashes, backslashes, colons, `..`, empty segments, and symlink escapes).
+   - File size and SHA-256 payload integrity validation.
+   - Exhaustive recursive directory walk rejecting unlisted files in release packages.
+
+3. **IPC Bridge Integration (`core/src/bridge.rs` & `research/pai_core_bridge.py`)**:
+   - Added typed bridge ops: `verify_ed25519` and `verify_release`.
+   - Wired two-directional shadow release verification into `research/updater.py`, recording any potential discrepancy via `record_shadow_discrepancy()`.
+   - Python reference implementation remains authoritative in shadow mode; missing binary fails closed via `CoreBridgeUnavailableError`.
+
+4. **Verification & Differential Parity**:
+   - Dedicated differential test suite `research/tests/test_updater_differential.py` (12 tests, 300+ mutation fuzzing cases across seeds).
+   - All 23 tests in `research/tests/test_updater.py` pass with `PAI_USE_RUST_CORE=1` with 0 shadow discrepancies.
+   - Rust test suite: 44 cargo tests passed; Clippy clean (`-D warnings`).
+   - Full Python test suite (Windows): 459 passed, 23 skipped (0 failures).
+   - Security constraint verified: No private signing keys in repository or chat.

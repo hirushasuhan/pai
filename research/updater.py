@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import ed25519_ref
+import pai_core_bridge
 
 MANIFEST = "manifest.json"
 SIGNATURE = "manifest.sig"
@@ -143,7 +144,7 @@ class Updater:
             return json.load(f)["version"]
 
     # ----------------------------------------------------------- verification
-    def verify_release(self, release_dir: str, check_rollback: bool = True) -> VerifiedRelease:
+    def _verify_release_py(self, release_dir: str, check_rollback: bool = True) -> VerifiedRelease:
         mpath, spath = os.path.join(release_dir, MANIFEST), os.path.join(release_dir, SIGNATURE)
         if not (os.path.isfile(mpath) and os.path.isfile(spath)):
             raise UpdateRejected("manifest or signature missing")
@@ -204,6 +205,55 @@ class Updater:
                 if rel not in listed:
                     raise UpdateRejected(f"unlisted file in release: {rel}")
         return VerifiedRelease(version, key_id, sorted(files), m)
+
+    def verify_release(self, release_dir: str, check_rollback: bool = True) -> VerifiedRelease:
+        if not pai_core_bridge.PAI_USE_RUST_CORE:
+            return self._verify_release_py(release_dir, check_rollback=check_rollback)
+
+        # Fail-closed if binary missing or handshake fails
+        pai_core_bridge.find_core_binary()
+
+        trust_cfg = {
+            "keys": [{"id": kid, "public_hex": pub.hex(), "revoked": False} for kid, pub in self.keys.items()],
+            "constitution_sha256": self.constitution_sha256,
+        }
+        highest = self._state()["highest_seen"] if check_rollback else None
+
+        rust_res = None
+        rust_err = None
+        try:
+            rust_res = pai_core_bridge.verify_release(
+                release_dir=release_dir,
+                trust_config_json=json.dumps(trust_cfg),
+                expected_product=self.product,
+                check_rollback=check_rollback,
+                highest_seen_version=highest,
+            )
+        except Exception as e:
+            rust_err = e
+
+        py_res = None
+        py_err = None
+        try:
+            py_res = self._verify_release_py(release_dir, check_rollback=check_rollback)
+        except Exception as e:
+            py_err = e
+
+        if (py_res is None) != (rust_res is None):
+            pai_core_bridge.record_shadow_discrepancy(
+                "verify_release",
+                f"Release verification outcome mismatch: py_res={py_res is not None} vs rust_res={rust_res is not None} (py_err={py_err}, rust_err={rust_err})",
+            )
+        elif py_res is not None and rust_res is not None:
+            if py_res.version != rust_res.get("version") or py_res.key_id != rust_res.get("key_id") or py_res.files != rust_res.get("files"):
+                pai_core_bridge.record_shadow_discrepancy(
+                    "verify_release",
+                    f"Release metadata mismatch: py=({py_res.version}, {py_res.key_id}, {len(py_res.files)}) vs rust=({rust_res.get('version')}, {rust_res.get('key_id')}, {len(rust_res.get('files', []))})",
+                )
+
+        if py_err is not None:
+            raise py_err
+        return py_res
 
     # ---------------------------------------------------------------- install
     def install(self, release_dir: str) -> VerifiedRelease:

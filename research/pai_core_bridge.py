@@ -249,6 +249,9 @@ def call_core_bridge(op: str, **kwargs: Any) -> Any:
         err_type = resp.get("error_type", "")
         if err_type == "CodecError":
             raise CodecError(err_text)
+        if err_type == "UpdateRejected":
+            from updater import UpdateRejected
+            raise UpdateRejected(err_text)
         raise ValueError(f"Rust core bridge error ({err_type}): {err_text}")
 
     if status != "ok":
@@ -542,3 +545,77 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
 
     # In shadow mode, Python reference is authoritative!
     return py_stmts
+
+
+# ============================================================================
+# Crypto & Updater Primitives (Slice 4)
+# ============================================================================
+
+def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """
+    Verifies an Ed25519 signature over `message` with `public_key`.
+    In shadow mode (PAI_USE_RUST_CORE=1), verifies across both Python reference and
+    Rust core, recording any discrepancies while returning the authoritative Python verdict.
+    """
+    import ed25519_ref
+    py_ver = ed25519_ref.verify(public_key, message, signature)
+
+    if not PAI_USE_RUST_CORE:
+        return py_ver
+
+    find_core_binary()
+
+    try:
+        rust_ver = call_core_bridge(
+            "verify_ed25519",
+            public_key_hex=public_key.hex(),
+            message_hex=message.hex(),
+            signature_hex=signature.hex(),
+        )
+    except Exception as exc:
+        record_shadow_discrepancy(
+            "verify_ed25519",
+            f"Bridge invocation exception: {exc}",
+            exception=type(exc).__name__,
+        )
+        return py_ver
+
+    if not isinstance(rust_ver, bool):
+        record_shadow_discrepancy(
+            "verify_ed25519",
+            f"Bridge returned non-bool: {type(rust_ver).__name__}",
+        )
+        return py_ver
+
+    if py_ver != rust_ver:
+        record_shadow_discrepancy(
+            "verify_ed25519",
+            f"Ed25519 verification mismatch: py={py_ver} vs rust={rust_ver}",
+            py_res=py_ver,
+            rust_res=rust_ver,
+        )
+
+    return py_ver
+
+
+def verify_release(
+    release_dir: str,
+    trust_config_json: str,
+    expected_product: str = "pai-core",
+    check_rollback: bool = True,
+    highest_seen_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Verifies a release directory via pai-core bridge.
+    Raises UpdateRejected on verification failure.
+    """
+    find_core_binary()
+    return call_core_bridge(
+        "verify_release",
+        release_dir=os.path.abspath(release_dir),
+        trust_root_json=trust_config_json,
+        expected_product=expected_product,
+        check_rollback=check_rollback,
+        highest_seen_version=highest_seen_version,
+    )
+

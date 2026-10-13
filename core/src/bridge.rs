@@ -15,11 +15,13 @@ use std::io::{self, Read};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ed25519;
 use crate::ingest::{
     defang_envelope_markers, get_ingest_limits, is_junk_dir, is_secret_file,
     sanitize_header, sanitize_terminal_output, sanitize_text_content, scan_secret_content,
     wrap_untrusted_envelope,
 };
+use crate::updater::{self, TrustConfig};
 use crate::verify_loop::{
     decode_envelope_json, decode_value, encode_value, extract_example_assertions,
     parse_strict_json, verify_verdict_frame,
@@ -151,6 +153,24 @@ pub enum BridgeRequest {
         #[serde(default)]
         entry_point: Option<String>,
     },
+
+    #[serde(rename = "verify_ed25519")]
+    VerifyEd25519 {
+        public_key_hex: String,
+        message_hex: String,
+        signature_hex: String,
+    },
+
+    #[serde(rename = "verify_release")]
+    VerifyRelease {
+        release_dir: String,
+        trust_root_json: String,
+        expected_product: String,
+        #[serde(default)]
+        check_rollback: bool,
+        #[serde(default)]
+        highest_seen_version: Option<String>,
+    },
 }
 
 pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
@@ -261,6 +281,74 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             match serde_json::to_value(&stmts) {
                 Ok(v) => BridgeResponse::ok(v),
                 Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+            }
+        }
+
+        BridgeRequest::VerifyEd25519 {
+            public_key_hex,
+            message_hex,
+            signature_hex,
+        } => {
+            let pk_clean = public_key_hex.trim();
+            let sig_clean = signature_hex.trim();
+            let msg_clean = message_hex.trim();
+
+            if pk_clean.len() != 64 || sig_clean.len() != 128 || !msg_clean.len().is_multiple_of(2) {
+                return BridgeResponse::ok(Value::Bool(false));
+            }
+
+            let mut pk = [0u8; 32];
+            for i in 0..32 {
+                match u8::from_str_radix(&pk_clean[i * 2..i * 2 + 2], 16) {
+                    Ok(b) => pk[i] = b,
+                    Err(_) => return BridgeResponse::ok(Value::Bool(false)),
+                }
+            }
+
+            let mut sig = [0u8; 64];
+            for i in 0..64 {
+                match u8::from_str_radix(&sig_clean[i * 2..i * 2 + 2], 16) {
+                    Ok(b) => sig[i] = b,
+                    Err(_) => return BridgeResponse::ok(Value::Bool(false)),
+                }
+            }
+
+            let mut msg = Vec::with_capacity(msg_clean.len() / 2);
+            for i in 0..msg_clean.len() / 2 {
+                match u8::from_str_radix(&msg_clean[i * 2..i * 2 + 2], 16) {
+                    Ok(b) => msg.push(b),
+                    Err(_) => return BridgeResponse::ok(Value::Bool(false)),
+                }
+            }
+
+            let valid = ed25519::verify(&pk, &msg, &sig);
+            BridgeResponse::ok(Value::Bool(valid))
+        }
+
+        BridgeRequest::VerifyRelease {
+            release_dir,
+            trust_root_json,
+            expected_product,
+            check_rollback,
+            highest_seen_version,
+        } => {
+            let trust_config: TrustConfig = match serde_json::from_str(&trust_root_json) {
+                Ok(c) => c,
+                Err(e) => return BridgeResponse::err(format!("Invalid trust configuration: {}", e), "InvalidTrustConfig"),
+            };
+
+            match updater::verify_release(
+                std::path::Path::new(&release_dir),
+                &trust_config,
+                &expected_product,
+                check_rollback,
+                highest_seen_version.as_deref(),
+            ) {
+                Ok(verified) => match serde_json::to_value(&verified) {
+                    Ok(v) => BridgeResponse::ok(v),
+                    Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+                },
+                Err(e) => BridgeResponse::err(e.0, "UpdateRejected"),
             }
         }
     }
