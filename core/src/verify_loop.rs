@@ -31,8 +31,10 @@ pub const MAX_ENCODED_JSON_BYTES: usize = 1_048_576;
 pub const MAX_VERDICT_STREAM_BYTES: usize = 1_048_576;
 pub const MAX_VERDICT_FRAME_BYTES: usize = 262_144;
 pub const MAX_VERDICT_COUNT_VALUE: i64 = 1_000_000;
+pub const MAX_EXTRACTED_STATEMENTS: usize = 50;
 pub const MIN_INT64: i64 = i64::MIN;
 pub const MAX_INT64: i64 = i64::MAX;
+
 
 const MAX_RAW_JSON_DEPTH: usize = 128;
 const MAX_RAW_JSON_NODES: usize = 200_000;
@@ -276,6 +278,82 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     std::hint::black_box(diff) == 0
 }
 
+/// Formats a float identically to Python's `repr(float)` and `json.dumps(float)`:
+/// - Shortest round-trip digits (via Dragonbox/Ryu scientific form)
+/// - Scientific exponent form (`e+XX` / `e-XX` with >=2 exponent digits) when exponent < -4 or >= 16
+/// - Positional form with at least one digit after the point (`.0`) when -4 <= exponent < 16
+pub fn format_python_float(f: f64) -> String {
+    if !f.is_finite() {
+        if f.is_nan() {
+            return "nan".to_string();
+        } else if f > 0.0 {
+            return "inf".to_string();
+        } else {
+            return "-inf".to_string();
+        }
+    }
+    let is_negative = f.is_sign_negative();
+    let abs_f = f.abs();
+    if abs_f == 0.0 {
+        return if is_negative {
+            "-0.0".to_string()
+        } else {
+            "0.0".to_string()
+        };
+    }
+
+    let s = format!("{:e}", abs_f);
+    let Some((mantissa, raw_exp)) = s.split_once('e') else {
+        return s;
+    };
+    let exp: i32 = raw_exp.parse().unwrap_or(0);
+
+    let mut out = String::new();
+    if is_negative {
+        out.push('-');
+    }
+
+    if !(-4..16).contains(&exp) {
+        out.push_str(mantissa);
+        if exp >= 0 {
+            out.push_str(&format!("e+{:02}", exp));
+        } else {
+            out.push_str(&format!("e-{:02}", -exp));
+        }
+    } else if exp >= 0 {
+        let digits: Vec<char> = mantissa.chars().filter(|c| *c != '.').collect();
+        let num_before = (exp + 1) as usize;
+        if digits.len() <= num_before {
+            for c in &digits {
+                out.push(*c);
+            }
+            for _ in 0..(num_before - digits.len()) {
+                out.push('0');
+            }
+            out.push_str(".0");
+        } else {
+            for c in &digits[..num_before] {
+                out.push(*c);
+            }
+            out.push('.');
+            for c in &digits[num_before..] {
+                out.push(*c);
+            }
+        }
+    } else {
+        out.push_str("0.");
+        let leading_zeros = (-exp - 1) as usize;
+        for _ in 0..leading_zeros {
+            out.push('0');
+        }
+        for c in mantissa.chars().filter(|c| *c != '.') {
+            out.push(c);
+        }
+    }
+
+    out
+}
+
 // ============================================================================
 // 3. Strict Bounded RFC 8259 JSON Value & Parser
 // ============================================================================
@@ -335,8 +413,12 @@ impl StrictJson {
             StrictJson::Int(i) => Ok(serde_json::Value::Number(serde_json::Number::from(*i))),
             StrictJson::OutOfRangeInt => Err(CodecError::new("Out-of-range i64 integer")),
             StrictJson::Float(f) => {
-                let num = serde_json::Number::from_f64(*f)
-                    .ok_or_else(|| CodecError::new("Non-finite float cannot be raw JSON number"))?;
+                if !f.is_finite() {
+                    return Err(CodecError::new("Non-finite float cannot be raw JSON number"));
+                }
+                let s = format_python_float(*f);
+                let num: serde_json::Number = serde_json::from_str(&s)
+                    .map_err(|_| CodecError::new("Failed to parse canonical float as JSON number"))?;
                 Ok(serde_json::Value::Number(num))
             }
             StrictJson::Str(s) => Ok(serde_json::Value::String(s.clone())),
@@ -375,11 +457,7 @@ impl StrictJson {
             StrictJson::Int(n) => out.push_str(&n.to_string()),
             StrictJson::OutOfRangeInt => out.push_str("null"),
             StrictJson::Float(f) => {
-                let s = f.to_string();
-                out.push_str(&s);
-                if f.is_finite() && !s.contains('.') && !s.contains('e') && !s.contains('E') {
-                    out.push_str(".0");
-                }
+                out.push_str(&format_python_float(*f));
             }
             StrictJson::Str(s) => write_python_json_string(s, out),
             StrictJson::Array(items) => {
@@ -407,6 +485,7 @@ impl StrictJson {
         }
     }
 }
+
 
 fn write_python_json_string(s: &str, out: &mut String) {
     out.push('"');
@@ -1873,24 +1952,27 @@ fn is_forbidden_example_name(name: &str) -> bool {
     FORBIDDEN_EXAMPLE_NAMES.contains(&name)
 }
 
-fn is_ascii_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_'
+fn is_ident_start(c: char) -> bool {
+    c == '_' || c.is_alphabetic()
 }
 
-fn is_ascii_ident_continue(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+fn is_ident_continue(c: char) -> bool {
+    c == '_'
+        || c.is_alphanumeric()
+        || matches!(c as u32, 0x0300..=0x036F | 0x0D82..=0x0DDF | 0x200C..=0x200D)
 }
 
-fn is_valid_ascii_identifier(s: &str) -> bool {
+fn is_valid_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
         return false;
     };
-    if !is_ascii_ident_start(first) {
+    if !is_ident_start(first) {
         return false;
     }
-    chars.all(is_ascii_ident_continue)
+    chars.all(is_ident_continue)
 }
+
 
 fn python_splitlines(s: &str) -> Vec<&str> {
     let mut lines = Vec::new();
@@ -1992,12 +2074,12 @@ fn infer_entry_point(prompt: &str, section: &str) -> Option<String> {
         let Some((_, first)) = chars.next() else {
             continue;
         };
-        if !is_ascii_ident_start(first) {
+        if !is_ident_start(first) {
             continue;
         }
         let mut end_idx = first.len_utf8();
         for (i, c) in chars {
-            if is_ascii_ident_continue(c) {
+            if is_ident_continue(c) {
                 end_idx = i + c.len_utf8();
             } else {
                 break;
@@ -2022,7 +2104,7 @@ fn find_keyword_ident_matches(text: &str, kw: &str, require_open_paren: bool) ->
     while i < chars.len() {
         let (byte_pos, ch) = chars[i];
         let prev_is_word = if i > 0 {
-            is_ascii_ident_continue(chars[i - 1].1)
+            is_ident_continue(chars[i - 1].1)
         } else {
             false
         };
@@ -2045,12 +2127,12 @@ fn find_keyword_ident_matches(text: &str, kw: &str, require_open_paren: bool) ->
                         }
                     }
                     if let Some(&(id_start_rel, id_first)) = after_chars.peek() {
-                        if is_ascii_ident_start(id_first) {
+                        if is_ident_start(id_first) {
                             let id_start = after_kw_byte + id_start_rel;
                             let mut id_end = id_start + id_first.len_utf8();
                             after_chars.next();
                             while let Some(&(rel_i, c)) = after_chars.peek() {
-                                if is_ascii_ident_continue(c) {
+                                if is_ident_continue(c) {
                                     id_end = after_kw_byte + rel_i + c.len_utf8();
                                     after_chars.next();
                                 } else {
@@ -2091,11 +2173,11 @@ fn find_backtick_call_matches(text: &str) -> Vec<String> {
             let after_bt = text.get(byte_pos + 1..).unwrap_or("");
             let mut chars = after_bt.char_indices().peekable();
             if let Some(&(_, first)) = chars.peek() {
-                if is_ascii_ident_start(first) {
+                if is_ident_start(first) {
                     let mut id_end = first.len_utf8();
                     chars.next();
                     while let Some(&(rel_i, c)) = chars.peek() {
-                        if is_ascii_ident_continue(c) {
+                        if is_ident_continue(c) {
                             id_end = rel_i + c.len_utf8();
                             chars.next();
                         } else {
@@ -2238,6 +2320,21 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
 
         let start = pos;
         let b = bytes.get(pos).copied().ok_or(())?;
+
+        // Check string or byte literal with 2-char prefix rb/br (case-insensitive)
+        if let (Some(&b1), Some(&b2), Some(&b3)) = (bytes.get(pos), bytes.get(pos + 1), bytes.get(pos + 2)) {
+            let is_rb = matches!((b1, b2), (b'r' | b'R', b'b' | b'B') | (b'b' | b'B', b'r' | b'R'));
+            if is_rb && matches!(b3, b'\'' | b'"') {
+                pos += 2;
+                let _ = consume_py_quoted_string(src, &mut pos)?;
+                tokens.push(PyTok {
+                    kind: PyTokKind::BytesLit,
+                    start,
+                    end: pos,
+                });
+                continue;
+            }
+        }
 
         // Check string or byte literal with optional prefix b/B/r/R/u/U
         if matches!(b, b'b' | b'B' | b'r' | b'R' | b'u' | b'U') {
@@ -2415,11 +2512,11 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
                     end: pos,
                 });
             }
-            _ if is_ascii_ident_start(first_ch) => {
+            _ if is_ident_start(first_ch) => {
                 pos += first_ch.len_utf8();
                 while let Some(rem) = src.get(pos..) {
                     if let Some(c) = rem.chars().next() {
-                        if is_ascii_ident_continue(c) {
+                        if is_ident_continue(c) {
                             pos += c.len_utf8();
                         } else {
                             break;
@@ -2582,7 +2679,7 @@ fn consume_py_number(src: &str, pos: &mut usize) -> Result<PyTokKind, ()> {
     // Reject trailing identifier characters like `123abc` or `10j`
     if let Some(rem) = src.get(*pos..) {
         if let Some(next_ch) = rem.chars().next() {
-            if is_ascii_ident_start(next_ch) {
+            if is_ident_start(next_ch) {
                 return Err(());
             }
         }
@@ -3025,14 +3122,17 @@ impl<'a> PyParser<'a> {
             });
         }
 
-        let first = self.parse_compare(depth)?;
+        let mut first = self.parse_compare(depth)?;
         if let Some(PyTok {
             kind: PyTokKind::RParen,
+            end,
             ..
         }) = self.peek()
         {
-            // Grouping parentheses `(expr)`: preserve inner node's span (matches Python ast.get_source_segment)
+            let end_pos = *end;
             self.next_tok();
+            first.start = start;
+            first.end = end_pos;
             return Ok(first);
         }
 
@@ -3416,7 +3516,7 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
     if ep.is_empty()
         || ep.starts_with('_')
         || is_forbidden_example_name(&ep)
-        || !is_valid_ascii_identifier(&ep)
+        || !is_valid_identifier(&ep)
     {
         return Vec::new();
     }
@@ -3467,11 +3567,22 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
     let mut allowed_vars: BTreeSet<String> = BTreeSet::new();
 
     for blk in &blocks {
-        let (clean_blk, comment_part) = split_code_and_comment(blk);
+        if statements.len() >= MAX_EXTRACTED_STATEMENTS {
+            break;
+        }
+
+        let (mut clean_blk, comment_part) = split_code_and_comment(blk);
         if clean_blk.is_empty() {
             continue;
         }
         if !comment_part.is_empty() && has_approx_marker(&comment_part) {
+            continue;
+        }
+        let trimmed = clean_blk.trim_end();
+        if let Some(stripped) = trimmed.strip_suffix(',') {
+            clean_blk = stripped.trim_end().to_string();
+        }
+        if clean_blk.is_empty() {
             continue;
         }
 
@@ -3731,4 +3842,87 @@ mod tests {
             let _ = extract_example_assertions(&lossy, None);
         }
     }
+
+    #[test]
+    fn test_format_python_float_parity() {
+        let cases: &[(f64, &str)] = &[
+            (0.0, "0.0"),
+            (-0.0, "-0.0"),
+            (1.0, "1.0"),
+            (-1.0, "-1.0"),
+            (1.5, "1.5"),
+            (-1.5, "-1.5"),
+            (1e-4, "0.0001"),
+            (-1e-4, "-0.0001"),
+            (1e-5, "1e-05"),
+            (-1e-5, "-1e-05"),
+            (1.25e-5, "1.25e-05"),
+            (-1.25e-5, "-1.25e-05"),
+            (1e15, "1000000000000000.0"),
+            (-1e15, "-1000000000000000.0"),
+            (1e16, "1e+16"),
+            (-1e16, "-1e+16"),
+            (1.25e16, "1.25e+16"),
+            (-1.25e16, "-1.25e+16"),
+            (1e22, "1e+22"),
+            (-1e22, "-1e+22"),
+            (5e-324, "5e-324"),
+            (-5e-324, "-5e-324"),
+            (1.7976931348623157e+308, "1.7976931348623157e+308"),
+            (2.2250738585072014e-308, "2.2250738585072014e-308"),
+        ];
+        for &(v, expected) in cases {
+            let got = format_python_float(v);
+            assert_eq!(got, expected, "Mismatch for {}", v);
+        }
+    }
+
+    #[test]
+    fn test_paren_neg_assertion_parity() {
+        let prompt = "Example:\n  solve(1) > -(1)";
+        let stmts = extract_example_assertions(prompt, Some("solve"));
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(
+            stmts[0],
+            "assert isinstance((solve(1)), (int, float)) and not isinstance((solve(1)), bool) and isinstance((-(1)), (int, float)) and not isinstance((-(1)), bool) and (solve(1) > -(1))"
+        );
+    }
+
+    #[test]
+    fn test_trailing_comma_assertion_parity() {
+        let prompt = "Example:\n  solve(1) -> 1,\n  solve(2) -> 2 ,";
+        let stmts = extract_example_assertions(prompt, Some("solve"));
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0], "assert solve(1) == 1");
+        assert_eq!(stmts[1], "assert solve(2) == 2");
+    }
+
+    #[test]
+    fn test_rb_bytes_literal() {
+        let prompt = "Example:\n  solve(rb'x') -> 1";
+        let stmts = extract_example_assertions(prompt, Some("solve"));
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(stmts[0], "assert solve(rb'x') == 1");
+    }
+
+    #[test]
+    fn test_sinhala_entry_point() {
+        let prompt = "def සිංහල(n):\nExample:\n  සිංහල(1) -> 2";
+        let stmts = extract_example_assertions(prompt, None);
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(stmts[0], "assert සිංහල(1) == 2");
+    }
+
+    #[test]
+    fn test_max_extracted_statements_cap() {
+        let mut prompt = String::from("Example:\n");
+        for i in 0..70 {
+            prompt.push_str(&format!("  solve({}) -> {}\n", i, i));
+        }
+        let stmts = extract_example_assertions(&prompt, Some("solve"));
+        assert_eq!(stmts.len(), MAX_EXTRACTED_STATEMENTS);
+    }
 }
+
+
+

@@ -617,6 +617,8 @@ def verify_loop_vectors() -> Dict[str, Any]:
         ("codec_18_nested_depth_32_boundary", _build_nested_list_value(MAX_RECURSION_DEPTH)),
         ("codec_19_int64_max", MAX_INT64),
         ("codec_20_int64_min", MIN_INT64),
+        ("codec_21_float_exponent_set", {1e22, 1e16, 1e-05, 5e-324}),
+        ("codec_22_surrogate_escaped_ordering_set", {"\uff5a", "\U0001f680"}),
     ]
     codec_roundtrip_cases = [
         {
@@ -876,6 +878,31 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "ex_12_int64_boundaries_and_overflow",
             "solve",
             "Write `solve(x)`.\nExample:\n  solve(9223372036854775807) -> -9223372036854775808\n  solve(9223372036854775808) -> 0\n  solve(0) -> -9223372036854775809\n",
+        ),
+        (
+            "ex_13_greater_than_neg_paren",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) > -(1)\n",
+        ),
+        (
+            "ex_14_trailing_comma",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) -> 1,\n",
+        ),
+        (
+            "ex_15_space_before_trailing_comma",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) -> 1 ,\n",
+        ),
+        (
+            "ex_16_rb_bytes_literal",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(rb'x') -> 1\n",
+        ),
+        (
+            "ex_17_sinhala_entry_point",
+            "සිංහල",
+            "def සිංහල(n):\nExample:\n  සිංහල(1) -> 2\n",
         ),
     ]
     canonical_example_extraction_cases = [
@@ -1265,9 +1292,16 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
         if kind_t == "int":
             return rng.choice([0, 1, -1, 42, -999999, MAX_INT64, MIN_INT64, rng.randint(-10000, 10000)])
         if kind_t == "float":
-            return rng.choice([0.0, -0.0, 1.0, -2.5, 3.14159265, float("nan"), float("inf"), float("-inf")])
+            return rng.choice([
+                0.0, -0.0, 1.0, -1.0, -2.5, 3.14159265, float("nan"), float("inf"), float("-inf"),
+                1e22, -1e22, 1e16, -1e16, 1e-05, -1e-05, 1e-04, -1e-04, 1.25e-05, -1.25e-05,
+                1e15, -1e15, 5e-324, -5e-324, 1.7976931348623157e+308, 2.2250738585072014e-308,
+            ])
         if kind_t == "str":
-            return rng.choice(["", "hello", "සිංහල\u200dා", "t", "v", "line1\nline2", "🚀✨"])
+            return rng.choice([
+                "", "hello", "සිංහල\u200dා", "t", "v", "line1\nline2", "🚀✨",
+                "\uff5a", "\U0001f680", "\\ud800", "\\n\\t\\r", "\u200c", "\u200d", "සිංහල\u0dd2", "pasſword",
+            ])
         if kind_t == "none":
             return None
         if kind_t == "bytes":
@@ -1343,25 +1377,55 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
         '{"t": "dict", "v": [[{"t": "int", "v": 1}]]}',
         '{"t": "str", "v": "\\ud800"}',
         '{"t": "str", "v": "unterminated}',
+        '\ufeff{"t": "int", "v": 1}',
+        '{"t": "int", "v": 012}',
+        '{"t": "int", "v": -0}',
+        '{"t": "float", "v": 1e400}',
+        '{"t": "int", "v": 1000000000000000000000000000000}',
+        '{"t": "int", "v": 1} trailing',
+        '{"t": "int", "v": 1} /* comment */',
+        '{"t": "str", "v": "\x00"}',
+        '{"t": "list", "v": [{"t": "int", "v": 1},]}',
         json.dumps(_build_nested_list_envelope(MAX_RECURSION_DEPTH)),
         json.dumps(_build_nested_list_envelope(MAX_RECURSION_DEPTH + 1)),
     ]
 
     for idx in range(verify_fuzz_count):
         # 1. Codec raw JSON envelope case
-        if rng.random() < 0.45:
+        if rng.random() < 0.50:
             val = _gen_random_py_val(0, False)
             raw_json = json.dumps(encode_value(val), sort_keys=rng.choice([True, False]))
-            if rng.random() < 0.20:
-                # Mutate valid JSON slightly
-                mut_choice = rng.random()
-                if mut_choice < 0.25:
+            if rng.random() < 0.35:
+                # Random character edits and structural mutations on valid text
+                edit_choice = rng.choice([
+                    "bom", "lone_surrogate", "raw_control", "char_insert", "char_delete",
+                    "char_replace", "dup_key", "trailing_comma", "extra_key", "truncate"
+                ])
+                if edit_choice == "bom":
+                    raw_json = "\ufeff" + raw_json
+                elif edit_choice == "lone_surrogate" and len(raw_json) > 5:
+                    pos = rng.randint(1, len(raw_json) - 2)
+                    raw_json = raw_json[:pos] + "\\ud800" + raw_json[pos:]
+                elif edit_choice == "raw_control" and len(raw_json) > 5:
+                    pos = rng.randint(1, len(raw_json) - 2)
+                    raw_json = raw_json[:pos] + chr(rng.randint(0, 31)) + raw_json[pos:]
+                elif edit_choice == "char_insert" and len(raw_json) > 2:
+                    pos = rng.randint(0, len(raw_json))
+                    ch = rng.choice([" ", "\t", "\r", "\n", ",", ":", "{", "}", "[", "]", '"', "a", "0", "-", ".", "e", "+"])
+                    raw_json = raw_json[:pos] + ch + raw_json[pos:]
+                elif edit_choice == "char_delete" and len(raw_json) > 3:
+                    pos = rng.randint(0, len(raw_json) - 1)
+                    raw_json = raw_json[:pos] + raw_json[pos + 1:]
+                elif edit_choice == "char_replace" and len(raw_json) > 3:
+                    pos = rng.randint(0, len(raw_json) - 1)
+                    raw_json = raw_json[:pos] + rng.choice(["_", "X", "0", "-", "\0"]) + raw_json[pos + 1:]
+                elif edit_choice == "dup_key":
                     raw_json = raw_json.replace('"t":', '"t": "int", "t":', 1)
-                elif mut_choice < 0.50:
-                    raw_json = raw_json.replace('"int"', '"bool"', 1)
-                elif mut_choice < 0.75:
+                elif edit_choice == "trailing_comma":
+                    raw_json = raw_json.replace('}', ', }', 1)
+                elif edit_choice == "extra_key":
                     raw_json = raw_json[:-1] + ', "extra": 1}'
-                else:
+                elif edit_choice == "truncate":
                     raw_json = raw_json[: max(1, len(raw_json) // 2)]
         else:
             raw_json = rng.choice(hostile_codec_raw_jsons)
@@ -1481,11 +1545,14 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
         })
 
         # 3. Canonical example extraction case (valid + hostile/edge ASTs)
-        ep_choice = rng.choice(["solve", "calc_total", "score", "", "_private", "open"])
+        ep_choice = rng.choice(["solve", "calc_total", "score", "සිංහල", "", "_private", "open"])
         header_choice = rng.choice([
             "Write `solve(x)`.\n",
             "Implement `def calc_total(items, tax):`\n",
             "Write function `score`.\n",
+            "def සිංහල(n):\n",
+            "Write `සිංහල(x)`.\n",
+            "Write function `සිංහල`.\n",
             "Task description in සිංහල.\n",
         ])
         marker_choice = rng.choice(["Example:\n", "Examples:\n"])
@@ -1504,6 +1571,20 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
             "  solve(1) -> float('inf')",
             "  solve(1) -> float('-inf')",
             "  solve(1) -> float('nan')",
+            "  solve(1) > -(1)",
+            "  solve(2) > -(1.5)",
+            "  solve(3) >= -(0)",
+            "  solve(4) < -(10)",
+            "  solve(rb'x') -> 1",
+            "  solve(br'hello') -> 2",
+            "  solve(b'abc') -> 3",
+            "  solve(1) -> 1,",
+            "  solve(2) -> 2 ,",
+            "  solve(3) -> 3   ,",
+            "  සිංහල(1) -> 2",
+            "  සිංහල(10) > 0",
+            "  සිංහල(rb'test') -> 5",
+            "  x = -(5)\n  solve(x) -> 10",
             "  p = [10, 20]",
             "  total_cost(p, 5) -> 35",
             "  calc_total([1, 2], tax=5) -> 8",
@@ -1518,7 +1599,8 @@ def generate_fuzz_dataset(num_cases: int, seed: int) -> Dict[str, Any]:
             "  solve(10) -> ...",
             "Note: constraints follow",
         ]
-        chosen_lines = "\n".join(rng.choices(sample_ex_lines, k=rng.randint(1, 4))) + "\n"
+        line_count = 60 if rng.random() < 0.05 else rng.randint(1, 4)
+        chosen_lines = "\n".join(rng.choices(sample_ex_lines, k=line_count)) + "\n"
         prompt_str = f"{header_choice}{marker_choice}{chosen_lines}"
         ep_arg = ep_choice if ep_choice else None
         expected_stmts = extract_example_assertions(prompt_str, entry_point=ep_arg)

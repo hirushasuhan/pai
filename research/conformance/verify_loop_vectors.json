@@ -84,6 +84,46 @@
    ],
    "id": "ex_12_int64_boundaries_and_overflow",
    "prompt": "Write `solve(x)`.\nExample:\n  solve(9223372036854775807) -> -9223372036854775808\n  solve(9223372036854775808) -> 0\n  solve(0) -> -9223372036854775809\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert isinstance((solve(1)), (int, float)) and not isinstance((solve(1)), bool) and isinstance((-(1)), (int, float)) and not isinstance((-(1)), bool) and (solve(1) > -(1))"
+   ],
+   "id": "ex_13_greater_than_neg_paren",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) > -(1)\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert solve(1) == 1"
+   ],
+   "id": "ex_14_trailing_comma",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) -> 1,\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert solve(1) == 1"
+   ],
+   "id": "ex_15_space_before_trailing_comma",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) -> 1 ,\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert solve(rb'x') == 1"
+   ],
+   "id": "ex_16_rb_bytes_literal",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(rb'x') -> 1\n"
+  },
+  {
+   "entry_point": "\u0dc3\u0dd2\u0d82\u0dc4\u0dbd",
+   "expected_statements": [
+    "assert \u0dc3\u0dd2\u0d82\u0dc4\u0dbd(1) == 2"
+   ],
+   "id": "ex_17_sinhala_entry_point",
+   "prompt": "def \u0dc3\u0dd2\u0d82\u0dc4\u0dbd(n):\nExample:\n  \u0dc3\u0dd2\u0d82\u0dc4\u0dbd(1) -> 2\n"
   }
  ],
  "codec_invalid_envelope_cases": [
@@ -4952,6 +4992,48 @@
    },
    "id": "codec_20_int64_min",
    "python_type": "int"
+  },
+  {
+   "encoded": {
+    "t": "set",
+    "v": [
+     {
+      "t": "float",
+      "v": 1e+16
+     },
+     {
+      "t": "float",
+      "v": 1e+22
+     },
+     {
+      "t": "float",
+      "v": 1e-05
+     },
+     {
+      "t": "float",
+      "v": 5e-324
+     }
+    ]
+   },
+   "id": "codec_21_float_exponent_set",
+   "python_type": "set"
+  },
+  {
+   "encoded": {
+    "t": "set",
+    "v": [
+     {
+      "t": "str",
+      "v": "\ud83d\ude80"
+     },
+     {
+      "t": "str",
+      "v": "\uff5a"
+     }
+    ]
+   },
+   "id": "codec_22_surrogate_escaped_ordering_set",
+   "python_type": "set"
   }
  ],
  "schema_version": 1,

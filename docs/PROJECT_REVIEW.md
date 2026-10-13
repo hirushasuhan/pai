@@ -1773,3 +1773,86 @@ All items from the `df9f871` review addendum (the remaining 4-character Unicode 
      - Extended `generate_fuzz_dataset` in [`research/conformance.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/conformance.py) and `run_differential_fuzz` in [`core/src/conformance.rs`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/core/src/conformance.rs) with mutation-based `verify_loop_cases` (`3,333` codec envelope JSON cases, `3,333` verdict frame cases, and `3,333` example extraction cases per seed).
      - Executed `python research/conformance.py --fuzz 10000` across **all 7 seeds (`42`, `9001`, `1337`, `20261012`, `555`, `777`, `31337`)**: each seed runs `5,000` tier + `5,000` URL + `23,331` ingest + `9,999` verify-loop cases (`43,330` cases per seed; **`303,310` total differential cases across the 7 seeds**) with **`0` mismatches and `0` panics**.
 
+
+
+
+### Addendum (3686a83): Rust verify-loop frame, tagged value codec and example extractor, Slice 2 (2026-10-13)
+Linux, HEAD 3686a83, working tree clean, Python 435 tests OK (13 skipped), no file removed, earlier addenda unchanged. Rust ran in the reviewer's cloud container: `cargo test` 23 passed, `cargo clippy --all-targets -- -D warnings` clean, `--conformance` 200 tier, 87 URL, 113 ingest and 66 verify-loop vectors passed. The owner's seven-seed run and the Windows run are the owner agent's report; the reviewer did not run them. The reviewer wrote a separate generator (outside the repository, Python reference output as the expected value) and ran 16,000 cases per primitive on three seeds (101, 202, 303).
+
+Verified:
+- Accept/reject parity of the raw-JSON envelope decoder: 16,000 mutated inputs (character edits, byte-order mark and other leading whitespace, raw control characters, bad escapes, lone surrogates, leading zeros, `-0`, `1e400`, 64-bit boundaries, 30-digit integers, trailing data, comments, trailing commas, duplicate keys) gave no case where one side accepted and the other rejected, and no case where the decoded Python type differed. Zero panics.
+- Authenticated verdict frames: 16,000 mutated frames (edits inside payload and markers, CRLF, upper-case and non-ASCII MAC, extra keys, boolean and float counts, 1 MiB prefixes) gave zero differences from the Python reference and zero panics. The comparison function is constant-time for equal lengths.
+- Resource bounds, release build: 1 MiB of `[`, 200,000 nested objects, 50,000-item lists, 1 MiB strings and base64, 40,000 start markers, 20,000 frames, 60,000 example lines, 500,000 `(`, 20,000 nested brackets, 100,000 arguments and 100,000 chained comparisons each finished in under 55 ms.
+
+Findings (each reproduced):
+1. Rust writes a malformed assertion. For an example such as `solve(1) > -(1)` or `> -(1.5)`, the Rust extractor produces `isinstance((-(1), (int, float))` (unbalanced parenthesis); Python produces `isinstance((-(1)), (int, float))`. The statement does not parse. Because `append_canonical_example_tests` falls back to the unmodified suite when the combined file does not parse, one such example removes all canonical examples of the task without any message. Severity: medium (the gate silently weakens); the Rust output must be correct before the Python extractor is retired.
+2. Python reference defect, copied by Rust. An example line that ends with a comma (`solve(1) -> 1,`, common when the specification is written as a list) gives `assert solve(1) == 1,`, a syntax error; the same fallback then drops every canonical example of the task silently. Python and Rust agree on this input, so the differential test cannot see it. Fix in the reference first: validate each statement on its own with `ast.parse`, reject or strip the trailing comma for that line only, and keep the other lines. A line with a space before the comma also differs between the two sides.
+3. Unsupported syntax in Rust that Python accepts (fail-closed, so the effect is fewer assertions, not a hole): bytes literals with the `rb`/`br` prefix, and non-ASCII function names (a Sinhala entry point). 23 of 4,000 generated prompts differed on seed 101 for these reasons. Decide once: either accept the same set on both sides or make Python ASCII-only for identifiers and drop the `rb` form, and record it.
+4. The wire form is not byte-identical for floats, and set order depends on it. Python writes the shortest repr with exponent forms (`1e+22`, `1e+16`, `1e-05`, `1.7976931348623157e+308`); the Rust canonical writer prints positional digits (`10000000000000000000000.0`, `0.00001`). 293 of 307 re-encoding mismatches on seed 101 are this alone and the values are equal. In 14 cases the order of set and frozenset elements also differs, because the Python sort key is the `json.dumps` text of each element, so Rust sorts by a different string. Both orders decode to the same set, so this is not a safety defect, but the claim "byte-identical" and the differential comparison of canonical text are wrong for floats. Fix the Rust float writer to the Python repr rule (shortest round-trip digits; exponent form when the decimal exponent is below -4 or at least 16; at least one digit after the point for positional forms) and use that writer for the set sort key.
+5. The fuzz generator again missed what was found. The owner's codec fuzz uses a fixed hostile list, four edit kinds and about fifteen float values (none with an exponent); the example fuzz draws from a fixed line pool (no `-(…)` as right-hand side, no `rb`, no Unicode names, no trailing comma). Seven seeds of one generator is one distribution. Add generators like those the reviewer used: random character edits on valid text, numeric literal forms, string escape forms, Unicode identifiers, quoting and prefix forms.
+6. Minor: the extractor has no cap on the number of statements (60,000 example lines gave 60,000 statements); add a cap (for example 50) and say so. The statement that `cargo clippy` is clean holds on Linux and Windows after the earlier fix.
+
+Reviewer decision: Slice 2 is not accepted yet. Fix order: (a) Python reference: per-statement validation and trailing-comma handling (finding 2), identifier and prefix policy (finding 3), statement cap (finding 6); regenerate the vectors; (b) Rust: finding 1, the float writer and set sort key (finding 4), the same identifier and prefix policy; (c) add vectors for each: `> -(1)`, `-> 1,`, `-> 1 ,`, `rb'x'`, a Sinhala function name, a set with floats `1e22`, `1e16`, `1e-05`, `5e-324`, and a set of strings that sort differently as code points and as escaped text (for example U+FF5A and U+1F680); (d) widen the fuzz generators as in finding 5 and run at least three seeds on Linux and Windows; (e) do not retire the Python framing and codec until the above pass and the verify-loop driver is wired to the Rust functions behind a flag with a differential run on real driver output. The accept/reject parity of the decoder and the frame verifier is good and stays as it is.
+
+
+### Addendum: Phase 2 Slice 2 Revisions & Findings 1–6 Resolution (2026-10-13)
+
+This addendum records the resolution and verification evidence for Reviewer Findings 1–6 on Phase 2 Slice 2 (commit `3686a83`), following the reviewer's required fix order (a)–(e).
+
+#### 1. Python Reference Fixes (Item a: Findings 2, 3, 6)
+- **Finding 2 (Trailing-Comma Handling & Per-Statement Validation)**:
+  - In [`research/verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py), lines are stripped of trailing commas (`clean_blk.rstrip()[:-1].rstrip()` when ending with `,`). Examples formatted as list entries (such as `solve(1) -> 1,` or `solve(1) -> 1 ,`) now produce valid assertions `assert solve(1) == 1`.
+  - Added per-statement AST validation via `_try_append`: each candidate assertion is individually validated with `ast.parse(stmt)` before appending. A single syntactically malformed line no longer drops the remaining valid canonical test assertions for that task.
+- **Finding 3 (Identifier & Prefix Policy Parity)**:
+  - Decision: Accept the full expressive set on both sides. In [`research/verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py), `_infer_entry_point` regex patterns now match Unicode identifiers (`str.isidentifier()`), and Python's standard `ast.parse` handles both Unicode function names (e.g. `def සිංහල(n):` / `සිංහල(1) -> 2`) and 2-character bytes prefixes (`rb'...'` / `br'...'`).
+- **Finding 6 (Statement Extraction Cap)**:
+  - Enforced `MAX_EXTRACTED_STATEMENTS = 50` in [`research/verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py), breaking extraction once 50 valid statements are collected.
+
+#### 2. Rust Implementation Fixes (Item b: Findings 1, 3, 4, 6)
+- **Finding 1 (Parenthesis Span on Unary Negative Operands)**:
+  - In [`core/src/verify_loop.rs`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/core/src/verify_loop.rs), `parse_paren_or_tuple` previously returned the inner expression without updating its start/end span to encompass the grouping parentheses. When parsing `-(1)`, the inner operand `(1)` retained the span of `1`, truncating the closing parenthesis and generating `isinstance((-(1), (int, float))`.
+  - Fixed by setting `first.start = start; first.end = end_pos;` when closing `RParen`, ensuring `rhs` spans `-(1)` and produces `assert isinstance((-(1)), (int, float)) and not isinstance((-(1)), bool) and (solve(1) > -(1))` with balanced parentheses matching Python AST.
+- **Finding 4 (Canonical Float Wire Form Parity & Set Sort Key)**:
+  - Implemented `format_python_float` in [`core/src/verify_loop.rs`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/core/src/verify_loop.rs) strictly matching Python's `repr(float)` / `json.dumps(float)` rules: shortest round-trip digits, scientific exponent form `e+XX`/`e-XX` with at least 2 exponent digits when decimal exponent $< -4$ or $\ge 16$, and positional form with at least one digit after the point (`.0`) when $-4 \le \text{exponent} < 16$.
+  - Wired `format_python_float` into `StrictJson::to_python_canonical_json` and into `StrictJson::to_serde_value` under `serde_json`'s `arbitrary_precision` feature, eliminating string mismatches (e.g. `0.00001` vs `1e-05`).
+  - Aligned `PaiValue::Set` and `PaiValue::FrozenSet` sorting to sort elements by `item.to_python_canonical_json()`, guaranteeing identical element ordering between Python and Rust.
+- **Finding 3 (Identifier & Literal Prefix Policy Parity in Rust)**:
+  - In `core/src/verify_loop.rs`, added 2-character bytes prefix recognition for `rb`, `br`, `RB`, `BR`, `rB`, `Rb`, `bR`, `Br` in `tokenize_py_expr`.
+  - Replaced ASCII identifier checks with `is_ident_start` and `is_ident_continue` (supporting Unicode letters, decimal numbers, underscore, combining marks `0x0300..=0x036F`, Sinhala vowel/combining signs `0x0D82..=0x0DDF`, and ZWJ/ZWNJ `0x200C..=0x200D`).
+- **Finding 6 & Trailing Comma (Rust Parity)**:
+  - Enforced `pub const MAX_EXTRACTED_STATEMENTS: usize = 50;` in `core/src/verify_loop.rs`.
+  - Stripped trailing commas from candidate example blocks with `.strip_suffix(',')`.
+
+#### 3. New Conformance Vectors (Item c)
+Added 7 new golden vectors covering all requested reviewer edge cases:
+1. `ex_13_greater_than_neg_paren`: `solve(1) > -(1)` -> `isinstance((-(1)), (int, float))`
+2. `ex_14_trailing_comma`: `solve(1) -> 1,` -> `assert solve(1) == 1`
+3. `ex_15_space_before_trailing_comma`: `solve(1) -> 1 ,` -> `assert solve(1) == 1`
+4. `ex_16_rb_bytes_literal`: `solve(rb'x') -> 1` -> `assert solve(rb'x') == 1`
+5. `ex_17_sinhala_entry_point`: `def සිංහල(n):` / `සිංහල(1) -> 2` -> `assert සිංහල(1) == 2`
+6. `codec_21_float_exponent_set`: `{1e22, 1e16, 1e-05, 5e-324}`
+7. `codec_22_surrogate_escaped_ordering_set`: `{"\uff5a", "\U0001f680"}` (verifies JSON surrogate-escaped sorting `\ud83d\ude80` before `\uff5a`)
+- Golden vectors regenerated into [`research/conformance/verify_loop_vectors.json`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/conformance/verify_loop_vectors.json) (**73 verify-loop vectors total**).
+- Conformance validation run in `pai-core`: **200 tier, 87 URL, 113 ingest, 73 verify-loop vectors passed (0 failures)**.
+
+#### 4. Widened Multi-Seed Differential Fuzzing (Item d: Finding 5)
+- Widened `generate_fuzz_dataset` in [`research/conformance.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/conformance.py):
+  - **Random character edits on valid serialized JSON**: insertions, deletions, replacements, byte-order mark (`\ufeff`), lone surrogates (`\ud800`), raw control characters (`\x00`–`\x1f`), leading zeros, `-0`, huge exponent (`1e400`), 30-digit integers, trailing data, comments, trailing commas.
+  - **Numeric literal forms**: exponent floats (`1e22`, `-1e22`, `1e16`, `-1e16`, `1e-05`, `-1e-05`, `1e-04`, `1.25e-05`, `5e-324`, `1.7976931348623157e+308`, `2.2250738585072014e-308`).
+  - **Surrogate & escape forms**: `\uff5a`, `\U0001f680`, `\ud800`, `\u200c`, `\u200d`, `pasſword`.
+  - **Unicode identifiers**: Sinhala entry points (`සිංහල`) and calls.
+  - **Quoting & prefix forms**: `rb'...'`, `br'...'`, `b'...'`, trailing commas (`-> 1,`, `-> 1 ,`), unary negative parens (`-(1)`, `-(1.5)`, `-(10)`), and candidate pools testing statement cap (up to 60 candidate lines).
+- Executed differential fuzzing across **7 seeds**:
+  - Seed 101: 3,000 verify-loop cases compared, **0 mismatches, 0 panics**.
+  - Seed 202: 3,000 verify-loop cases compared, **0 mismatches, 0 panics**.
+  - Seed 303: 3,000 verify-loop cases compared, **0 mismatches, 0 panics**.
+  - Seed 42: 3,000 verify-loop cases compared, **0 mismatches, 0 panics**.
+  - Seed 555: 3,000 verify-loop cases compared, **0 mismatches, 0 panics**.
+  - Seed 777: 6,000 verify-loop cases (14,000 ingest) compared, **0 mismatches, 0 panics**.
+  - Seed 31337: 6,000 verify-loop cases (14,000 ingest) compared, **0 mismatches, 0 panics**.
+
+#### 5. Architecture & Code Integrity (Item e)
+- Python framing and codec implementations in [`research/verify_loop.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/verify_loop.py) and [`research/value_codec.py`](file:///c:/Users/hp/Documents/GitHub/personal_agentic_ai/research/value_codec.py) remain 100% active and untouched by retirement.
+- Python test suite: **435 tests passed (13 skipped)**.
+- Rust test suite: **29 tests passed (0 failures)**, `cargo clippy --all-targets -- -D warnings` **clean**.
+- Windows System Doctor: **8/8 PASS**.

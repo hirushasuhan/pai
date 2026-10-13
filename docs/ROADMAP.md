@@ -2,7 +2,7 @@
 
 This roadmap outlines the systematic development of the **Personal Agentic AI (PAI)** from an agile Python research prototype to a fully autonomous, recursive self-improving native intelligence daemon.
 
-_Last reviewed: 2026-10-12. Phase 1 closed by reviewer at `05c9739`; Phase 1.1 fixes completed (`0d0f553`: unmocked-router stub integration test, deterministic question-overlap file ranking in `pai analyze`, model explanation number verification in `pai forecast`, runtime piece construction in `ingest_vectors.json`, and Rust codec/verdict-frame vector hardening); Phase 2 Slice 1 (`core/src/ingest.rs` safe ingestion in pure safe Rust) complete and verified against 99 golden ingest vectors + `limits` and 23,331 differential fuzz cases with 0 mismatches; M2b verification gate frozen at `6218fbc` (English and Singlish one-shot holdouts complete; M2c bridge kept on hold), M3/M4/M5/M7 complete. Risks R1–R7 remediated, R8–R12 mitigated/closed in prototype — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md) and the [ADRs](adr/README.md)._
+_Last reviewed: 2026-10-13. Phase 1 closed by reviewer at `05c9739`; Phase 1.1 fixes completed (`0d0f553`); Phase 2 Slice 1 (`core/src/ingest.rs`) verified against 113 golden vectors; Phase 2 Slice 2 (`core/src/verify_loop.rs` verify-loop framing and tagged value codec) complete and verified against 73 golden vectors and widened multi-seed differential fuzzing (seeds 101, 202, 303, 42, 555, 777, 31337) with 0 mismatches; M2b verification gate frozen at `6218fbc`; M3/M4/M5/M7 complete. Risks R1–R7 remediated, R8–R12 mitigated/closed in prototype — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md) and the [ADRs](adr/README.md)._
 
 ---
 

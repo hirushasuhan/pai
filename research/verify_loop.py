@@ -64,6 +64,8 @@ from sandbox import get_sandbox, is_sandbox_supported
 MAX_VERDICT_STREAM_BYTES = 1_048_576
 MAX_VERDICT_FRAME_BYTES = 262_144
 MAX_VERDICT_COUNT_VALUE = 1_000_000
+MAX_EXTRACTED_STATEMENTS = 50
+
 
 
 class TestMutationError(RuntimeError):
@@ -428,18 +430,21 @@ def _infer_entry_point(prompt: str, section: str) -> Optional[str]:
     marker = "Example:" if "Example:" in prompt else "Examples:"
     header = prompt.split(marker, 1)[0] if marker in prompt else prompt
     for pat in (
-        r"\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(",
-        r"`([a-zA-Z_][a-zA-Z0-9_]*)\s*\(",
-        r"\bfunction\s+`?([a-zA-Z_][a-zA-Z0-9_]*)\b",
+        r"\bdef\s+`?([^\s()`,]+)`?\s*\(",
+        r"`([^\s()`,]+)\s*\(",
+        r"\bfunction\s+`?([^\s()`,]+)`?",
     ):
-        matches = [m for m in re.findall(pat, header) if not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES]
+        matches = [
+            m for m in re.findall(pat, header)
+            if m.isidentifier() and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+        ]
         if matches:
             return matches[0]
 
     sec_matches = [
         m
-        for m in re.findall(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", section, re.MULTILINE)
-        if not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+        for m in re.findall(r"^\s*`?([^\s()`,]+)`?\s*\(", section, re.MULTILINE)
+        if m.isidentifier() and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
     ]
     if sec_matches:
         return sec_matches[0]
@@ -506,8 +511,26 @@ def extract_example_assertions(
     statements: List[str] = []
     allowed_vars: Set[str] = set()
 
+    def _try_append(stmt: str) -> bool:
+        if len(statements) >= MAX_EXTRACTED_STATEMENTS:
+            return False
+        try:
+            ast.parse(stmt)
+            statements.append(stmt)
+            return len(statements) < MAX_EXTRACTED_STATEMENTS
+        except SyntaxError:
+            return True
+
     for blk in blocks:
+        if len(statements) >= MAX_EXTRACTED_STATEMENTS:
+            break
+
         clean_blk, comment_part = _split_code_and_comment(blk)
+        if not clean_blk:
+            continue
+        clean_blk = clean_blk.rstrip()
+        if clean_blk.endswith(","):
+            clean_blk = clean_blk[:-1].rstrip()
         if not clean_blk:
             continue
 
@@ -537,12 +560,14 @@ def extract_example_assertions(
                     )
                 )
                 if is_scalar_float:
-                    statements.append(
+                    candidate = (
                         f"assert isinstance(({expr}), (int, float)) and not isinstance(({expr}), bool) "
                         f"and abs(({expr}) - ({expected})) <= 1e-3"
                     )
                 else:
-                    statements.append(f"assert {expr} == {expected}")
+                    candidate = f"assert {expr} == {expected}"
+                if not _try_append(candidate):
+                    break
                 continue
             except (SyntaxError, ValueError, TypeError, OverflowError, RecursionError, MemoryError):
                 continue
@@ -564,14 +589,18 @@ def extract_example_assertions(
                             lhs = ast.get_source_segment(clean_blk, left_node)
                             rhs = ast.get_source_segment(clean_blk, right_node)
                             if lhs and rhs:
-                                statements.append(
+                                candidate = (
                                     f"assert isinstance(({lhs}), (int, float)) and not isinstance(({lhs}), bool) "
                                     f"and isinstance(({rhs}), (int, float)) and not isinstance(({rhs}), bool) "
                                     f"and ({clean_blk})"
                                 )
+                                if not _try_append(candidate):
+                                    break
                                 continue
                         elif isinstance(expr_ast.ops[0], ast.Eq):
-                            statements.append(f"assert {clean_blk}")
+                            candidate = f"assert {clean_blk}"
+                            if not _try_append(candidate):
+                                break
                             continue
                 except (SyntaxError, ValueError, TypeError, OverflowError, RecursionError, MemoryError):
                     continue
@@ -591,7 +620,8 @@ def extract_example_assertions(
                             and _is_safe_literal(assign_node.value, allowed_vars, allow_inexact_floats=False)
                         ):
                             allowed_vars.add(var_name)
-                            statements.append(clean_blk)
+                            if not _try_append(clean_blk):
+                                break
                             continue
             except (SyntaxError, ValueError, TypeError, OverflowError, RecursionError, MemoryError):
                 continue
@@ -599,6 +629,7 @@ def extract_example_assertions(
     if not any(s.startswith("assert ") for s in statements):
         return []
     return statements
+
 
 
 def append_canonical_example_tests(
@@ -619,7 +650,10 @@ def append_canonical_example_tests(
         section = task_prompt.split(marker, 1)[1] if marker in task_prompt else ""
         ep = _infer_entry_point(task_prompt, section)
     if not ep:
-        imp_matches = re.findall(r"\bfrom\s+solution\s+import\s+([a-zA-Z_][a-zA-Z0-9_]*)", test_code)
+        imp_matches = [
+            m for m in re.findall(r"\bfrom\s+solution\s+import\s+([^\s(),]+)", test_code)
+            if m.isidentifier() and not m.startswith("_") and m not in _FORBIDDEN_EXAMPLE_NAMES
+        ]
         if imp_matches:
             ep = imp_matches[0]
 
