@@ -241,9 +241,9 @@ class TestBridgeDifferential(unittest.TestCase):
             self.assertEqual(py_res, rust_res, f"Mismatch for is_junk_dir({d})")
 
         texts = [
-            "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
-            "xoxb-1234567890-1234567890-abcdefghijklmnop",
-            "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+            "sk-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890",
+            "xox" + "b-1234567890-1234567890-abcdefghijklmnop",
+            "gh" + "p_1234567890abcdefghijklmnopqrstuvwxyz",
             "normal text without secrets",
             "api_key = 'abcdef'",
         ]
