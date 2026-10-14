@@ -123,6 +123,39 @@ jobs:
         run: |
           python -m unittest tests/test_m1_code.py
 
+      - name: Build Release Rust Core Binary
+        working-directory: core
+        run: |
+          cargo build --release
+
+      - name: Differential Integration Test Suites (Rust Core vs Python Reference)
+        working-directory: research
+        env:
+          PAI_USE_RUST_CORE: "1"
+        run: |
+          python -c "
+          import sys, os, unittest
+          sys.path.insert(0, 'tests')
+          sys.path.insert(0, '.')
+          loader = unittest.TestLoader()
+          suites = [
+              loader.loadTestsFromName('test_bridge_differential'),
+              loader.loadTestsFromName('test_ingest_differential'),
+              loader.loadTestsFromName('test_updater_differential'),
+          ]
+          all_suite = unittest.TestSuite(suites)
+          runner = unittest.TextTestRunner(verbosity=2)
+          result = runner.run(all_suite)
+          if not result.wasSuccessful():
+              sys.exit(f'FATAL: Differential tests failed (failures={len(result.failures)}, errors={len(result.errors)})')
+          if result.testsRun < 45:
+              sys.exit(f'FATAL: Expected at least 45 differential tests, but only {result.testsRun} were executed!')
+          for test_case, reason in result.skipped:
+              if 'pai-core binary not available' in str(reason) or 'incompatible' in str(reason):
+                  sys.exit(f'FATAL: Differential test skipped due to missing Rust binary: {reason}')
+          print(f'SUCCESS: All {result.testsRun} differential tests passed across 3 modules.')
+          "
+
   linux-portability:
     runs-on: ubuntu-latest
     steps:
@@ -144,6 +177,7 @@ jobs:
       - name: Install bubblewrap for M2 Linux sandbox
         run: |
           sudo apt-get update && sudo apt-get install -y bubblewrap
+          sudo chmod u+s /usr/bin/bwrap || true
           if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           fi

@@ -562,7 +562,11 @@ class TestIngestDifferential(unittest.TestCase):
 
         # Folder test
         haz_dir = os.path.join(self.test_dir, "hazard_test")
-        os.makedirs(os.path.join(haz_dir, "NUL.dir"), exist_ok=True)
+        os.makedirs(haz_dir, exist_ok=True)
+        try:
+            os.makedirs(os.path.join(haz_dir, "NUL.dir"), exist_ok=True)
+        except OSError:
+            pass
         with open(os.path.join(haz_dir, "valid.txt"), "w", encoding="utf-8") as f:
             f.write("valid data")
 
@@ -598,19 +602,23 @@ class TestIngestDifferential(unittest.TestCase):
             self.assertEqual(py_rej.path, rust_rej.path)
 
         # Relative path in subdirectory with root_path=None
-        sub_d = os.path.join(self.test_dir, "sub_diff")
+        # Keep directory inside CWD so os.path.relpath is guaranteed to be on the same drive on Windows CI
+        sub_d = os.path.join(os.getcwd(), "_tmp_diff_sub_test")
         os.makedirs(sub_d, exist_ok=True)
-        sub_f = os.path.join(sub_d, "diff_sample.py")
-        with open(sub_f, "w", encoding="utf-8") as f:
-            f.write("diff_val = 100\n")
-        rel_sub = os.path.relpath(sub_f, os.getcwd())
-        py_item, py_rej = ingest.ingest_file(rel_sub)
-        rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=rel_sub)
-        self.assertIsNone(py_rej)
-        self.assertIsNone(rust_res.get("rejection"))
-        self.assertIsNotNone(py_item)
-        self.assertIsNotNone(rust_res.get("item"))
-        self.assertEqual(py_item.text, rust_res["item"]["text"])
+        try:
+            sub_f = os.path.join(sub_d, "diff_sample.py")
+            with open(sub_f, "w", encoding="utf-8") as f:
+                f.write("diff_val = 100\n")
+            rel_sub = os.path.relpath(sub_f, os.getcwd())
+            py_item, py_rej = ingest.ingest_file(rel_sub)
+            rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=rel_sub)
+            self.assertIsNone(py_rej)
+            self.assertIsNone(rust_res.get("rejection"))
+            self.assertIsNotNone(py_item)
+            self.assertIsNotNone(rust_res.get("item"))
+            self.assertEqual(py_item.text, rust_res["item"]["text"])
+        finally:
+            shutil.rmtree(sub_d, ignore_errors=True)
 
     def test_differential_windows_directory_junctions(self):
         """Verifies Python and Rust return identical rejections for Windows directory junctions."""
@@ -651,6 +659,70 @@ class TestIngestDifferential(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_differential_parameter_bounds(self):
+        """Verifies Python and Rust return identical errors for out-of-bound parameters and accept boundary values."""
+        test_file = os.path.join(self.test_dir, "bound_test.txt")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("bound data\n")
+
+        # max_depth boundary values: 0 (invalid), 1 (valid), 64 (valid), 65 (invalid)
+        with self.assertRaises(ValueError):
+            ingest.ingest_folder(self.test_dir, max_depth=0)
+        with self.assertRaises(ValueError):
+            pai_core_bridge.call_core_bridge("ingest_folder", folder_path=self.test_dir, max_depth=0)
+
+        # 1 and 64 are valid boundaries
+        py_rep_1 = ingest.ingest_folder(self.test_dir, max_depth=1)
+        rust_res_1 = pai_core_bridge.call_core_bridge("ingest_folder", folder_path=self.test_dir, max_depth=1)
+        self.assertEqual(py_rep_1.total_files, rust_res_1["total_files"])
+
+        py_rep_64 = ingest.ingest_folder(self.test_dir, max_depth=64)
+        rust_res_64 = pai_core_bridge.call_core_bridge("ingest_folder", folder_path=self.test_dir, max_depth=64)
+        self.assertEqual(py_rep_64.total_files, rust_res_64["total_files"])
+
+        with self.assertRaises(ValueError):
+            ingest.ingest_folder(self.test_dir, max_depth=65)
+        with self.assertRaises(ValueError):
+            pai_core_bridge.call_core_bridge("ingest_folder", folder_path=self.test_dir, max_depth=65)
+
+        # max_file_size boundaries: 0, 1, 100_000_000, 100_000_001
+        with self.assertRaises(ValueError):
+            ingest.ingest_file(test_file, max_file_size=0)
+        with self.assertRaises(ValueError):
+            pai_core_bridge.call_core_bridge("ingest_file", file_path=test_file, max_file_size=0)
+        with self.assertRaises(ValueError):
+            ingest.ingest_file(test_file, max_file_size=100_000_001)
+        with self.assertRaises(ValueError):
+            pai_core_bridge.call_core_bridge("ingest_file", file_path=test_file, max_file_size=100_000_001)
+
+        # max_line_length boundaries: 0, 1_000_001
+        with self.assertRaises(ValueError):
+            ingest.ingest_file(test_file, max_line_length=0)
+        with self.assertRaises(ValueError):
+            pai_core_bridge.call_core_bridge("ingest_file", file_path=test_file, max_line_length=0)
+        with self.assertRaises(ValueError):
+            ingest.ingest_file(test_file, max_line_length=1_000_001)
+        with self.assertRaises(ValueError):
+            pai_core_bridge.call_core_bridge("ingest_file", file_path=test_file, max_line_length=1_000_001)
+
+    def test_differential_invalid_filename_surrogate_rendering(self):
+        """Verifies lone surrogates render as \ufffd in rejections matching Rust to_string_lossy."""
+        self.assertEqual(ingest._lossy_utf8("bad_\ud800_name"), "bad_\ufffd_name")
+        _, py_rej = ingest.ingest_file("bad_\ud800_name.txt")
+        self.assertIsNotNone(py_rej)
+        self.assertEqual(py_rej.reason_code, "INVALID_FILENAME")
+        self.assertIn("\ufffd", py_rej.path)
+        self.assertNotIn("?", py_rej.path)
+
+        rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path="bad_\ufffd_name.txt")
+        rust_rej = rust_res.get("rejection")
+        self.assertIsNotNone(rust_rej)
+        self.assertEqual(rust_rej["reason_code"], "INVALID_FILENAME")
+        self.assertIn("\ufffd", rust_rej["path"])
+        self.assertEqual(py_rej.message, rust_rej["message"])
+        self.assertEqual(py_rej.path, rust_rej["path"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -688,13 +688,15 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
             message_hex=message.hex(),
             signature_hex=signature.hex(),
         )
+    except CoreBridgeUnavailableError:
+        raise
     except Exception as exc:
         record_shadow_discrepancy(
             "verify_ed25519",
             f"Bridge invocation exception: {exc}",
             exception=type(exc).__name__,
         )
-        return py_ver
+        raise CoreBridgeUnavailableError(f"Bridge invocation exception: {exc}") from exc
 
     if not isinstance(rust_ver, bool):
         record_shadow_discrepancy(

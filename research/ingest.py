@@ -793,7 +793,8 @@ def _is_invalid_filename(name: str) -> bool:
 
 
 def _lossy_utf8(s: str) -> str:
-    return s.encode("utf-8", errors="replace").decode("utf-8")
+    cleaned = "".join("\ufffd" if 0xD800 <= ord(c) <= 0xDFFF else c for c in s)
+    return cleaned.encode("utf-8", errors="replace").decode("utf-8")
 
 
 RESERVED_DEVICE_NAMES: Set[str] = {
@@ -858,6 +859,10 @@ def ingest_file(
     Safely ingests a single file, verifying boundaries, secrets hygiene, and content validity.
     Always reports relative paths in rejections.
     """
+    if not (1 <= max_line_length <= 1_000_000):
+        raise ValueError("max_line_length must be between 1 and 1000000")
+    if not (1 <= max_file_size <= 100_000_000):
+        raise ValueError("max_file_size must be between 1 and 100000000")
     if root_path is None:
         abs_target = os.path.abspath(file_path)
         canonical_root = os.path.realpath(os.path.dirname(abs_target))
@@ -1072,6 +1077,21 @@ def ingest_folder(
     Enforces total file count, total byte budget, max depth, symlink escapes, secrets denial,
     junk directory pruning (unless include_junk=True), and capped rejection tracking.
     """
+    if not (1 <= max_line_length <= 1_000_000):
+        raise ValueError("max_line_length must be between 1 and 1000000")
+    if not (1 <= max_file_size <= 100_000_000):
+        raise ValueError("max_file_size must be between 1 and 100000000")
+    if not (1 <= max_total_bytes <= 1_000_000_000):
+        raise ValueError("max_total_bytes must be between 1 and 1000000000")
+    if not (1 <= max_file_count <= 1_000_000):
+        raise ValueError("max_file_count must be between 1 and 1000000")
+    if not (1 <= max_depth <= 64):
+        raise ValueError("max_depth must be between 1 and 64")
+    if not (1 <= max_rejections_per_reason <= 10_000):
+        raise ValueError("max_rejections_per_reason must be between 1 and 10000")
+    if not (1 <= max_total_rejections <= 50_000):
+        raise ValueError("max_total_rejections must be between 1 and 50000")
+
     canonical_root = os.path.realpath(os.path.abspath(folder_path))
     limits = {
         "max_file_size_bytes": max_file_size,

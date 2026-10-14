@@ -31,6 +31,7 @@ from ingest import (
     sanitize_text_content,
     scan_secret_content,
     wrap_untrusted_envelope,
+    _lossy_utf8,
 )
 
 
@@ -639,12 +640,17 @@ class TestSafeIngestModule(unittest.TestCase):
 
         # Directory with reserved name is pruned in ingest_folder
         con_dir = os.path.join(self.test_dir, "NUL.dir")
-        os.makedirs(con_dir, exist_ok=True)
+        try:
+            os.makedirs(con_dir, exist_ok=True)
+            created_con_dir = True
+        except OSError:
+            created_con_dir = False
         valid_file = os.path.join(self.test_dir, "valid.txt")
         with open(valid_file, "w", encoding="utf-8") as f:
             f.write("hello")
         rep = ingest_folder(self.test_dir)
-        self.assertIn("SPECIAL_FILE", rep.rejection_counts)
+        if created_con_dir:
+            self.assertIn("SPECIAL_FILE", rep.rejection_counts)
         self.assertEqual(len(rep.items), 1)
 
     def test_ntfs_alternate_data_streams_rejected(self):
@@ -657,16 +663,20 @@ class TestSafeIngestModule(unittest.TestCase):
             self.assertEqual(rej.message, "Filename contains invalid Unicode or non-decodable bytes")
 
         # Relative path in subdirectory without root_path (root_path=None) does not double directories
-        sub_d = os.path.join(self.test_dir, "sub_mod")
+        # Keep directory inside CWD so os.path.relpath is guaranteed to be on the same drive on Windows CI
+        sub_d = os.path.join(os.getcwd(), "_tmp_ingest_sub_test")
         os.makedirs(sub_d, exist_ok=True)
-        sub_f = os.path.join(sub_d, "sample.py")
-        with open(sub_f, "w", encoding="utf-8") as f:
-            f.write("val = 42\n")
-        rel_sub = os.path.relpath(sub_f, os.getcwd())
-        item, rej = ingest_file(rel_sub)
-        self.assertIsNone(rej)
-        self.assertIsNotNone(item)
-        self.assertEqual(item.text, "val = 42\n")
+        try:
+            sub_f = os.path.join(sub_d, "sample.py")
+            with open(sub_f, "w", encoding="utf-8") as f:
+                f.write("val = 42\n")
+            rel_sub = os.path.relpath(sub_f, os.getcwd())
+            item, rej = ingest_file(rel_sub)
+            self.assertIsNone(rej)
+            self.assertIsNotNone(item)
+            self.assertEqual(item.text, "val = 42\n")
+        finally:
+            shutil.rmtree(sub_d, ignore_errors=True)
 
     def test_windows_directory_junction_containment(self):
         """Verifies Windows directory junctions (mklink /J) are treated as symlinks/reparse points."""
@@ -692,7 +702,49 @@ class TestSafeIngestModule(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_parameter_bounds_validation(self):
+        """Verifies ingest_file and ingest_folder reject parameters outside valid bounds."""
+        test_file = os.path.join(self.test_dir, "test_bounds.txt")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("content")
+
+        with self.assertRaises(ValueError):
+            ingest_file(test_file, max_file_size=0)
+        with self.assertRaises(ValueError):
+            ingest_file(test_file, max_file_size=100_000_001)
+        with self.assertRaises(ValueError):
+            ingest_file(test_file, max_line_length=0)
+        with self.assertRaises(ValueError):
+            ingest_file(test_file, max_line_length=1_000_001)
+
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_depth=0)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_depth=65)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_file_size=0)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_file_size=100_000_001)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_total_bytes=0)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_total_bytes=1_000_000_001)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_file_count=0)
+        with self.assertRaises(ValueError):
+            ingest_folder(self.test_dir, max_file_count=1_000_001)
+
+    def test_invalid_filename_surrogate_rendering(self):
+        """Verifies lone surrogates render as \ufffd in rejections rather than '?'."""
+        self.assertEqual(_lossy_utf8("bad_\ud800_name"), "bad_\ufffd_name")
+        _, rej = ingest_file("bad_\ud800_name.txt")
+        self.assertIsNotNone(rej)
+        self.assertEqual(rej.reason_code, "INVALID_FILENAME")
+        self.assertIn("\ufffd", rej.path)
+        self.assertNotIn("?", rej.path)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
