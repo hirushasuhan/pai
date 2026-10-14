@@ -58,6 +58,26 @@ _CORE_BIN_CACHE: Optional[str] = None
 _SHADOW_DISCREPANCIES: List[Dict[str, Any]] = []
 
 
+def _get_discrepancy_log_path() -> Path:
+    override = os.environ.get("PAI_SHADOW_LOG")
+    if override:
+        return Path(override)
+    pai_dir = Path.home() / ".pai"
+    try:
+        pai_dir.mkdir(parents=True, exist_ok=True)
+        probe = pai_dir / ".probe_write"
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        if probe.exists():
+            probe.unlink()
+        return pai_dir / "shadow_discrepancies.jsonl"
+    except OSError:
+        import tempfile
+        temp_pai = Path(tempfile.gettempdir()) / "pai"
+        temp_pai.mkdir(parents=True, exist_ok=True)
+        return temp_pai / "shadow_discrepancies.jsonl"
+
+
 class CoreBridgeUnavailableError(RuntimeError):
     """Raised when PAI_USE_RUST_CORE is requested but pai-core binary is unavailable or cannot execute."""
     pass
@@ -72,22 +92,50 @@ def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
         **extra,
     }
     _SHADOW_DISCREPANCIES.append(rec)
+    try:
+        log_file = _get_discrepancy_log_path()
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.warning("Failed to persist shadow discrepancy to file: %s", e)
     logger.warning("[SHADOW DISCREPANCY] op=%s: %s", op, detail)
+
+
+def get_shadow_discrepancies() -> List[Dict[str, Any]]:
+    """Returns all recorded shadow discrepancies from the persistent log file."""
+    results: List[Dict[str, Any]] = []
+    try:
+        log_file = _get_discrepancy_log_path()
+        if log_file.exists():
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            results.append(json.loads(line))
+                        except Exception:
+                            pass
+            return results
+    except Exception as e:
+        logger.warning("Failed to read shadow discrepancies log: %s", e)
+    return list(_SHADOW_DISCREPANCIES)
 
 
 def get_shadow_discrepancy_count() -> int:
     """Returns the total number of recorded shadow discrepancies."""
-    return len(_SHADOW_DISCREPANCIES)
-
-
-def get_shadow_discrepancies() -> List[Dict[str, Any]]:
-    """Returns a copy of all recorded shadow discrepancies."""
-    return list(_SHADOW_DISCREPANCIES)
+    return len(get_shadow_discrepancies())
 
 
 def reset_shadow_discrepancies() -> None:
-    """Resets the recorded shadow discrepancies."""
+    """Resets both in-memory and persistent shadow discrepancies log."""
     _SHADOW_DISCREPANCIES.clear()
+    try:
+        log_file = _get_discrepancy_log_path()
+        if log_file.exists():
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.truncate(0)
+    except Exception as e:
+        logger.warning("Failed to truncate shadow discrepancies log: %s", e)
 
 
 def compute_repo_vectors_hash() -> str:

@@ -179,6 +179,27 @@ def _get_icacls_bin() -> str:
     return candidate if os.path.exists(candidate) else "icacls"
 
 
+def _get_pai_dir() -> str:
+    override = os.environ.get("PAI_DIR")
+    if override:
+        os.makedirs(override, exist_ok=True)
+        return override
+    pai_dir = os.path.expanduser("~/.pai")
+    try:
+        os.makedirs(pai_dir, exist_ok=True)
+        probe = os.path.join(pai_dir, ".probe_test")
+        with open(probe, "w") as f:
+            f.write("ok")
+        if os.path.exists(probe):
+            os.unlink(probe)
+        return pai_dir
+    except OSError:
+        import tempfile
+        fallback = os.path.join(tempfile.gettempdir(), "pai")
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+
 def ensure_sandbox_runtime() -> str:
     """
     Ensures that an isolated read-only Python runtime exists in ~/.pai/sandbox_runtime.
@@ -187,7 +208,7 @@ def ensure_sandbox_runtime() -> str:
     Does NOT modify system-wide ACLs (C:\\Windows, C:\\Program Files remain untouched).
     Returns the absolute path to the sandbox python.exe executable.
     """
-    pai_dir = os.path.expanduser("~/.pai")
+    pai_dir = _get_pai_dir()
     runtime_dir = os.path.join(pai_dir, "sandbox_runtime")
     os.makedirs(runtime_dir, exist_ok=True)
 
@@ -650,7 +671,7 @@ def probe_win32_boundary() -> Tuple[bool, str]:
     """
     import socket
 
-    pai_dir = os.path.expanduser("~/.pai")
+    pai_dir = _get_pai_dir()
     os.makedirs(pai_dir, exist_ok=True)
     canary_file = os.path.join(pai_dir, f"probe_canary_{uuid.uuid4().hex[:8]}.tmp")
     secret_token = f"SECRET_CANARY_{uuid.uuid4().hex}"

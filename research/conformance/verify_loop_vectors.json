@@ -244,6 +244,52 @@
    ],
    "id": "ex_36_double_trailing_comma",
    "prompt": "Write `solve(x)`.\nExample:\n  solve(1) -> 1,,\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_37_rejected_int64_overflow_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) < 9223372036854775808\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_38_rejected_int64_underflow_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) > -9223372036854775809\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_39_rejected_30_digit_int_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) < 123456789012345678901234567890\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_40_rejected_inf_float_pos_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) < 1e999\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [],
+   "id": "ex_41_rejected_inf_float_neg_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) > -1e999\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert isinstance((solve(1)), (int, float)) and not isinstance((solve(1)), bool) and isinstance((9223372036854775807), (int, float)) and not isinstance((9223372036854775807), bool) and (solve(1) <= 9223372036854775807)"
+   ],
+   "id": "ex_42_accepted_max_int64_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) <= 9223372036854775807\n"
+  },
+  {
+   "entry_point": "solve",
+   "expected_statements": [
+    "assert isinstance((solve(1)), (int, float)) and not isinstance((solve(1)), bool) and isinstance((-9223372036854775808), (int, float)) and not isinstance((-9223372036854775808), bool) and (solve(1) >= -9223372036854775808)"
+   ],
+   "id": "ex_43_accepted_min_int64_ordering",
+   "prompt": "Write `solve(x)`.\nExample:\n  solve(1) >= -9223372036854775808\n"
   }
  ],
  "codec_invalid_envelope_cases": [

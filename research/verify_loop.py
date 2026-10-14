@@ -430,17 +430,26 @@ def _is_safe_literal(
 
 def _is_safe_numeric_literal(node: ast.AST, allowed_vars: Set[str]) -> bool:
     """
-    Returns True only if node is a safe numeric literal (int or float, but NOT bool,
-    and NOT containers, strings, bytes, or None). For variables in allowed_vars,
+    Returns True only if node is a safe numeric literal (int in [MIN_INT64, MAX_INT64] or finite float,
+    but NOT bool, and NOT containers, strings, bytes, or None). For variables in allowed_vars,
     returns True only if the identifier is valid.
     """
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool):
             return False
-        return isinstance(node.value, (int, float))
+        if isinstance(node.value, int):
+            return MIN_INT64 <= node.value <= MAX_INT64
+        if isinstance(node.value, float):
+            return math.isfinite(node.value)
+        return False
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)) and not isinstance(node.operand.value, bool):
-            return True
+        if isinstance(node.operand, ast.Constant) and not isinstance(node.operand.value, bool):
+            op_val = node.operand.value
+            if isinstance(op_val, int):
+                signed_val = -op_val if isinstance(node.op, ast.USub) else op_val
+                return MIN_INT64 <= signed_val <= MAX_INT64
+            if isinstance(op_val, float):
+                return math.isfinite(op_val)
     if allowed_vars and isinstance(node, ast.Name) and node.id in allowed_vars and _is_valid_example_identifier(node.id):
         return True
     return False

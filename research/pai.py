@@ -438,17 +438,28 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # Core bridge shadow discrepancy diagnostic
     try:
-        from pai_core_bridge import get_shadow_discrepancy_count, get_shadow_discrepancies
-        shadow_disc_count = get_shadow_discrepancy_count()
-        checks_table.append({
-            "check": "core_bridge_shadow",
-            "passed": shadow_disc_count == 0,
-            "detail": (
-                "0 discrepancies (Rust core bridge matches Python reference)"
-                if shadow_disc_count == 0
-                else f"{shadow_disc_count} shadow discrepancies recorded"
-            ),
-        })
+        from pai_core_bridge import (
+            PAI_USE_RUST_CORE,
+            get_shadow_discrepancy_count,
+            get_shadow_discrepancies,
+        )
+        if not PAI_USE_RUST_CORE:
+            checks_table.append({
+                "check": "core_bridge_shadow",
+                "passed": True,
+                "detail": "not active (flag off)",
+            })
+        else:
+            shadow_disc_count = get_shadow_discrepancy_count()
+            checks_table.append({
+                "check": "core_bridge_shadow",
+                "passed": shadow_disc_count == 0,
+                "detail": (
+                    "0 discrepancies (Rust core bridge matches Python reference)"
+                    if shadow_disc_count == 0
+                    else f"{shadow_disc_count} shadow discrepancies recorded"
+                ),
+            })
     except Exception as e:
         checks_table.append({
             "check": "core_bridge_shadow",

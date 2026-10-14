@@ -38,7 +38,7 @@ import pai_core_bridge
 MANIFEST = "manifest.json"
 SIGNATURE = "manifest.sig"
 MAX_MANIFEST_BYTES = 1024 * 1024
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_VERSION_RE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -55,10 +55,13 @@ class VerifiedRelease:
 
 
 def parse_version(v: str) -> Tuple[int, int, int]:
-    if not isinstance(v, str) or not _VERSION_RE.match(v):
+    if not isinstance(v, str) or not _VERSION_RE.fullmatch(v):
         raise UpdateRejected(f"bad version '{v}'")
-    a, b, c = (int(x) for x in v.split("."))
-    return a, b, c
+    parts = v.split(".")
+    nums = [int(p) for p in parts]
+    if any(n > 4294967295 for n in nums):
+        raise UpdateRejected(f"bad version '{v}' (exceeds u32)")
+    return (nums[0], nums[1], nums[2])
 
 
 def sha256_file(path: str) -> str:
@@ -120,10 +123,16 @@ class Updater:
             trust = json.load(f)
         self.keys: Dict[str, bytes] = {}
         for k in trust["keys"]:
+            hex_key = k.get("public_hex", "")
+            if not isinstance(hex_key, str) or len(hex_key) != 64 or not all(c in "0123456789abcdefABCDEF" for c in hex_key):
+                raise ValueError(f"bad public key hex {k.get('id')}")
+            try:
+                pub = bytes.fromhex(hex_key)
+            except ValueError as e:
+                raise ValueError(f"bad public key {k.get('id')}: {e}") from e
+            if len(pub) != 32:
+                raise ValueError(f"bad public key length {k['id']}")
             if not k.get("revoked", False):
-                pub = bytes.fromhex(k["public_hex"])
-                if len(pub) != 32:
-                    raise ValueError(f"bad public key {k['id']}")
                 self.keys[k["id"]] = pub
         self.constitution_sha256: str = trust["constitution_sha256"]
         os.makedirs(os.path.join(install_root, "releases"), exist_ok=True)
@@ -153,11 +162,23 @@ class Updater:
         with open(mpath, "rb") as f:
             manifest_bytes = f.read()
         with open(spath, "rb") as f:
-            raw_sig = f.read(512)
+            raw_sig = f.read()
         sig = raw_sig  # 64 raw bytes (do NOT strip: a binary signature may end in whitespace-valued bytes)
         if len(raw_sig) != 64:
             try:
-                sig = bytes.fromhex(raw_sig.decode("ascii").strip())  # also accept hex text
+                sig_text = raw_sig.decode("ascii")
+                # Strip at most an optional trailing newline (\r\n or \n)
+                if sig_text.endswith("\r\n"):
+                    trimmed = sig_text[:-2]
+                elif sig_text.endswith("\n"):
+                    trimmed = sig_text[:-1]
+                else:
+                    trimmed = sig_text
+                # Must be exactly 128 hex characters with no spaces or whitespace
+                if len(trimmed) == 128 and all(c in "0123456789abcdefABCDEF" for c in trimmed):
+                    sig = bytes.fromhex(trimmed)
+                else:
+                    sig = b""
             except (ValueError, UnicodeDecodeError):
                 sig = b""
 
@@ -171,7 +192,8 @@ class Updater:
             version, product, const = m["version"], m["product"], m["constitution_sha256"]
         except (ValueError, KeyError, TypeError):
             raise UpdateRejected("malformed manifest")
-        if m.get("format") != 1 or product != self.product:
+        fmt = m.get("format")
+        if type(fmt) is not int or fmt != 1 or product != self.product:
             raise UpdateRejected("wrong manifest format or product")
         if const != self.constitution_sha256:
             raise UpdateRejected("Constitution hash differs from the pinned trust-root value")
@@ -193,17 +215,31 @@ class Updater:
                 raise UpdateRejected(f"listed file missing: {rel}")
             if not isinstance(meta, dict) or not _SHA_RE.match(str(meta.get("sha256", ""))):
                 raise UpdateRejected(f"bad digest entry for {rel}")
-            if os.path.getsize(full) != meta.get("size"):
+            sz = meta.get("size")
+            if type(sz) is not int or sz < 0:
+                raise UpdateRejected(f"bad size in manifest for {rel}")
+            if os.path.getsize(full) != sz:
                 raise UpdateRejected(f"size mismatch: {rel}")
             if sha256_file(full) != meta["sha256"]:
                 raise UpdateRejected(f"SHA-256 mismatch (tampered?): {rel}")
 
         listed = set(files) | {MANIFEST, SIGNATURE}
-        for dirpath, _, names in os.walk(root):
-            for n in names:
-                rel = os.path.relpath(os.path.join(dirpath, n), root).replace(os.sep, "/")
-                if rel not in listed:
-                    raise UpdateRejected(f"unlisted file in release: {rel}")
+
+        def _verify_dir_entries(curr_dir: str) -> None:
+            with os.scandir(curr_dir) as it:
+                for entry in it:
+                    if entry.is_symlink():
+                        raise UpdateRejected(f"symlink in release: {entry.name}")
+                    if entry.is_dir(follow_symlinks=False):
+                        _verify_dir_entries(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        rel = os.path.relpath(entry.path, root).replace(os.sep, "/")
+                        if rel not in listed:
+                            raise UpdateRejected(f"unlisted file in release: {rel}")
+                    else:
+                        raise UpdateRejected(f"non-regular file in release: {entry.name}")
+
+        _verify_dir_entries(root)
         return VerifiedRelease(version, key_id, sorted(files), m)
 
     def verify_release(self, release_dir: str, check_rollback: bool = True) -> VerifiedRelease:

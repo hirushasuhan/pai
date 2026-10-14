@@ -180,50 +180,84 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
     state[7] = state[7].wrapping_add(h);
 }
 
+/// Streaming FIPS 180-4 SHA-256 hasher for chunked hashing.
+#[derive(Clone, Debug)]
+pub struct Sha256Hasher {
+    state: [u32; 8],
+    count: u64,
+    buffer: [u8; 64],
+}
+
+impl Sha256Hasher {
+    pub fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            ],
+            count: 0,
+            buffer: [0u8; 64],
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        let mut idx = (self.count as usize) & 0x3f;
+        self.count = self.count.wrapping_add(data.len() as u64);
+        let mut pos = 0;
+        if idx > 0 && idx + data.len() >= 64 {
+            let needed = 64 - idx;
+            self.buffer[idx..64].copy_from_slice(&data[..needed]);
+            sha256_compress(&mut self.state, &self.buffer);
+            pos += needed;
+            idx = 0;
+        }
+        while pos + 64 <= data.len() {
+            let chunk: &[u8; 64] = data[pos..pos + 64].try_into().unwrap();
+            sha256_compress(&mut self.state, chunk);
+            pos += 64;
+        }
+        if pos < data.len() {
+            let rem = &data[pos..];
+            self.buffer[idx..idx + rem.len()].copy_from_slice(rem);
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        let total_bits = self.count.wrapping_mul(8);
+        let idx = (self.count as usize) & 0x3f;
+        self.buffer[idx] = 0x80;
+        if idx < 56 {
+            for b in &mut self.buffer[idx + 1..56] {
+                *b = 0;
+            }
+        } else {
+            for b in &mut self.buffer[idx + 1..64] {
+                *b = 0;
+            }
+            sha256_compress(&mut self.state, &self.buffer);
+            self.buffer = [0u8; 64];
+        }
+        self.buffer[56..64].copy_from_slice(&total_bits.to_be_bytes());
+        sha256_compress(&mut self.state, &self.buffer);
+        let mut out = [0u8; 32];
+        for (i, val) in self.state.iter().enumerate() {
+            out[i * 4..(i + 1) * 4].copy_from_slice(&val.to_be_bytes());
+        }
+        out
+    }
+}
+
+impl Default for Sha256Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Computes the FIPS 180-4 SHA-256 digest of `data`.
 pub fn sha256(data: &[u8]) -> [u8; 32] {
-    let mut state: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-    ];
-
-    let mut offset = 0;
-    while offset + 64 <= data.len() {
-        if let Some(chunk) = data.get(offset..offset + 64) {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(chunk);
-            sha256_compress(&mut state, &block);
-        }
-        offset += 64;
-    }
-
-    let rem = data.get(offset..).unwrap_or(&[]);
-    let mut final_block = [0u8; 64];
-    if let Some(target) = final_block.get_mut(..rem.len()) {
-        target.copy_from_slice(rem);
-    }
-    if let Some(pad_byte) = final_block.get_mut(rem.len()) {
-        *pad_byte = 0x80;
-    }
-
-    if rem.len() >= 56 {
-        sha256_compress(&mut state, &final_block);
-        final_block = [0u8; 64];
-    }
-
-    let bit_len = (data.len() as u64).wrapping_mul(8);
-    if let Some(len_slot) = final_block.get_mut(56..64) {
-        len_slot.copy_from_slice(&bit_len.to_be_bytes());
-    }
-    sha256_compress(&mut state, &final_block);
-
-    let mut out = [0u8; 32];
-    for (i, word) in state.iter().enumerate() {
-        if let Some(slot) = out.get_mut(i * 4..(i + 1) * 4) {
-            slot.copy_from_slice(&word.to_be_bytes());
-        }
-    }
-    out
+    let mut h = Sha256Hasher::new();
+    h.update(data);
+    h.finalize()
 }
 
 /// Computes the RFC 2104 HMAC-SHA256 authentication tag over `message` using `key`.

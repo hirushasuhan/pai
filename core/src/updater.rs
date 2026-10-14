@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ed25519;
-use crate::verify_loop::sha256;
 
 pub const MANIFEST: &str = "manifest.json";
 pub const SIGNATURE: &str = "manifest.sig";
@@ -94,13 +93,12 @@ pub fn parse_version(v: &str) -> Result<(u32, u32, u32), UpdaterError> {
 }
 
 fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>, UpdaterError> {
-    let clean = hex_str.trim();
-    if !clean.len().is_multiple_of(2) {
+    if !hex_str.len().is_multiple_of(2) {
         return Err(UpdaterError::new("invalid hex length"));
     }
-    let mut out = Vec::with_capacity(clean.len() / 2);
-    for i in 0..clean.len() / 2 {
-        let byte = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16)
+    let mut out = Vec::with_capacity(hex_str.len() / 2);
+    for i in 0..hex_str.len() / 2 {
+        let byte = u8::from_str_radix(&hex_str[i * 2..i * 2 + 2], 16)
             .map_err(|_| UpdaterError::new("invalid hex digit"))?;
         out.push(byte);
     }
@@ -112,8 +110,19 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 pub fn sha256_file(path: &Path) -> Result<String, UpdaterError> {
-    let data = fs::read(path).map_err(|e| UpdaterError::new(format!("failed to read file: {}", e)))?;
-    let digest = sha256(&data);
+    use std::io::Read;
+    let file = fs::File::open(path).map_err(|e| UpdaterError::new(format!("failed to open file {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::with_capacity(1024 * 1024, file);
+    let mut hasher = crate::verify_loop::Sha256Hasher::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| UpdaterError::new(format!("failed to read file {}: {}", path.display(), e)))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
     Ok(bytes_to_hex(&digest))
 }
 
@@ -149,31 +158,37 @@ pub fn verify_release(
     } else {
         match std::str::from_utf8(&raw_sig) {
             Ok(s) => {
-                let trimmed = s.trim();
-                let decoded = hex_to_bytes(trimmed).unwrap_or_default();
-                if decoded.len() == 64 {
-                    decoded.try_into().unwrap()
+                let trimmed = s.strip_suffix("\r\n").or_else(|| s.strip_suffix('\n')).unwrap_or(s);
+                if trimmed.len() == 128 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+                    let decoded = hex_to_bytes(trimmed)?;
+                    if decoded.len() == 64 {
+                        decoded.try_into().unwrap()
+                    } else {
+                        return Err(UpdaterError::new("invalid signature length"));
+                    }
                 } else {
-                    [0u8; 64]
+                    return Err(UpdaterError::new("invalid signature format (must be 64 raw bytes or 128 hex digits)"));
                 }
             }
-            Err(_) => [0u8; 64],
+            Err(_) => return Err(UpdaterError::new("invalid signature encoding")),
         }
     };
 
     let mut verified_key_id: Option<String> = None;
     for key in &trust.keys {
+        if key.public_hex.len() != 64 || !key.public_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(UpdaterError::new(format!("invalid trust key hex for key {}", key.id)));
+        }
+        let pub_bytes_vec = hex_to_bytes(&key.public_hex)
+            .map_err(|_| UpdaterError::new(format!("invalid trust key hex for key {}", key.id)))?;
+        if pub_bytes_vec.len() != 32 {
+            return Err(UpdaterError::new(format!("invalid trust key length for key {}", key.id)));
+        }
         if key.revoked {
             continue;
         }
-        let pub_bytes = match hex_to_bytes(&key.public_hex) {
-            Ok(b) if b.len() == 32 => {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&b);
-                arr
-            }
-            _ => continue,
-        };
+        let mut pub_bytes = [0u8; 32];
+        pub_bytes.copy_from_slice(&pub_bytes_vec);
 
         if ed25519::verify(&pub_bytes, &manifest_bytes, &sig_bytes) {
             verified_key_id = Some(key.id.clone());
@@ -189,10 +204,19 @@ pub fn verify_release(
     let manifest_val: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|_| UpdaterError::new("malformed manifest"))?;
 
+    // Validate format is strictly integer 1 (not boolean, not float)
+    let fmt_val = manifest_val.get("format").ok_or_else(|| UpdaterError::new("malformed manifest"))?;
+    if !fmt_val.is_i64() && !fmt_val.is_u64() {
+        return Err(UpdaterError::new("wrong manifest format or product"));
+    }
+    if fmt_val.as_i64() != Some(1) {
+        return Err(UpdaterError::new("wrong manifest format or product"));
+    }
+
     let manifest: Manifest = serde_json::from_value(manifest_val.clone())
         .map_err(|_| UpdaterError::new("malformed manifest"))?;
 
-    if manifest.format != 1 || manifest.product != expected_product {
+    if manifest.product != expected_product {
         return Err(UpdaterError::new("wrong manifest format or product"));
     }
 
@@ -267,7 +291,7 @@ pub fn verify_release(
         }
     }
 
-    // Check for unlisted files in release directory
+    // Check for unlisted files in release directory via non-following walk
     let mut listed_set = std::collections::BTreeSet::new();
     for k in manifest.files.keys() {
         listed_set.insert(k.clone());
@@ -275,14 +299,7 @@ pub fn verify_release(
     listed_set.insert(MANIFEST.to_string());
     listed_set.insert(SIGNATURE.to_string());
 
-    let mut files_on_disk = Vec::new();
-    collect_files_recursive(&root, &root, &mut files_on_disk)?;
-
-    for disk_file in &files_on_disk {
-        if !listed_set.contains(disk_file) {
-            return Err(UpdaterError::new(format!("unlisted file in release: {}", disk_file)));
-        }
-    }
+    verify_directory_entries(&root, &root, &listed_set)?;
 
     let mut sorted_files: Vec<String> = manifest.files.keys().cloned().collect();
     sorted_files.sort();
@@ -295,14 +312,22 @@ pub fn verify_release(
     })
 }
 
-fn collect_files_recursive(base: &Path, current: &Path, list: &mut Vec<String>) -> Result<(), UpdaterError> {
+fn verify_directory_entries(
+    base: &Path,
+    current: &Path,
+    listed: &std::collections::BTreeSet<String>,
+) -> Result<(), UpdaterError> {
     let entries = fs::read_dir(current).map_err(|e| UpdaterError::new(e.to_string()))?;
     for entry in entries {
         let entry = entry.map_err(|e| UpdaterError::new(e.to_string()))?;
+        let file_type = entry.file_type().map_err(|e| UpdaterError::new(e.to_string()))?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_files_recursive(base, &path, list)?;
-        } else if path.is_file() {
+        if file_type.is_symlink() {
+            return Err(UpdaterError::new(format!("symlink in release: {:?}", path)));
+        }
+        if file_type.is_dir() {
+            verify_directory_entries(base, &path, listed)?;
+        } else if file_type.is_file() {
             let rel = path.strip_prefix(base).map_err(|e| UpdaterError::new(e.to_string()))?;
             let mut parts = Vec::new();
             for c in rel.components() {
@@ -310,7 +335,12 @@ fn collect_files_recursive(base: &Path, current: &Path, list: &mut Vec<String>) 
                     parts.push(os_str.to_string_lossy().to_string());
                 }
             }
-            list.push(parts.join("/"));
+            let rel_str = parts.join("/");
+            if !listed.contains(&rel_str) {
+                return Err(UpdaterError::new(format!("unlisted file in release: {}", rel_str)));
+            }
+        } else {
+            return Err(UpdaterError::new(format!("special or non-regular file in release: {:?}", path)));
         }
     }
     Ok(())

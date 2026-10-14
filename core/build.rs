@@ -1,4 +1,5 @@
-#![allow(clippy::all)]
+// Standalone build-time SHA-256 for binding compiled binary to repository conformance vector files
+// without adding external build-dependencies.
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -77,8 +78,8 @@ impl Sha256 {
 
     fn transform(state: &mut [u32; 8], block: &[u8; 64]) {
         let mut w = [0u32; 64];
-        for (i, chunk) in block.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes(chunk.try_into().unwrap());
+        for (i, chunk) in block.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*chunk);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

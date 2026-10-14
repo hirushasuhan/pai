@@ -2,7 +2,7 @@
 //!
 //! Provides strict, safe, zero-unsafe cryptographic verification:
 //! - Pure-Rust FIPS 180-4 SHA-512
-//! - Constant-time / side-channel safe operations for public data verification
+//! - Verification only for public inputs (branches on public signature and key data; not intended for secret signing operations)
 //! - Canonical Curve25519 field arithmetic modulo p = 2^255 - 19
 //! - Point decompression with strict y < p canonical checks
 //! - Strict scalar verification rejecting malleated s >= L signatures

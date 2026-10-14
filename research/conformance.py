@@ -999,6 +999,41 @@ def verify_loop_vectors() -> Dict[str, Any]:
             "solve",
             "Write `solve(x)`.\nExample:\n  solve(1) -> 1,,\n",
         ),
+        (
+            "ex_37_rejected_int64_overflow_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) < 9223372036854775808\n",
+        ),
+        (
+            "ex_38_rejected_int64_underflow_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) > -9223372036854775809\n",
+        ),
+        (
+            "ex_39_rejected_30_digit_int_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) < 123456789012345678901234567890\n",
+        ),
+        (
+            "ex_40_rejected_inf_float_pos_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) < 1e999\n",
+        ),
+        (
+            "ex_41_rejected_inf_float_neg_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) > -1e999\n",
+        ),
+        (
+            "ex_42_accepted_max_int64_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) <= 9223372036854775807\n",
+        ),
+        (
+            "ex_43_accepted_min_int64_ordering",
+            "solve",
+            "Write `solve(x)`.\nExample:\n  solve(1) >= -9223372036854775808\n",
+        ),
     ]
     canonical_example_extraction_cases = [
         {
