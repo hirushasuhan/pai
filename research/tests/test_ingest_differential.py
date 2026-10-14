@@ -436,8 +436,8 @@ class TestIngestDifferential(unittest.TestCase):
             else:
                 os.environ["PAI_DIR"] = old_pai_dir
 
-    def test_differential_dangling_symlinks_and_tight_caps(self):
-        """Verifies tight rejection caps and dangling symlink behavior match 100% between Python and Rust."""
+    def test_differential_tight_caps(self):
+        """Verifies tight rejection caps match 100% between Python and Rust."""
         caps_dir = os.path.join(self.test_dir, "caps_tree")
         os.makedirs(caps_dir, exist_ok=True)
 
@@ -489,38 +489,60 @@ class TestIngestDifferential(unittest.TestCase):
         self.assertEqual(len(py_rep.rejections), len(rust_rep.rejections), "Rejection list lengths must match under caps")
         self.assertEqual([r.to_dict() for r in py_rep.rejections], [r.to_dict() for r in rust_rep.rejections])
 
-        # Test dangling symlinks if supported
+    def test_differential_dangling_symlinks(self):
+        """Verifies dangling symlinks (internal STAT_ERROR and escaping SYMLINK_ESCAPE) match 100%."""
         symlink_dir = os.path.join(self.test_dir, "symlink_test")
         os.makedirs(symlink_dir, exist_ok=True)
         int_dangling = os.path.join(symlink_dir, "int_dangling.txt")
         esc_dangling = os.path.join(symlink_dir, "esc_dangling.txt")
 
-        symlinks_work = False
         try:
             os.symlink("non_existent_target.txt", int_dangling)
             os.symlink("../outside_non_existent.txt", esc_dangling)
-            symlinks_work = True
         except (OSError, NotImplementedError):
-            pass
+            self.skipTest("Symlinks require privilege on Windows")
 
-        if symlinks_work:
-            py_int_item, py_int_rej = ingest.ingest_file(int_dangling, root_path=symlink_dir)
-            rust_int_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=int_dangling, root_path=symlink_dir)
-            rust_int_rej = IngestionRejection(**rust_int_res["rejection"]) if rust_int_res.get("rejection") else None
+        # Ingest individual files
+        py_int_item, py_int_rej = ingest.ingest_file(int_dangling, root_path=symlink_dir)
+        rust_int_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=int_dangling, root_path=symlink_dir)
+        rust_int_rej = IngestionRejection(**rust_int_res["rejection"]) if rust_int_res.get("rejection") else None
 
-            self.assertIsNotNone(py_int_rej)
-            self.assertIsNotNone(rust_int_rej)
-            self.assertEqual(py_int_rej.reason_code, rust_int_rej.reason_code)
-            self.assertEqual(py_int_rej.reason_code, "NOT_FOUND")
+        self.assertIsNotNone(py_int_rej)
+        self.assertIsNotNone(rust_int_rej)
+        self.assertEqual(py_int_rej.reason_code, "STAT_ERROR")
+        self.assertEqual(rust_int_rej.reason_code, "STAT_ERROR")
+        self.assertEqual(py_int_rej.message, rust_int_rej.message)
+        self.assertEqual(py_int_rej.path, rust_int_rej.path)
 
-            py_esc_item, py_esc_rej = ingest.ingest_file(esc_dangling, root_path=symlink_dir)
-            rust_esc_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=esc_dangling, root_path=symlink_dir)
-            rust_esc_rej = IngestionRejection(**rust_esc_res["rejection"]) if rust_esc_res.get("rejection") else None
+        py_esc_item, py_esc_rej = ingest.ingest_file(esc_dangling, root_path=symlink_dir)
+        rust_esc_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=esc_dangling, root_path=symlink_dir)
+        rust_esc_rej = IngestionRejection(**rust_esc_res["rejection"]) if rust_esc_res.get("rejection") else None
 
-            self.assertIsNotNone(py_esc_rej)
-            self.assertIsNotNone(rust_esc_rej)
-            self.assertEqual(py_esc_rej.reason_code, rust_esc_rej.reason_code)
-            self.assertEqual(py_esc_rej.reason_code, "SYMLINK_ESCAPE")
+        self.assertIsNotNone(py_esc_rej)
+        self.assertIsNotNone(rust_esc_rej)
+        self.assertEqual(py_esc_rej.reason_code, "SYMLINK_ESCAPE")
+        self.assertEqual(rust_esc_rej.reason_code, "SYMLINK_ESCAPE")
+        self.assertEqual(py_esc_rej.message, rust_esc_rej.message)
+        self.assertEqual(py_esc_rej.path, rust_esc_rej.path)
+
+        # Ingest folder containing dangling symlinks
+        py_rep = ingest.ingest_folder(symlink_dir)
+        bridge_res = pai_core_bridge.call_core_bridge("ingest_folder", folder_path=symlink_dir)
+
+        rust_rejections = [IngestionRejection(**rej) for rej in bridge_res.get("rejections", [])]
+        rust_rep = IngestionReport(
+            root=bridge_res.get("root", ""),
+            items=[IngestedItem(**it) for it in bridge_res.get("items", [])],
+            rejections=rust_rejections,
+            total_bytes=bridge_res.get("total_bytes", 0),
+            total_files=bridge_res.get("total_files", 0),
+            limits=bridge_res.get("limits", {}),
+            rejection_counts=bridge_res.get("rejection_counts", {}),
+            rejections_capped=bridge_res.get("rejections_capped", False),
+        )
+
+        self.assertEqual(py_rep.rejection_counts, rust_rep.rejection_counts)
+        self.assertEqual([r.to_dict() for r in py_rep.rejections], [r.to_dict() for r in rust_rep.rejections])
 
 
 if __name__ == "__main__":

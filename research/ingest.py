@@ -781,6 +781,20 @@ def format_untrusted_context(
     ).text
 
 
+def _is_invalid_filename(name: str) -> bool:
+    if "\ufffd" in name:
+        return True
+    try:
+        name.encode("utf-8")
+        return False
+    except UnicodeEncodeError:
+        return True
+
+
+def _lossy_utf8(s: str) -> str:
+    return s.encode("utf-8", errors="replace").decode("utf-8")
+
+
 # -----------------------------------------------------------------------------
 # Core Ingestion Logic
 # -----------------------------------------------------------------------------
@@ -808,11 +822,9 @@ def ingest_file(
         rel_path = file_path
 
     # 0. Filename validity check (reject lone surrogates or unencodable UTF-8)
-    try:
-        os.path.basename(file_path).encode("utf-8")
-    except UnicodeEncodeError:
+    if _is_invalid_filename(os.path.basename(file_path)) or _is_invalid_filename(file_path):
         return None, IngestionRejection(
-            path=rel_path,
+            path=_lossy_utf8(rel_path),
             reason_code="INVALID_FILENAME",
             message="Filename contains invalid Unicode or non-decodable bytes",
         )
@@ -1020,11 +1032,23 @@ def ingest_folder(
         dirnames.sort()
         filenames.sort()
 
-        # Prune Junk Directories & Symlinked Directories
+        # Prune Junk Directories, Symlinked Directories, & Invalid Directory Names
         pruned_dirs = []
         for d in list(dirnames):
             dpath = os.path.join(current_dir, d)
             rel_dpath = os.path.relpath(dpath, canonical_root)
+
+            # Check if directory name contains invalid Unicode or replacement char
+            if _is_invalid_filename(d):
+                pruned_dirs.append(d)
+                add_rejection(
+                    IngestionRejection(
+                        path=_lossy_utf8(rel_dpath),
+                        reason_code="INVALID_FILENAME",
+                        message="Filename contains invalid Unicode or non-decodable bytes",
+                    )
+                )
+                continue
 
             # Check if directory entry is a symlink
             if os.path.islink(dpath):
@@ -1072,12 +1096,10 @@ def ingest_folder(
             fpath = os.path.join(current_dir, fname)
             rel_fpath = os.path.relpath(fpath, canonical_root)
 
-            try:
-                fname.encode("utf-8")
-            except UnicodeEncodeError:
+            if _is_invalid_filename(fname):
                 add_rejection(
                     IngestionRejection(
-                        path=rel_fpath,
+                        path=_lossy_utf8(rel_fpath),
                         reason_code="INVALID_FILENAME",
                         message="Filename contains invalid Unicode or non-decodable bytes",
                     )

@@ -2277,7 +2277,7 @@ All 7 defects identified during code audit and QA review have been resolved and 
    - Preserved deterministic traversal order by sorting subdirectories before pruning on both Python and Rust paths, and sorting `rejection_counts` alphabetically in `REJECTIONS_CAPPED` messages.
    - Updated bridge and wrapper default `max_line_length` to 4096; added parameter validation capping `max_depth` to 64; guarded `max_file_size + 1` with saturating addition.
    - Rejection of invalid Unicode and unpaired surrogate filenames with `INVALID_FILENAME` on both sides.
-   - Upper-case `constitution_sha256` validated case-insensitively / normalized in Python `Updater.__init__` matching Rust lower-case hex parsing.
+   - Upper-case `constitution_sha256` rejected via strict lower-case 64-hex validation in Python `Updater.__init__` matching Rust lower-case hex parsing.
 5. **Eager Trust Configuration Validation**: `Updater.__init__` validates non-empty key lists and valid 64-hex SHA-256 eagerly, passing raw trust configuration JSON into `pai_core_bridge.verify_release`.
 6. **Sandbox Directory Override Verification**: `_get_pai_dir` in `sandbox_win32.py` verifies writability of `PAI_DIR` via `.probe_test` and fails closed on `OSError`. Extracted cross-platform test class `TestPaiDirResolution`.
 7. **Line-Ending Normalization & Hash Parity**: Added `.gitattributes` (`* text=auto eol=lf`), normalized CRLF before eval set hash verification and build-time vector hashing including `ed25519_vectors.json`.

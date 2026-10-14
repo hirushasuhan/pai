@@ -1383,6 +1383,8 @@ pub fn resolve_path_like_realpath(path: &Path) -> PathBuf {
         }
     }
 
+    current = lexical_normalize(&normalize_abs_path(&current));
+
     let mut ancestors_stack = Vec::new();
     let mut curr = current.as_path();
     while let Some(parent) = curr.parent() {
@@ -1399,7 +1401,7 @@ pub fn resolve_path_like_realpath(path: &Path) -> PathBuf {
         curr = parent;
     }
 
-    lexical_normalize(&normalize_abs_path(&current))
+    current
 }
 
 /// Safely ingests a single file, verifying path boundaries, symlinks, device types,
@@ -1700,54 +1702,14 @@ impl FolderWalkState {
 
         for entry in read_entries.flatten() {
             let path = entry.path();
-            let raw_os_name = entry.file_name();
-            let fname = match raw_os_name.to_str() {
-                Some(s) => s.to_string(),
-                None => {
-                    let rel_fpath = compute_rel_path(&path, &self.canonical_root, &raw_os_name.to_string_lossy());
-                    self.add_rejection(IngestionRejection {
-                        path: rel_fpath,
-                        reason_code: "INVALID_FILENAME".into(),
-                        message: "Filename contains invalid Unicode or non-decodable bytes".into(),
-                    });
-                    continue;
-                }
-            };
-            if fname.contains('\u{FFFD}') {
-                let rel_fpath = compute_rel_path(&path, &self.canonical_root, &fname);
-                self.add_rejection(IngestionRejection {
-                    path: rel_fpath,
-                    reason_code: "INVALID_FILENAME".into(),
-                    message: "Filename contains invalid Unicode or non-decodable bytes".into(),
-                });
-                continue;
-            }
+            let fname = entry.file_name().to_string_lossy().to_string();
             let file_type = match entry.file_type() {
                 Ok(ft) => ft,
                 Err(_) => continue,
             };
 
             if file_type.is_symlink() {
-                let resolved_dir = resolve_path_like_realpath(&path);
-                let is_target_dir = match std::fs::metadata(&resolved_dir) {
-                    Ok(m) => m.is_dir(),
-                    Err(_) => {
-                        if !is_same_or_descendant(&resolved_dir, &self.canonical_root) {
-                            let rel_dpath = compute_rel_path(&path, &self.canonical_root, &fname);
-                            let dest_name = file_basename(&resolved_dir.to_string_lossy());
-                            self.add_rejection(IngestionRejection {
-                                path: rel_dpath,
-                                reason_code: "SYMLINK_ESCAPE".into(),
-                                message: format!(
-                                    "Symlinked directory points outside root boundary: {}",
-                                    dest_name
-                                ),
-                            });
-                            continue;
-                        }
-                        false
-                    }
-                };
+                let is_target_dir = std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false);
                 if is_target_dir {
                     dir_entries.push((fname, path, true));
                 } else {
@@ -1767,6 +1729,14 @@ impl FolderWalkState {
         let mut valid_subdirs = Vec::new();
         for (d_name, d_path, is_symlink) in dir_entries {
             let rel_dpath = compute_rel_path(&d_path, &self.canonical_root, &d_name);
+            if d_name.contains('\u{FFFD}') {
+                self.add_rejection(IngestionRejection {
+                    path: rel_dpath,
+                    reason_code: "INVALID_FILENAME".into(),
+                    message: "Filename contains invalid Unicode or non-decodable bytes".into(),
+                });
+                continue;
+            }
             if is_symlink {
                 let target_dest = resolve_path_like_realpath(&d_path);
                 if !is_same_or_descendant(&target_dest, &self.canonical_root) {
@@ -1807,6 +1777,14 @@ impl FolderWalkState {
 
         for (fname, fpath) in file_entries {
             let rel_fpath = compute_rel_path(&fpath, &self.canonical_root, &fname);
+            if fname.contains('\u{FFFD}') {
+                self.add_rejection(IngestionRejection {
+                    path: rel_fpath,
+                    reason_code: "INVALID_FILENAME".into(),
+                    message: "Filename contains invalid Unicode or non-decodable bytes".into(),
+                });
+                continue;
+            }
 
             if self.items.len() >= self.max_file_count {
                 self.add_rejection(IngestionRejection {
