@@ -1462,7 +1462,7 @@ pub fn ingest_file(
             let abs_root = normalize_abs_path(Path::new(rp));
             let c_root =
                 strip_verbatim_prefix(std::fs::canonicalize(&abs_root).unwrap_or(abs_root));
-            let target = if Path::new(file_path).is_absolute() {
+            let target_raw = if Path::new(file_path).is_absolute() {
                 normalize_abs_path(Path::new(file_path))
             } else {
                 let cwd_candidate = normalize_abs_path(Path::new(file_path));
@@ -1474,14 +1474,42 @@ pub fn ingest_file(
                     normalize_abs_path(&c_root.join(file_path))
                 }
             };
+            let is_symlink = std::fs::symlink_metadata(&target_raw)
+                .map(|m| is_symlink_or_reparse(&m))
+                .unwrap_or(false);
+            let target = if is_symlink {
+                let parent = target_raw.parent().unwrap_or(&target_raw);
+                let c_parent = strip_verbatim_prefix(
+                    std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()),
+                );
+                c_parent.join(target_raw.file_name().unwrap_or(target_raw.as_os_str()))
+            } else {
+                strip_verbatim_prefix(std::fs::canonicalize(&target_raw).unwrap_or_else(|_| {
+                    let parent = target_raw.parent().unwrap_or(&target_raw);
+                    let c_parent = strip_verbatim_prefix(
+                        std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()),
+                    );
+                    c_parent.join(target_raw.file_name().unwrap_or(target_raw.as_os_str()))
+                }))
+            };
             (c_root, target)
         }
         None => {
-            let target = normalize_abs_path(Path::new(file_path));
-            let parent = target.parent().unwrap_or(&target);
+            let target_raw = normalize_abs_path(Path::new(file_path));
+            let is_symlink = std::fs::symlink_metadata(&target_raw)
+                .map(|m| is_symlink_or_reparse(&m))
+                .unwrap_or(false);
+            let parent_raw = target_raw.parent().unwrap_or(&target_raw);
             let c_root = strip_verbatim_prefix(
-                std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()),
+                std::fs::canonicalize(parent_raw).unwrap_or_else(|_| parent_raw.to_path_buf()),
             );
+            let target = if is_symlink {
+                c_root.join(target_raw.file_name().unwrap_or(target_raw.as_os_str()))
+            } else {
+                strip_verbatim_prefix(std::fs::canonicalize(&target_raw).unwrap_or_else(|_| {
+                    c_root.join(target_raw.file_name().unwrap_or(target_raw.as_os_str()))
+                }))
+            };
             (c_root, target)
         }
     };

@@ -257,6 +257,14 @@ exec(code, {{'__name__': '__main__', '__file__': target}})
                 else:
                     args.extend(["--ro-bind", lib_path, lib_path])
 
+        # Mask sensitive user directories with ephemeral tmpfs
+        args.extend([
+            "--tmpfs", "/home",
+            "--tmpfs", "/tmp",
+            "--tmpfs", "/root",
+            "--tmpfs", "/run",
+        ])
+
         # Extra caller-specified read-only binds (e.g. for external canary testing)
         for extra_path in self.extra_ro_binds:
             if os.path.exists(extra_path):
@@ -266,14 +274,6 @@ exec(code, {{'__name__': '__main__', '__file__': target}})
         py_prefix = os.path.abspath(sys.base_prefix)
         if os.path.exists(py_prefix) and not py_prefix.startswith(("/usr", "/lib", "/bin")):
             args.extend(["--ro-bind", py_prefix, py_prefix])
-
-        # Mask sensitive user directories with ephemeral tmpfs
-        args.extend([
-            "--tmpfs", "/home",
-            "--tmpfs", "/tmp",
-            "--tmpfs", "/root",
-            "--tmpfs", "/run",
-        ])
 
         # Bind scratch directory as the ONLY writable location by default
         scratch_abs = os.path.abspath(self.scratch_dir)

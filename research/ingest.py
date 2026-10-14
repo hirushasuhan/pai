@@ -864,12 +864,16 @@ def ingest_file(
     if not (1 <= max_file_size <= 100_000_000):
         raise ValueError("max_file_size must be between 1 and 100000000")
     if root_path is None:
-        abs_target = os.path.abspath(file_path)
-        canonical_root = os.path.realpath(os.path.dirname(abs_target))
+        abs_raw = os.path.abspath(file_path)
+        canonical_root = os.path.realpath(os.path.dirname(abs_raw))
+        if _is_symlink_or_reparse(abs_raw):
+            abs_target = os.path.join(canonical_root, os.path.basename(abs_raw))
+        else:
+            abs_target = os.path.realpath(abs_raw)
     else:
         canonical_root = os.path.realpath(os.path.abspath(root_path))
         if os.path.isabs(file_path):
-            abs_target = os.path.abspath(file_path)
+            raw_target = os.path.abspath(file_path)
         else:
             cwd_candidate = os.path.abspath(file_path)
             try:
@@ -879,9 +883,15 @@ def ingest_file(
             except ValueError:
                 is_under_root = False
             if is_under_root and os.path.lexists(cwd_candidate):
-                abs_target = cwd_candidate
+                raw_target = cwd_candidate
             else:
-                abs_target = os.path.abspath(os.path.join(canonical_root, file_path))
+                raw_target = os.path.abspath(os.path.join(canonical_root, file_path))
+
+        parent_real = os.path.realpath(os.path.dirname(raw_target))
+        if _is_symlink_or_reparse(raw_target):
+            abs_target = os.path.join(parent_real, os.path.basename(raw_target))
+        else:
+            abs_target = os.path.realpath(raw_target)
 
     # Relative display path
     try:
