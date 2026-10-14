@@ -588,9 +588,28 @@ pub fn decompress_point(s: &[u8; 32]) -> Option<Point> {
     })
 }
 
+/// Returns true if `p` is a small-order point (order dividing 8).
+/// In Ed25519 (cofactor 8), small-order points satisfy [8] P == IDENTITY.
+pub fn is_small_order_point(p: &Point) -> bool {
+    let p2 = point_add(p, p);
+    let p4 = point_add(&p2, &p2);
+    let p8 = point_add(&p4, &p4);
+    point_equal(&p8, &Point::IDENTITY)
+}
+
+/// Validates a public key for trust root inclusion:
+/// Must decompress to a valid curve point AND must not be a small-order point.
+pub fn validate_trust_public_key(pk: &[u8; 32]) -> bool {
+    match decompress_point(pk) {
+        Some(p) => !is_small_order_point(&p),
+        None => false,
+    }
+}
+
 // ==============================================================================
 // 5. Ed25519 Signature Verification
 // ==============================================================================
+
 
 /// Verifies an Ed25519 signature over `message` using 32-byte `public_key`.
 ///
@@ -699,4 +718,76 @@ mod tests {
 
         assert!(!verify(&pk, b"", &sig), "Malleated s >= Q signature must be rejected");
     }
+
+    #[test]
+    fn test_small_order_points_rejected_by_trust_validator() {
+        // Identity point (order 1): y=1, x=0
+        let mut id_pk = [0u8; 32];
+        id_pk[0] = 1;
+        assert!(!validate_trust_public_key(&id_pk), "Identity key must be rejected by trust validator");
+
+        // Order 2 point: y = p - 1, x = 0
+        let p2_hex = "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f";
+        let mut p2_pk = [0u8; 32];
+        for i in 0..32 {
+            p2_pk[i] = u8::from_str_radix(&p2_hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        assert!(!validate_trust_public_key(&p2_pk), "Order-2 key must be rejected by trust validator");
+
+        // Order 4 points: y = 0, x = +- sqrt(-1)
+        let p4_pk1 = [0u8; 32];
+        assert!(!validate_trust_public_key(&p4_pk1), "Order-4 key (sign 0) must be rejected");
+        let mut p4_pk2 = [0u8; 32];
+        p4_pk2[31] = 0x80;
+        assert!(!validate_trust_public_key(&p4_pk2), "Order-4 key (sign 1) must be rejected");
+
+        // Legitimate base point G (large prime order) must be accepted
+        let g_compressed = [
+            0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+            0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        ];
+        assert!(validate_trust_public_key(&g_compressed), "Base point G must be accepted");
+    }
+
+    #[test]
+    fn test_conformance_ed25519_vectors_in_rust() {
+        let vectors_json = include_str!("../../research/conformance/ed25519_vectors.json");
+        let parsed: serde_json::Value = serde_json::from_str(vectors_json).expect("valid vectors JSON");
+        let cases = parsed.get("cases").and_then(|v| v.as_array()).expect("cases array");
+        assert!(cases.len() >= 176, "must have at least 176 test cases");
+
+        for (idx, c) in cases.iter().enumerate() {
+            let pk_hex = c["public_key_hex"].as_str().expect("pk hex");
+            let msg_hex = c["message_hex"].as_str().expect("msg hex");
+            let sig_hex = c["signature_hex"].as_str().expect("sig hex");
+            let expected = c["expected"].as_bool().expect("expected bool");
+
+            let mut pk = [0u8; 32];
+            for i in 0..32 {
+                pk[i] = u8::from_str_radix(&pk_hex[i * 2..i * 2 + 2], 16).expect("valid pk hex");
+            }
+
+            let mut sig = [0u8; 64];
+            for i in 0..64 {
+                sig[i] = u8::from_str_radix(&sig_hex[i * 2..i * 2 + 2], 16).expect("valid sig hex");
+            }
+
+            let mut msg = Vec::with_capacity(msg_hex.len() / 2);
+            for i in 0..msg_hex.len() / 2 {
+                msg.push(u8::from_str_radix(&msg_hex[i * 2..i * 2 + 2], 16).expect("valid msg hex"));
+            }
+
+            let result = verify(&pk, &msg, &sig);
+            assert_eq!(
+                result,
+                expected,
+                "Case {} ({}) mismatch: expected {}, got {}",
+                idx,
+                c["id"].as_str().unwrap_or("?"),
+                expected,
+                result
+            );
+        }
+    }
 }
+

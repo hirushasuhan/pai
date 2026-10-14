@@ -309,6 +309,16 @@ def _run_doctor_smoke_tests() -> List[Dict[str, Any]]:
 # -----------------------------------------------------------------------------
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Runs comprehensive system diagnostics, candidate eligibility, ingestion limits, and e2e smoke checks."""
+    if getattr(args, "clear_shadow", False) or getattr(args, "reset_shadow", False):
+        try:
+            from pai_core_bridge import clear_shadow_log
+            clear_shadow_log()
+            print("Shadow discrepancy telemetry log cleared.")
+            return 0
+        except Exception as e:
+            print(f"Failed to clear shadow log: {e}")
+            return 1
+
     from ingest import get_ingest_limits
 
     telem = HardwareTelemetry()
@@ -440,8 +450,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         from pai_core_bridge import (
             PAI_USE_RUST_CORE,
-            get_shadow_discrepancy_count,
-            get_shadow_discrepancies,
+            get_shadow_stats,
         )
         if not PAI_USE_RUST_CORE:
             checks_table.append({
@@ -450,15 +459,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 "detail": "not active (flag off)",
             })
         else:
-            shadow_disc_count = get_shadow_discrepancy_count()
+            comparisons, discrepancies, _ = get_shadow_stats()
+            if comparisons == 0:
+                detail_str = "no comparisons yet (flag on)"
+                passed_val = True
+            elif discrepancies == 0:
+                detail_str = f"0 discrepancies in {comparisons} comparisons (Rust core bridge matches Python reference)"
+                passed_val = True
+            else:
+                detail_str = f"{discrepancies} discrepancies in {comparisons} comparisons"
+                passed_val = False
+
             checks_table.append({
                 "check": "core_bridge_shadow",
-                "passed": shadow_disc_count == 0,
-                "detail": (
-                    "0 discrepancies (Rust core bridge matches Python reference)"
-                    if shadow_disc_count == 0
-                    else f"{shadow_disc_count} shadow discrepancies recorded"
-                ),
+                "passed": passed_val,
+                "detail": detail_str,
             })
     except Exception as e:
         checks_table.append({
@@ -949,6 +964,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc = subparsers.add_parser("doctor", help="Hardware diagnostics, safety boundaries, and command smoke tests")
     p_doc.add_argument("--json", action="store_true", help="Output diagnostics in JSON format")
     p_doc.add_argument("--skip-smoke", action="store_true", help="Skip command smoke tests during diagnostics")
+    p_doc.add_argument("--clear-shadow", "--reset-shadow", dest="clear_shadow", action="store_true", help="Clear persistent shadow discrepancy telemetry log")
+
+    # clear-shadow
+    subparsers.add_parser("clear-shadow", help="Clear persistent shadow discrepancy telemetry log")
 
     # calibrate
     p_cal = subparsers.add_parser("calibrate", help="Empirical 5-run cold RAM & latency calibration")
@@ -2759,6 +2778,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.subcommand == "doctor":
         return cmd_doctor(args)
+    elif args.subcommand == "clear-shadow":
+        from pai_core_bridge import clear_shadow_log
+        clear_shadow_log()
+        print("Shadow discrepancy telemetry log cleared.")
+        return 0
     elif args.subcommand == "calibrate":
         return cmd_calibrate(args)
     elif args.subcommand == "models":

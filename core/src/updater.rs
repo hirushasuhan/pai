@@ -130,6 +130,60 @@ fn is_valid_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
+/// Parses raw signature bytes or 128-hex-character string with optional trailing whitespace.
+pub fn parse_signature_bytes(raw_sig: &[u8]) -> Result<[u8; 64], UpdaterError> {
+    if raw_sig.len() == 64 {
+        Ok(raw_sig.try_into().unwrap())
+    } else {
+        match std::str::from_utf8(raw_sig) {
+            Ok(s) => {
+                let trimmed = s.strip_suffix("\r\n").or_else(|| s.strip_suffix('\n')).unwrap_or(s);
+                if trimmed.len() == 128 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+                    let decoded = hex_to_bytes(trimmed)?;
+                    if decoded.len() == 64 {
+                        Ok(decoded.try_into().unwrap())
+                    } else {
+                        Err(UpdaterError::new("invalid signature length"))
+                    }
+                } else {
+                    Err(UpdaterError::new("invalid signature format (must be 64 raw bytes or 128 hex digits)"))
+                }
+            }
+            Err(_) => Err(UpdaterError::new("invalid signature encoding")),
+        }
+    }
+}
+
+/// Validates all keys in a trust config upfront (including revoked keys), ensuring valid hex and rejecting small-order keys.
+pub fn validate_trust_config(trust: &TrustConfig) -> Result<(), UpdaterError> {
+    if !is_valid_sha256_hex(&trust.constitution_sha256) {
+        return Err(UpdaterError::new("invalid constitution sha256 in trust config"));
+    }
+    if trust.keys.is_empty() {
+        return Err(UpdaterError::new("trust config contains no keys"));
+    }
+    for key in &trust.keys {
+        if key.public_hex.len() != 64 || !key.public_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(UpdaterError::new(format!("invalid trust key hex for key {}", key.id)));
+        }
+        let pub_bytes_vec = hex_to_bytes(&key.public_hex)
+            .map_err(|_| UpdaterError::new(format!("invalid trust key hex for key {}", key.id)))?;
+        if pub_bytes_vec.len() != 32 {
+            return Err(UpdaterError::new(format!("invalid trust key length for key {}", key.id)));
+        }
+        let mut pub_bytes = [0u8; 32];
+        pub_bytes.copy_from_slice(&pub_bytes_vec);
+
+        if !ed25519::validate_trust_public_key(&pub_bytes) {
+            return Err(UpdaterError::new(format!(
+                "invalid curve point or small-order key for key {}",
+                key.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Verifies a staged or distribution release directory against trusted signing keys and pinned constitution.
 pub fn verify_release(
     release_dir: &Path,
@@ -138,6 +192,9 @@ pub fn verify_release(
     check_rollback: bool,
     highest_seen_version: Option<&str>,
 ) -> Result<VerifiedRelease, UpdaterError> {
+    // Eagerly validate trust configuration: all keys (including revoked ones) must be valid and non-small-order
+    validate_trust_config(trust)?;
+
     let mpath = release_dir.join(MANIFEST);
     let spath = release_dir.join(SIGNATURE);
 
@@ -153,41 +210,15 @@ pub fn verify_release(
     let manifest_bytes = fs::read(&mpath).map_err(|e| UpdaterError::new(e.to_string()))?;
     let raw_sig = fs::read(&spath).map_err(|e| UpdaterError::new(e.to_string()))?;
 
-    let sig_bytes: [u8; 64] = if raw_sig.len() == 64 {
-        raw_sig.try_into().unwrap()
-    } else {
-        match std::str::from_utf8(&raw_sig) {
-            Ok(s) => {
-                let trimmed = s.strip_suffix("\r\n").or_else(|| s.strip_suffix('\n')).unwrap_or(s);
-                if trimmed.len() == 128 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-                    let decoded = hex_to_bytes(trimmed)?;
-                    if decoded.len() == 64 {
-                        decoded.try_into().unwrap()
-                    } else {
-                        return Err(UpdaterError::new("invalid signature length"));
-                    }
-                } else {
-                    return Err(UpdaterError::new("invalid signature format (must be 64 raw bytes or 128 hex digits)"));
-                }
-            }
-            Err(_) => return Err(UpdaterError::new("invalid signature encoding")),
-        }
-    };
+    let sig_bytes = parse_signature_bytes(&raw_sig)?;
 
     let mut verified_key_id: Option<String> = None;
     for key in &trust.keys {
-        if key.public_hex.len() != 64 || !key.public_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(UpdaterError::new(format!("invalid trust key hex for key {}", key.id)));
-        }
-        let pub_bytes_vec = hex_to_bytes(&key.public_hex)
-            .map_err(|_| UpdaterError::new(format!("invalid trust key hex for key {}", key.id)))?;
-        if pub_bytes_vec.len() != 32 {
-            return Err(UpdaterError::new(format!("invalid trust key length for key {}", key.id)));
-        }
         if key.revoked {
             continue;
         }
         let mut pub_bytes = [0u8; 32];
+        let pub_bytes_vec = hex_to_bytes(&key.public_hex).unwrap();
         pub_bytes.copy_from_slice(&pub_bytes_vec);
 
         if ed25519::verify(&pub_bytes, &manifest_bytes, &sig_bytes) {
@@ -200,6 +231,7 @@ pub fn verify_release(
         Some(kid) => kid,
         None => return Err(UpdaterError::new("signature invalid or signed by an unknown/revoked key")),
     };
+
 
     let manifest_val: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|_| UpdaterError::new("malformed manifest"))?;
@@ -366,4 +398,121 @@ mod tests {
         assert!(!is_valid_sha256_hex("0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"));
         assert!(!is_valid_sha256_hex("short"));
     }
+
+    #[test]
+    fn test_parse_signature_bytes() {
+        let raw = [7u8; 64];
+        assert_eq!(parse_signature_bytes(&raw).unwrap(), raw);
+
+        let hex_128 = "a".repeat(128);
+        assert!(parse_signature_bytes(hex_128.as_bytes()).is_ok());
+
+        let hex_with_crlf = format!("{}\r\n", "b".repeat(128));
+        assert!(parse_signature_bytes(hex_with_crlf.as_bytes()).is_ok());
+
+        let hex_odd = "a".repeat(127);
+        assert!(parse_signature_bytes(hex_odd.as_bytes()).is_err());
+
+        let bad_chars = format!("{}gg", "a".repeat(126));
+        assert!(parse_signature_bytes(bad_chars.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn test_validate_trust_config_rejections() {
+        let valid_pk = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        let const_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        let valid_cfg = TrustConfig {
+            constitution_sha256: const_hash.to_string(),
+            keys: vec![TrustKey {
+                id: "k1".to_string(),
+                public_hex: valid_pk.to_string(),
+                revoked: false,
+            }],
+        };
+        assert!(validate_trust_config(&valid_cfg).is_ok());
+
+        // Identity key rejected
+        let id_pk = "0100000000000000000000000000000000000000000000000000000000000000";
+        let id_cfg = TrustConfig {
+            constitution_sha256: const_hash.to_string(),
+            keys: vec![TrustKey {
+                id: "k_id".to_string(),
+                public_hex: id_pk.to_string(),
+                revoked: false,
+            }],
+        };
+        assert!(validate_trust_config(&id_cfg).is_err());
+
+        // Order-2 key rejected
+        let p2_pk = "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f";
+        let p2_cfg = TrustConfig {
+            constitution_sha256: const_hash.to_string(),
+            keys: vec![TrustKey {
+                id: "k_p2".to_string(),
+                public_hex: p2_pk.to_string(),
+                revoked: false,
+            }],
+        };
+        assert!(validate_trust_config(&p2_cfg).is_err());
+
+        // [valid_key, bad_hex_key] rejected eagerly
+        let mixed_cfg = TrustConfig {
+            constitution_sha256: const_hash.to_string(),
+            keys: vec![
+                TrustKey {
+                    id: "valid".to_string(),
+                    public_hex: valid_pk.to_string(),
+                    revoked: false,
+                },
+                TrustKey {
+                    id: "bad".to_string(),
+                    public_hex: "not-hex".to_string(),
+                    revoked: false,
+                },
+            ],
+        };
+        assert!(validate_trust_config(&mixed_cfg).is_err());
+
+        // [valid_key, revoked_bad_key] rejected eagerly (revoked keys must also be well-formed)
+        let revoked_bad_cfg = TrustConfig {
+            constitution_sha256: const_hash.to_string(),
+            keys: vec![
+                TrustKey {
+                    id: "valid".to_string(),
+                    public_hex: valid_pk.to_string(),
+                    revoked: false,
+                },
+                TrustKey {
+                    id: "revoked_bad".to_string(),
+                    public_hex: "badbad".to_string(),
+                    revoked: true,
+                },
+            ],
+        };
+        assert!(validate_trust_config(&revoked_bad_cfg).is_err());
+    }
+
+    #[test]
+    fn test_verify_directory_entries_unlisted_rejection() {
+        let temp_dir = std::env::temp_dir().join(format!("pai_test_walk_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        fs::write(temp_dir.join("file1.txt"), b"content1").unwrap();
+        fs::write(temp_dir.join("file2.txt"), b"content2").unwrap();
+
+        let mut listed = std::collections::BTreeSet::new();
+        listed.insert("file1.txt".to_string());
+        // file2.txt is not listed -> must error
+        let res = verify_directory_entries(&temp_dir, &temp_dir, &listed);
+        assert!(res.is_err(), "Unlisted file must be rejected");
+
+        listed.insert("file2.txt".to_string());
+        let res2 = verify_directory_entries(&temp_dir, &temp_dir, &listed);
+        assert!(res2.is_ok(), "All listed files must pass");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+

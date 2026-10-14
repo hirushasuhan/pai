@@ -132,6 +132,8 @@ class Updater:
                 raise ValueError(f"bad public key {k.get('id')}: {e}") from e
             if len(pub) != 32:
                 raise ValueError(f"bad public key length {k['id']}")
+            if not ed25519_ref.validate_trust_public_key(pub):
+                raise ValueError(f"invalid curve point or small-order key {k['id']}")
             if not k.get("revoked", False):
                 self.keys[k["id"]] = pub
         self.constitution_sha256: str = trust["constitution_sha256"]

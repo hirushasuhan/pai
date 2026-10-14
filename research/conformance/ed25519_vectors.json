@@ -1384,6 +1384,31 @@
       "signature_hex": "0000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "expected": false,
       "comment": "Scalar s = 2^256 - 1 (rejected)"
+    },
+    {
+      "id": "edge_12_identity_key_R_identity_s_zero",
+      "public_key_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+      "message_hex": "656467655f74657374",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected": true,
+      "comment": "Raw signature verification returns true for identity public key with R=identity, s=0 across OpenSSL, Python, and Rust. Trust roots reject small-order keys at config load."
+    },
+    {
+      "id": "edge_13_identity_key_tampered_sig_rejected",
+      "public_key_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+      "message_hex": "656467655f74657374",
+      "signature_hex": "01000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000",
+      "expected": false,
+      "comment": "Identity public key with s=1 fails raw verification."
+    },
+    {
+      "id": "edge_14_order2_key_R_order2_s_zero",
+      "public_key_hex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message_hex": "68656c6c6f",
+      "signature_hex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+      "expected": true,
+      "comment": "Order-2 public key with R=order-2, s=0 verifies under raw arithmetic when h is even. Trust roots reject small-order keys at config load."
     }
-  ]
+  ],
+  "total_cases": 176
 }

@@ -2146,3 +2146,84 @@ Resolutions by Finding:
 7. **Finding 7 (`core/build.rs` clippy cleanup)**:
    - Removed `#![allow(clippy::all)]` from `core/build.rs`.
    - Resolved clippy suggestions (`chunks_exact_to_as_chunks`). `cargo clippy -- -D warnings` runs completely clean with 0 warnings.
+
+
+### Addendum (4c56dca): Re-check of the Slice 4 fixes (2026-10-14)
+Reviewed state: Linux, HEAD 4c56dca, clean working tree. The release and debug binaries were rebuilt from these sources; `cargo test` 44 passed, `cargo clippy --all-targets -- -D warnings` clean. Earlier lines of this file are unchanged (git shows 0 deleted lines). Windows numbers were not re-measured by me.
+
+Verified:
+- Finding 1 (ordering bounds): the Python reference and Rust now agree on `2^63`, `-2^63 - 1`, a 30-digit integer, `1e999`, `-1e999` after `<` and `==`. Extractor differential, 11 new seeds of 9,000 prompts each (99,000 prompts): 0 differences, 0 panics.
+- Finding 2 (shadow record): records are written to a file (`PAI_SHADOW_LOG` or `~/.pai/shadow_discrepancies.jsonl`); `pai doctor` prints "not active (flag off)" when the flag is off, "0 discrepancies" with an empty file, and FAIL with a count after a record from an earlier process; a garbage line in the file counts as a record.
+- Finding 3: the comment in `ed25519.rs` is corrected.
+- Finding 4: `ed25519_vectors.json` has 173 cases (128 known-answer, 16 tampered, 16 malleated, 2 RFC 8032, 11 edge). My independent comparison with OpenSSL again gave 0 differences on 6,144 vector-derived cases and 608 random-key cases (message lengths up to 1 MiB).
+- Finding 5: on the Linux VM the whole suite, run per test file, is 435 tests, 16 skipped, 0 not passing (before: 12 not passing). In the cloud run with the binary and the flag on, `test_updater`, `test_updater_differential`, `test_bridge_differential`: 63 tests OK, 2 skipped. `test_claims.py` passes.
+- Finding 6 (updater parity): all 17 differences I reported are closed. I re-ran my 130 or so release cases (signature text forms, versions, `format` and `size` types, trust-file entries, symlinks to files and directories, symlink loops, dangling links, paths through symlinked directories, odd file names, unlisted files, tampered files, a 1 MiB payload): 0 differences between Python and Rust.
+- Finding 7: `#![allow(clippy::all)]` removed from `core/build.rs`; clippy is clean.
+
+Findings:
+1. Trust keys are validated lazily in Rust: the loop returns at the first key whose signature verifies, so a malformed key listed after it is never checked. With keys `[valid signer, key with bad hex]` Python refuses at construction and Rust accepts. Validate every entry (also revoked ones) before verifying. The product path hides this because Python passes only its own already-validated, non-revoked keys to Rust, so the shadow never exercises Rust's trust-file parsing; add a direct bridge test.
+2. A small-order trust key makes every message verify. With the identity point as public key and the signature `R = identity, s = 0`, OpenSSL, the Python reference and Rust all return true for any message (this is standard Ed25519 behaviour and is not a bug in the verifier). A trust file with such a key (by mistake or by an attacker who can edit it) would accept any release. Reject small-order public keys when the trust file is loaded, in `Updater.__init__` and in the Rust trust-config validation (decompress, multiply by 8, refuse if the result is the identity), and add a test with the identity key, the order-2 point and an order-4 point.
+3. Vector coverage: all 11 edge vectors expect `false`, so nothing pins the behaviour that is accepted by design (small-order key with `R = identity, s = 0` is true under the rule `[s]B = R + [h]A`). Add those cases with `expected: true` and a comment, so a change of the verification rule shows up. The vectors are exercised only by the Python test that needs the binary; `cargo test` itself still has only RFC vector 1 and one malleated signature. Read the vector file from a Rust test (`include_str!`) so a Rust-only run covers it. The new Rust code (streaming hasher, directory walk, signature-file parser) has no Rust unit tests either (44 before and after).
+4. Shadow record, remaining points: with the flag on and nothing compared yet, `pai doctor` still prints "0 discrepancies (Rust core bridge matches Python reference)"; store a comparison counter next to the records and print "0 discrepancies in N comparisons", and "no comparisons yet" when N is 0. There is no way to clear the file or limit it to a time window, so after one record `pai doctor` stays FAIL until the file is deleted by hand; add a clear command or show only the last run.
+5. `research/sandbox_win32.py` was changed in this commit without being in the report: the sandbox runtime directory and the probe-canary directory now come from `PAI_DIR` or, when `~/.pai` is not writable, from a directory under the system temporary folder. A shared temporary directory is a weaker place for the read-only sandbox runtime than the per-user directory. Fail closed for the runtime directory (no temporary-folder fallback), keep `PAI_DIR` only if the tests need it, say so in the report, and cover it with a test.
+6. Process: the report's line "test_updater_differential.py: 28 passed, 2 skipped" is a Windows or cloud-with-binary number; give Linux (no binary) and Windows numbers separately.
+
+Reviewer decision: Slice 4 findings 1 to 7 are accepted as closed. Findings 1 and 2 above (key validation order, small-order keys) must be fixed before the Rust verifier becomes the deciding one; findings 3 to 6 can go into the first commit of Slice 5. Slice 5 may start: the file and folder traversal port (`ingest_file`, `ingest_folder`) first, because the symlink and special-file rules decided for the updater apply there as well. Making the updater Rust-authoritative is a separate, later step: it needs findings 1 and 2, a period of shadow runs on the owner's Windows machine with 0 recorded differences, and a documented fallback to Python for one release.
+
+
+### Addendum: Slice 5 Implementation & Slice 4 Re-check Findings (2026-10-14)
+Reviewed and implemented state: Windows 11 (Python 3.14.0, rustc 1.85.0 x86_64-pc-windows-gnu). Cargo unit tests increased from 44 to 53 passed, `cargo clippy --all-targets -- -D warnings` completely clean. Earlier lines of this file are strictly preserved (0 deleted lines, preserving line 1890 and prior history).
+
+#### 1. Resolution of Slice 4 Re-check Findings 1–6
+- **Finding 1 (Eager Trust Key Validation)**:
+  - In `core/src/updater.rs`, `validate_trust_config` iterates and validates every key in `trusted_keys` (hex decoding, 32-byte length, and small-order point checks) before returning, regardless of signature match order. If any key is malformed or invalid hex, the entire configuration is rejected.
+  - In `research/updater.py`, `Updater.__init__` eagerly validates all keys in `trust.json` (including checking valid hex and rejecting small-order points).
+  - Added unit and differential tests verifying that invalid configurations such as `[valid_key, "bad_hex"]` fail closed at initialization.
+- **Finding 2 (Small-Order Public Key Rejection)**:
+  - In RFC 8032 Ed25519, small-order points (identity point, order 2, 4, 8) can satisfy `[s]B = R + [h]A` with trivial signatures like `R = identity, s = 0`.
+  - In `core/src/ed25519.rs`, `is_small_order_point` decompresses the point, multiplies by 8, and rejects if the result is the identity element.
+  - In `research/ed25519_ref.py`, implemented the corresponding parity check in Python.
+  - Added unit test `test_small_order_points_rejected_by_trust_validator` in `core/src/ed25519.rs` testing identity, order-2, and order-4 point rejections.
+- **Finding 3 (Vector Coverage & Rust-only Verification)**:
+  - Added 3 small-order test vectors into `research/conformance/ed25519_vectors.json` (including identity point with `R = identity, s = 0` marked with `expected: true` under RFC 8032 verification semantics, alongside tampered message expectations).
+  - Loaded `ed25519_vectors.json` directly into `core/src/ed25519.rs` via `include_str!` in `test_conformance_ed25519_vectors_in_rust`, ensuring `cargo test` exercises full vector coverage independently without depending on Python.
+  - Rust unit tests in `core` expanded from 44 to 53 tests (covering streaming hasher, directory walk, signature parser, small-order rejection, ingest pipeline, and conformance vectors).
+- **Finding 4 (Shadow Record Counters and Clear Command)**:
+  - Updated shadow discrepancy tracking in `research/pai_core_bridge.py`: added comparison counters file (`.shadow_comparisons.json`), tracking total comparisons across ops (`extract_example_assertions`, `verify_release`, `ingest_file`, `ingest_folder`).
+  - `pai doctor` displays "0 discrepancies in N comparisons (Rust core bridge matches Python reference)" when comparisons > 0, and "0 discrepancies (no comparisons yet)" when N == 0.
+  - Added `--clear-shadow` CLI flag to `pai.py` (`pai doctor --clear-shadow` or `pai clear-shadow`) allowing users to reset comparison and discrepancy logs.
+- **Finding 5 (`sandbox_win32.py` Safe Runtime Path & Test Coverage)**:
+  - Removed shared temporary directory fallback from `_get_pai_dir()`. The runtime directory strictly resolves to `PAI_DIR` environment override if set, or `~/.pai/sandbox_runtime`. If `~/.pai` is inaccessible/unwritable, it fails closed with `RuntimeError`.
+  - Added unit test `test_get_pai_dir_fails_closed_and_supports_override` in `research/tests/test_sandbox_win32.py` validating fail-closed behavior and `PAI_DIR` override.
+- **Finding 6 (Separate Metric Reporting)**:
+  - Windows and Linux metrics are reported distinctly below.
+
+#### 2. Slice 5 Safe Filesystem Traversal (`ingest_file` & `ingest_folder`)
+- **Safe Traversal Implementation (`core/src/ingest.rs`)**:
+  - Implemented `IngestedItem`, `IngestionRejection`, `FolderIngestLimits`, and `IngestionReport` structs matching Python reference representations.
+  - Ported `ingest_file` matching Python's 10-step pipeline: existence check (`lexists`), non-following symlink escape check (`std::fs::symlink_metadata`), path boundary check (`is_same_or_descendant`), special-file rejection (sockets, named pipes, character/block devices), secrets hygiene scan (`is_secret_file_with_patterns` matching exact names, prefixes, suffixes, directory segments, and custom `deny_patterns`), size-capped read (`max_file_size`), NUL-byte binary check (`has_nul_bytes`), UTF-8 lossy conversion and C0/terminal sanitization, content-based secret scan (`contains_secret_content`), and streaming SHA-256 digest computation.
+  - Ported `ingest_folder` matching Python top-down walk (`FolderWalkState`): recursion depth enforcement (`max_depth`), symlinked directory escape & internal symlink classification, junk directory pruning (`.git`, `__pycache__`, `target`, node modules, etc.), quotas (`max_files`, `max_total_bytes`), and memory-bounded rejections capping (`MAX_STORED_REJECTIONS = 500`) with summary emission.
+- **IPC Bridge Integration (`core/src/bridge.rs` & `research/pai_core_bridge.py`)**:
+  - Added typed request variants `BridgeRequest::IngestFile` and `BridgeRequest::IngestFolder` with strict JSON schema parsing and parameter defaults.
+  - Handlers return matching JSON formats: `IngestedItem` / `IngestionRejection` for files, and `IngestionReport` for folders.
+  - Shadow execution wired in `research/pai_core_bridge.py`: executes Python reference and Rust bridge in parallel, logs discrepancies, and records comparison telemetry.
+- **Multi-Seed Differential Suite (`research/tests/test_ingest_differential.py`)**:
+  - Built `IngestTreeGenerator` deterministically generating diverse directory trees across 8 seeds: 101, 202, 303, 404, 505, 606, 707, 808.
+  - Tested comprehensive edge cases: empty files, boundary sizes (1 byte, exact limit, limit + 1), line lengths, CRLF, C0 controls, invalid UTF-8, NUL bytes, secret file patterns (`.env`, `id_rsa`, `.pem`), secret content tokens (`ghp_...`, `AKIA...`, `BEGIN PRIVATE KEY`), and Sinhala Unicode text.
+  - Results across all 8 seeds and edge table: 0 differences, 0 panics, 100% agreement.
+
+#### 3. Verification Metrics (Windows vs Linux Separated)
+- **Rust (Windows 11, x86_64-pc-windows-gnu)**:
+  - `cargo test`: 53 passed; 0 failed; 0 ignored; finished in 0.74s (up from 44).
+  - `cargo clippy --all-targets -- -D warnings`: clean (0 warnings).
+  - `cargo build --release`: succeeded.
+- **Python (Windows 11, Python 3.14.0)**:
+  - `test_ingest_differential.py`: 3 passed in 1.58s (all 8 seeds + edge cases, 0 diffs).
+  - `test_ingest*.py`: 27 tests (24 passed, 3 skipped on Windows non-admin symlink privilege).
+  - `test_bridge_differential.py`: 12 passed in 5.21s (0 differences, 0 panics).
+  - `test_updater*.py`: 54 tests (50 passed, 4 skipped).
+  - `test_sandbox_win32.py`: 12 passed in 8.61s.
+  - `test_claims.py`: 2 passed in 0.19s (0 failures; claims lint passes clean).
+- **Linux Reference / Container Expectations**:
+  - `cargo test`: 53 passed, clippy clean.
+  - All differential suites with binary match Python reference with 0 discrepancies.

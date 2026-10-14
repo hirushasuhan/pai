@@ -8,12 +8,14 @@
 //! verified against `research/conformance/ingest_vectors.json` and multi-seed
 //! differential fuzzing against `research/ingest.py`.
 //!
-//! Scope note (Phase 2 Slice 1): Filesystem traversal, path/symlink boundary
-//! checks, and size/count quota enforcement (`ingest_file`, `ingest_folder`,
-//! `assemble_untrusted_context`) remain in Python (`research/ingest.py`).
+//! Scope note (Phase 2 Slice 5): Pure safe Rust implementation of filesystem traversal,
+//! path/symlink boundary checks, quotas, secrets hygiene, and capped rejection tracking
+//! (`ingest_file`, `ingest_folder`), with shadow parity against `research/ingest.py`.
 
 #![forbid(unsafe_code)]
 
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MAX_FILE_SIZE: usize = 1_048_576;
@@ -101,6 +103,49 @@ pub struct IngestLimits {
     pub junk_dir_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestedItem {
+    pub path: String,
+    pub kind: String,
+    pub text: String,
+    pub truncated: bool,
+    pub sha256: String,
+    pub bytes_read: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestionRejection {
+    pub path: String,
+    pub reason_code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderIngestLimits {
+    pub max_file_size_bytes: usize,
+    pub max_total_bytes: usize,
+    pub max_file_count: usize,
+    pub max_depth: usize,
+    pub max_line_length: usize,
+    pub include_junk: bool,
+    pub max_rejections_per_reason: usize,
+    pub max_total_rejections: usize,
+    pub secret_deny_patterns: Vec<String>,
+    pub junk_dir_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestionReport {
+    pub root: String,
+    pub items: Vec<IngestedItem>,
+    pub rejections: Vec<IngestionRejection>,
+    pub rejection_counts: std::collections::BTreeMap<String, usize>,
+    pub rejections_capped: bool,
+    pub total_bytes: usize,
+    pub total_files: usize,
+    pub limits: FolderIngestLimits,
+}
+
 pub fn get_ingest_limits() -> IngestLimits {
     IngestLimits {
         max_file_size_bytes: DEFAULT_MAX_FILE_SIZE,
@@ -158,8 +203,8 @@ fn fnmatch_simple(text: &str, pat: &str) -> bool {
     pi == p.len()
 }
 
-/// Returns `true` if filename or path matches any pattern in the secret deny list or sensitive directories.
-pub fn is_secret_file(file_path: &str) -> bool {
+/// Returns `true` if filename or path matches any pattern in the provided or default secret deny list.
+pub fn is_secret_file_with_patterns(file_path: &str, deny_patterns: Option<&[String]>) -> bool {
     let norm = file_path.replace('\\', "/").to_lowercase();
     let base = norm.rsplit('/').next().unwrap_or("");
     let parts: Vec<&str> = norm.split('/').filter(|p| !p.is_empty()).collect();
@@ -172,16 +217,32 @@ pub fn is_secret_file(file_path: &str) -> bool {
         }
     }
 
-    for pat in DEFAULT_SECRET_DENY_PATTERNS {
-        let pat_lower = pat.to_lowercase();
-        if fnmatch_simple(base, &pat_lower) {
-            return true;
-        }
-        if pat_lower.contains('/') {
-            let slash_pat = format!("/{}", pat_lower);
-            let wild_pat = format!("*{}*", pat_lower);
-            if norm == pat_lower || norm.ends_with(&slash_pat) || fnmatch_simple(&norm, &wild_pat) {
+    if let Some(custom) = deny_patterns {
+        for pat in custom {
+            let pat_lower = pat.to_lowercase();
+            if fnmatch_simple(base, &pat_lower) {
                 return true;
+            }
+            if pat_lower.contains('/') {
+                let slash_pat = format!("/{}", pat_lower);
+                let wild_pat = format!("*{}*", pat_lower);
+                if norm == pat_lower || norm.ends_with(&slash_pat) || fnmatch_simple(&norm, &wild_pat) {
+                    return true;
+                }
+            }
+        }
+    } else {
+        for pat in DEFAULT_SECRET_DENY_PATTERNS {
+            let pat_lower = pat.to_lowercase();
+            if fnmatch_simple(base, &pat_lower) {
+                return true;
+            }
+            if pat_lower.contains('/') {
+                let slash_pat = format!("/{}", pat_lower);
+                let wild_pat = format!("*{}*", pat_lower);
+                if norm == pat_lower || norm.ends_with(&slash_pat) || fnmatch_simple(&norm, &wild_pat) {
+                    return true;
+                }
             }
         }
     }
@@ -189,17 +250,35 @@ pub fn is_secret_file(file_path: &str) -> bool {
     false
 }
 
-/// Returns `true` if `dirname` matches any junk directory pattern.
-pub fn is_junk_dir(dirname: &str) -> bool {
+/// Returns `true` if filename or path matches any pattern in the default secret deny list or sensitive directories.
+pub fn is_secret_file(file_path: &str) -> bool {
+    is_secret_file_with_patterns(file_path, None)
+}
+
+/// Returns `true` if `dirname` matches any junk directory pattern (custom or default).
+pub fn is_junk_dir_with_patterns(dirname: &str, junk_patterns: Option<&[String]>) -> bool {
     let norm = dirname.replace('\\', "/");
     let trimmed = norm.trim_end_matches('/');
     let base = trimmed.rsplit('/').next().unwrap_or("").to_lowercase();
-    for pat in DEFAULT_JUNK_DIR_PATTERNS {
-        if fnmatch_simple(&base, &pat.to_lowercase()) {
-            return true;
+    if let Some(custom) = junk_patterns {
+        for pat in custom {
+            if fnmatch_simple(&base, &pat.to_lowercase()) {
+                return true;
+            }
+        }
+    } else {
+        for pat in DEFAULT_JUNK_DIR_PATTERNS {
+            if fnmatch_simple(&base, &pat.to_lowercase()) {
+                return true;
+            }
         }
     }
     false
+}
+
+/// Returns `true` if `dirname` matches any default junk directory pattern.
+pub fn is_junk_dir(dirname: &str) -> bool {
+    is_junk_dir_with_patterns(dirname, None)
 }
 
 /// Matches Python Unicode `\s` and `str.strip()` whitespace characters (Unicode `White_Space` plus C0 separators `\x1c`..=`\x1f`).
@@ -1120,6 +1199,677 @@ pub fn scan_secret_content(text: &str, file_path: Option<&str>) -> Option<&'stat
     None
 }
 
+#[cfg(unix)]
+fn get_file_mode(m: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    m.mode()
+}
+
+#[cfg(not(unix))]
+fn get_file_mode(m: &std::fs::Metadata) -> u32 {
+    if m.is_dir() {
+        0o040777
+    } else {
+        0o100666
+    }
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
+fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{}", stripped))
+        } else if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(stripped)
+        } else {
+            p
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        p
+    }
+}
+
+fn file_basename(p: &str) -> String {
+    let norm = p.replace('\\', "/");
+    let trimmed = norm.trim_end_matches('/');
+    trimmed.rsplit('/').next().unwrap_or("").to_string()
+}
+
+fn normalize_abs_path(p: &Path) -> PathBuf {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(p),
+            Err(_) => p.to_path_buf(),
+        }
+    };
+    let mut parts = Vec::new();
+    for comp in abs.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if let Some(std::path::Component::Normal(_)) = parts.last() {
+                    parts.pop();
+                } else {
+                    parts.push(comp);
+                }
+            }
+            _ => parts.push(comp),
+        }
+    }
+    parts.iter().collect()
+}
+
+fn is_same_or_descendant(child: &Path, parent: &Path) -> bool {
+    let child_norm = strip_verbatim_prefix(child.to_path_buf());
+    let parent_norm = strip_verbatim_prefix(parent.to_path_buf());
+
+    #[cfg(windows)]
+    {
+        let c_str = child_norm.to_string_lossy().to_lowercase();
+        let p_str = parent_norm.to_string_lossy().to_lowercase();
+        if c_str == p_str {
+            return true;
+        }
+        let p_with_sep = if p_str.ends_with('\\') || p_str.ends_with('/') {
+            p_str
+        } else {
+            format!("{}\\", p_str)
+        };
+        c_str.starts_with(&p_with_sep)
+    }
+    #[cfg(not(windows))]
+    {
+        child_norm.starts_with(&parent_norm)
+    }
+}
+
+fn compute_rel_path(target: &Path, base: &Path, fallback: &str) -> String {
+    let t_norm = strip_verbatim_prefix(target.to_path_buf());
+    let b_norm = strip_verbatim_prefix(base.to_path_buf());
+
+    if let Ok(rel) = t_norm.strip_prefix(&b_norm) {
+        let s = rel.to_string_lossy().to_string();
+        if s.is_empty() {
+            ".".to_string()
+        } else {
+            s
+        }
+    } else {
+        let t_comps: Vec<_> = t_norm.components().collect();
+        let b_comps: Vec<_> = b_norm.components().collect();
+
+        if t_comps.is_empty() || b_comps.is_empty() || t_comps[0] != b_comps[0] {
+            return fallback.to_string();
+        }
+
+        let mut common_len = 0;
+        while common_len < t_comps.len()
+            && common_len < b_comps.len()
+            && t_comps[common_len] == b_comps[common_len]
+        {
+            common_len += 1;
+        }
+
+        let mut parts = Vec::new();
+        for _ in common_len..b_comps.len() {
+            parts.push("..".to_string());
+        }
+        for comp in &t_comps[common_len..] {
+            parts.push(comp.as_os_str().to_string_lossy().to_string());
+        }
+        if parts.is_empty() {
+            ".".to_string()
+        } else {
+            parts.join(std::path::MAIN_SEPARATOR_STR)
+        }
+    }
+}
+
+/// Safely ingests a single file, verifying path boundaries, symlinks, device types,
+/// secrets hygiene, content size caps, binary safety, text normalization, and secret scanning.
+pub fn ingest_file(
+    file_path: &str,
+    root_path: Option<&str>,
+    max_file_size: usize,
+    max_line_length: usize,
+    deny_patterns: Option<&[String]>,
+) -> (Option<IngestedItem>, Option<IngestionRejection>) {
+    let abs_target = normalize_abs_path(Path::new(file_path));
+
+    let canonical_root = match root_path {
+        Some(rp) => {
+            let abs_root = normalize_abs_path(Path::new(rp));
+            strip_verbatim_prefix(std::fs::canonicalize(&abs_root).unwrap_or(abs_root))
+        }
+        None => {
+            let parent = abs_target.parent().unwrap_or(&abs_target);
+            strip_verbatim_prefix(
+                std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()),
+            )
+        }
+    };
+
+    let rel_path = compute_rel_path(&abs_target, &canonical_root, file_path);
+
+    // 1. Existence check
+    let lst = match std::fs::symlink_metadata(&abs_target) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "NOT_FOUND".into(),
+                    message: format!("Target file does not exist: {}", file_basename(file_path)),
+                }),
+            );
+        }
+        Err(e) => {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "STAT_ERROR".into(),
+                    message: format!("Failed to inspect file status: {}", e),
+                }),
+            );
+        }
+    };
+
+    // 2. Symlink escape check
+    if lst.file_type().is_symlink() {
+        let target_dest = strip_verbatim_prefix(
+            std::fs::canonicalize(&abs_target).unwrap_or_else(|_| abs_target.clone()),
+        );
+        if !is_same_or_descendant(&target_dest, &canonical_root) {
+            let dest_name = file_basename(&target_dest.to_string_lossy());
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "SYMLINK_ESCAPE".into(),
+                    message: format!("Symlink points outside root boundary: {}", dest_name),
+                }),
+            );
+        }
+    }
+
+    // 3. Path boundary check
+    let real_target = strip_verbatim_prefix(
+        std::fs::canonicalize(&abs_target).unwrap_or_else(|_| abs_target.clone()),
+    );
+    if !is_same_or_descendant(&real_target, &canonical_root) {
+        let real_name = file_basename(&real_target.to_string_lossy());
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "OUTSIDE_ROOT".into(),
+                message: format!("Target path resolves outside root boundary: {}", real_name),
+            }),
+        );
+    }
+
+    // 4. Device / Special file check
+    if !lst.file_type().is_file() && !lst.file_type().is_symlink() {
+        let mode = get_file_mode(&lst);
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "SPECIAL_FILE".into(),
+                message: format!("Target is a special device file or FIFO (mode 0o{:o})", mode),
+            }),
+        );
+    }
+
+    let st = match std::fs::metadata(&real_target) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "STAT_ERROR".into(),
+                    message: format!("Failed to inspect file status: {}", e),
+                }),
+            );
+        }
+    };
+    if !st.file_type().is_file() {
+        let mode = get_file_mode(&st);
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "SPECIAL_FILE".into(),
+                message: format!("Target resolves to a non-regular file (mode 0o{:o})", mode),
+            }),
+        );
+    }
+
+    // 5. Secrets hygiene check
+    let abs_target_str = abs_target.to_string_lossy();
+    let real_target_str = real_target.to_string_lossy();
+    if is_secret_file_with_patterns(file_path, deny_patterns)
+        || is_secret_file_with_patterns(&abs_target_str, deny_patterns)
+        || is_secret_file_with_patterns(&real_target_str, deny_patterns)
+    {
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "SECRET_FILE".into(),
+                message: format!(
+                    "Access denied to secret file pattern: {}",
+                    file_basename(file_path)
+                ),
+            }),
+        );
+    }
+
+    // 6. Read content with size capping
+    let file = match std::fs::File::open(&real_target) {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "READ_ERROR".into(),
+                    message: format!("Failed to read file: {}", e),
+                }),
+            );
+        }
+    };
+
+    let mut raw_data = Vec::new();
+    let mut take_reader = file.take((max_file_size + 1) as u64);
+    if let Err(e) = take_reader.read_to_end(&mut raw_data) {
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "READ_ERROR".into(),
+                message: format!("Failed to read file: {}", e),
+            }),
+        );
+    }
+
+    let mut truncated = false;
+    if raw_data.len() > max_file_size {
+        truncated = true;
+        raw_data.truncate(max_file_size);
+    }
+
+    // 7. Binary check (NUL byte presence)
+    if raw_data.contains(&0u8) {
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "BINARY_CONTENT".into(),
+                message: "Binary content detected (contains NUL bytes)".into(),
+            }),
+        );
+    }
+
+    // 8. Sanitize and normalize text
+    let norm_text = sanitize_text_content(&String::from_utf8_lossy(&raw_data), max_line_length);
+
+    // 9. Content-based secret scanning
+    if let Some(secret_match) = scan_secret_content(&norm_text, Some(file_path)) {
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "SECRET_CONTENT".into(),
+                message: format!(
+                    "Access denied: secret credential pattern ({}) detected in file content: {}",
+                    secret_match,
+                    file_basename(file_path)
+                ),
+            }),
+        );
+    }
+
+    // 10. SHA-256 hash
+    let mut hasher = crate::verify_loop::Sha256Hasher::new();
+    hasher.update(&raw_data);
+    let digest = hasher.finalize();
+    let sha256_hash = bytes_to_hex(&digest);
+
+    let bytes_read = raw_data.len();
+    let item = IngestedItem {
+        path: rel_path,
+        kind: "file".into(),
+        text: norm_text,
+        truncated,
+        sha256: sha256_hash,
+        bytes_read,
+    };
+    (Some(item), None)
+}
+
+struct FolderWalkState {
+    canonical_root: PathBuf,
+    items: Vec<IngestedItem>,
+    rejections: Vec<IngestionRejection>,
+    rejection_counts: std::collections::BTreeMap<String, usize>,
+    rejections_capped: bool,
+    total_bytes: usize,
+    max_file_size: usize,
+    max_total_bytes: usize,
+    max_file_count: usize,
+    max_depth: usize,
+    max_line_length: usize,
+    deny_patterns: Option<Vec<String>>,
+    junk_patterns: Option<Vec<String>>,
+    include_junk: bool,
+    max_rejections_per_reason: usize,
+    max_total_rejections: usize,
+}
+
+impl FolderWalkState {
+    fn add_rejection(&mut self, rej: IngestionRejection) {
+        let code = rej.reason_code.clone();
+        let count = self.rejection_counts.entry(code).or_insert(0);
+        *count += 1;
+        if *count <= self.max_rejections_per_reason
+            && self.rejections.len() < self.max_total_rejections
+        {
+            self.rejections.push(rej);
+        } else {
+            self.rejections_capped = true;
+        }
+    }
+
+    fn walk_directory(&mut self, current_dir: &Path) {
+        let rel_dir = compute_rel_path(current_dir, &self.canonical_root, ".");
+        let depth = if rel_dir == "." {
+            0
+        } else {
+            rel_dir.split(std::path::MAIN_SEPARATOR).count()
+        };
+
+        if depth > self.max_depth {
+            self.add_rejection(IngestionRejection {
+                path: rel_dir,
+                reason_code: "MAX_DEPTH_EXCEEDED".into(),
+                message: format!(
+                    "Recursion depth {} exceeds max depth limit {}",
+                    depth, self.max_depth
+                ),
+            });
+            return;
+        }
+
+        let read_entries = match std::fs::read_dir(current_dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        let mut dir_entries = Vec::new();
+        let mut file_entries = Vec::new();
+
+        for entry in read_entries.flatten() {
+            let path = entry.path();
+            let fname = entry.file_name().to_string_lossy().to_string();
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+
+            if file_type.is_symlink() {
+                let is_target_dir = match std::fs::metadata(&path) {
+                    Ok(m) => m.is_dir(),
+                    Err(_) => false,
+                };
+                if is_target_dir {
+                    dir_entries.push((fname, path, true));
+                } else {
+                    file_entries.push((fname, path));
+                }
+            } else if file_type.is_dir() {
+                dir_entries.push((fname, path, false));
+            } else {
+                file_entries.push((fname, path));
+            }
+        }
+
+        let mut valid_subdirs = Vec::new();
+        for (d_name, d_path, is_symlink) in dir_entries {
+            let rel_dpath = compute_rel_path(&d_path, &self.canonical_root, &d_name);
+            if is_symlink {
+                let target_dest = strip_verbatim_prefix(
+                    std::fs::canonicalize(&d_path).unwrap_or_else(|_| d_path.clone()),
+                );
+                if !is_same_or_descendant(&target_dest, &self.canonical_root) {
+                    let dest_name = file_basename(&target_dest.to_string_lossy());
+                    self.add_rejection(IngestionRejection {
+                        path: rel_dpath,
+                        reason_code: "SYMLINK_ESCAPE".into(),
+                        message: format!(
+                            "Symlinked directory points outside root boundary: {}",
+                            dest_name
+                        ),
+                    });
+                } else {
+                    self.add_rejection(IngestionRejection {
+                        path: rel_dpath.clone(),
+                        reason_code: "SYMLINK_DIRECTORY".into(),
+                        message: format!("Skipped internal directory symlink: {}", rel_dpath),
+                    });
+                }
+                continue;
+            }
+
+            if !self.include_junk
+                && is_junk_dir_with_patterns(&d_name, self.junk_patterns.as_deref())
+            {
+                self.add_rejection(IngestionRejection {
+                    path: rel_dpath,
+                    reason_code: "JUNK_DIRECTORY".into(),
+                    message: format!("Skipped junk directory: {}", d_name),
+                });
+                continue;
+            }
+
+            valid_subdirs.push((d_name, d_path));
+        }
+
+        file_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        valid_subdirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (fname, fpath) in file_entries {
+            let rel_fpath = compute_rel_path(&fpath, &self.canonical_root, &fname);
+
+            if self.items.len() >= self.max_file_count {
+                self.add_rejection(IngestionRejection {
+                    path: rel_fpath,
+                    reason_code: "FILE_COUNT_EXCEEDED".into(),
+                    message: format!("Max file count limit reached ({})", self.max_file_count),
+                });
+                continue;
+            }
+
+            if self.total_bytes >= self.max_total_bytes {
+                self.add_rejection(IngestionRejection {
+                    path: rel_fpath,
+                    reason_code: "TOTAL_BYTES_EXCEEDED".into(),
+                    message: format!(
+                        "Total ingested byte budget reached ({} bytes)",
+                        self.max_total_bytes
+                    ),
+                });
+                continue;
+            }
+
+            let fpath_str = fpath.to_string_lossy();
+            let canon_root_str = self.canonical_root.to_string_lossy();
+            let (item, rej) = ingest_file(
+                &fpath_str,
+                Some(&canon_root_str),
+                self.max_file_size,
+                self.max_line_length,
+                self.deny_patterns.as_deref(),
+            );
+
+            if let Some(r) = rej {
+                self.add_rejection(r);
+            } else if let Some(item) = item {
+                if self.total_bytes + item.bytes_read > self.max_total_bytes {
+                    self.add_rejection(IngestionRejection {
+                        path: item.path,
+                        reason_code: "TOTAL_BYTES_EXCEEDED".into(),
+                        message: format!(
+                            "Ingesting {} bytes would exceed total budget ({})",
+                            item.bytes_read, self.max_total_bytes
+                        ),
+                    });
+                } else {
+                    self.total_bytes += item.bytes_read;
+                    self.items.push(item);
+                }
+            }
+        }
+
+        for (_dname, dpath) in valid_subdirs {
+            self.walk_directory(&dpath);
+        }
+    }
+}
+
+/// Recursively scans and safely ingests all text files within a folder boundary.
+#[allow(clippy::too_many_arguments)]
+pub fn ingest_folder(
+    folder_path: &str,
+    max_file_size: usize,
+    max_total_bytes: usize,
+    max_file_count: usize,
+    max_depth: usize,
+    max_line_length: usize,
+    deny_patterns: Option<&[String]>,
+    junk_patterns: Option<&[String]>,
+    include_junk: bool,
+    max_rejections_per_reason: usize,
+    max_total_rejections: usize,
+) -> IngestionReport {
+    let abs_root = normalize_abs_path(Path::new(folder_path));
+    let canonical_root = strip_verbatim_prefix(
+        std::fs::canonicalize(&abs_root).unwrap_or_else(|_| abs_root.clone()),
+    );
+
+    let limits = FolderIngestLimits {
+        max_file_size_bytes: max_file_size,
+        max_total_bytes,
+        max_file_count,
+        max_depth,
+        max_line_length,
+        include_junk,
+        max_rejections_per_reason,
+        max_total_rejections,
+        secret_deny_patterns: deny_patterns.map(|p| p.to_vec()).unwrap_or_else(|| {
+            DEFAULT_SECRET_DENY_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        }),
+        junk_dir_patterns: junk_patterns.map(|p| p.to_vec()).unwrap_or_else(|| {
+            DEFAULT_JUNK_DIR_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        }),
+    };
+
+    if !canonical_root.exists() || !canonical_root.is_dir() {
+        let mut rejection_counts = std::collections::BTreeMap::new();
+        rejection_counts.insert("NOT_FOUND".to_string(), 1);
+        let rejections = vec![IngestionRejection {
+            path: folder_path.to_string(),
+            reason_code: "NOT_FOUND".into(),
+            message: format!(
+                "Root directory does not exist or is not a directory: {}",
+                folder_path
+            ),
+        }];
+        return IngestionReport {
+            root: folder_path.to_string(),
+            items: Vec::new(),
+            rejections,
+            rejection_counts,
+            rejections_capped: false,
+            total_bytes: 0,
+            total_files: 0,
+            limits,
+        };
+    }
+
+    let mut state = FolderWalkState {
+        canonical_root: canonical_root.clone(),
+        items: Vec::new(),
+        rejections: Vec::new(),
+        rejection_counts: std::collections::BTreeMap::new(),
+        rejections_capped: false,
+        total_bytes: 0,
+        max_file_size,
+        max_total_bytes,
+        max_file_count,
+        max_depth,
+        max_line_length,
+        deny_patterns: deny_patterns.map(|p| p.to_vec()),
+        junk_patterns: junk_patterns.map(|p| p.to_vec()),
+        include_junk,
+        max_rejections_per_reason,
+        max_total_rejections,
+    };
+
+    state.walk_directory(&canonical_root);
+
+    if state.rejections_capped {
+        let entries: Vec<String> = state
+            .rejection_counts
+            .iter()
+            .map(|(k, v)| format!("'{}': {}", k, v))
+            .collect();
+        state.rejections.push(IngestionRejection {
+            path: "[REJECTIONS_SUMMARY]".into(),
+            reason_code: "REJECTIONS_CAPPED".into(),
+            message: format!(
+                "Rejection list capped for memory bounds. Total rejections by reason: {{{}}}",
+                entries.join(", ")
+            ),
+        });
+    }
+
+    let total_files = state.items.len();
+    IngestionReport {
+        root: canonical_root.to_string_lossy().to_string(),
+        items: state.items,
+        rejections: state.rejections,
+        total_bytes: state.total_bytes,
+        total_files,
+        limits,
+        rejection_counts: state.rejection_counts,
+        rejections_capped: state.rejections_capped,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1423,5 +2173,180 @@ mod tests {
                 let _ = wrap_untrusted_envelope(&s, fp, "nonce123");
             }
         }
+    }
+
+    #[test]
+    fn test_ingest_file_regular_truncation_binary_and_secrets() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pai_test_ingest_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. Regular file
+        let regular = temp_dir.join("hello.txt");
+        std::fs::write(&regular, b"hello world\r\nline2").unwrap();
+        let (item, rej) = ingest_file(
+            regular.to_str().unwrap(),
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(rej.is_none());
+        let item = item.unwrap();
+        assert_eq!(item.text, "hello world\nline2");
+        assert!(!item.truncated);
+        assert_eq!(item.bytes_read, 18);
+
+        // 2. Truncated file
+        let (trunc_item, trunc_rej) = ingest_file(
+            regular.to_str().unwrap(),
+            Some(temp_dir.to_str().unwrap()),
+            5,
+            4096,
+            None,
+        );
+        assert!(trunc_rej.is_none());
+        let trunc_item = trunc_item.unwrap();
+        assert!(trunc_item.truncated);
+        assert_eq!(trunc_item.bytes_read, 5);
+        assert_eq!(trunc_item.text, "hello");
+
+        // 3. Binary file
+        let bin_file = temp_dir.join("bin.dat");
+        std::fs::write(&bin_file, b"data\x00corrupt").unwrap();
+        let (b_item, b_rej) = ingest_file(
+            bin_file.to_str().unwrap(),
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(b_item.is_none());
+        assert_eq!(b_rej.unwrap().reason_code, "BINARY_CONTENT");
+
+        // 4. Secret file
+        let env_file = temp_dir.join(".env");
+        std::fs::write(&env_file, b"FOO=bar").unwrap();
+        let (s_item, s_rej) = ingest_file(
+            env_file.to_str().unwrap(),
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(s_item.is_none());
+        assert_eq!(s_rej.unwrap().reason_code, "SECRET_FILE");
+
+        // 5. Secret content
+        let secret_code = temp_dir.join("config.py");
+        std::fs::write(&secret_code, b"aws_key = 'AKIAIOSFODNN7EXAMPLE'\n").unwrap();
+        let (sc_item, sc_rej) = ingest_file(
+            secret_code.to_str().unwrap(),
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(sc_item.is_none());
+        let sc_rej = sc_rej.unwrap();
+        assert_eq!(sc_rej.reason_code, "SECRET_CONTENT");
+        assert!(!sc_rej.message.contains("AKIAIOSFODNN7EXAMPLE"));
+
+        // 6. Not found
+        let (nf_item, nf_rej) = ingest_file(
+            temp_dir.join("nonexistent.txt").to_str().unwrap(),
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(nf_item.is_none());
+        assert_eq!(nf_rej.unwrap().reason_code, "NOT_FOUND");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ingest_folder_walk_pruning_and_quotas() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pai_test_folder_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Subdirectories: src, node_modules (junk), deep/d1/d2/d3
+        let src_dir = temp_dir.join("src");
+        let node_modules = temp_dir.join("node_modules");
+        let deep_dir = temp_dir.join("d1").join("d2").join("d3");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&node_modules).unwrap();
+        std::fs::create_dir_all(&deep_dir).unwrap();
+
+        std::fs::write(src_dir.join("app.py"), b"print('hello')\n").unwrap();
+        std::fs::write(src_dir.join("util.py"), b"def add(a, b): return a + b\n").unwrap();
+        std::fs::write(node_modules.join("pkg.js"), b"console.log('junk')\n").unwrap();
+        std::fs::write(deep_dir.join("leaf.txt"), b"deep content\n").unwrap();
+
+        // Ingest with default junk pruning and max_depth=2
+        let report = ingest_folder(
+            temp_dir.to_str().unwrap(),
+            1024,
+            10240,
+            500,
+            2,
+            4096,
+            None,
+            None,
+            false,
+            20,
+            500,
+        );
+        assert_eq!(report.items.len(), 2); // app.py and util.py
+        assert!(report.rejection_counts.contains_key("JUNK_DIRECTORY"));
+        assert!(report.rejection_counts.contains_key("MAX_DEPTH_EXCEEDED"));
+
+        // Ingest with include_junk=true
+        let report_junk = ingest_folder(
+            temp_dir.to_str().unwrap(),
+            1024,
+            10240,
+            500,
+            2,
+            4096,
+            None,
+            None,
+            true,
+            20,
+            500,
+        );
+        assert!(!report_junk.rejection_counts.contains_key("JUNK_DIRECTORY"));
+        assert_eq!(report_junk.items.len(), 3); // app.py, util.py, and pkg.js
+
+        // Ingest with file count quota limit = 1
+        let report_quota = ingest_folder(
+            temp_dir.to_str().unwrap(),
+            1024,
+            10240,
+            1,
+            10,
+            4096,
+            None,
+            None,
+            false,
+            20,
+            500,
+        );
+        assert_eq!(report_quota.items.len(), 1);
+        assert!(report_quota.rejection_counts.contains_key("FILE_COUNT_EXCEEDED"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

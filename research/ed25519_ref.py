@@ -130,3 +130,24 @@ def verify(public: bytes, msg: bytes, signature: bytes) -> bool:
         return False
     h = _sha512_modq(Rs + public + msg)
     return _equal(_mul(s, G), _add(R, _mul(h, A)))
+
+
+def is_small_order_point(P) -> bool:
+    """Returns True if point P has small order (order dividing 8), i.e., [8]P == identity."""
+    if P is None:
+        return True
+    p2 = _add(P, P)
+    p4 = _add(p2, p2)
+    p8 = _add(p4, p4)
+    return _equal(p8, (0, 1, 1, 0))
+
+
+def validate_trust_public_key(public: bytes) -> bool:
+    """Validates public key for trust root: must decompress and not be small-order."""
+    if len(public) != 32:
+        return False
+    A = _decompress(public)
+    if A is None:
+        return False
+    return not is_small_order_point(A)
+

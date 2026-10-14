@@ -17,9 +17,9 @@ use serde_json::Value;
 
 use crate::ed25519;
 use crate::ingest::{
-    defang_envelope_markers, get_ingest_limits, is_junk_dir, is_secret_file,
-    sanitize_header, sanitize_terminal_output, sanitize_text_content, scan_secret_content,
-    wrap_untrusted_envelope,
+    defang_envelope_markers, get_ingest_limits, ingest_file, ingest_folder, is_junk_dir,
+    is_secret_file, sanitize_header, sanitize_terminal_output, sanitize_text_content,
+    scan_secret_content, wrap_untrusted_envelope,
 };
 use crate::updater::{self, TrustConfig};
 use crate::verify_loop::{
@@ -62,6 +62,30 @@ impl BridgeResponse {
 
 fn default_max_line_length() -> usize {
     4000
+}
+
+fn default_max_file_size() -> usize {
+    1_048_576
+}
+
+fn default_max_total_bytes() -> usize {
+    10_485_760
+}
+
+fn default_max_file_count() -> usize {
+    500
+}
+
+fn default_max_depth() -> usize {
+    10
+}
+
+fn default_max_rejections_per_reason() -> usize {
+    20
+}
+
+fn default_max_total_rejections() -> usize {
+    500
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +194,44 @@ pub enum BridgeRequest {
         check_rollback: bool,
         #[serde(default)]
         highest_seen_version: Option<String>,
+    },
+
+    #[serde(rename = "ingest_file")]
+    IngestFile {
+        file_path: String,
+        #[serde(default)]
+        root_path: Option<String>,
+        #[serde(default = "default_max_file_size")]
+        max_file_size: usize,
+        #[serde(default = "default_max_line_length")]
+        max_line_length: usize,
+        #[serde(default)]
+        deny_patterns: Option<Vec<String>>,
+    },
+
+    #[serde(rename = "ingest_folder")]
+    IngestFolder {
+        folder_path: String,
+        #[serde(default = "default_max_file_size")]
+        max_file_size: usize,
+        #[serde(default = "default_max_total_bytes")]
+        max_total_bytes: usize,
+        #[serde(default = "default_max_file_count")]
+        max_file_count: usize,
+        #[serde(default = "default_max_depth")]
+        max_depth: usize,
+        #[serde(default = "default_max_line_length")]
+        max_line_length: usize,
+        #[serde(default)]
+        deny_patterns: Option<Vec<String>>,
+        #[serde(default)]
+        junk_patterns: Option<Vec<String>>,
+        #[serde(default)]
+        include_junk: bool,
+        #[serde(default = "default_max_rejections_per_reason")]
+        max_rejections_per_reason: usize,
+        #[serde(default = "default_max_total_rejections")]
+        max_total_rejections: usize,
     },
 }
 
@@ -337,6 +399,10 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
                 Err(e) => return BridgeResponse::err(format!("Invalid trust configuration: {}", e), "InvalidTrustConfig"),
             };
 
+            if let Err(e) = updater::validate_trust_config(&trust_config) {
+                return BridgeResponse::err(e.0, "InvalidTrustConfig");
+            }
+
             match updater::verify_release(
                 std::path::Path::new(&release_dir),
                 &trust_config,
@@ -349,6 +415,71 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
                     Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
                 },
                 Err(e) => BridgeResponse::err(e.0, "UpdateRejected"),
+            }
+        }
+
+        BridgeRequest::IngestFile {
+            file_path,
+            root_path,
+            max_file_size,
+            max_line_length,
+            deny_patterns,
+        } => {
+            if max_line_length == 0 || max_line_length > 1_000_000 {
+                return BridgeResponse::err(
+                    "max_line_length must be between 1 and 1000000",
+                    "InvalidParameter",
+                );
+            }
+            let (item, rej) = ingest_file(
+                &file_path,
+                root_path.as_deref(),
+                max_file_size,
+                max_line_length,
+                deny_patterns.as_deref(),
+            );
+            let res = serde_json::json!({
+                "item": item,
+                "rejection": rej,
+            });
+            BridgeResponse::ok(res)
+        }
+
+        BridgeRequest::IngestFolder {
+            folder_path,
+            max_file_size,
+            max_total_bytes,
+            max_file_count,
+            max_depth,
+            max_line_length,
+            deny_patterns,
+            junk_patterns,
+            include_junk,
+            max_rejections_per_reason,
+            max_total_rejections,
+        } => {
+            if max_line_length == 0 || max_line_length > 1_000_000 {
+                return BridgeResponse::err(
+                    "max_line_length must be between 1 and 1000000",
+                    "InvalidParameter",
+                );
+            }
+            let report = ingest_folder(
+                &folder_path,
+                max_file_size,
+                max_total_bytes,
+                max_file_count,
+                max_depth,
+                max_line_length,
+                deny_patterns.as_deref(),
+                junk_patterns.as_deref(),
+                include_junk,
+                max_rejections_per_reason,
+                max_total_rejections,
+            );
+            match serde_json::to_value(report) {
+                Ok(v) => BridgeResponse::ok(v),
+                Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
             }
         }
     }
@@ -533,4 +664,30 @@ mod tests {
         assert_eq!(resp_neg.status, "error");
         assert_eq!(resp_neg.error_type, Some("InvalidRequest".to_string()));
     }
+
+    #[test]
+    fn test_bridge_verify_release_bad_trust_root() {
+        let req_bad_key = r#"{
+            "op": "verify_release",
+            "release_dir": ".",
+            "trust_root_json": "{\"constitution_sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"keys\":[{\"id\":\"k1\",\"public_hex\":\"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a\"},{\"id\":\"k2\",\"public_hex\":\"bad_hex\"}]}",
+            "expected_product": "pai-core",
+            "check_rollback": false
+        }"#;
+        let resp = handle_raw_bridge_request(req_bad_key);
+        assert_eq!(resp.status, "error");
+        assert_eq!(resp.error_type, Some("InvalidTrustConfig".to_string()));
+
+        let req_small_order = r#"{
+            "op": "verify_release",
+            "release_dir": ".",
+            "trust_root_json": "{\"constitution_sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"keys\":[{\"id\":\"k_id\",\"public_hex\":\"0100000000000000000000000000000000000000000000000000000000000000\"}]}",
+            "expected_product": "pai-core",
+            "check_rollback": false
+        }"#;
+        let resp2 = handle_raw_bridge_request(req_small_order);
+        assert_eq!(resp2.status, "error");
+        assert_eq!(resp2.error_type, Some("InvalidTrustConfig".to_string()));
+    }
 }
+

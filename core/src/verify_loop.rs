@@ -4283,7 +4283,45 @@ mod tests {
         let p3 = "def solve\u{00b2}(n):\nExample:\n  solve\u{00b2}(1) -> 2";
         assert!(extract_example_assertions(p3, None).is_empty());
     }
+
+    #[test]
+    fn test_streaming_sha256_hasher_matches_oneshot() {
+        let payloads: &[&[u8]] = &[
+            b"",
+            b"a",
+            b"abc",
+            b"message digest",
+            b"abcdefghijklmnopqrstuvwxyz",
+            &[42u8; 55],
+            &[42u8; 56],
+            &[42u8; 64],
+            &[42u8; 65],
+            &[42u8; 119],
+            &[42u8; 120],
+            &[42u8; 128],
+            &[42u8; 1000],
+        ];
+
+        for payload in payloads {
+            let oneshot = sha256(payload);
+
+            for chunk_size in [1, 2, 7, 16, 55, 64, 100] {
+                let mut hasher = Sha256Hasher::new();
+                for chunk in payload.chunks(chunk_size) {
+                    hasher.update(chunk);
+                }
+                let streamed = hasher.finalize();
+                assert_eq!(
+                    streamed, oneshot,
+                    "Streaming SHA-256 with chunk size {} differed from oneshot for payload len {}",
+                    chunk_size,
+                    payload.len()
+                );
+            }
+        }
+    }
 }
+
 
 
 

@@ -183,6 +183,37 @@ class Attacks(Base):
             u.rollback()
         self.assertEqual(u.current_version(), "0.4.0")
 
+    def test_small_order_trust_keys_rejected(self):
+        # Identity key
+        id_pk = "0100000000000000000000000000000000000000000000000000000000000000"
+        trust_file = os.path.join(self.trust, "trust.json")
+        with open(trust_file, "r", encoding="utf-8") as f:
+            t = json.load(f)
+        t["keys"] = [{"id": "id-key", "public_hex": id_pk}]
+        with open(trust_file, "w", encoding="utf-8") as f:
+            json.dump(t, f)
+        with self.assertRaises(ValueError):
+            self.updater()
+
+        # Order 2 key
+        p2_pk = "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+        t["keys"] = [{"id": "p2-key", "public_hex": p2_pk}]
+        with open(trust_file, "w", encoding="utf-8") as f:
+            json.dump(t, f)
+        with self.assertRaises(ValueError):
+            self.updater()
+
+        # [valid_key, bad_hex_key] rejected eagerly in __init__
+        t["keys"] = [
+            {"id": "valid", "public_hex": PUB.hex()},
+            {"id": "bad", "public_hex": "not-a-valid-hex-string"},
+        ]
+        with open(trust_file, "w", encoding="utf-8") as f:
+            json.dump(t, f)
+        with self.assertRaises(ValueError):
+            self.updater()
+
+
 
 class TrustRoot(unittest.TestCase):
     def test_writable_directory_is_reported_unprotected(self):

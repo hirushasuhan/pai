@@ -22,15 +22,31 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if sys.platform == "win32":
-    from sandbox_win32 import Win32Sandbox, probe_win32_boundary
+    from sandbox_win32 import Win32Sandbox, probe_win32_boundary, _get_pai_dir
 else:
     Win32Sandbox = None
     probe_win32_boundary = None
+    _get_pai_dir = None
 
 
 
 @unittest.skipUnless(sys.platform == "win32", "Win32 sandbox tests run only on Windows")
 class TestWin32SandboxContainment(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._orig_pai_dir = os.environ.get("PAI_DIR")
+        cls._temp_pai_dir = tempfile.mkdtemp(prefix="pai_sandbox_test_")
+        os.environ["PAI_DIR"] = cls._temp_pai_dir
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._orig_pai_dir is not None:
+            os.environ["PAI_DIR"] = cls._orig_pai_dir
+        else:
+            os.environ.pop("PAI_DIR", None)
+        import shutil
+        shutil.rmtree(cls._temp_pai_dir, ignore_errors=True)
+
     def setUp(self):
         self.sandbox = Win32Sandbox(memory_mb=512.0, timeout_sec=3.0)
         self.sandbox.setup()
@@ -102,7 +118,7 @@ except Exception as e:
 
     def test_a4_canary_deletion(self):
         """A4: Attempting to delete a canary file outside scratch fails with PermissionError."""
-        pai_dir = os.path.expanduser("~/.pai")
+        pai_dir = _get_pai_dir()
         canary = os.path.join(pai_dir, "canary_a4.tmp")
         with open(canary, "w", encoding="utf-8") as f:
             f.write("CANARY_ACTIVE")
@@ -130,7 +146,7 @@ except Exception as e:
 
     def test_a5_filesystem_read_escape(self):
         """A5: Attempting to read files outside scratch fails with PermissionError."""
-        pai_dir = os.path.expanduser("~/.pai")
+        pai_dir = _get_pai_dir()
         canary = os.path.join(pai_dir, "canary_a5.tmp")
         with open(canary, "w", encoding="utf-8") as f:
             f.write("SECRET_CONTENTS")
@@ -207,6 +223,20 @@ ctypes.string_at(0)
         self.assertIn(res.status, ("crash", "error"))
         self.assertNotEqual(res.exit_code, 0)
 
+    def test_pai_dir_fail_closed_when_inaccessible(self):
+        """Finding 5: _get_pai_dir must fail closed (raise RuntimeError) when ~/.pai is inaccessible and PAI_DIR unset."""
+        from unittest import mock
+        from sandbox_win32 import _get_pai_dir
+
+        env_copy = os.environ.copy()
+        env_copy.pop("PAI_DIR", None)
+        with mock.patch.dict(os.environ, env_copy, clear=True):
+            with mock.patch("os.makedirs", side_effect=OSError("Permission denied")):
+                with self.assertRaises(RuntimeError) as cm:
+                    _get_pai_dir()
+                self.assertIn("failing closed", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
+

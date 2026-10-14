@@ -28,6 +28,8 @@ from pai_core_bridge import (
     extract_example_assertions,
     find_core_binary,
     get_ingest_limits,
+    ingest_file,
+    ingest_folder,
     is_junk_dir,
     is_secret_file,
     sanitize_header,
@@ -87,6 +89,20 @@ class TestBridgeDifferential(unittest.TestCase):
 
             # 4. sanitize_text_content
             self.assertEqual(sanitize_text_content("hello\r\nworld", max_line_length=100), "hello\nworld")
+
+            # 5. ingest_file and ingest_folder
+            with tempfile.TemporaryDirectory(prefix="pai_bridge_ingest_test_") as tmp_d:
+                clean_f = os.path.join(tmp_d, "sample.txt")
+                with open(clean_f, "w", encoding="utf-8") as f:
+                    f.write("Clean ingestion test payload\n")
+                item, rej = ingest_file(clean_f)
+                self.assertIsNotNone(item)
+                self.assertIsNone(rej)
+                self.assertTrue(item.bytes_read > 0)
+
+                rep = ingest_folder(tmp_d)
+                self.assertIsInstance(rep, ingest.IngestionReport)
+                self.assertEqual(rep.total_files, 1)
         finally:
             pai_core_bridge.PAI_USE_RUST_CORE = orig_flag
 
@@ -122,6 +138,20 @@ class TestBridgeDifferential(unittest.TestCase):
             prompt = "Write `solve(x)`.\nExample:\n  solve(1) -> 2\n"
             stmts = extract_example_assertions(prompt, entry_point="solve")
             self.assertEqual(stmts, ["assert solve(1) == 2"])
+
+            # 4. ingest_file and ingest_folder via bridge
+            with tempfile.TemporaryDirectory(prefix="pai_bridge_ingest_test_") as tmp_d:
+                clean_f = os.path.join(tmp_d, "sample.txt")
+                with open(clean_f, "w", encoding="utf-8") as f:
+                    f.write("Clean ingestion test payload\n")
+                item, rej = ingest_file(clean_f)
+                self.assertIsNotNone(item)
+                self.assertIsNone(rej)
+                self.assertTrue(item.bytes_read > 0)
+
+                rep = ingest_folder(tmp_d)
+                self.assertIsInstance(rep, ingest.IngestionReport)
+                self.assertEqual(rep.total_files, 1)
         finally:
             pai_core_bridge.PAI_USE_RUST_CORE = orig_flag
 

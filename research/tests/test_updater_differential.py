@@ -665,6 +665,65 @@ class TestUpdaterDifferential(unittest.TestCase):
         self.assertEqual(py_res.version, rust_res["version"])
         self.assertEqual(py_res.files, rust_res["files"])
 
+    def test_differential_trust_keys_eager_bad_hex_rejection(self):
+        """[valid_signer, bad_hex_key] must fail eagerly before verifying any release on both sides."""
+        mixed_cfg = {
+            "constitution_sha256": self.trust_cfg["constitution_sha256"],
+            "keys": [
+                {"id": "valid", "public_hex": TEST_PUB.hex()},
+                {"id": "bad", "public_hex": "not-valid-hex"},
+            ],
+        }
+        trust_path = os.path.join(self.trust_dir, "trust.json")
+        with open(trust_path, "w", encoding="utf-8") as f:
+            json.dump(mixed_cfg, f)
+
+        # Python constructor fails eagerly
+        with self.assertRaises(ValueError):
+            Updater(self.trust_dir, self.install_dir)
+
+        # Rust bridge fails eagerly
+        rel_dir = make_test_release(self.src_dir, version="0.3.0")
+        with self.assertRaises(Exception) as cm:
+            pai_core_bridge.call_core_bridge(
+                "verify_release",
+                release_dir=rel_dir,
+                trust_root_json=json.dumps(mixed_cfg),
+                expected_product="pai-core",
+            )
+        self.assertIn("InvalidTrustConfig", str(cm.exception))
+
+    def test_differential_small_order_trust_key_rejection(self):
+        """Small-order trust keys (identity, order 2, order 4) must be rejected on both sides."""
+        rel_dir = make_test_release(self.src_dir, version="0.3.0")
+        small_order_keys = [
+            ("identity", "0100000000000000000000000000000000000000000000000000000000000000"),
+            ("order_2", "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+            ("order_4_a", "0000000000000000000000000000000000000000000000000000000000000000"),
+            ("order_4_b", "0000000000000000000000000000000000000000000000000000000000000080"),
+        ]
+        for name, key_hex in small_order_keys:
+            bad_cfg = {
+                "constitution_sha256": self.trust_cfg["constitution_sha256"],
+                "keys": [{"id": name, "public_hex": key_hex}],
+            }
+            trust_path = os.path.join(self.trust_dir, "trust.json")
+            with open(trust_path, "w", encoding="utf-8") as f:
+                json.dump(bad_cfg, f)
+
+            with self.assertRaises(ValueError):
+                Updater(self.trust_dir, self.install_dir)
+
+            with self.assertRaises(Exception) as cm:
+                pai_core_bridge.call_core_bridge(
+                    "verify_release",
+                    release_dir=rel_dir,
+                    trust_root_json=json.dumps(bad_cfg),
+                    expected_product="pai-core",
+                )
+            self.assertIn("InvalidTrustConfig", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
+

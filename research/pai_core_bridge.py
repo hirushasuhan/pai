@@ -23,8 +23,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ingest import (
+    DEFAULT_JUNK_DIR_PATTERNS,
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_MAX_FILE_COUNT,
+    DEFAULT_MAX_FILE_SIZE,
+    DEFAULT_MAX_LINE_LENGTH,
+    DEFAULT_MAX_REJECTIONS_PER_REASON,
+    DEFAULT_MAX_TOTAL_BYTES,
+    DEFAULT_MAX_TOTAL_REJECTIONS,
+    DEFAULT_SECRET_DENY_PATTERNS,
+    IngestedItem,
+    IngestionRejection,
+    IngestionReport,
     defang_envelope_markers as py_defang_envelope_markers,
     get_ingest_limits as py_get_ingest_limits,
+    ingest_file as py_ingest_file,
+    ingest_folder as py_ingest_folder,
     is_junk_dir as py_is_junk_dir,
     is_secret_file as py_is_secret_file,
     sanitize_header as py_sanitize_header,
@@ -83,10 +97,27 @@ class CoreBridgeUnavailableError(RuntimeError):
     pass
 
 
+def record_shadow_comparison(op: str, **extra: Any) -> None:
+    """Records that a shadow comparison was executed."""
+    rec = {
+        "timestamp": time.time(),
+        "type": "comparison",
+        "op": op,
+        **extra,
+    }
+    try:
+        log_file = _get_discrepancy_log_path()
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug("Failed to persist shadow comparison: %s", e)
+
+
 def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
     """Records a shadow discrepancy for visibility in run reports and pai doctor."""
     rec = {
         "timestamp": time.time(),
+        "type": "discrepancy",
         "op": op,
         "detail": detail,
         **extra,
@@ -101,9 +132,12 @@ def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
     logger.warning("[SHADOW DISCREPANCY] op=%s: %s", op, detail)
 
 
-def get_shadow_discrepancies() -> List[Dict[str, Any]]:
-    """Returns all recorded shadow discrepancies from the persistent log file."""
-    results: List[Dict[str, Any]] = []
+def get_shadow_stats() -> Tuple[int, int, List[Dict[str, Any]]]:
+    """
+    Returns (comparisons_count, discrepancies_count, list_of_discrepancies).
+    """
+    comparisons = 0
+    discrepancies: List[Dict[str, Any]] = []
     try:
         log_file = _get_discrepancy_log_path()
         if log_file.exists():
@@ -112,18 +146,34 @@ def get_shadow_discrepancies() -> List[Dict[str, Any]]:
                     line = line.strip()
                     if line:
                         try:
-                            results.append(json.loads(line))
+                            obj = json.loads(line)
+                            if obj.get("type") == "comparison":
+                                comparisons += 1
+                            else:
+                                discrepancies.append(obj)
                         except Exception:
                             pass
-            return results
+            return comparisons, len(discrepancies), discrepancies
     except Exception as e:
         logger.warning("Failed to read shadow discrepancies log: %s", e)
-    return list(_SHADOW_DISCREPANCIES)
+    return len(_SHADOW_DISCREPANCIES), len(_SHADOW_DISCREPANCIES), list(_SHADOW_DISCREPANCIES)
+
+
+def get_shadow_discrepancies() -> List[Dict[str, Any]]:
+    """Returns all recorded shadow discrepancies from the persistent log file."""
+    _, _, disc = get_shadow_stats()
+    return disc
 
 
 def get_shadow_discrepancy_count() -> int:
     """Returns the total number of recorded shadow discrepancies."""
-    return len(get_shadow_discrepancies())
+    _, count, _ = get_shadow_stats()
+    return count
+
+
+def clear_shadow_log() -> None:
+    """Clears the persistent shadow comparison/discrepancy log file."""
+    reset_shadow_discrepancies()
 
 
 def reset_shadow_discrepancies() -> None:
@@ -136,6 +186,7 @@ def reset_shadow_discrepancies() -> None:
                 f.truncate(0)
     except Exception as e:
         logger.warning("Failed to truncate shadow discrepancies log: %s", e)
+
 
 
 def compute_repo_vectors_hash() -> str:
@@ -474,6 +525,8 @@ def verify_verdict_frame(
     if not PAI_USE_RUST_CORE:
         return py_res
 
+    record_shadow_comparison("verify_verdict_frame")
+
     bridge_kwargs: Dict[str, Any] = {
         "comb_out": comb_out,
         "parent_nonce": parent_nonce,
@@ -539,6 +592,8 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
     py_stmts = py_extract_example_assertions(prompt, entry_point=entry_point)
     if not PAI_USE_RUST_CORE:
         return py_stmts
+
+    record_shadow_comparison("extract_example_assertions")
 
     kwargs: Dict[str, Any] = {"prompt": prompt}
     if entry_point is not None:
@@ -612,6 +667,7 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
         return py_ver
 
     find_core_binary()
+    record_shadow_comparison("verify_ed25519")
 
     try:
         rust_ver = call_core_bridge(
@@ -666,4 +722,162 @@ def verify_release(
         check_rollback=check_rollback,
         highest_seen_version=highest_seen_version,
     )
+
+
+# ============================================================================
+# Ingestion Primitives (Slice 5)
+# ============================================================================
+
+def ingest_file(
+    file_path: str,
+    root_path: Optional[str] = None,
+    max_file_size: int = DEFAULT_MAX_FILE_SIZE,
+    max_line_length: int = DEFAULT_MAX_LINE_LENGTH,
+    deny_patterns: Tuple[str, ...] = DEFAULT_SECRET_DENY_PATTERNS,
+) -> Tuple[Optional[IngestedItem], Optional[IngestionRejection]]:
+    """
+    Safely ingests a single file.
+    In shadow mode (PAI_USE_RUST_CORE=1), executes across both Python reference and
+    Rust core, recording any discrepancies while returning the authoritative Python result.
+    """
+    py_item, py_rej = py_ingest_file(
+        file_path=file_path,
+        root_path=root_path,
+        max_file_size=max_file_size,
+        max_line_length=max_line_length,
+        deny_patterns=deny_patterns,
+    )
+    if not PAI_USE_RUST_CORE:
+        return py_item, py_rej
+
+    find_core_binary()
+    record_shadow_comparison("ingest_file")
+
+    bridge_kwargs: Dict[str, Any] = {
+        "file_path": file_path,
+        "max_file_size": max_file_size,
+        "max_line_length": max_line_length,
+    }
+    if root_path is not None:
+        bridge_kwargs["root_path"] = root_path
+    if deny_patterns != DEFAULT_SECRET_DENY_PATTERNS:
+        bridge_kwargs["deny_patterns"] = list(deny_patterns)
+
+    try:
+        raw_res = call_core_bridge("ingest_file", **bridge_kwargs)
+        raw_item = raw_res.get("item")
+        raw_rej = raw_res.get("rejection")
+        rust_item = IngestedItem(**raw_item) if raw_item else None
+        rust_rej = IngestionRejection(**raw_rej) if raw_rej else None
+    except CoreBridgeUnavailableError:
+        raise
+    except Exception as exc:
+        record_shadow_discrepancy(
+            "ingest_file",
+            f"Bridge invocation exception: {exc}",
+            exception=type(exc).__name__,
+        )
+        return py_item, py_rej
+
+    if (rust_item != py_item) or (rust_rej != py_rej):
+        record_shadow_discrepancy(
+            "ingest_file",
+            f"Ingest file mismatch: py=({py_item!r}, {py_rej!r}) vs rust=({rust_item!r}, {rust_rej!r})",
+            py_item=py_item.to_dict() if py_item else None,
+            rust_item=rust_item.to_dict() if rust_item else None,
+            py_rej=py_rej.to_dict() if py_rej else None,
+            rust_rej=rust_rej.to_dict() if rust_rej else None,
+        )
+
+    return py_item, py_rej
+
+
+def ingest_folder(
+    folder_path: str,
+    max_file_size: int = DEFAULT_MAX_FILE_SIZE,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    max_file_count: int = DEFAULT_MAX_FILE_COUNT,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_line_length: int = DEFAULT_MAX_LINE_LENGTH,
+    deny_patterns: Tuple[str, ...] = DEFAULT_SECRET_DENY_PATTERNS,
+    junk_patterns: Tuple[str, ...] = DEFAULT_JUNK_DIR_PATTERNS,
+    include_junk: bool = False,
+    max_rejections_per_reason: int = DEFAULT_MAX_REJECTIONS_PER_REASON,
+    max_total_rejections: int = DEFAULT_MAX_TOTAL_REJECTIONS,
+) -> IngestionReport:
+    """
+    Safely ingests a folder tree.
+    In shadow mode (PAI_USE_RUST_CORE=1), executes across both Python reference and
+    Rust core, recording any discrepancies while returning the authoritative Python result.
+    """
+    py_report = py_ingest_folder(
+        folder_path=folder_path,
+        max_file_size=max_file_size,
+        max_total_bytes=max_total_bytes,
+        max_file_count=max_file_count,
+        max_depth=max_depth,
+        max_line_length=max_line_length,
+        deny_patterns=deny_patterns,
+        junk_patterns=junk_patterns,
+        include_junk=include_junk,
+        max_rejections_per_reason=max_rejections_per_reason,
+        max_total_rejections=max_total_rejections,
+    )
+    if not PAI_USE_RUST_CORE:
+        return py_report
+
+    find_core_binary()
+    record_shadow_comparison("ingest_folder")
+
+    bridge_kwargs: Dict[str, Any] = {
+        "folder_path": folder_path,
+        "max_file_size": max_file_size,
+        "max_total_bytes": max_total_bytes,
+        "max_file_count": max_file_count,
+        "max_depth": max_depth,
+        "max_line_length": max_line_length,
+        "include_junk": include_junk,
+        "max_rejections_per_reason": max_rejections_per_reason,
+        "max_total_rejections": max_total_rejections,
+    }
+    if deny_patterns != DEFAULT_SECRET_DENY_PATTERNS:
+        bridge_kwargs["deny_patterns"] = list(deny_patterns)
+    if junk_patterns != DEFAULT_JUNK_DIR_PATTERNS:
+        bridge_kwargs["junk_patterns"] = list(junk_patterns)
+
+    try:
+        raw_res = call_core_bridge("ingest_folder", **bridge_kwargs)
+        rust_items = [IngestedItem(**it) for it in raw_res.get("items", [])]
+        rust_rejections = [IngestionRejection(**rej) for rej in raw_res.get("rejections", [])]
+        rust_report = IngestionReport(
+            root=raw_res.get("root", ""),
+            items=rust_items,
+            rejections=rust_rejections,
+            total_bytes=raw_res.get("total_bytes", 0),
+            total_files=raw_res.get("total_files", 0),
+            limits=raw_res.get("limits", {}),
+            rejection_counts=raw_res.get("rejection_counts", {}),
+            rejections_capped=raw_res.get("rejections_capped", False),
+        )
+    except CoreBridgeUnavailableError:
+        raise
+    except Exception as exc:
+        record_shadow_discrepancy(
+            "ingest_folder",
+            f"Bridge invocation exception: {exc}",
+            exception=type(exc).__name__,
+        )
+        return py_report
+
+    py_dict = py_report.to_dict()
+    rust_dict = rust_report.to_dict()
+    if py_dict != rust_dict:
+        record_shadow_discrepancy(
+            "ingest_folder",
+            f"Ingest folder mismatch: py={py_dict!r} vs rust={rust_dict!r}",
+            py_report=py_dict,
+            rust_report=rust_dict,
+        )
+
+    return py_report
 

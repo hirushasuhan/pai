@@ -193,11 +193,9 @@ def _get_pai_dir() -> str:
         if os.path.exists(probe):
             os.unlink(probe)
         return pai_dir
-    except OSError:
-        import tempfile
-        fallback = os.path.join(tempfile.gettempdir(), "pai")
-        os.makedirs(fallback, exist_ok=True)
-        return fallback
+    except OSError as e:
+        raise RuntimeError(f"Sandbox runtime directory ~/.pai is inaccessible; failing closed: {e}") from e
+
 
 
 def ensure_sandbox_runtime() -> str:
