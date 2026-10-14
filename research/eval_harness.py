@@ -242,8 +242,8 @@ def verify_eval_set_hashes(
 
         hasher = hashlib.sha256()
         with open(full_path, "rb") as f:
-            while chunk := f.read(65536):
-                hasher.update(chunk)
+            content = f.read().replace(b"\r\n", b"\n")
+            hasher.update(content)
         actual_hash = hasher.hexdigest()
 
         if actual_hash != expected_hash:

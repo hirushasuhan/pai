@@ -219,9 +219,9 @@ class TestIngestDifferential(unittest.TestCase):
             ("credentials.json", b"{\"key\":\"val\"}\n", {}),
             ("service-account.json", b"{\"client_email\":\"a@b.com\"}\n", {}),
             ("normal.py", b"def add(a, b):\n    return a + b\n", {}),
-            ("aws_secret.txt", b"KEY = AKIAIOSFODNN7EXAMPLE\n", {}),
-            ("pem_secret.txt", b"-----BEGIN RSA PRIVATE KEY-----\nMIIE\n", {}),
-            ("db_url.txt", b"DATABASE_URL=postgres://user:mypassword123@host:5432/db\n", {}),
+            ("aws_secret.txt", b"KEY = " + b"AKIA" + b"IOSFODNN7EXAMPLE\n", {}),
+            ("pem_secret.txt", b"-----BEGIN " + b"RSA PRIVATE KEY-----\nMIIE\n", {}),
+            ("db_url.txt", b"DATABASE_URL=postgres://" + b"user:mypassword123" + b"@host:5432/db\n", {}),
             ("sinhala_text.txt", "සිංහල යුනිකෝඩ් පරීක්ෂණය\n".encode("utf-8"), {}),
         ]
 
@@ -375,6 +375,152 @@ class TestIngestDifferential(unittest.TestCase):
             if d.get("op") in ("ingest_file", "ingest_folder")
         ]
         self.assertEqual(len(discrepancies), 0, f"Unexpected discrepancies: {discrepancies}")
+
+    def test_cmd_analyze_and_cmd_docs_shadow_counters_incremented(self):
+        """Verifies pai analyze and pai docs with PAI_USE_RUST_CORE=1 increment shadow comparison counters."""
+        from unittest import mock
+        import pai
+
+        # Create a valid test repository folder
+        repo_dir = os.path.join(self.test_dir, "test_repo")
+        os.makedirs(repo_dir, exist_ok=True)
+        main_py = os.path.join(repo_dir, "main.py")
+        with open(main_py, "w", encoding="utf-8") as f:
+            f.write("# PAI Test\ndef hello():\n    return 'world'\nif __name__ == '__main__':\n    print(hello())\n")
+
+        doc_file = os.path.join(repo_dir, "README.md")
+        with open(doc_file, "w", encoding="utf-8") as f:
+            f.write("# Test Project Documentation\nThis is a safe documentation file for PAI docs.\n")
+
+        # Set shadow mode active
+        old_env = os.environ.get("PAI_USE_RUST_CORE")
+        old_pai_dir = os.environ.get("PAI_DIR")
+        pai_dir = os.path.join(self.test_dir, ".pai")
+        os.makedirs(pai_dir, exist_ok=True)
+        os.environ["PAI_DIR"] = pai_dir
+        os.environ["PAI_USE_RUST_CORE"] = "1"
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.reset_shadow_discrepancies()
+
+        try:
+            initial_comparisons, initial_discrepancies, _ = pai_core_bridge.get_shadow_stats()
+
+            with mock.patch("sandbox.probe_system_boundary", return_value=(True, "OK")):
+                with mock.patch("pai.probe_ollama_server", return_value={"reachable": True, "version": "0.1.0"}):
+                    with mock.patch("pai.call_model_generate", return_value="Objective analysis response"):
+                        # Execute pai analyze
+                        ret_analyze = pai.main(["analyze", repo_dir, "--model", "test-model", "--json"])
+                        self.assertEqual(ret_analyze, 0, "pai analyze should succeed")
+
+                        comps_after_analyze, disc_after_analyze, _ = pai_core_bridge.get_shadow_stats()
+                        self.assertGreater(comps_after_analyze, initial_comparisons, "ingest_folder comparison counter must increment")
+                        self.assertEqual(disc_after_analyze, 0, "No discrepancies after pai analyze")
+
+                        # Execute pai docs
+                        ret_docs = pai.main(["docs", doc_file, "--model", "test-model", "--json"])
+                        self.assertEqual(ret_docs, 0, "pai docs should succeed")
+
+                        comps_after_docs, disc_after_docs, _ = pai_core_bridge.get_shadow_stats()
+                        self.assertGreater(comps_after_docs, comps_after_analyze, "ingest_file comparison counter must increment")
+                        self.assertEqual(disc_after_docs, 0, "No discrepancies after pai docs")
+
+        finally:
+            if old_env is None:
+                os.environ.pop("PAI_USE_RUST_CORE", None)
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+            else:
+                os.environ["PAI_USE_RUST_CORE"] = old_env
+                pai_core_bridge.PAI_USE_RUST_CORE = (old_env == "1")
+            if old_pai_dir is None:
+                os.environ.pop("PAI_DIR", None)
+            else:
+                os.environ["PAI_DIR"] = old_pai_dir
+
+    def test_differential_dangling_symlinks_and_tight_caps(self):
+        """Verifies tight rejection caps and dangling symlink behavior match 100% between Python and Rust."""
+        caps_dir = os.path.join(self.test_dir, "caps_tree")
+        os.makedirs(caps_dir, exist_ok=True)
+
+        # Create multiple secret files (.env, credentials.json, id_rsa, server.pem)
+        for sname in [".env", ".env.local", "credentials.json", "id_rsa", "server.pem"]:
+            with open(os.path.join(caps_dir, sname), "w", encoding="utf-8") as f:
+                f.write("safe payload without secrets\n")
+
+        # Create multiple junk directories
+        for jname in ["node_modules", ".git", "__pycache__", ".venv"]:
+            jdir = os.path.join(caps_dir, jname)
+            os.makedirs(jdir, exist_ok=True)
+            with open(os.path.join(jdir, "junk.txt"), "w", encoding="utf-8") as f:
+                f.write("junk data\n")
+
+        # Create binary files
+        for bidx in range(4):
+            with open(os.path.join(caps_dir, f"bin_{bidx}.bin"), "wb") as f:
+                f.write(b"data\x00data\x00")
+
+        # Test with tight caps: max_rejections_per_reason=2, max_total_rejections=5
+        py_rep = ingest.ingest_folder(
+            caps_dir,
+            max_rejections_per_reason=2,
+            max_total_rejections=5,
+        )
+        bridge_res = pai_core_bridge.call_core_bridge(
+            "ingest_folder",
+            folder_path=caps_dir,
+            max_rejections_per_reason=2,
+            max_total_rejections=5,
+        )
+
+        rust_rejections = [IngestionRejection(**rej) for rej in bridge_res.get("rejections", [])]
+        rust_rep = IngestionReport(
+            root=bridge_res.get("root", ""),
+            items=[IngestedItem(**it) for it in bridge_res.get("items", [])],
+            rejections=rust_rejections,
+            total_bytes=bridge_res.get("total_bytes", 0),
+            total_files=bridge_res.get("total_files", 0),
+            limits=bridge_res.get("limits", {}),
+            rejection_counts=bridge_res.get("rejection_counts", {}),
+            rejections_capped=bridge_res.get("rejections_capped", False),
+        )
+
+        self.assertTrue(py_rep.rejections_capped, "Python should report rejections_capped=True under tight limits")
+        self.assertTrue(rust_rep.rejections_capped, "Rust should report rejections_capped=True under tight limits")
+        self.assertEqual(py_rep.rejection_counts, rust_rep.rejection_counts, "Rejection counts must match")
+        self.assertEqual(len(py_rep.rejections), len(rust_rep.rejections), "Rejection list lengths must match under caps")
+        self.assertEqual([r.to_dict() for r in py_rep.rejections], [r.to_dict() for r in rust_rep.rejections])
+
+        # Test dangling symlinks if supported
+        symlink_dir = os.path.join(self.test_dir, "symlink_test")
+        os.makedirs(symlink_dir, exist_ok=True)
+        int_dangling = os.path.join(symlink_dir, "int_dangling.txt")
+        esc_dangling = os.path.join(symlink_dir, "esc_dangling.txt")
+
+        symlinks_work = False
+        try:
+            os.symlink("non_existent_target.txt", int_dangling)
+            os.symlink("../outside_non_existent.txt", esc_dangling)
+            symlinks_work = True
+        except (OSError, NotImplementedError):
+            pass
+
+        if symlinks_work:
+            py_int_item, py_int_rej = ingest.ingest_file(int_dangling, root_path=symlink_dir)
+            rust_int_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=int_dangling, root_path=symlink_dir)
+            rust_int_rej = IngestionRejection(**rust_int_res["rejection"]) if rust_int_res.get("rejection") else None
+
+            self.assertIsNotNone(py_int_rej)
+            self.assertIsNotNone(rust_int_rej)
+            self.assertEqual(py_int_rej.reason_code, rust_int_rej.reason_code)
+            self.assertEqual(py_int_rej.reason_code, "NOT_FOUND")
+
+            py_esc_item, py_esc_rej = ingest.ingest_file(esc_dangling, root_path=symlink_dir)
+            rust_esc_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=esc_dangling, root_path=symlink_dir)
+            rust_esc_rej = IngestionRejection(**rust_esc_res["rejection"]) if rust_esc_res.get("rejection") else None
+
+            self.assertIsNotNone(py_esc_rej)
+            self.assertIsNotNone(rust_esc_rej)
+            self.assertEqual(py_esc_rej.reason_code, rust_esc_rej.reason_code)
+            self.assertEqual(py_esc_rej.reason_code, "SYMLINK_ESCAPE")
 
 
 if __name__ == "__main__":

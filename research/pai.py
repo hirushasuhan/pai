@@ -319,7 +319,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"Failed to clear shadow log: {e}")
             return 1
 
-    from ingest import get_ingest_limits
+    from pai_core_bridge import get_ingest_limits
 
     telem = HardwareTelemetry()
     snap = telem.get_system_snapshot()
@@ -460,15 +460,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             })
         else:
             comparisons, discrepancies, _ = get_shadow_stats()
-            if comparisons == 0:
-                detail_str = "no comparisons yet (flag on)"
-                passed_val = True
-            elif discrepancies == 0:
-                detail_str = f"0 discrepancies in {comparisons} comparisons (Rust core bridge matches Python reference)"
-                passed_val = True
-            else:
+            if discrepancies > 0:
                 detail_str = f"{discrepancies} discrepancies in {comparisons} comparisons"
                 passed_val = False
+            elif comparisons == 0:
+                detail_str = "no comparisons yet (flag on)"
+                passed_val = True
+            else:
+                detail_str = f"0 discrepancies in {comparisons} comparisons (Rust core bridge matches Python reference)"
+                passed_val = True
 
             checks_table.append({
                 "check": "core_bridge_shadow",
@@ -1533,7 +1533,7 @@ def cmd_analyze(args) -> int:
     if not getattr(args, "json", False):
         print("Sandbox execution boundary verified fail-closed.")
 
-    from ingest import (
+    from pai_core_bridge import (
         assemble_untrusted_context,
         format_untrusted_context,
         generate_envelope_nonce,
@@ -1969,7 +1969,7 @@ def cmd_docs(args) -> int:
     import csv
     import io
     import random
-    from ingest import (
+    from pai_core_bridge import (
         generate_envelope_nonce,
         ingest_file,
         is_secret_file,

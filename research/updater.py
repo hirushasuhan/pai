@@ -120,7 +120,14 @@ class Updater:
     def __init__(self, trust_root: str, install_root: str, product: str = "pai-core"):
         self.trust_root, self.install_root, self.product = trust_root, install_root, product
         with open(os.path.join(trust_root, "trust.json"), encoding="utf-8") as f:
-            trust = json.load(f)
+            self._raw_trust_json = f.read()
+            trust = json.loads(self._raw_trust_json)
+        if not isinstance(trust.get("keys"), list) or len(trust["keys"]) == 0:
+            raise ValueError("trust.json must contain a non-empty 'keys' list")
+        const_sha = str(trust.get("constitution_sha256", ""))
+        if not _SHA_RE.match(const_sha):
+            raise ValueError(f"invalid constitution_sha256: {const_sha}")
+        self.constitution_sha256: str = const_sha
         self.keys: Dict[str, bytes] = {}
         for k in trust["keys"]:
             hex_key = k.get("public_hex", "")
@@ -136,7 +143,6 @@ class Updater:
                 raise ValueError(f"invalid curve point or small-order key {k['id']}")
             if not k.get("revoked", False):
                 self.keys[k["id"]] = pub
-        self.constitution_sha256: str = trust["constitution_sha256"]
         os.makedirs(os.path.join(install_root, "releases"), exist_ok=True)
         self._state_path = os.path.join(install_root, "state.json")
         self._current_path = os.path.join(install_root, "current.json")
@@ -250,11 +256,15 @@ class Updater:
 
         # Fail-closed if binary missing or handshake fails
         pai_core_bridge.find_core_binary()
+        pai_core_bridge.record_shadow_comparison("verify_release")
 
-        trust_cfg = {
-            "keys": [{"id": kid, "public_hex": pub.hex(), "revoked": False} for kid, pub in self.keys.items()],
-            "constitution_sha256": self.constitution_sha256,
-        }
+        trust_cfg_json = getattr(self, "_raw_trust_json", None)
+        if trust_cfg_json is None:
+            trust_cfg = {
+                "keys": [{"id": kid, "public_hex": pub.hex(), "revoked": False} for kid, pub in self.keys.items()],
+                "constitution_sha256": self.constitution_sha256,
+            }
+            trust_cfg_json = json.dumps(trust_cfg)
         highest = self._state()["highest_seen"] if check_rollback else None
 
         rust_res = None
@@ -262,7 +272,7 @@ class Updater:
         try:
             rust_res = pai_core_bridge.verify_release(
                 release_dir=release_dir,
-                trust_config_json=json.dumps(trust_cfg),
+                trust_config_json=trust_cfg_json,
                 expected_product=self.product,
                 check_rollback=check_rollback,
                 highest_seen_version=highest,

@@ -131,6 +131,16 @@ class Vectors(unittest.TestCase):
             scan_secret_content(raw_test_ingest, file_path="research/tests/test_ingest.py"),
             "test_ingest.py must not contain contiguous secret-shaped literals at rest",
         )
+        test_diff_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "test_ingest_differential.py",
+        )
+        with open(test_diff_path, encoding="utf-8") as f:
+            raw_test_diff = f.read()
+        self.assertIsNone(
+            scan_secret_content(raw_test_diff, file_path="research/tests/test_ingest_differential.py"),
+            "test_ingest_differential.py must not contain contiguous secret-shaped literals at rest",
+        )
 
     def test_verify_loop_vectors_match_the_code(self):
         vec = load("verify_loop_vectors.json")

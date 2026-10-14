@@ -223,8 +223,11 @@ ctypes.string_at(0)
         self.assertIn(res.status, ("crash", "error"))
         self.assertNotEqual(res.exit_code, 0)
 
-    def test_pai_dir_fail_closed_when_inaccessible(self):
-        """Finding 5: _get_pai_dir must fail closed (raise RuntimeError) when ~/.pai is inaccessible and PAI_DIR unset."""
+
+class TestPaiDirResolution(unittest.TestCase):
+    """Slice 4/5: Tests for _get_pai_dir resolution, PAI_DIR override, and fail-closed security across platforms."""
+
+    def test_pai_dir_default_fail_closed_when_inaccessible(self):
         from unittest import mock
         from sandbox_win32 import _get_pai_dir
 
@@ -236,7 +239,27 @@ ctypes.string_at(0)
                     _get_pai_dir()
                 self.assertIn("failing closed", str(cm.exception))
 
+    def test_pai_dir_override_valid(self):
+        from unittest import mock
+        from sandbox_win32 import _get_pai_dir
+
+        with tempfile.TemporaryDirectory(prefix="pai_dir_test_") as tmp:
+            with mock.patch.dict(os.environ, {"PAI_DIR": tmp}):
+                got = _get_pai_dir()
+                self.assertEqual(os.path.abspath(got), os.path.abspath(tmp))
+
+    def test_pai_dir_override_unwritable_fail_closed(self):
+        from unittest import mock
+        from sandbox_win32 import _get_pai_dir
+
+        with mock.patch.dict(os.environ, {"PAI_DIR": "/invalid/nonexistent/read_only_root/pai"}):
+            with mock.patch("os.makedirs", side_effect=OSError("Read-only file system")):
+                with self.assertRaises(RuntimeError) as cm:
+                    _get_pai_dir()
+                self.assertIn("failing closed", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

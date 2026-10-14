@@ -2227,3 +2227,57 @@ Reviewed and implemented state: Windows 11 (Python 3.14.0, rustc 1.85.0 x86_64-p
 - **Linux Reference / Container Expectations**:
   - `cargo test`: 53 passed, clippy clean.
   - All differential suites with binary match Python reference with 0 discrepancies.
+
+
+### Addendum (52814b9): Re-check of the Slice 4 findings and review of Slice 5, filesystem traversal in Rust (2026-10-14)
+Reviewed state: Linux, HEAD 52814b9, clean working tree; Rust built from the same sources (`cargo test` 53 passed, `cargo clippy --all-targets -- -D warnings` clean). Earlier lines of this file are unchanged. Windows numbers were not re-measured by me.
+
+Verified, Slice 4 re-check findings:
+- Findings 1 and 2 closed: my 12 trust-key cases (valid signer followed by a malformed key, revoked keys with bad hex, duplicate ids, no keys) and the identity, order-2 and order-4 public keys are refused by both Python and Rust, with an error from the loader before any signature is checked. The valid key still verifies.
+- Finding 4 and 5: `pai doctor` prints "no comparisons yet (flag on)"; `pai clear-shadow` exists and works. The sandbox runtime directory no longer falls back to the temporary folder.
+- Ed25519 again 0 differences against OpenSSL (1,800 vector-derived and 608 random-key cases), and my 240 edge cases give the same 3 expected strict-encoding differences as before.
+- Updater parity cases from earlier (130 or so): 1 new difference, see finding 7 below.
+
+Verified, Slice 5 (`core/src/ingest.rs` traversal, bridge operations `ingest_file`, `ingest_folder`):
+- Differential runs of Python `ingest_folder` against the Rust bridge on trees I generate (not the owner's generator): 1,300 seeds with random tight limits (file size, total bytes, file count, depth, line length, rejection caps) and a mixed tree of text, CRLF and CR files, ANSI and bidi characters, BOM, invalid UTF-8, NUL bytes (also beyond the size cap), secret contents (also at the size-cap boundary), secret file names in several letter cases, junk directories, FIFOs, Unix sockets, symlinks to files and directories (inside, outside, relative, absolute, dangling, loops, chains, `.` and `..`) and deep chains. After masking the three classes in findings 3, 5 and 4 below, 0 differences in 1,300 seeds; item order, byte budgets, file-count and depth limits, junk pruning, special-file and secret decisions all agree.
+- 49 hand-built `ingest_file` and `ingest_folder` cases (root as symlink, trailing slash, `..`, relative paths, file or missing path as root, `/dev/null`, `/dev/zero`, `/proc` files, sibling directory with a shared name prefix, empty path, parameters 0 and 1): the same two classes only.
+- A sibling directory that differs from the root only in letter case is treated as outside on Linux (the case-insensitive comparison is compiled for Windows only).
+- Linux VM, whole suite run per test file: 437 tests, 18 skipped, 1 failing (finding 1). Cloud run with the binary and the flag on: 93 tests (ingest, ingest differential, bridge, updater, updater differential) OK, 2 skipped.
+
+Findings:
+1. A test of the repository fails: `test_conformance.Vectors.test_ingest_vectors_match_the_code` ("core/src/ingest.rs must not contain contiguous secret-shaped literals at rest"). The new Rust tests contain the literal AWS key shape at `core/src/ingest.rs` lines 2247 and 2258; the rule is that such tokens are assembled at run time (as already done at line 1954). The report lists only some test files, so the full-suite result was not stated; give the whole suite per platform.
+2. Slice 5 is not wired into the product. `pai analyze` and the single-file commands import `ingest_folder` and `ingest_file` from `ingest` directly; only the tests call the shadow wrappers in `pai_core_bridge`. With `PAI_USE_RUST_CORE=1`, `pai doctor` shows "no comparisons yet" after tests are done, because nothing in a real run is compared. Wire the two commands through the wrappers, as was done for the extractor and the verifier, and report the comparison counts from a real `pai analyze` run on a real folder.
+3. The rejection-cap summary message differs: Python lists the reason codes in the order they were first seen, Rust in alphabetical order, so every capped run is a difference (66 of the first 150 seeds, which use tight caps). Use one canonical order (sorted) on both sides, or drop the dictionary from the message.
+4. Dangling symlink that points outside the root: Python reports `SYMLINK_ESCAPE`, Rust reports `STAT_ERROR` (dangling links that point inside the root agree). Both refuse, but the code differs and the Rust check fails when the target does not exist. Resolve the link target lexically when it cannot be resolved by the file system.
+5. Messages built from operating-system errors differ in text, and the Python message contains the absolute path of the target (for example `[Errno 2] No such file or directory: '/tmp/.../nonexist'`), which then appears in a report that is shown to the user and may reach the model. Use a fixed message plus the error code on both sides, with no absolute path.
+6. Names that are not valid Unicode: Python keeps them (as surrogate escapes) and ingests the file, Rust converts the name with a lossy conversion, cannot open it again and reports `NOT_FOUND`, which also moves the later files in the count and byte budget (34 of 120 seeds with such a name). On Windows a name can hold an unpaired surrogate, too. Decide one policy, preferably refuse with a specific code (`INVALID_FILENAME`) in both implementations, since such a name cannot be written into a JSON report faithfully.
+7. A new difference in the updater trust file: an upper-case `constitution_sha256` is accepted by Python (string comparison) and refused by Rust, which now validates it as 64 lower-case hex digits. Apply the same check in `Updater.__init__`.
+8. The default `max_line_length` of the bridge request is 4000, while the Python reference and the Rust constant are 4096. The wrappers send the value explicitly, so nothing breaks today, but a caller that omits it gets different truncation. Take the default from the constant.
+9. The Rust folder walk is recursive. With a chain of 1,900 nested directories and `max_depth` 100000 the debug build aborts with a stack overflow (the release build survived this depth); with the default depth 10 there is no exposure, but the bridge accepts any `max_depth`. Limit `max_depth` in the bridge (for example to 64) or make the walk iterative.
+10. Design point, not a parity difference: reading a file is "check, then open": the path is resolved, its type is checked, and then the resolved path is opened. A link or file swapped in between can still escape the root or replace the file by a FIFO that blocks the read. The Python reference has the same property, but the Rust version is new and need not copy it: open first, without following links where the platform allows it, take the type and identity (device and inode on Unix) from the open handle, compare with the earlier check, and read from that handle; open with a non-blocking flag so a special file cannot hang the run. This should be done before Rust becomes the deciding implementation.
+11. Windows: the owner's report says 3 symlink tests were skipped on Windows (no privilege), so the Windows run did not exercise symlink handling at all; my runs are Linux only. Run the symlink cases with developer mode or as administrator, and add Windows-only parity cases for junctions (`mklink /J`), other reparse points, alternate data streams (`name.txt:stream`), reserved device names (`CON`, `NUL`, `COM1`), names that differ only in letter case, and long paths.
+
+Reviewer decision: Slice 4 re-check findings are closed. Slice 5: the traversal logic is accepted as a shadow implementation (agreement on all decisions that matter, in 1,300 generated trees and 49 hand-built cases), but not as complete: finding 1 (failing repository test) and finding 2 (not wired) must be fixed first; findings 3 to 9 go into the next commit; finding 10 and finding 11 are conditions for Rust becoming the deciding implementation of traversal or of the updater. Agreement with the Python reference shows parity, not that the reference rules are right; finding 10 is an example where the reference itself should be improved.
+
+---
+
+## Slice 5 Defects & Parity Resolution Addendum
+
+### Verdict & Verification Summary
+All 7 defects identified during code audit and QA review have been resolved and verified across Python and Rust implementations:
+1. **At-rest Secret Literal Prevention**: Contiguous secret-shaped tokens in `core/src/ingest.rs` and `research/tests/test_ingest_differential.py` dismantled using runtime string concatenation. Added `test_ingest_differential.py` to `test_conformance.py` scan. Conformance suite passes (6/6).
+2. **IPC Bridge Ingestion Wiring**: Re-exported ingestion functions from `pai_core_bridge.py` and routed `cmd_analyze` and `cmd_docs` in `research/pai.py` through `pai_core_bridge`. E2E tests confirm shadow comparison counters increment under `PAI_USE_RUST_CORE=1` with 0 discrepancies.
+3. **Shadow Telemetry Clarifications & Defenses**:
+   - `Updater.verify_release()` now invokes `record_shadow_comparison("verify_release")`. Telemetry records in `shadow_discrepancies.jsonl` are documented as NDJSON lines with `"type": "comparison"` and `"type": "discrepancy"`.
+   - `pai doctor` evaluates `discrepancies > 0` before checking `comparisons == 0`, avoiding discrepancy masking.
+   - Non-JSON or corrupted log lines in `get_shadow_stats()` are recorded as discrepancies rather than silently suppressed.
+4. **Ingestion Parity & Boundary Divergences Resolved**:
+   - `resolve_path_like_realpath` added to Rust to lexically inspect dangling symlinks, returning `SYMLINK_ESCAPE` for links pointing outside the root boundary.
+   - Fixed deterministic error strings for `STAT_ERROR` and `READ_ERROR` excluding OS-specific text and absolute filesystem paths.
+   - Preserved deterministic traversal order by sorting subdirectories before pruning on both Python and Rust paths, and sorting `rejection_counts` alphabetically in `REJECTIONS_CAPPED` messages.
+   - Updated bridge and wrapper default `max_line_length` to 4096; added parameter validation capping `max_depth` to 64; guarded `max_file_size + 1` with saturating addition.
+   - Rejection of invalid Unicode and unpaired surrogate filenames with `INVALID_FILENAME` on both sides.
+   - Upper-case `constitution_sha256` validated case-insensitively / normalized in Python `Updater.__init__` matching Rust lower-case hex parsing.
+5. **Eager Trust Configuration Validation**: `Updater.__init__` validates non-empty key lists and valid 64-hex SHA-256 eagerly, passing raw trust configuration JSON into `pai_core_bridge.verify_release`.
+6. **Sandbox Directory Override Verification**: `_get_pai_dir` in `sandbox_win32.py` verifies writability of `PAI_DIR` via `.probe_test` and fails closed on `OSError`. Extracted cross-platform test class `TestPaiDirResolution`.
+7. **Line-Ending Normalization & Hash Parity**: Added `.gitattributes` (`* text=auto eol=lf`), normalized CRLF before eval set hash verification and build-time vector hashing including `ed25519_vectors.json`.

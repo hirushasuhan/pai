@@ -122,6 +122,21 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
+fn normalize_crlf(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            out.push(b'\n');
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
@@ -132,6 +147,7 @@ fn main() {
         "url_policy_vectors.json",
         "ingest_vectors.json",
         "verify_loop_vectors.json",
+        "ed25519_vectors.json",
     ];
 
     let mut hasher = Sha256::new();
@@ -142,7 +158,8 @@ fn main() {
         println!("cargo:rerun-if-changed={}", p.display());
         if let Ok(bytes) = fs::read(&p) {
             hasher.update(vf.as_bytes());
-            hasher.update(&bytes);
+            let normalized = normalize_crlf(&bytes);
+            hasher.update(&normalized);
             any_found = true;
         }
     }

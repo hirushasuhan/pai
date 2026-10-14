@@ -1339,6 +1339,69 @@ fn compute_rel_path(target: &Path, base: &Path, fallback: &str) -> String {
     }
 }
 
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c.as_os_str()),
+        }
+    }
+    out
+}
+
+pub fn resolve_path_like_realpath(path: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(path) {
+        return strip_verbatim_prefix(c);
+    }
+    let mut current = path.to_path_buf();
+    for _ in 0..32 {
+        let meta = match std::fs::symlink_metadata(&current) {
+            Ok(m) => m,
+            Err(_) => break,
+        };
+        if meta.file_type().is_symlink() {
+            match std::fs::read_link(&current) {
+                Ok(target) => {
+                    if target.is_relative() {
+                        let parent = current.parent().unwrap_or(Path::new("."));
+                        current = parent.join(target);
+                    } else {
+                        current = target;
+                    }
+                    if let Ok(c) = std::fs::canonicalize(&current) {
+                        return strip_verbatim_prefix(c);
+                    }
+                }
+                Err(_) => break,
+            }
+        } else {
+            break;
+        }
+    }
+
+    let mut ancestors_stack = Vec::new();
+    let mut curr = current.as_path();
+    while let Some(parent) = curr.parent() {
+        if let Some(name) = curr.file_name() {
+            ancestors_stack.push(name);
+        }
+        if let Ok(canon_parent) = std::fs::canonicalize(parent) {
+            let mut resolved = strip_verbatim_prefix(canon_parent);
+            while let Some(tail) = ancestors_stack.pop() {
+                resolved.push(tail);
+            }
+            return lexical_normalize(&resolved);
+        }
+        curr = parent;
+    }
+
+    lexical_normalize(&normalize_abs_path(&current))
+}
+
 /// Safely ingests a single file, verifying path boundaries, symlinks, device types,
 /// secrets hygiene, content size caps, binary safety, text normalization, and secret scanning.
 pub fn ingest_file(
@@ -1365,6 +1428,18 @@ pub fn ingest_file(
 
     let rel_path = compute_rel_path(&abs_target, &canonical_root, file_path);
 
+    // 0. Filename validity check (reject lone surrogates or unencodable UTF-8)
+    if file_path.contains('\u{FFFD}') {
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "INVALID_FILENAME".into(),
+                message: "Filename contains invalid Unicode or non-decodable bytes".into(),
+            }),
+        );
+    }
+
     // 1. Existence check
     let lst = match std::fs::symlink_metadata(&abs_target) {
         Ok(m) => m,
@@ -1378,13 +1453,13 @@ pub fn ingest_file(
                 }),
             );
         }
-        Err(e) => {
+        Err(_) => {
             return (
                 None,
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "STAT_ERROR".into(),
-                    message: format!("Failed to inspect file status: {}", e),
+                    message: format!("Failed to inspect file status: {}", file_basename(file_path)),
                 }),
             );
         }
@@ -1392,9 +1467,7 @@ pub fn ingest_file(
 
     // 2. Symlink escape check
     if lst.file_type().is_symlink() {
-        let target_dest = strip_verbatim_prefix(
-            std::fs::canonicalize(&abs_target).unwrap_or_else(|_| abs_target.clone()),
-        );
+        let target_dest = resolve_path_like_realpath(&abs_target);
         if !is_same_or_descendant(&target_dest, &canonical_root) {
             let dest_name = file_basename(&target_dest.to_string_lossy());
             return (
@@ -1409,9 +1482,7 @@ pub fn ingest_file(
     }
 
     // 3. Path boundary check
-    let real_target = strip_verbatim_prefix(
-        std::fs::canonicalize(&abs_target).unwrap_or_else(|_| abs_target.clone()),
-    );
+    let real_target = resolve_path_like_realpath(&abs_target);
     if !is_same_or_descendant(&real_target, &canonical_root) {
         let real_name = file_basename(&real_target.to_string_lossy());
         return (
@@ -1439,13 +1510,13 @@ pub fn ingest_file(
 
     let st = match std::fs::metadata(&real_target) {
         Ok(m) => m,
-        Err(e) => {
+        Err(_) => {
             return (
                 None,
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "STAT_ERROR".into(),
-                    message: format!("Failed to inspect file status: {}", e),
+                    message: format!("Failed to inspect file status: {}", file_basename(file_path)),
                 }),
             );
         }
@@ -1485,27 +1556,27 @@ pub fn ingest_file(
     // 6. Read content with size capping
     let file = match std::fs::File::open(&real_target) {
         Ok(f) => f,
-        Err(e) => {
+        Err(_) => {
             return (
                 None,
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "READ_ERROR".into(),
-                    message: format!("Failed to read file: {}", e),
+                    message: format!("Failed to read file: {}", file_basename(file_path)),
                 }),
             );
         }
     };
 
     let mut raw_data = Vec::new();
-    let mut take_reader = file.take((max_file_size + 1) as u64);
-    if let Err(e) = take_reader.read_to_end(&mut raw_data) {
+    let mut take_reader = file.take((max_file_size as u64).saturating_add(1));
+    if take_reader.read_to_end(&mut raw_data).is_err() {
         return (
             None,
             Some(IngestionRejection {
                 path: rel_path,
                 reason_code: "READ_ERROR".into(),
-                message: format!("Failed to read file: {}", e),
+                message: format!("Failed to read file: {}", file_basename(file_path)),
             }),
         );
     }
@@ -1606,7 +1677,8 @@ impl FolderWalkState {
             rel_dir.split(std::path::MAIN_SEPARATOR).count()
         };
 
-        if depth > self.max_depth {
+        let effective_max_depth = std::cmp::min(self.max_depth, 64);
+        if depth > effective_max_depth {
             self.add_rejection(IngestionRejection {
                 path: rel_dir,
                 reason_code: "MAX_DEPTH_EXCEEDED".into(),
@@ -1628,16 +1700,53 @@ impl FolderWalkState {
 
         for entry in read_entries.flatten() {
             let path = entry.path();
-            let fname = entry.file_name().to_string_lossy().to_string();
+            let raw_os_name = entry.file_name();
+            let fname = match raw_os_name.to_str() {
+                Some(s) => s.to_string(),
+                None => {
+                    let rel_fpath = compute_rel_path(&path, &self.canonical_root, &raw_os_name.to_string_lossy());
+                    self.add_rejection(IngestionRejection {
+                        path: rel_fpath,
+                        reason_code: "INVALID_FILENAME".into(),
+                        message: "Filename contains invalid Unicode or non-decodable bytes".into(),
+                    });
+                    continue;
+                }
+            };
+            if fname.contains('\u{FFFD}') {
+                let rel_fpath = compute_rel_path(&path, &self.canonical_root, &fname);
+                self.add_rejection(IngestionRejection {
+                    path: rel_fpath,
+                    reason_code: "INVALID_FILENAME".into(),
+                    message: "Filename contains invalid Unicode or non-decodable bytes".into(),
+                });
+                continue;
+            }
             let file_type = match entry.file_type() {
                 Ok(ft) => ft,
                 Err(_) => continue,
             };
 
             if file_type.is_symlink() {
-                let is_target_dir = match std::fs::metadata(&path) {
+                let resolved_dir = resolve_path_like_realpath(&path);
+                let is_target_dir = match std::fs::metadata(&resolved_dir) {
                     Ok(m) => m.is_dir(),
-                    Err(_) => false,
+                    Err(_) => {
+                        if !is_same_or_descendant(&resolved_dir, &self.canonical_root) {
+                            let rel_dpath = compute_rel_path(&path, &self.canonical_root, &fname);
+                            let dest_name = file_basename(&resolved_dir.to_string_lossy());
+                            self.add_rejection(IngestionRejection {
+                                path: rel_dpath,
+                                reason_code: "SYMLINK_ESCAPE".into(),
+                                message: format!(
+                                    "Symlinked directory points outside root boundary: {}",
+                                    dest_name
+                                ),
+                            });
+                            continue;
+                        }
+                        false
+                    }
                 };
                 if is_target_dir {
                     dir_entries.push((fname, path, true));
@@ -1651,13 +1760,15 @@ impl FolderWalkState {
             }
         }
 
+        // Sort dir_entries and file_entries BEFORE pruning!
+        dir_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        file_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
         let mut valid_subdirs = Vec::new();
         for (d_name, d_path, is_symlink) in dir_entries {
             let rel_dpath = compute_rel_path(&d_path, &self.canonical_root, &d_name);
             if is_symlink {
-                let target_dest = strip_verbatim_prefix(
-                    std::fs::canonicalize(&d_path).unwrap_or_else(|_| d_path.clone()),
-                );
+                let target_dest = resolve_path_like_realpath(&d_path);
                 if !is_same_or_descendant(&target_dest, &self.canonical_root) {
                     let dest_name = file_basename(&target_dest.to_string_lossy());
                     self.add_rejection(IngestionRejection {
@@ -1692,7 +1803,6 @@ impl FolderWalkState {
             valid_subdirs.push((d_name, d_path));
         }
 
-        file_entries.sort_by(|a, b| a.0.cmp(&b.0));
         valid_subdirs.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (fname, fpath) in file_entries {
@@ -2244,7 +2354,9 @@ mod tests {
 
         // 5. Secret content
         let secret_code = temp_dir.join("config.py");
-        std::fs::write(&secret_code, b"aws_key = 'AKIAIOSFODNN7EXAMPLE'\n").unwrap();
+        let aws_tok = ["AKIA", "IOSFODNN7EXAMPLE"].concat();
+        let secret_file_body = format!("aws_key = '{}'\n", aws_tok);
+        std::fs::write(&secret_code, secret_file_body.as_bytes()).unwrap();
         let (sc_item, sc_rej) = ingest_file(
             secret_code.to_str().unwrap(),
             Some(temp_dir.to_str().unwrap()),
@@ -2255,7 +2367,7 @@ mod tests {
         assert!(sc_item.is_none());
         let sc_rej = sc_rej.unwrap();
         assert_eq!(sc_rej.reason_code, "SECRET_CONTENT");
-        assert!(!sc_rej.message.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!sc_rej.message.contains(&aws_tok));
 
         // 6. Not found
         let (nf_item, nf_rej) = ingest_file(

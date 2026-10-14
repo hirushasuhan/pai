@@ -61,7 +61,7 @@ impl BridgeResponse {
 }
 
 fn default_max_line_length() -> usize {
-    4000
+    4096
 }
 
 fn default_max_file_size() -> usize {
@@ -431,6 +431,12 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
                     "InvalidParameter",
                 );
             }
+            if max_file_size == 0 || max_file_size > 100_000_000 {
+                return BridgeResponse::err(
+                    "max_file_size must be between 1 and 100000000",
+                    "InvalidParameter",
+                );
+            }
             let (item, rej) = ingest_file(
                 &file_path,
                 root_path.as_deref(),
@@ -461,6 +467,42 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             if max_line_length == 0 || max_line_length > 1_000_000 {
                 return BridgeResponse::err(
                     "max_line_length must be between 1 and 1000000",
+                    "InvalidParameter",
+                );
+            }
+            if max_file_size == 0 || max_file_size > 100_000_000 {
+                return BridgeResponse::err(
+                    "max_file_size must be between 1 and 100000000",
+                    "InvalidParameter",
+                );
+            }
+            if max_total_bytes == 0 || max_total_bytes > 1_000_000_000 {
+                return BridgeResponse::err(
+                    "max_total_bytes must be between 1 and 1000000000",
+                    "InvalidParameter",
+                );
+            }
+            if max_file_count == 0 || max_file_count > 1_000_000 {
+                return BridgeResponse::err(
+                    "max_file_count must be between 1 and 1000000",
+                    "InvalidParameter",
+                );
+            }
+            if max_depth == 0 || max_depth > 64 {
+                return BridgeResponse::err(
+                    "max_depth must be between 1 and 64",
+                    "InvalidParameter",
+                );
+            }
+            if max_rejections_per_reason == 0 || max_rejections_per_reason > 10_000 {
+                return BridgeResponse::err(
+                    "max_rejections_per_reason must be between 1 and 10000",
+                    "InvalidParameter",
+                );
+            }
+            if max_total_rejections == 0 || max_total_rejections > 50_000 {
+                return BridgeResponse::err(
+                    "max_total_rejections must be between 1 and 50000",
                     "InvalidParameter",
                 );
             }

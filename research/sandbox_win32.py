@@ -181,20 +181,18 @@ def _get_icacls_bin() -> str:
 
 def _get_pai_dir() -> str:
     override = os.environ.get("PAI_DIR")
-    if override:
-        os.makedirs(override, exist_ok=True)
-        return override
-    pai_dir = os.path.expanduser("~/.pai")
+    target_dir = os.path.abspath(override) if override else os.path.expanduser("~/.pai")
+    dir_label = f"PAI_DIR ({target_dir})" if override else "~/.pai"
     try:
-        os.makedirs(pai_dir, exist_ok=True)
-        probe = os.path.join(pai_dir, ".probe_test")
-        with open(probe, "w") as f:
+        os.makedirs(target_dir, exist_ok=True)
+        probe = os.path.join(target_dir, ".probe_test")
+        with open(probe, "w", encoding="utf-8") as f:
             f.write("ok")
         if os.path.exists(probe):
             os.unlink(probe)
-        return pai_dir
+        return target_dir
     except OSError as e:
-        raise RuntimeError(f"Sandbox runtime directory ~/.pai is inaccessible; failing closed: {e}") from e
+        raise RuntimeError(f"Sandbox runtime directory {dir_label} is inaccessible; failing closed: {e}") from e
 
 
 

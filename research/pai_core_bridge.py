@@ -35,7 +35,10 @@ from ingest import (
     IngestedItem,
     IngestionRejection,
     IngestionReport,
+    assemble_untrusted_context,
     defang_envelope_markers as py_defang_envelope_markers,
+    format_untrusted_context,
+    generate_envelope_nonce,
     get_ingest_limits as py_get_ingest_limits,
     ingest_file as py_ingest_file,
     ingest_folder as py_ingest_folder,
@@ -70,6 +73,7 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16 MiB
 _CORE_BIN_CACHE: Optional[str] = None
 
 _SHADOW_DISCREPANCIES: List[Dict[str, Any]] = []
+_SHADOW_COMPARISONS_COUNT: int = 0
 
 
 def _get_discrepancy_log_path() -> Path:
@@ -99,6 +103,8 @@ class CoreBridgeUnavailableError(RuntimeError):
 
 def record_shadow_comparison(op: str, **extra: Any) -> None:
     """Records that a shadow comparison was executed."""
+    global _SHADOW_COMPARISONS_COUNT
+    _SHADOW_COMPARISONS_COUNT += 1
     rec = {
         "timestamp": time.time(),
         "type": "comparison",
@@ -147,16 +153,18 @@ def get_shadow_stats() -> Tuple[int, int, List[Dict[str, Any]]]:
                     if line:
                         try:
                             obj = json.loads(line)
-                            if obj.get("type") == "comparison":
+                            if isinstance(obj, dict) and obj.get("type") == "comparison":
                                 comparisons += 1
-                            else:
+                            elif isinstance(obj, dict):
                                 discrepancies.append(obj)
+                            else:
+                                discrepancies.append({"corrupted": line})
                         except Exception:
-                            pass
+                            discrepancies.append({"corrupted": line})
             return comparisons, len(discrepancies), discrepancies
     except Exception as e:
         logger.warning("Failed to read shadow discrepancies log: %s", e)
-    return len(_SHADOW_DISCREPANCIES), len(_SHADOW_DISCREPANCIES), list(_SHADOW_DISCREPANCIES)
+    return _SHADOW_COMPARISONS_COUNT, len(_SHADOW_DISCREPANCIES), list(_SHADOW_DISCREPANCIES)
 
 
 def get_shadow_discrepancies() -> List[Dict[str, Any]]:
@@ -178,6 +186,8 @@ def clear_shadow_log() -> None:
 
 def reset_shadow_discrepancies() -> None:
     """Resets both in-memory and persistent shadow discrepancies log."""
+    global _SHADOW_COMPARISONS_COUNT
+    _SHADOW_COMPARISONS_COUNT = 0
     _SHADOW_DISCREPANCIES.clear()
     try:
         log_file = _get_discrepancy_log_path()
@@ -198,14 +208,16 @@ def compute_repo_vectors_hash() -> str:
         "url_policy_vectors.json",
         "ingest_vectors.json",
         "verify_loop_vectors.json",
+        "ed25519_vectors.json",
     ]
     h = hashlib.sha256()
     for vf in vector_files:
         p = os.path.join(base_dir, vf)
         if os.path.exists(p):
             with open(p, "rb") as f:
+                content = f.read().replace(b"\r\n", b"\n")
                 h.update(vf.encode("utf-8"))
-                h.update(f.read())
+                h.update(content)
     return h.hexdigest()
 
 
@@ -402,7 +414,7 @@ def sanitize_terminal_output(text: str) -> str:
     return res
 
 
-def sanitize_text_content(raw_utf8: str, max_line_length: int = 4000) -> str:
+def sanitize_text_content(raw_utf8: str, max_line_length: int = 4096) -> str:
     if max_line_length <= 0 or max_line_length > 1_000_000:
         raise ValueError(f"max_line_length must be between 1 and 1000000, got {max_line_length}")
     if not PAI_USE_RUST_CORE:

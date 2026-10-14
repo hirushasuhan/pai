@@ -807,6 +807,16 @@ def ingest_file(
     except ValueError:
         rel_path = file_path
 
+    # 0. Filename validity check (reject lone surrogates or unencodable UTF-8)
+    try:
+        os.path.basename(file_path).encode("utf-8")
+    except UnicodeEncodeError:
+        return None, IngestionRejection(
+            path=rel_path,
+            reason_code="INVALID_FILENAME",
+            message="Filename contains invalid Unicode or non-decodable bytes",
+        )
+
     # 1. Existence check
     if not os.path.lexists(abs_target):
         return None, IngestionRejection(
@@ -858,11 +868,11 @@ def ingest_file(
                 reason_code="SPECIAL_FILE",
                 message=f"Target resolves to a non-regular file (mode {oct(st.st_mode)})",
             )
-    except Exception as e:
+    except Exception:
         return None, IngestionRejection(
             path=rel_path,
             reason_code="STAT_ERROR",
-            message=f"Failed to inspect file status: {e}",
+            message=f"Failed to inspect file status: {os.path.basename(file_path)}",
         )
 
     # 5. Secrets hygiene check
@@ -877,11 +887,11 @@ def ingest_file(
     try:
         with open(real_target, "rb") as f:
             raw_data = f.read(max_file_size + 1)
-    except Exception as e:
+    except Exception:
         return None, IngestionRejection(
             path=rel_path,
             reason_code="READ_ERROR",
-            message=f"Failed to read file: {e}",
+            message=f"Failed to read file: {os.path.basename(file_path)}",
         )
 
     truncated = False
@@ -1006,6 +1016,10 @@ def ingest_folder(
             dirnames.clear()
             continue
 
+        # Sort for deterministic processing order BEFORE pruning
+        dirnames.sort()
+        filenames.sort()
+
         # Prune Junk Directories & Symlinked Directories
         pruned_dirs = []
         for d in list(dirnames):
@@ -1054,13 +1068,21 @@ def ingest_folder(
         for d in pruned_dirs:
             dirnames.remove(d)
 
-        # Sort for deterministic processing order
-        filenames.sort()
-        dirnames.sort()
-
         for fname in filenames:
             fpath = os.path.join(current_dir, fname)
             rel_fpath = os.path.relpath(fpath, canonical_root)
+
+            try:
+                fname.encode("utf-8")
+            except UnicodeEncodeError:
+                add_rejection(
+                    IngestionRejection(
+                        path=rel_fpath,
+                        reason_code="INVALID_FILENAME",
+                        message="Filename contains invalid Unicode or non-decodable bytes",
+                    )
+                )
+                continue
 
             # Check file count limit
             if len(items) >= max_file_count:
@@ -1112,7 +1134,7 @@ def ingest_folder(
             IngestionRejection(
                 path="[REJECTIONS_SUMMARY]",
                 reason_code="REJECTIONS_CAPPED",
-                message=f"Rejection list capped for memory bounds. Total rejections by reason: {dict(rejection_counts)}",
+                message=f"Rejection list capped for memory bounds. Total rejections by reason: {dict(sorted(rejection_counts.items()))}",
             )
         )
 
