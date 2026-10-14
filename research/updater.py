@@ -217,18 +217,22 @@ class Updater:
             if (not isinstance(rel, str) or rel.startswith(("/", "\\")) or "\\" in rel or ":" in rel
                     or any(part in ("..", "", ".") for part in rel.split("/"))):
                 raise UpdateRejected(f"unsafe path in manifest: {rel!r}")
-            full = os.path.realpath(os.path.join(root, *rel.split("/")))
-            if os.path.commonpath([full, root]) != root or os.path.islink(os.path.join(root, *rel.split("/"))):
-                raise UpdateRejected(f"path escapes release directory: {rel!r}")
-            if not os.path.exists(full):
+            raw_path = os.path.join(root, *rel.split("/"))
+            try:
+                pre_lst = os.lstat(raw_path)
+            except OSError:
                 raise UpdateRejected(f"listed file missing: {rel}")
+            if stat.S_ISLNK(pre_lst.st_mode):
+                raise UpdateRejected(f"path escapes release directory: {rel!r}")
+            full = os.path.realpath(raw_path)
+            if os.path.commonpath([full, root]) != root:
+                raise UpdateRejected(f"path escapes release directory: {rel!r}")
             if not isinstance(meta, dict) or not _SHA_RE.match(str(meta.get("sha256", ""))):
                 raise UpdateRejected(f"bad digest entry for {rel}")
             sz = meta.get("size")
             if type(sz) is not int or sz < 0:
                 raise UpdateRejected(f"bad size in manifest for {rel}")
 
-            raw_path = os.path.join(root, *rel.split("/"))
             try:
                 with open(full, "rb") as f:
                     st_handle = os.fstat(f.fileno())
@@ -236,15 +240,23 @@ class Updater:
                         raise UpdateRejected(f"listed file missing: {rel}")
                     if st_handle.st_size != sz:
                         raise UpdateRejected(f"size mismatch: {rel}")
-                    if hasattr(st_handle, "st_ino") and hasattr(os.lstat(raw_path), "st_ino"):
-                        l_st = os.lstat(raw_path)
-                        if l_st.st_ino != 0 and (st_handle.st_dev, st_handle.st_ino) != (l_st.st_dev, l_st.st_ino):
+                    if (
+                        hasattr(st_handle, "st_ino")
+                        and hasattr(pre_lst, "st_ino")
+                        and pre_lst.st_ino != 0
+                    ):
+                        if (st_handle.st_dev, st_handle.st_ino) != (
+                            pre_lst.st_dev,
+                            pre_lst.st_ino,
+                        ):
                             raise UpdateRejected(f"listed file replaced during verification: {rel}")
                     h = hashlib.sha256()
                     for chunk in iter(lambda: f.read(1 << 20), b""):
                         h.update(chunk)
                     if h.hexdigest() != meta["sha256"]:
                         raise UpdateRejected(f"SHA-256 mismatch (tampered?): {rel}")
+            except UpdateRejected:
+                raise
             except (OSError, IOError):
                 raise UpdateRejected(f"listed file missing: {rel}")
 

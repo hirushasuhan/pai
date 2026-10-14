@@ -583,7 +583,7 @@ class TestIngestDifferential(unittest.TestCase):
 
     def test_differential_alternate_data_streams(self):
         """Verifies Python and Rust return identical INVALID_FILENAME rejections for NTFS ADS colons."""
-        for ads in ["file.txt:stream", "notes.txt:secret", "test.py:$DATA"]:
+        for ads in ["file.txt:stream", "notes.txt:secret", "test.py:$DATA", "අ:stream", "é:stream"]:
             py_item, py_rej = ingest.ingest_file(ads, root_path=self.test_dir)
             rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=ads, root_path=self.test_dir)
             rust_rej = IngestionRejection(**rust_res["rejection"]) if rust_res.get("rejection") else None
@@ -596,6 +596,21 @@ class TestIngestDifferential(unittest.TestCase):
             self.assertEqual(rust_rej.reason_code, "INVALID_FILENAME")
             self.assertEqual(py_rej.message, rust_rej.message)
             self.assertEqual(py_rej.path, rust_rej.path)
+
+        # Relative path in subdirectory with root_path=None
+        sub_d = os.path.join(self.test_dir, "sub_diff")
+        os.makedirs(sub_d, exist_ok=True)
+        sub_f = os.path.join(sub_d, "diff_sample.py")
+        with open(sub_f, "w", encoding="utf-8") as f:
+            f.write("diff_val = 100\n")
+        rel_sub = os.path.relpath(sub_f, os.getcwd())
+        py_item, py_rej = ingest.ingest_file(rel_sub)
+        rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=rel_sub)
+        self.assertIsNone(py_rej)
+        self.assertIsNone(rust_res.get("rejection"))
+        self.assertIsNotNone(py_item)
+        self.assertIsNotNone(rust_res.get("item"))
+        self.assertEqual(py_item.text, rust_res["item"]["text"])
 
     def test_differential_windows_directory_junctions(self):
         """Verifies Python and Rust return identical rejections for Windows directory junctions."""

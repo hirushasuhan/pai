@@ -1264,7 +1264,10 @@ pub fn is_reserved_device_name(name: &str) -> bool {
 }
 
 pub fn has_ads_colon(path: &str) -> bool {
-    let p = path;
+    let mut p = path;
+    if p.starts_with(r"\\?\") || p.starts_with("//?/") {
+        p = &p[4..];
+    }
     let remainder =
         if p.len() >= 2 && p.as_bytes()[0].is_ascii_alphabetic() && p.as_bytes()[1] == b':' {
             &p[2..]
@@ -1454,27 +1457,32 @@ pub fn ingest_file(
     max_line_length: usize,
     deny_patterns: Option<&[String]>,
 ) -> (Option<IngestedItem>, Option<IngestionRejection>) {
-    let abs_target = normalize_abs_path(Path::new(file_path));
-
-    let canonical_root = match root_path {
+    let (canonical_root, abs_target) = match root_path {
         Some(rp) => {
             let abs_root = normalize_abs_path(Path::new(rp));
-            strip_verbatim_prefix(std::fs::canonicalize(&abs_root).unwrap_or(abs_root))
+            let c_root =
+                strip_verbatim_prefix(std::fs::canonicalize(&abs_root).unwrap_or(abs_root));
+            let target = if Path::new(file_path).is_absolute() {
+                normalize_abs_path(Path::new(file_path))
+            } else {
+                let cwd_candidate = normalize_abs_path(Path::new(file_path));
+                if is_same_or_descendant(&cwd_candidate, &c_root)
+                    && std::fs::symlink_metadata(&cwd_candidate).is_ok()
+                {
+                    cwd_candidate
+                } else {
+                    normalize_abs_path(&c_root.join(file_path))
+                }
+            };
+            (c_root, target)
         }
         None => {
-            let parent = abs_target.parent().unwrap_or(&abs_target);
-            strip_verbatim_prefix(
+            let target = normalize_abs_path(Path::new(file_path));
+            let parent = target.parent().unwrap_or(&target);
+            let c_root = strip_verbatim_prefix(
                 std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()),
-            )
-        }
-    };
-
-    let abs_target = if Path::new(file_path).is_absolute() {
-        normalize_abs_path(Path::new(file_path))
-    } else {
-        match root_path {
-            Some(_) => normalize_abs_path(&canonical_root.join(file_path)),
-            None => normalize_abs_path(Path::new(file_path)),
+            );
+            (c_root, target)
         }
     };
 
@@ -1482,7 +1490,7 @@ pub fn ingest_file(
     let fname_base = file_basename(file_path);
 
     // 0. Filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
-    if file_path.contains('\u{FFFD}') || has_ads_colon(file_path) {
+    if file_path.contains('\u{FFFD}') || has_ads_colon(&fname_base) || has_ads_colon(&rel_path) {
         return (
             None,
             Some(IngestionRejection {
@@ -2664,6 +2672,28 @@ mod tests {
             r_ads.message,
             "Filename contains invalid Unicode or non-decodable bytes"
         );
+
+        // 2b. Non-ASCII ADS colon rejection
+        let (item_ads2, rej_ads2) = ingest_file(
+            "අ:stream",
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(item_ads2.is_none());
+        assert_eq!(rej_ads2.unwrap().reason_code, "INVALID_FILENAME");
+
+        // 2c. Relative path in subdirectory without root_path (root_path=None)
+        let sub_dir = temp_dir.join("sub_mod");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let sub_file = sub_dir.join("sample.rs");
+        std::fs::write(&sub_file, b"fn main() {}").unwrap();
+        let (item_rel, rej_rel) = ingest_file(sub_file.to_str().unwrap(), None, 1024, 4096, None);
+        assert!(rej_rel.is_none());
+        assert!(item_rel.is_some());
+        assert_eq!(item_rel.unwrap().text, "fn main() {}");
+        let _ = std::fs::remove_dir_all(&sub_dir);
 
         // 3. Reserved directory pruned in ingest_folder
         let reserved_dir = temp_dir.join("NUL.dir");

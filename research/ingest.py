@@ -819,7 +819,9 @@ def has_ads_colon(path: str) -> bool:
     excluding an initial single-letter Windows drive prefix (e.g. 'C:').
     """
     p = path
-    if len(p) >= 2 and p[0].isalpha() and p[1] == ":":
+    if p.startswith(("\\\\?\\", "//?/")):
+        p = p[4:]
+    if len(p) >= 2 and p[0].isascii() and p[0].isalpha() and p[1] == ":":
         p = p[2:]
     return ":" in p
 
@@ -857,13 +859,24 @@ def ingest_file(
     Always reports relative paths in rejections.
     """
     if root_path is None:
-        root_path = os.path.dirname(os.path.abspath(file_path))
-
-    canonical_root = os.path.realpath(os.path.abspath(root_path))
-    if os.path.isabs(file_path):
         abs_target = os.path.abspath(file_path)
+        canonical_root = os.path.realpath(os.path.dirname(abs_target))
     else:
-        abs_target = os.path.abspath(os.path.join(canonical_root, file_path))
+        canonical_root = os.path.realpath(os.path.abspath(root_path))
+        if os.path.isabs(file_path):
+            abs_target = os.path.abspath(file_path)
+        else:
+            cwd_candidate = os.path.abspath(file_path)
+            try:
+                is_under_root = (
+                    os.path.commonpath([canonical_root, cwd_candidate]) == canonical_root
+                )
+            except ValueError:
+                is_under_root = False
+            if is_under_root and os.path.lexists(cwd_candidate):
+                abs_target = cwd_candidate
+            else:
+                abs_target = os.path.abspath(os.path.join(canonical_root, file_path))
 
     # Relative display path
     try:
@@ -874,7 +887,7 @@ def ingest_file(
     basename = os.path.basename(file_path)
 
     # 0. Filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
-    if _is_invalid_filename(basename) or _is_invalid_filename(file_path) or has_ads_colon(file_path):
+    if _is_invalid_filename(basename) or _is_invalid_filename(file_path) or has_ads_colon(basename) or has_ads_colon(rel_path):
         return None, IngestionRejection(
             path=_lossy_utf8(rel_path),
             reason_code="INVALID_FILENAME",

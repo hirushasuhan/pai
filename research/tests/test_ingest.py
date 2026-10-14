@@ -649,12 +649,24 @@ class TestSafeIngestModule(unittest.TestCase):
 
     def test_ntfs_alternate_data_streams_rejected(self):
         """Verifies NTFS alternate data streams (: in path after drive) are rejected as INVALID_FILENAME."""
-        for ads in ["file.txt:stream", "notes.txt:secret", "test.py:$DATA"]:
+        for ads in ["file.txt:stream", "notes.txt:secret", "test.py:$DATA", "අ:stream", "é:stream"]:
             item, rej = ingest_file(ads, root_path=self.test_dir)
             self.assertIsNone(item)
             self.assertIsNotNone(rej)
             self.assertEqual(rej.reason_code, "INVALID_FILENAME")
             self.assertEqual(rej.message, "Filename contains invalid Unicode or non-decodable bytes")
+
+        # Relative path in subdirectory without root_path (root_path=None) does not double directories
+        sub_d = os.path.join(self.test_dir, "sub_mod")
+        os.makedirs(sub_d, exist_ok=True)
+        sub_f = os.path.join(sub_d, "sample.py")
+        with open(sub_f, "w", encoding="utf-8") as f:
+            f.write("val = 42\n")
+        rel_sub = os.path.relpath(sub_f, os.getcwd())
+        item, rej = ingest_file(rel_sub)
+        self.assertIsNone(rej)
+        self.assertIsNotNone(item)
+        self.assertEqual(item.text, "val = 42\n")
 
     def test_windows_directory_junction_containment(self):
         """Verifies Windows directory junctions (mklink /J) are treated as symlinks/reparse points."""
