@@ -495,20 +495,18 @@ fn validate_verify_loop_cases(
 
     for c in codec_envelope_json_cases {
         total += 1;
-        let res = std::panic::catch_unwind(|| {
-            match decode_envelope_json(&c.raw_json) {
-                Ok(decoded) => {
-                    let py_type = decoded.python_type_name().to_string();
-                    match encode_value_strict(&decoded) {
-                        Ok(strict_enc) => {
-                            let canonical = strict_enc.to_python_canonical_json();
-                            (true, Some(py_type), Some(canonical))
-                        }
-                        Err(_) => (false, None, None),
+        let res = std::panic::catch_unwind(|| match decode_envelope_json(&c.raw_json) {
+            Ok(decoded) => {
+                let py_type = decoded.python_type_name().to_string();
+                match encode_value_strict(&decoded) {
+                    Ok(strict_enc) => {
+                        let canonical = strict_enc.to_python_canonical_json();
+                        (true, Some(py_type), Some(canonical))
                     }
+                    Err(_) => (false, None, None),
                 }
-                Err(_) => (false, None, None),
             }
+            Err(_) => (false, None, None),
         });
         match res {
             Ok((got_ok, got_type, got_re_enc))

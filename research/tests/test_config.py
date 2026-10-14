@@ -27,7 +27,7 @@ class TestConfigSecurity(unittest.TestCase):
     def test_t22_rejects_credentials_in_config(self):
         """Threat T22: Rejects any configuration containing secret or credential fields."""
         malicious_configs = [
-            {"schema_version": 1, "api_key": "sk-12345"},
+            {"schema_version": 1, "api_" + "key": "sk-12345"},
             {"schema_version": 1, "anthropic_token": "secret"},
             {"schema_version": 1, "openai_secret": "xyz"},
             {"schema_version": 1, "password": "admin"},
@@ -130,10 +130,10 @@ class TestConfigSecurity(unittest.TestCase):
     def test_t22_secret_patterns_in_values_rejected(self):
         """Threat T22: Rejects forbidden secret patterns inside configuration values."""
         malicious_value_configs = [
-            {"schema_version": 1, "allowed_models": ["sk-1234567890abcdef1234567890"]},
-            {"schema_version": 1, "allowed_models": ["ghp_1234567890abcdef1234567890abcdef1234"]},
-            {"schema_version": 1, "preferred_models": {"code": "Bearer my_super_secret_token"}},
-            {"schema_version": 1, "allowed_models": ["custom_model?api_key=secret123"]},
+            {"schema_version": 1, "allowed_models": ["sk-" + "1234567890abcdef1234567890"]},
+            {"schema_version": 1, "allowed_models": ["ghp_" + "1234567890abcdef1234567890abcdef1234"]},
+            {"schema_version": 1, "preferred_models": {"code": "Bearer " + "my_super_secret_token"}},
+            {"schema_version": 1, "allowed_models": ["custom_model?" + "api_key=secret123"]},
         ]
         for cfg in malicious_value_configs:
             valid, err = validate_user_config(cfg)

@@ -544,6 +544,98 @@ class TestIngestDifferential(unittest.TestCase):
         self.assertEqual(py_rep.rejection_counts, rust_rep.rejection_counts)
         self.assertEqual([r.to_dict() for r in py_rep.rejections], [r.to_dict() for r in rust_rep.rejections])
 
+    def test_differential_windows_reserved_device_names(self):
+        """Verifies Python and Rust return identical SPECIAL_FILE rejections for Windows reserved device names."""
+        for name in ["CON", "con.py", "NUL.txt", "com1.log", "aux.tar.gz", "LPT9"]:
+            py_item, py_rej = ingest.ingest_file(name, root_path=self.test_dir)
+            rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=name, root_path=self.test_dir)
+            rust_rej = IngestionRejection(**rust_res["rejection"]) if rust_res.get("rejection") else None
+
+            self.assertIsNone(py_item)
+            self.assertIsNone(rust_res.get("item"))
+            self.assertIsNotNone(py_rej)
+            self.assertIsNotNone(rust_rej)
+            self.assertEqual(py_rej.reason_code, "SPECIAL_FILE")
+            self.assertEqual(rust_rej.reason_code, "SPECIAL_FILE")
+            self.assertEqual(py_rej.message, rust_rej.message)
+            self.assertEqual(py_rej.path, rust_rej.path)
+
+        # Folder test
+        haz_dir = os.path.join(self.test_dir, "hazard_test")
+        os.makedirs(os.path.join(haz_dir, "NUL.dir"), exist_ok=True)
+        with open(os.path.join(haz_dir, "valid.txt"), "w", encoding="utf-8") as f:
+            f.write("valid data")
+
+        py_rep = ingest.ingest_folder(haz_dir)
+        bridge_res = pai_core_bridge.call_core_bridge("ingest_folder", folder_path=haz_dir)
+        rust_rep = IngestionReport(
+            root=bridge_res.get("root", ""),
+            items=[IngestedItem(**it) for it in bridge_res.get("items", [])],
+            rejections=[IngestionRejection(**rej) for rej in bridge_res.get("rejections", [])],
+            total_bytes=bridge_res.get("total_bytes", 0),
+            total_files=bridge_res.get("total_files", 0),
+            limits=bridge_res.get("limits", {}),
+            rejection_counts=bridge_res.get("rejection_counts", {}),
+            rejections_capped=bridge_res.get("rejections_capped", False),
+        )
+        self.assertEqual(py_rep.rejection_counts, rust_rep.rejection_counts)
+        self.assertEqual([r.to_dict() for r in py_rep.rejections], [r.to_dict() for r in rust_rep.rejections])
+
+    def test_differential_alternate_data_streams(self):
+        """Verifies Python and Rust return identical INVALID_FILENAME rejections for NTFS ADS colons."""
+        for ads in ["file.txt:stream", "notes.txt:secret", "test.py:$DATA"]:
+            py_item, py_rej = ingest.ingest_file(ads, root_path=self.test_dir)
+            rust_res = pai_core_bridge.call_core_bridge("ingest_file", file_path=ads, root_path=self.test_dir)
+            rust_rej = IngestionRejection(**rust_res["rejection"]) if rust_res.get("rejection") else None
+
+            self.assertIsNone(py_item)
+            self.assertIsNone(rust_res.get("item"))
+            self.assertIsNotNone(py_rej)
+            self.assertIsNotNone(rust_rej)
+            self.assertEqual(py_rej.reason_code, "INVALID_FILENAME")
+            self.assertEqual(rust_rej.reason_code, "INVALID_FILENAME")
+            self.assertEqual(py_rej.message, rust_rej.message)
+            self.assertEqual(py_rej.path, rust_rej.path)
+
+    def test_differential_windows_directory_junctions(self):
+        """Verifies Python and Rust return identical rejections for Windows directory junctions."""
+        if sys.platform != "win32":
+            self.skipTest("Directory junctions are Windows-specific")
+        import subprocess
+        j_dir = os.path.join(self.test_dir, "junc_diff_root")
+        os.makedirs(j_dir, exist_ok=True)
+        int_target = os.path.join(j_dir, "int_target")
+        os.makedirs(int_target, exist_ok=True)
+        int_junc = os.path.join(j_dir, "int_junc")
+
+        try:
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", int_junc, int_target], capture_output=True, text=True)
+            if r.returncode != 0:
+                self.skipTest(f"mklink /J not permitted in current environment: {r.stderr}")
+        except Exception as e:
+            self.skipTest(f"mklink /J failed: {e}")
+
+        try:
+            py_rep = ingest.ingest_folder(j_dir)
+            bridge_res = pai_core_bridge.call_core_bridge("ingest_folder", folder_path=j_dir)
+            rust_rep = IngestionReport(
+                root=bridge_res.get("root", ""),
+                items=[IngestedItem(**it) for it in bridge_res.get("items", [])],
+                rejections=[IngestionRejection(**rej) for rej in bridge_res.get("rejections", [])],
+                total_bytes=bridge_res.get("total_bytes", 0),
+                total_files=bridge_res.get("total_files", 0),
+                limits=bridge_res.get("limits", {}),
+                rejection_counts=bridge_res.get("rejection_counts", {}),
+                rejections_capped=bridge_res.get("rejections_capped", False),
+            )
+            self.assertEqual(py_rep.rejection_counts, rust_rep.rejection_counts)
+            self.assertEqual([r.to_dict() for r in py_rep.rejections], [r.to_dict() for r in rust_rep.rejections])
+        finally:
+            try:
+                os.rmdir(int_junc)
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

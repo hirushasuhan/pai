@@ -14,9 +14,9 @@
 
 #![forbid(unsafe_code)]
 
+use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MAX_FILE_SIZE: usize = 1_048_576;
 pub const DEFAULT_MAX_TOTAL_BYTES: usize = 10_485_760;
@@ -226,7 +226,10 @@ pub fn is_secret_file_with_patterns(file_path: &str, deny_patterns: Option<&[Str
             if pat_lower.contains('/') {
                 let slash_pat = format!("/{}", pat_lower);
                 let wild_pat = format!("*{}*", pat_lower);
-                if norm == pat_lower || norm.ends_with(&slash_pat) || fnmatch_simple(&norm, &wild_pat) {
+                if norm == pat_lower
+                    || norm.ends_with(&slash_pat)
+                    || fnmatch_simple(&norm, &wild_pat)
+                {
                     return true;
                 }
             }
@@ -240,7 +243,10 @@ pub fn is_secret_file_with_patterns(file_path: &str, deny_patterns: Option<&[Str
             if pat_lower.contains('/') {
                 let slash_pat = format!("/{}", pat_lower);
                 let wild_pat = format!("*{}*", pat_lower);
-                if norm == pat_lower || norm.ends_with(&slash_pat) || fnmatch_simple(&norm, &wild_pat) {
+                if norm == pat_lower
+                    || norm.ends_with(&slash_pat)
+                    || fnmatch_simple(&norm, &wild_pat)
+                {
                     return true;
                 }
             }
@@ -1247,6 +1253,41 @@ fn file_basename(p: &str) -> String {
     trimmed.rsplit('/').next().unwrap_or("").to_string()
 }
 
+pub const RESERVED_DEVICE_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+pub fn is_reserved_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    RESERVED_DEVICE_NAMES.contains(&stem.as_str())
+}
+
+pub fn has_ads_colon(path: &str) -> bool {
+    let p = path;
+    let remainder =
+        if p.len() >= 2 && p.as_bytes()[0].is_ascii_alphabetic() && p.as_bytes()[1] == b':' {
+            &p[2..]
+        } else {
+            p
+        };
+    remainder.contains(':')
+}
+
+pub fn is_symlink_or_reparse(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if (meta.file_attributes() & 0x400) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 fn normalize_abs_path(p: &Path) -> PathBuf {
     let abs = if p.is_absolute() {
         p.to_path_buf()
@@ -1428,16 +1469,38 @@ pub fn ingest_file(
         }
     };
 
-    let rel_path = compute_rel_path(&abs_target, &canonical_root, file_path);
+    let abs_target = if Path::new(file_path).is_absolute() {
+        normalize_abs_path(Path::new(file_path))
+    } else {
+        match root_path {
+            Some(_) => normalize_abs_path(&canonical_root.join(file_path)),
+            None => normalize_abs_path(Path::new(file_path)),
+        }
+    };
 
-    // 0. Filename validity check (reject lone surrogates or unencodable UTF-8)
-    if file_path.contains('\u{FFFD}') {
+    let rel_path = compute_rel_path(&abs_target, &canonical_root, file_path);
+    let fname_base = file_basename(file_path);
+
+    // 0. Filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
+    if file_path.contains('\u{FFFD}') || has_ads_colon(file_path) {
         return (
             None,
             Some(IngestionRejection {
                 path: rel_path,
                 reason_code: "INVALID_FILENAME".into(),
                 message: "Filename contains invalid Unicode or non-decodable bytes".into(),
+            }),
+        );
+    }
+
+    // Reserved device name check (SPECIAL_FILE per platform-independent parity rule)
+    if is_reserved_device_name(&fname_base) {
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "SPECIAL_FILE".into(),
+                message: format!("Target is a reserved device name: {}", fname_base),
             }),
         );
     }
@@ -1451,7 +1514,7 @@ pub fn ingest_file(
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "NOT_FOUND".into(),
-                    message: format!("Target file does not exist: {}", file_basename(file_path)),
+                    message: format!("Target file does not exist: {}", fname_base),
                 }),
             );
         }
@@ -1461,14 +1524,17 @@ pub fn ingest_file(
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "STAT_ERROR".into(),
-                    message: format!("Failed to inspect file status: {}", file_basename(file_path)),
+                    message: format!(
+                        "Failed to inspect file status: {}",
+                        file_basename(file_path)
+                    ),
                 }),
             );
         }
     };
 
-    // 2. Symlink escape check
-    if lst.file_type().is_symlink() {
+    // 2. Symlink / Junction escape check
+    if is_symlink_or_reparse(&lst) {
         let target_dest = resolve_path_like_realpath(&abs_target);
         if !is_same_or_descendant(&target_dest, &canonical_root) {
             let dest_name = file_basename(&target_dest.to_string_lossy());
@@ -1498,14 +1564,17 @@ pub fn ingest_file(
     }
 
     // 4. Device / Special file check
-    if !lst.file_type().is_file() && !lst.file_type().is_symlink() {
+    if !lst.file_type().is_file() && !is_symlink_or_reparse(&lst) {
         let mode = get_file_mode(&lst);
         return (
             None,
             Some(IngestionRejection {
                 path: rel_path,
                 reason_code: "SPECIAL_FILE".into(),
-                message: format!("Target is a special device file or FIFO (mode 0o{:o})", mode),
+                message: format!(
+                    "Target is a special device file or FIFO (mode 0o{:o})",
+                    mode
+                ),
             }),
         );
     }
@@ -1518,7 +1587,7 @@ pub fn ingest_file(
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "STAT_ERROR".into(),
-                    message: format!("Failed to inspect file status: {}", file_basename(file_path)),
+                    message: format!("Failed to inspect file status: {}", fname_base),
                 }),
             );
         }
@@ -1547,15 +1616,12 @@ pub fn ingest_file(
             Some(IngestionRejection {
                 path: rel_path,
                 reason_code: "SECRET_FILE".into(),
-                message: format!(
-                    "Access denied to secret file pattern: {}",
-                    file_basename(file_path)
-                ),
+                message: format!("Access denied to secret file pattern: {}", fname_base),
             }),
         );
     }
 
-    // 6. Read content with size capping
+    // 6. Read content with size capping (handle-verified open / TOCTOU defense)
     let file = match std::fs::File::open(&real_target) {
         Ok(f) => f,
         Err(_) => {
@@ -1564,11 +1630,93 @@ pub fn ingest_file(
                 Some(IngestionRejection {
                     path: rel_path,
                     reason_code: "READ_ERROR".into(),
-                    message: format!("Failed to read file: {}", file_basename(file_path)),
+                    message: format!("Failed to read file: {}", fname_base),
                 }),
             );
         }
     };
+
+    let st_handle = match file.metadata() {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "STAT_ERROR".into(),
+                    message: format!("Failed to inspect file status: {}", fname_base),
+                }),
+            );
+        }
+    };
+
+    if !st_handle.file_type().is_file() {
+        let mode = get_file_mode(&st_handle);
+        return (
+            None,
+            Some(IngestionRejection {
+                path: rel_path,
+                reason_code: "SPECIAL_FILE".into(),
+                message: format!("Target resolves to a non-regular file (mode 0o{:o})", mode),
+            }),
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (st_handle.dev(), st_handle.ino()) != (st.dev(), st.ino()) {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "STAT_ERROR".into(),
+                    message: format!("Failed to inspect file status: {}", fname_base),
+                }),
+            );
+        }
+        if !lst.file_type().is_symlink()
+            && (st_handle.dev(), st_handle.ino()) != (lst.dev(), lst.ino())
+        {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "STAT_ERROR".into(),
+                    message: format!("Failed to inspect file status: {}", fname_base),
+                }),
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if let Ok(post_lst) = std::fs::symlink_metadata(&abs_target) {
+            let is_reparse = (post_lst.file_attributes() & 0x400) != 0;
+            if (!lst.file_type().is_symlink() && (post_lst.file_type().is_symlink() || is_reparse))
+                || !st_handle.file_type().is_file()
+            {
+                return (
+                    None,
+                    Some(IngestionRejection {
+                        path: rel_path,
+                        reason_code: "STAT_ERROR".into(),
+                        message: format!("Failed to inspect file status: {}", fname_base),
+                    }),
+                );
+            }
+        } else {
+            return (
+                None,
+                Some(IngestionRejection {
+                    path: rel_path,
+                    reason_code: "STAT_ERROR".into(),
+                    message: format!("Failed to inspect file status: {}", fname_base),
+                }),
+            );
+        }
+    }
 
     let mut raw_data = Vec::new();
     let mut take_reader = file.take((max_file_size as u64).saturating_add(1));
@@ -1578,7 +1726,7 @@ pub fn ingest_file(
             Some(IngestionRejection {
                 path: rel_path,
                 reason_code: "READ_ERROR".into(),
-                message: format!("Failed to read file: {}", file_basename(file_path)),
+                message: format!("Failed to read file: {}", fname_base),
             }),
         );
     }
@@ -1708,8 +1856,16 @@ impl FolderWalkState {
                 Err(_) => continue,
             };
 
-            if file_type.is_symlink() {
-                let is_target_dir = std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false);
+            let sym_meta = std::fs::symlink_metadata(&path).ok();
+            let is_sym = sym_meta
+                .as_ref()
+                .map(is_symlink_or_reparse)
+                .unwrap_or(file_type.is_symlink());
+
+            if is_sym {
+                let is_target_dir = std::fs::metadata(&path)
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
                 if is_target_dir {
                     dir_entries.push((fname, path, true));
                 } else {
@@ -1729,7 +1885,7 @@ impl FolderWalkState {
         let mut valid_subdirs = Vec::new();
         for (d_name, d_path, is_symlink) in dir_entries {
             let rel_dpath = compute_rel_path(&d_path, &self.canonical_root, &d_name);
-            if d_name.contains('\u{FFFD}') {
+            if d_name.contains('\u{FFFD}') || has_ads_colon(&d_name) {
                 self.add_rejection(IngestionRejection {
                     path: rel_dpath,
                     reason_code: "INVALID_FILENAME".into(),
@@ -1737,6 +1893,16 @@ impl FolderWalkState {
                 });
                 continue;
             }
+
+            if is_reserved_device_name(&d_name) {
+                self.add_rejection(IngestionRejection {
+                    path: rel_dpath,
+                    reason_code: "SPECIAL_FILE".into(),
+                    message: format!("Target is a reserved device name: {}", d_name),
+                });
+                continue;
+            }
+
             if is_symlink {
                 let target_dest = resolve_path_like_realpath(&d_path);
                 if !is_same_or_descendant(&target_dest, &self.canonical_root) {
@@ -1777,7 +1943,7 @@ impl FolderWalkState {
 
         for (fname, fpath) in file_entries {
             let rel_fpath = compute_rel_path(&fpath, &self.canonical_root, &fname);
-            if fname.contains('\u{FFFD}') {
+            if fname.contains('\u{FFFD}') || has_ads_colon(&fname) {
                 self.add_rejection(IngestionRejection {
                     path: rel_fpath,
                     reason_code: "INVALID_FILENAME".into(),
@@ -2435,7 +2601,91 @@ mod tests {
             500,
         );
         assert_eq!(report_quota.items.len(), 1);
-        assert!(report_quota.rejection_counts.contains_key("FILE_COUNT_EXCEEDED"));
+        assert!(report_quota
+            .rejection_counts
+            .contains_key("FILE_COUNT_EXCEEDED"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_windows_hazards_reserved_device_names_ads_and_reparse() {
+        assert!(is_reserved_device_name("CON"));
+        assert!(is_reserved_device_name("con.py"));
+        assert!(is_reserved_device_name("NUL.txt"));
+        assert!(is_reserved_device_name("com1.log"));
+        assert!(is_reserved_device_name("aux.tar.gz"));
+        assert!(is_reserved_device_name("LPT9"));
+        assert!(!is_reserved_device_name("contact.txt"));
+        assert!(!is_reserved_device_name("null.txt"));
+        assert!(!is_reserved_device_name("regular.rs"));
+
+        assert!(has_ads_colon("notes.txt:secret"));
+        assert!(has_ads_colon("C:\\path\\file.txt:stream"));
+        assert!(has_ads_colon("test.py:$DATA"));
+        assert!(!has_ads_colon("C:\\path\\file.txt"));
+        assert!(!has_ads_colon("regular_file.txt"));
+        assert!(!has_ads_colon("/home/user/file.txt"));
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pai_test_hazards_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. Reserved name rejection in ingest_file
+        let (item_con, rej_con) = ingest_file(
+            "CON.txt",
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(item_con.is_none());
+        let r_con = rej_con.unwrap();
+        assert_eq!(r_con.reason_code, "SPECIAL_FILE");
+        assert_eq!(r_con.message, "Target is a reserved device name: CON.txt");
+
+        // 2. ADS colon rejection in ingest_file
+        let (item_ads, rej_ads) = ingest_file(
+            "file.txt:stream",
+            Some(temp_dir.to_str().unwrap()),
+            1024,
+            4096,
+            None,
+        );
+        assert!(item_ads.is_none());
+        let r_ads = rej_ads.unwrap();
+        assert_eq!(r_ads.reason_code, "INVALID_FILENAME");
+        assert_eq!(
+            r_ads.message,
+            "Filename contains invalid Unicode or non-decodable bytes"
+        );
+
+        // 3. Reserved directory pruned in ingest_folder
+        let reserved_dir = temp_dir.join("NUL.dir");
+        std::fs::create_dir_all(&reserved_dir).unwrap();
+        let regular_file = temp_dir.join("valid.txt");
+        std::fs::write(&regular_file, b"valid content").unwrap();
+
+        let report = ingest_folder(
+            temp_dir.to_str().unwrap(),
+            1024,
+            10240,
+            500,
+            10,
+            4096,
+            None,
+            None,
+            false,
+            20,
+            500,
+        );
+        assert!(report.rejection_counts.contains_key("SPECIAL_FILE"));
+        assert_eq!(report.items.len(), 1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

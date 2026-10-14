@@ -35,7 +35,6 @@ pub const MAX_EXTRACTED_STATEMENTS: usize = 50;
 pub const MIN_INT64: i64 = i64::MIN;
 pub const MAX_INT64: i64 = i64::MAX;
 
-
 const MAX_RAW_JSON_DEPTH: usize = 128;
 const MAX_RAW_JSON_NODES: usize = 200_000;
 
@@ -130,10 +129,7 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
         let s0 = w_i_15.rotate_right(7) ^ w_i_15.rotate_right(18) ^ (w_i_15 >> 3);
         let s1 = w_i_2.rotate_right(17) ^ w_i_2.rotate_right(19) ^ (w_i_2 >> 10);
         if let Some(slot) = w.get_mut(i) {
-            *slot = w_i_16
-                .wrapping_add(s0)
-                .wrapping_add(w_i_7)
-                .wrapping_add(s1);
+            *slot = w_i_16.wrapping_add(s0).wrapping_add(w_i_7).wrapping_add(s1);
         }
     }
 
@@ -192,8 +188,8 @@ impl Sha256Hasher {
     pub fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             count: 0,
             buffer: [0u8; 64],
@@ -448,11 +444,14 @@ impl StrictJson {
             StrictJson::OutOfRangeInt => Err(CodecError::new("Out-of-range i64 integer")),
             StrictJson::Float(f) => {
                 if !f.is_finite() {
-                    return Err(CodecError::new("Non-finite float cannot be raw JSON number"));
+                    return Err(CodecError::new(
+                        "Non-finite float cannot be raw JSON number",
+                    ));
                 }
                 let s = format_python_float(*f);
-                let num: serde_json::Number = serde_json::from_str(&s)
-                    .map_err(|_| CodecError::new("Failed to parse canonical float as JSON number"))?;
+                let num: serde_json::Number = serde_json::from_str(&s).map_err(|_| {
+                    CodecError::new("Failed to parse canonical float as JSON number")
+                })?;
                 Ok(serde_json::Value::Number(num))
             }
             StrictJson::Str(s) => Ok(serde_json::Value::String(s.clone())),
@@ -520,7 +519,6 @@ impl StrictJson {
     }
 }
 
-
 fn write_python_json_string(s: &str, out: &mut String) {
     out.push('"');
     for ch in s.chars() {
@@ -586,7 +584,10 @@ impl<'a> StrictJsonParser<'a> {
     fn bump_node(&mut self) -> Result<(), String> {
         self.nodes += 1;
         if self.nodes > self.max_nodes {
-            return Err(format!("JSON node count limit exceeded: {}", self.max_nodes));
+            return Err(format!(
+                "JSON node count limit exceeded: {}",
+                self.max_nodes
+            ));
         }
         Ok(())
     }
@@ -617,11 +618,16 @@ impl<'a> StrictJsonParser<'a> {
 
     fn parse_value(&mut self, depth: usize) -> Result<StrictJson, String> {
         if depth > self.max_depth {
-            return Err(format!("JSON nesting depth limit exceeded: {}", self.max_depth));
+            return Err(format!(
+                "JSON nesting depth limit exceeded: {}",
+                self.max_depth
+            ));
         }
         self.bump_node()?;
         self.skip_ws();
-        let b = self.peek().ok_or_else(|| "Unexpected EOF in JSON".to_string())?;
+        let b = self
+            .peek()
+            .ok_or_else(|| "Unexpected EOF in JSON".to_string())?;
         match b {
             b'{' => self.parse_object(depth),
             b'[' => self.parse_array(depth),
@@ -786,8 +792,9 @@ impl<'a> StrictJsonParser<'a> {
                             if !(0xdc00..=0xdfff).contains(&low) {
                                 return Err("Invalid low surrogate in JSON string".to_string());
                             }
-                            let combined =
-                                0x10000 + (((code - 0xd800) as u32) << 10) + ((low - 0xdc00) as u32);
+                            let combined = 0x10000
+                                + (((code - 0xd800) as u32) << 10)
+                                + ((low - 0xdc00) as u32);
                             let ch = char::from_u32(combined)
                                 .ok_or_else(|| "Invalid surrogate codepoint".to_string())?;
                             out.push(ch);
@@ -802,7 +809,10 @@ impl<'a> StrictJsonParser<'a> {
                     _ => return Err(format!("Invalid string escape: \\{}", esc as char)),
                 }
             } else if b < 0x20 {
-                return Err(format!("Unescaped control character in JSON string: 0x{:02x}", b));
+                return Err(format!(
+                    "Unescaped control character in JSON string: 0x{:02x}",
+                    b
+                ));
             } else {
                 // Advance by one full UTF-8 char from self.raw_str at self.pos
                 let tail = self
@@ -880,7 +890,10 @@ impl<'a> StrictJsonParser<'a> {
                 .parse::<f64>()
                 .map_err(|e| format!("Invalid JSON float {}: {}", num_str, e))?;
             if !fval.is_finite() {
-                return Err(format!("JSON float overflowed to non-finite value: {}", num_str));
+                return Err(format!(
+                    "JSON float overflowed to non-finite value: {}",
+                    num_str
+                ));
             }
             Ok(StrictJson::Float(fval))
         } else {
@@ -1011,23 +1024,17 @@ pub fn python_key_eq(a: &PaiValue, b: &PaiValue) -> bool {
         (PaiValue::Bytes(x), PaiValue::Bytes(y)) => x == y,
         (PaiValue::None, PaiValue::None) => true,
         (PaiValue::Tuple(x), PaiValue::Tuple(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .zip(y.iter())
-                    .all(|(ex, ey)| python_key_eq(ex, ey))
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(ex, ey)| python_key_eq(ex, ey))
         }
         (PaiValue::FrozenSet(x), PaiValue::FrozenSet(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|ex| y.iter().any(|ey| python_key_eq(ex, ey)))
+            x.len() == y.len() && x.iter().all(|ex| y.iter().any(|ey| python_key_eq(ex, ey)))
         }
         _ => false,
     }
 }
 
 pub fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut offset = 0;
     while offset + 3 <= bytes.len() {
@@ -1072,7 +1079,9 @@ fn b64_val(b: u8) -> Option<u8> {
 /// Decodes a Base64 string matching Python's `base64.b64decode(val.encode("ascii"), validate=True)`.
 pub fn base64_decode_strict(s: &str) -> Result<Vec<u8>, CodecError> {
     if !s.is_ascii() {
-        return Err(CodecError::new("Base64 payload contains non-ASCII characters"));
+        return Err(CodecError::new(
+            "Base64 payload contains non-ASCII characters",
+        ));
     }
     let bytes = s.as_bytes();
     if (bytes.len() & 3) != 0 {
@@ -1101,7 +1110,9 @@ pub fn base64_decode_strict(s: &str) -> Result<Vec<u8>, CodecError> {
             out.push((v0 << 2) | (v1 >> 4));
         } else if c3 == b'=' {
             if !is_last {
-                return Err(CodecError::new("Invalid base64 padding in non-final quantum"));
+                return Err(CodecError::new(
+                    "Invalid base64 padding in non-final quantum",
+                ));
             }
             let v2 = b64_val(c2).ok_or_else(|| CodecError::new("Invalid base64 character"))?;
             out.push((v0 << 2) | (v1 >> 4));
@@ -1176,7 +1187,10 @@ fn encode_value_inner(
         PaiValue::Int(i) => Ok(make_envelope_obj("int", StrictJson::Int(*i))),
         PaiValue::Float(f) => {
             if f.is_nan() {
-                Ok(make_envelope_obj("float", StrictJson::Str("nan".to_string())))
+                Ok(make_envelope_obj(
+                    "float",
+                    StrictJson::Str("nan".to_string()),
+                ))
             } else if f.is_infinite() {
                 let s = if *f > 0.0 { "inf" } else { "-inf" };
                 Ok(make_envelope_obj("float", StrictJson::Str(s.to_string())))
@@ -1345,7 +1359,10 @@ fn decode_value_inner(
                 "nan" => Ok(PaiValue::Float(f64::NAN)),
                 "inf" => Ok(PaiValue::Float(f64::INFINITY)),
                 "-inf" => Ok(PaiValue::Float(f64::NEG_INFINITY)),
-                _ => Err(CodecError::new(format!("Invalid float special string: {}", s))),
+                _ => Err(CodecError::new(format!(
+                    "Invalid float special string: {}",
+                    s
+                ))),
             },
             StrictJson::Int(i) => Ok(PaiValue::Float(*i as f64)),
             StrictJson::Float(f) => {
@@ -1427,7 +1444,10 @@ fn decode_value_inner(
                 if !item.is_hashable() {
                     return Err(CodecError::new("Unhashable element in set"));
                 }
-                if res_set.iter().any(|existing| python_key_eq(existing, &item)) {
+                if res_set
+                    .iter()
+                    .any(|existing| python_key_eq(existing, &item))
+                {
                     return Err(CodecError::new("Duplicate element in set envelope"));
                 }
                 res_set.push(item);
@@ -1452,7 +1472,10 @@ fn decode_value_inner(
                 if !item.is_hashable() {
                     return Err(CodecError::new("Unhashable element in frozenset"));
                 }
-                if res_set.iter().any(|existing| python_key_eq(existing, &item)) {
+                if res_set
+                    .iter()
+                    .any(|existing| python_key_eq(existing, &item))
+                {
                     return Err(CodecError::new("Duplicate element in frozenset envelope"));
                 }
                 res_set.push(item);
@@ -1572,12 +1595,8 @@ fn is_python_whitespace(c: char) -> bool {
             | '\u{0085}'
             | '\u{00a0}'
             | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
+            | '\u{2000}'
+            ..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
     )
 }
 
@@ -2031,7 +2050,6 @@ fn is_valid_identifier(s: &str) -> bool {
     chars.all(is_ident_continue)
 }
 
-
 fn python_splitlines(s: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut line_start = 0;
@@ -2102,10 +2120,7 @@ fn infer_entry_point(prompt: &str, section: &str) -> Option<String> {
     } else {
         "Examples:"
     };
-    let header = prompt
-        .split_once(marker)
-        .map(|(h, _)| h)
-        .unwrap_or(prompt);
+    let header = prompt.split_once(marker).map(|(h, _)| h).unwrap_or(prompt);
 
     // Pattern 1: \bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(
     for m in find_keyword_ident_matches(header, "def", true) {
@@ -2383,8 +2398,13 @@ fn tokenize_py_expr(src: &str) -> Result<Vec<PyTok>, ()> {
         let b = bytes.get(pos).copied().ok_or(())?;
 
         // Check string or byte literal with 2-char prefix rb/br (case-insensitive)
-        if let (Some(&b1), Some(&b2), Some(&b3)) = (bytes.get(pos), bytes.get(pos + 1), bytes.get(pos + 2)) {
-            let is_rb = matches!((b1, b2), (b'r' | b'R', b'b' | b'B') | (b'b' | b'B', b'r' | b'R'));
+        if let (Some(&b1), Some(&b2), Some(&b3)) =
+            (bytes.get(pos), bytes.get(pos + 1), bytes.get(pos + 2))
+        {
+            let is_rb = matches!(
+                (b1, b2),
+                (b'r' | b'R', b'b' | b'B') | (b'b' | b'B', b'r' | b'R')
+            );
             if is_rb && matches!(b3, b'\'' | b'"') {
                 pos += 2;
                 let _ = consume_py_quoted_string(src, &mut pos, true)?;
@@ -2825,10 +2845,7 @@ fn consume_py_number(src: &str, pos: &mut usize) -> Result<PyTokKind, ()> {
                     }
                 }
                 let raw_digits = src.get(dig_start..*pos).ok_or(())?;
-                if raw_digits.is_empty()
-                    || raw_digits.ends_with('_')
-                    || raw_digits.contains("__")
-                {
+                if raw_digits.is_empty() || raw_digits.ends_with('_') || raw_digits.contains("__") {
                     return Err(());
                 }
                 let clean: String = raw_digits.chars().filter(|&c| c != '_').collect();
@@ -3191,12 +3208,7 @@ impl<'a> PyParser<'a> {
         }
     }
 
-    fn parse_call(
-        &mut self,
-        func: String,
-        start: usize,
-        depth: usize,
-    ) -> Result<PyAstNode, ()> {
+    fn parse_call(&mut self, func: String, start: usize, depth: usize) -> Result<PyAstNode, ()> {
         self.next_tok(); // consume '('
         let mut args = Vec::new();
         let mut keywords = Vec::new();
@@ -3654,10 +3666,7 @@ fn is_safe_literal_ast(
     }
 }
 
-fn is_numeric_literal_ast(
-    node: &PyAstNode,
-    allowed_vars: Option<&BTreeSet<String>>,
-) -> bool {
+fn is_numeric_literal_ast(node: &PyAstNode, allowed_vars: Option<&BTreeSet<String>>) -> bool {
     match &node.kind {
         PyAstKind::Int(v) => *v <= (i64::MAX as u64),
         PyAstKind::Float(f) => f.is_finite(),
@@ -3837,12 +3846,12 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
         if !current_block.is_empty() {
             let joined = current_block.join(" ");
             let (code_part, _) = split_code_and_comment(&joined);
-            let open_parens =
-                (code_part.matches('(').count() as isize) - (code_part.matches(')').count() as isize);
-            let open_brackets =
-                (code_part.matches('[').count() as isize) - (code_part.matches(']').count() as isize);
-            let open_braces =
-                (code_part.matches('{').count() as isize) - (code_part.matches('}').count() as isize);
+            let open_parens = (code_part.matches('(').count() as isize)
+                - (code_part.matches(')').count() as isize);
+            let open_brackets = (code_part.matches('[').count() as isize)
+                - (code_part.matches(']').count() as isize);
+            let open_braces = (code_part.matches('{').count() as isize)
+                - (code_part.matches('}').count() as isize);
             if open_parens <= 0 && open_brackets <= 0 && open_braces <= 0 {
                 blocks.push(joined);
                 current_block.clear();
@@ -3882,7 +3891,10 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
         if clean_blk.contains('\0') || clean_blk.contains(r"\N{") {
             continue;
         }
-        if clean_blk.chars().any(|c| (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r') {
+        if clean_blk
+            .chars()
+            .any(|c| (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r')
+        {
             continue;
         }
 
@@ -3890,8 +3902,7 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
         if let Some((raw_expr, raw_expected)) = clean_blk.split_once("->") {
             let expr = python_strip(raw_expr);
             let expected = python_strip(raw_expected);
-            if let (Ok(expr_ast), Ok(expected_ast)) =
-                (parse_py_eval(expr), parse_py_eval(expected))
+            if let (Ok(expr_ast), Ok(expected_ast)) = (parse_py_eval(expr), parse_py_eval(expected))
             {
                 if is_safe_entry_call_ast(&expr_ast, &ep, &allowed_vars)
                     && is_safe_literal_ast(&expected_ast, None, false, 0)
@@ -3928,8 +3939,10 @@ pub fn extract_example_assertions(prompt: &str, entry_point: Option<&str>) -> Ve
                         PyCmpOp::Gt | PyCmpOp::Lt | PyCmpOp::GtE | PyCmpOp::LtE => {
                             let left_is_call = is_safe_entry_call_ast(&left, &ep, &allowed_vars);
                             let right_is_call = is_safe_entry_call_ast(&right, &ep, &allowed_vars);
-                            let left_ok = left_is_call || is_numeric_literal_ast(&left, Some(&allowed_vars));
-                            let right_ok = right_is_call || is_numeric_literal_ast(&right, Some(&allowed_vars));
+                            let left_ok =
+                                left_is_call || is_numeric_literal_ast(&left, Some(&allowed_vars));
+                            let right_ok = right_is_call
+                                || is_numeric_literal_ast(&right, Some(&allowed_vars));
                             if left_ok && right_ok {
                                 if let (Some(lhs), Some(rhs)) = (
                                     clean_blk.get(left.start..left.end),
@@ -4050,9 +4063,8 @@ mod tests {
         assert_eq!(policy.max_int64, i64::MAX);
 
         // Reject duplicate set elements including Python numeric equivalence (1, True, 1.0)
-        let dup_set = decode_envelope_json(
-            r#"{"t":"set","v":[{"t":"int","v":1},{"t":"bool","v":true}]}"#,
-        );
+        let dup_set =
+            decode_envelope_json(r#"{"t":"set","v":[{"t":"int","v":1},{"t":"bool","v":true}]}"#);
         assert!(dup_set.is_err());
 
         // Reject duplicate JSON object keys in raw envelope
@@ -4105,13 +4117,61 @@ mod tests {
 
         let mut rng = XorShift64(0x2026_1012_dead_beef);
         let alphabet: &[&str] = &[
-            "{", "}", "[", "]", "\"", ":", ",", "t", "v", "int", "float", "str", "bytes",
-            "list", "tuple", "set", "frozenset", "dict", "none", "bool", "true", "false",
-            "null", "nan", "inf", "-inf", "0", "-1", "9223372036854775807",
-            "-9223372036854775808", "9223372036854775808", "-9223372036854775809",
-            "1e500", "\\u0000", "\\ud800", "\\ud83d\\ude00", "සිංහල", "ක්\u{200d}ර",
-            "---PAI_VERDICT_START---", "---PAI_VERDICT_END---", "Example:", "Examples:",
-            "->", "==", ">=", "<=", "=", "(", ")", "#", "~", "approx", "\n", "\r\n", "\x00",
+            "{",
+            "}",
+            "[",
+            "]",
+            "\"",
+            ":",
+            ",",
+            "t",
+            "v",
+            "int",
+            "float",
+            "str",
+            "bytes",
+            "list",
+            "tuple",
+            "set",
+            "frozenset",
+            "dict",
+            "none",
+            "bool",
+            "true",
+            "false",
+            "null",
+            "nan",
+            "inf",
+            "-inf",
+            "0",
+            "-1",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "9223372036854775808",
+            "-9223372036854775809",
+            "1e500",
+            "\\u0000",
+            "\\ud800",
+            "\\ud83d\\ude00",
+            "සිංහල",
+            "ක්\u{200d}ර",
+            "---PAI_VERDICT_START---",
+            "---PAI_VERDICT_END---",
+            "Example:",
+            "Examples:",
+            "->",
+            "==",
+            ">=",
+            "<=",
+            "=",
+            "(",
+            ")",
+            "#",
+            "~",
+            "approx",
+            "\n",
+            "\r\n",
+            "\x00",
         ];
 
         for _ in 0..5_000 {
@@ -4312,7 +4372,8 @@ mod tests {
                 }
                 let streamed = hasher.finalize();
                 assert_eq!(
-                    streamed, oneshot,
+                    streamed,
+                    oneshot,
                     "Streaming SHA-256 with chunk size {} differed from oneshot for payload len {}",
                     chunk_size,
                     payload.len()
@@ -4321,7 +4382,3 @@ mod tests {
         }
     }
 }
-
-
-
-

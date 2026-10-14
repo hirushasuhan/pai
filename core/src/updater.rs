@@ -10,11 +10,11 @@
 
 #![deny(unsafe_code)]
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::ed25519;
 
@@ -86,9 +86,15 @@ pub fn parse_version(v: &str) -> Result<(u32, u32, u32), UpdaterError> {
             return Err(UpdaterError::new(format!("bad version '{}'", v)));
         }
     }
-    let a = parts[0].parse::<u32>().map_err(|_| UpdaterError::new(format!("bad version '{}'", v)))?;
-    let b = parts[1].parse::<u32>().map_err(|_| UpdaterError::new(format!("bad version '{}'", v)))?;
-    let c = parts[2].parse::<u32>().map_err(|_| UpdaterError::new(format!("bad version '{}'", v)))?;
+    let a = parts[0]
+        .parse::<u32>()
+        .map_err(|_| UpdaterError::new(format!("bad version '{}'", v)))?;
+    let b = parts[1]
+        .parse::<u32>()
+        .map_err(|_| UpdaterError::new(format!("bad version '{}'", v)))?;
+    let c = parts[2]
+        .parse::<u32>()
+        .map_err(|_| UpdaterError::new(format!("bad version '{}'", v)))?;
     Ok((a, b, c))
 }
 
@@ -109,14 +115,15 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-pub fn sha256_file(path: &Path) -> Result<String, UpdaterError> {
+pub fn sha256_from_file(file: fs::File, path: &Path) -> Result<String, UpdaterError> {
     use std::io::Read;
-    let file = fs::File::open(path).map_err(|e| UpdaterError::new(format!("failed to open file {}: {}", path.display(), e)))?;
     let mut reader = std::io::BufReader::with_capacity(1024 * 1024, file);
     let mut hasher = crate::verify_loop::Sha256Hasher::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
-        let n = reader.read(&mut buf).map_err(|e| UpdaterError::new(format!("failed to read file {}: {}", path.display(), e)))?;
+        let n = reader.read(&mut buf).map_err(|e| {
+            UpdaterError::new(format!("failed to read file {}: {}", path.display(), e))
+        })?;
         if n == 0 {
             break;
         }
@@ -126,8 +133,25 @@ pub fn sha256_file(path: &Path) -> Result<String, UpdaterError> {
     Ok(bytes_to_hex(&digest))
 }
 
+pub fn sha256_file(path: &Path) -> Result<String, UpdaterError> {
+    let file = fs::File::open(path)
+        .map_err(|e| UpdaterError::new(format!("failed to open file {}: {}", path.display(), e)))?;
+    let file_meta = file.metadata().map_err(|e| {
+        UpdaterError::new(format!("failed to inspect file {}: {}", path.display(), e))
+    })?;
+    if !file_meta.file_type().is_file() {
+        return Err(UpdaterError::new(format!(
+            "not a regular file: {}",
+            path.display()
+        )));
+    }
+    sha256_from_file(file, path)
+}
+
 fn is_valid_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// Parses raw signature bytes or 128-hex-character string with optional trailing whitespace.
@@ -137,7 +161,10 @@ pub fn parse_signature_bytes(raw_sig: &[u8]) -> Result<[u8; 64], UpdaterError> {
     } else {
         match std::str::from_utf8(raw_sig) {
             Ok(s) => {
-                let trimmed = s.strip_suffix("\r\n").or_else(|| s.strip_suffix('\n')).unwrap_or(s);
+                let trimmed = s
+                    .strip_suffix("\r\n")
+                    .or_else(|| s.strip_suffix('\n'))
+                    .unwrap_or(s);
                 if trimmed.len() == 128 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
                     let decoded = hex_to_bytes(trimmed)?;
                     if decoded.len() == 64 {
@@ -146,7 +173,9 @@ pub fn parse_signature_bytes(raw_sig: &[u8]) -> Result<[u8; 64], UpdaterError> {
                         Err(UpdaterError::new("invalid signature length"))
                     }
                 } else {
-                    Err(UpdaterError::new("invalid signature format (must be 64 raw bytes or 128 hex digits)"))
+                    Err(UpdaterError::new(
+                        "invalid signature format (must be 64 raw bytes or 128 hex digits)",
+                    ))
                 }
             }
             Err(_) => Err(UpdaterError::new("invalid signature encoding")),
@@ -157,19 +186,27 @@ pub fn parse_signature_bytes(raw_sig: &[u8]) -> Result<[u8; 64], UpdaterError> {
 /// Validates all keys in a trust config upfront (including revoked keys), ensuring valid hex and rejecting small-order keys.
 pub fn validate_trust_config(trust: &TrustConfig) -> Result<(), UpdaterError> {
     if !is_valid_sha256_hex(&trust.constitution_sha256) {
-        return Err(UpdaterError::new("invalid constitution sha256 in trust config"));
+        return Err(UpdaterError::new(
+            "invalid constitution sha256 in trust config",
+        ));
     }
     if trust.keys.is_empty() {
         return Err(UpdaterError::new("trust config contains no keys"));
     }
     for key in &trust.keys {
         if key.public_hex.len() != 64 || !key.public_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(UpdaterError::new(format!("invalid trust key hex for key {}", key.id)));
+            return Err(UpdaterError::new(format!(
+                "invalid trust key hex for key {}",
+                key.id
+            )));
         }
         let pub_bytes_vec = hex_to_bytes(&key.public_hex)
             .map_err(|_| UpdaterError::new(format!("invalid trust key hex for key {}", key.id)))?;
         if pub_bytes_vec.len() != 32 {
-            return Err(UpdaterError::new(format!("invalid trust key length for key {}", key.id)));
+            return Err(UpdaterError::new(format!(
+                "invalid trust key length for key {}",
+                key.id
+            )));
         }
         let mut pub_bytes = [0u8; 32];
         pub_bytes.copy_from_slice(&pub_bytes_vec);
@@ -229,15 +266,20 @@ pub fn verify_release(
 
     let key_id = match verified_key_id {
         Some(kid) => kid,
-        None => return Err(UpdaterError::new("signature invalid or signed by an unknown/revoked key")),
+        None => {
+            return Err(UpdaterError::new(
+                "signature invalid or signed by an unknown/revoked key",
+            ))
+        }
     };
-
 
     let manifest_val: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|_| UpdaterError::new("malformed manifest"))?;
 
     // Validate format is strictly integer 1 (not boolean, not float)
-    let fmt_val = manifest_val.get("format").ok_or_else(|| UpdaterError::new("malformed manifest"))?;
+    let fmt_val = manifest_val
+        .get("format")
+        .ok_or_else(|| UpdaterError::new("malformed manifest"))?;
     if !fmt_val.is_i64() && !fmt_val.is_u64() {
         return Err(UpdaterError::new("wrong manifest format or product"));
     }
@@ -253,7 +295,9 @@ pub fn verify_release(
     }
 
     if manifest.constitution_sha256 != trust.constitution_sha256 {
-        return Err(UpdaterError::new("Constitution hash differs from the pinned trust-root value"));
+        return Err(UpdaterError::new(
+            "Constitution hash differs from the pinned trust-root value",
+        ));
     }
 
     let v = parse_version(&manifest.version)?;
@@ -273,15 +317,24 @@ pub fn verify_release(
         return Err(UpdaterError::new("manifest lists no files"));
     }
 
-    let root = release_dir.canonicalize().map_err(|e| UpdaterError::new(e.to_string()))?;
+    let root = release_dir
+        .canonicalize()
+        .map_err(|e| UpdaterError::new(e.to_string()))?;
 
     for (rel, meta) in &manifest.files {
-        if rel.starts_with('/') || rel.starts_with('\\') || rel.contains('\\') || rel.contains(':') {
-            return Err(UpdaterError::new(format!("unsafe path in manifest: {:?}", rel)));
+        if rel.starts_with('/') || rel.starts_with('\\') || rel.contains('\\') || rel.contains(':')
+        {
+            return Err(UpdaterError::new(format!(
+                "unsafe path in manifest: {:?}",
+                rel
+            )));
         }
         let parts: Vec<&str> = rel.split('/').collect();
         if parts.iter().any(|&p| p == ".." || p == "." || p.is_empty()) {
-            return Err(UpdaterError::new(format!("unsafe path in manifest: {:?}", rel)));
+            return Err(UpdaterError::new(format!(
+                "unsafe path in manifest: {:?}",
+                rel
+            )));
         }
 
         let mut full_path = root.clone();
@@ -294,32 +347,58 @@ pub fn verify_release(
         }
 
         // Symlink check
-        let sym_meta = fs::symlink_metadata(&full_path).map_err(|e| UpdaterError::new(e.to_string()))?;
+        let sym_meta =
+            fs::symlink_metadata(&full_path).map_err(|e| UpdaterError::new(e.to_string()))?;
         if sym_meta.file_type().is_symlink() {
-            return Err(UpdaterError::new(format!("path escapes release directory: {:?}", rel)));
+            return Err(UpdaterError::new(format!(
+                "path escapes release directory: {:?}",
+                rel
+            )));
         }
 
-        let canon_full = full_path.canonicalize().map_err(|e| UpdaterError::new(e.to_string()))?;
+        let canon_full = full_path
+            .canonicalize()
+            .map_err(|e| UpdaterError::new(e.to_string()))?;
         if !canon_full.starts_with(&root) {
-            return Err(UpdaterError::new(format!("path escapes release directory: {:?}", rel)));
-        }
-
-        if !canon_full.is_file() {
-            return Err(UpdaterError::new(format!("listed file missing: {}", rel)));
+            return Err(UpdaterError::new(format!(
+                "path escapes release directory: {:?}",
+                rel
+            )));
         }
 
         if !is_valid_sha256_hex(&meta.sha256) {
             return Err(UpdaterError::new(format!("bad digest entry for {}", rel)));
         }
 
-        let file_meta = fs::metadata(&canon_full).map_err(|e| UpdaterError::new(e.to_string()))?;
+        let file = fs::File::open(&canon_full)
+            .map_err(|_| UpdaterError::new(format!("listed file missing: {}", rel)))?;
+        let file_meta = file
+            .metadata()
+            .map_err(|e| UpdaterError::new(e.to_string()))?;
+        if !file_meta.file_type().is_file() {
+            return Err(UpdaterError::new(format!("listed file missing: {}", rel)));
+        }
         if file_meta.len() != meta.size {
             return Err(UpdaterError::new(format!("size mismatch: {}", rel)));
         }
 
-        let actual_sha = sha256_file(&canon_full)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if (file_meta.dev(), file_meta.ino()) != (sym_meta.dev(), sym_meta.ino()) {
+                return Err(UpdaterError::new(format!(
+                    "listed file replaced during verification: {}",
+                    rel
+                )));
+            }
+        }
+
+        let actual_sha = sha256_from_file(file, &canon_full)?;
         if actual_sha != meta.sha256 {
-            return Err(UpdaterError::new(format!("SHA-256 mismatch (tampered?): {}", rel)));
+            return Err(UpdaterError::new(format!(
+                "SHA-256 mismatch (tampered?): {}",
+                rel
+            )));
         }
     }
 
@@ -352,7 +431,9 @@ fn verify_directory_entries(
     let entries = fs::read_dir(current).map_err(|e| UpdaterError::new(e.to_string()))?;
     for entry in entries {
         let entry = entry.map_err(|e| UpdaterError::new(e.to_string()))?;
-        let file_type = entry.file_type().map_err(|e| UpdaterError::new(e.to_string()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| UpdaterError::new(e.to_string()))?;
         let path = entry.path();
         if file_type.is_symlink() {
             return Err(UpdaterError::new(format!("symlink in release: {:?}", path)));
@@ -360,7 +441,9 @@ fn verify_directory_entries(
         if file_type.is_dir() {
             verify_directory_entries(base, &path, listed)?;
         } else if file_type.is_file() {
-            let rel = path.strip_prefix(base).map_err(|e| UpdaterError::new(e.to_string()))?;
+            let rel = path
+                .strip_prefix(base)
+                .map_err(|e| UpdaterError::new(e.to_string()))?;
             let mut parts = Vec::new();
             for c in rel.components() {
                 if let Component::Normal(os_str) = c {
@@ -369,10 +452,16 @@ fn verify_directory_entries(
             }
             let rel_str = parts.join("/");
             if !listed.contains(&rel_str) {
-                return Err(UpdaterError::new(format!("unlisted file in release: {}", rel_str)));
+                return Err(UpdaterError::new(format!(
+                    "unlisted file in release: {}",
+                    rel_str
+                )));
             }
         } else {
-            return Err(UpdaterError::new(format!("special or non-regular file in release: {:?}", path)));
+            return Err(UpdaterError::new(format!(
+                "special or non-regular file in release: {:?}",
+                path
+            )));
         }
     }
     Ok(())
@@ -394,8 +483,12 @@ mod tests {
 
     #[test]
     fn test_valid_sha256_hex() {
-        assert!(is_valid_sha256_hex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
-        assert!(!is_valid_sha256_hex("0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"));
+        assert!(is_valid_sha256_hex(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!is_valid_sha256_hex(
+            "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
         assert!(!is_valid_sha256_hex("short"));
     }
 
@@ -515,4 +608,3 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
-

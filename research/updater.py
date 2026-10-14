@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -219,17 +220,33 @@ class Updater:
             full = os.path.realpath(os.path.join(root, *rel.split("/")))
             if os.path.commonpath([full, root]) != root or os.path.islink(os.path.join(root, *rel.split("/"))):
                 raise UpdateRejected(f"path escapes release directory: {rel!r}")
-            if not os.path.isfile(full):
+            if not os.path.exists(full):
                 raise UpdateRejected(f"listed file missing: {rel}")
             if not isinstance(meta, dict) or not _SHA_RE.match(str(meta.get("sha256", ""))):
                 raise UpdateRejected(f"bad digest entry for {rel}")
             sz = meta.get("size")
             if type(sz) is not int or sz < 0:
                 raise UpdateRejected(f"bad size in manifest for {rel}")
-            if os.path.getsize(full) != sz:
-                raise UpdateRejected(f"size mismatch: {rel}")
-            if sha256_file(full) != meta["sha256"]:
-                raise UpdateRejected(f"SHA-256 mismatch (tampered?): {rel}")
+
+            raw_path = os.path.join(root, *rel.split("/"))
+            try:
+                with open(full, "rb") as f:
+                    st_handle = os.fstat(f.fileno())
+                    if not stat.S_ISREG(st_handle.st_mode):
+                        raise UpdateRejected(f"listed file missing: {rel}")
+                    if st_handle.st_size != sz:
+                        raise UpdateRejected(f"size mismatch: {rel}")
+                    if hasattr(st_handle, "st_ino") and hasattr(os.lstat(raw_path), "st_ino"):
+                        l_st = os.lstat(raw_path)
+                        if l_st.st_ino != 0 and (st_handle.st_dev, st_handle.st_ino) != (l_st.st_dev, l_st.st_ino):
+                            raise UpdateRejected(f"listed file replaced during verification: {rel}")
+                    h = hashlib.sha256()
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+                    if h.hexdigest() != meta["sha256"]:
+                        raise UpdateRejected(f"SHA-256 mismatch (tampered?): {rel}")
+            except (OSError, IOError):
+                raise UpdateRejected(f"listed file missing: {rel}")
 
         listed = set(files) | {MANIFEST, SIGNATURE}
 

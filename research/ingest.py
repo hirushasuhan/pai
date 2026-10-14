@@ -32,6 +32,7 @@ import os
 import re
 import secrets
 import stat
+import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # -----------------------------------------------------------------------------
@@ -529,7 +530,7 @@ def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[
     Scans text content for embedded high-confidence credential/private-key patterns:
     - Token formats: PEM private keys, AWS access keys (`AKIA`/`ASIA`), GitHub tokens (`ghp_`/`github_pat_`),
       OpenAI/Anthropic keys (`sk-`), Slack tokens (`xox`), Google API keys (`AIza`).
-    - Database URLs with embedded passwords (`postgres://user:pass@host/db`, `mysql://...`, `redis://...`).
+    - Database URLs with embedded passwords (`postgres://user:<pw>@host/db`, `mysql://...`, `redis://...`).
     - Quoted inline credential assignments (`password = "..."`, `API_KEY = "..."`, `AWS_SECRET_ACCESS_KEY = "..."`).
     - Unquoted inline credential assignments (`DB_PASSWORD=...`, `AWS_SECRET_ACCESS_KEY=...`) in
       configuration-style files (`.env`, `.ini`, `.cfg`, `.conf`, `.yaml`, `.yml`, `.toml`, `.properties`)
@@ -795,6 +796,52 @@ def _lossy_utf8(s: str) -> str:
     return s.encode("utf-8", errors="replace").decode("utf-8")
 
 
+RESERVED_DEVICE_NAMES: Set[str] = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
+def is_reserved_device_name(name: str) -> bool:
+    """
+    Returns True if the basename stem (part before first '.') is one of the 22
+    Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9).
+    Enforced platform-independently on all operating systems for parity.
+    """
+    stem = name.split(".")[0].upper()
+    return stem in RESERVED_DEVICE_NAMES
+
+
+def has_ads_colon(path: str) -> bool:
+    """
+    Returns True if path contains a colon ':' indicating an NTFS Alternate Data Stream,
+    excluding an initial single-letter Windows drive prefix (e.g. 'C:').
+    """
+    p = path
+    if len(p) >= 2 and p[0].isalpha() and p[1] == ":":
+        p = p[2:]
+    return ":" in p
+
+
+def _is_symlink_or_reparse(path: str) -> bool:
+    """
+    Returns True if path is a symlink or a Windows directory junction / reparse point
+    (FILE_ATTRIBUTE_REPARSE_POINT = 0x400).
+    """
+    if os.path.islink(path):
+        return True
+    if sys.platform == "win32":
+        try:
+            st = os.lstat(path)
+            attrs = getattr(st, "st_file_attributes", 0)
+            if attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 # -----------------------------------------------------------------------------
 # Core Ingestion Logic
 # -----------------------------------------------------------------------------
@@ -813,7 +860,10 @@ def ingest_file(
         root_path = os.path.dirname(os.path.abspath(file_path))
 
     canonical_root = os.path.realpath(os.path.abspath(root_path))
-    abs_target = os.path.abspath(file_path)
+    if os.path.isabs(file_path):
+        abs_target = os.path.abspath(file_path)
+    else:
+        abs_target = os.path.abspath(os.path.join(canonical_root, file_path))
 
     # Relative display path
     try:
@@ -821,12 +871,22 @@ def ingest_file(
     except ValueError:
         rel_path = file_path
 
-    # 0. Filename validity check (reject lone surrogates or unencodable UTF-8)
-    if _is_invalid_filename(os.path.basename(file_path)) or _is_invalid_filename(file_path):
+    basename = os.path.basename(file_path)
+
+    # 0. Filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
+    if _is_invalid_filename(basename) or _is_invalid_filename(file_path) or has_ads_colon(file_path):
         return None, IngestionRejection(
             path=_lossy_utf8(rel_path),
             reason_code="INVALID_FILENAME",
             message="Filename contains invalid Unicode or non-decodable bytes",
+        )
+
+    # Reserved device name check (SPECIAL_FILE per platform-independent parity rule)
+    if is_reserved_device_name(basename):
+        return None, IngestionRejection(
+            path=rel_path,
+            reason_code="SPECIAL_FILE",
+            message=f"Target is a reserved device name: {basename}",
         )
 
     # 1. Existence check
@@ -834,11 +894,11 @@ def ingest_file(
         return None, IngestionRejection(
             path=rel_path,
             reason_code="NOT_FOUND",
-            message=f"Target file does not exist: {os.path.basename(file_path)}",
+            message=f"Target file does not exist: {basename}",
         )
 
-    # 2. Symlink escape check
-    if os.path.islink(abs_target):
+    # 2. Symlink / Junction escape check
+    if _is_symlink_or_reparse(abs_target):
         target_dest = os.path.realpath(abs_target)
         try:
             common = os.path.commonpath([canonical_root, target_dest])
@@ -865,9 +925,10 @@ def ingest_file(
         )
 
     # 4. Device / Special file check
+
     try:
         lst = os.lstat(abs_target)
-        if not stat.S_ISREG(lst.st_mode) and not stat.S_ISLNK(lst.st_mode):
+        if not stat.S_ISREG(lst.st_mode) and not _is_symlink_or_reparse(abs_target):
             return None, IngestionRejection(
                 path=rel_path,
                 reason_code="SPECIAL_FILE",
@@ -895,9 +956,45 @@ def ingest_file(
             message=f"Access denied to secret file pattern: {os.path.basename(file_path)}",
         )
 
-    # 6. Read content with size capping
+    # 6. Read content with size capping (handle-verified open / TOCTOU defense)
     try:
         with open(real_target, "rb") as f:
+            st_handle = os.fstat(f.fileno())
+            if not stat.S_ISREG(st_handle.st_mode):
+                return None, IngestionRejection(
+                    path=rel_path,
+                    reason_code="SPECIAL_FILE",
+                    message=f"Target resolves to a non-regular file (mode {oct(st_handle.st_mode)})",
+                )
+            if hasattr(st_handle, "st_ino") and hasattr(st, "st_ino") and st_handle.st_ino != 0:
+                if (st_handle.st_dev, st_handle.st_ino) != (st.st_dev, st.st_ino):
+                    return None, IngestionRejection(
+                        path=rel_path,
+                        reason_code="STAT_ERROR",
+                        message=f"Failed to inspect file status: {os.path.basename(file_path)}",
+                    )
+                if not stat.S_ISLNK(lst.st_mode) and (st_handle.st_dev, st_handle.st_ino) != (lst.st_dev, lst.st_ino):
+                    return None, IngestionRejection(
+                        path=rel_path,
+                        reason_code="STAT_ERROR",
+                        message=f"Failed to inspect file status: {os.path.basename(file_path)}",
+                    )
+            if sys.platform == "win32":
+                try:
+                    post_lst = os.lstat(abs_target)
+                    is_reparse = bool(getattr(post_lst, "st_file_attributes", 0) & 0x400)
+                    if not stat.S_ISLNK(lst.st_mode) and (stat.S_ISLNK(post_lst.st_mode) or is_reparse):
+                        return None, IngestionRejection(
+                            path=rel_path,
+                            reason_code="STAT_ERROR",
+                            message=f"Failed to inspect file status: {os.path.basename(file_path)}",
+                        )
+                except Exception:
+                    return None, IngestionRejection(
+                        path=rel_path,
+                        reason_code="STAT_ERROR",
+                        message=f"Failed to inspect file status: {os.path.basename(file_path)}",
+                    )
             raw_data = f.read(max_file_size + 1)
     except Exception:
         return None, IngestionRejection(
@@ -1038,8 +1135,8 @@ def ingest_folder(
             dpath = os.path.join(current_dir, d)
             rel_dpath = os.path.relpath(dpath, canonical_root)
 
-            # Check if directory name contains invalid Unicode or replacement char
-            if _is_invalid_filename(d):
+            # Check if directory name contains invalid Unicode or replacement char or ADS colon
+            if _is_invalid_filename(d) or has_ads_colon(d):
                 pruned_dirs.append(d)
                 add_rejection(
                     IngestionRejection(
@@ -1050,8 +1147,20 @@ def ingest_folder(
                 )
                 continue
 
-            # Check if directory entry is a symlink
-            if os.path.islink(dpath):
+            # Check if directory name is a Windows reserved device name
+            if is_reserved_device_name(d):
+                pruned_dirs.append(d)
+                add_rejection(
+                    IngestionRejection(
+                        path=rel_dpath,
+                        reason_code="SPECIAL_FILE",
+                        message=f"Target is a reserved device name: {d}",
+                    )
+                )
+                continue
+
+            # Check if directory entry is a symlink or Windows directory junction
+            if _is_symlink_or_reparse(dpath):
                 pruned_dirs.append(d)
                 target_dest = os.path.realpath(dpath)
                 try:
@@ -1096,7 +1205,7 @@ def ingest_folder(
             fpath = os.path.join(current_dir, fname)
             rel_fpath = os.path.relpath(fpath, canonical_root)
 
-            if _is_invalid_filename(fname):
+            if _is_invalid_filename(fname) or has_ads_colon(fname):
                 add_rejection(
                     IngestionRejection(
                         path=_lossy_utf8(rel_fpath),

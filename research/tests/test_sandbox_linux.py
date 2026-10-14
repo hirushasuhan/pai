@@ -313,25 +313,25 @@ ctypes.string_at(0)
         environment (via launcher stdin pipe) and strictly absent from host-visible
         bwrap command-line arguments (argv).
         """
-        secret_key = "PAI_TEST_SECRET_NONCE"
-        secret_val = "secret_nonce_value_12345"
+        sec_key = "PAI_TEST_SECRET_NONCE"
+        sec_val = "secret_nonce_value_12345"
 
         script = self._write_script(f"""
 import os
-val = os.environ.get('{secret_key}', '')
-if val == '{secret_val}':
+val = os.environ.get('{sec_key}', '')
+if val == '{sec_val}':
     print('SECRET_RECEIVED_OK')
 else:
     print(f'SECRET_MISMATCH: {{val}}')
 """)
         # 1. Assert secret is NOT in host-visible bwrap args:
         launcher_path = self.sandbox._prepare_launcher(script)
-        bwrap_args = self.sandbox._build_bwrap_args(launcher_path, script, extra_env={secret_key: secret_val})
-        self.assertNotIn(secret_key, " ".join(bwrap_args), "Secret key must not appear in bwrap command-line arguments")
-        self.assertNotIn(secret_val, " ".join(bwrap_args), "Secret value must not appear in bwrap command-line arguments")
+        bwrap_args = self.sandbox._build_bwrap_args(launcher_path, script, extra_env={sec_key: sec_val})
+        self.assertNotIn(sec_key, " ".join(bwrap_args), "Secret key must not appear in bwrap command-line arguments")
+        self.assertNotIn(sec_val, " ".join(bwrap_args), "Secret value must not appear in bwrap command-line arguments")
 
         # 2. Assert secret is received inside the sandbox via execute():
-        res = self.sandbox.execute(script, extra_env={secret_key: secret_val})
+        res = self.sandbox.execute(script, extra_env={sec_key: sec_val})
         self.assertEqual(res.exit_code, 0, f"Script failed: {res.stderr}")
         self.assertIn("SECRET_RECEIVED_OK", res.stdout, f"Secret was not injected into sandbox: {res.stdout}")
 

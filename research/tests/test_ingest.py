@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -626,6 +627,58 @@ class TestSafeIngestModule(unittest.TestCase):
             scan_secret_content(ascii_line, file_path="config.py"),
             "inline_secret_assignment",
         )
+
+    def test_windows_reserved_device_names_rejected(self):
+        """Verifies 22 Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) are rejected as SPECIAL_FILE."""
+        for name in ["CON", "con.py", "NUL.txt", "com1.log", "aux.tar.gz", "LPT9"]:
+            item, rej = ingest_file(name, root_path=self.test_dir)
+            self.assertIsNone(item)
+            self.assertIsNotNone(rej)
+            self.assertEqual(rej.reason_code, "SPECIAL_FILE")
+            self.assertEqual(rej.message, f"Target is a reserved device name: {name}")
+
+        # Directory with reserved name is pruned in ingest_folder
+        con_dir = os.path.join(self.test_dir, "NUL.dir")
+        os.makedirs(con_dir, exist_ok=True)
+        valid_file = os.path.join(self.test_dir, "valid.txt")
+        with open(valid_file, "w", encoding="utf-8") as f:
+            f.write("hello")
+        rep = ingest_folder(self.test_dir)
+        self.assertIn("SPECIAL_FILE", rep.rejection_counts)
+        self.assertEqual(len(rep.items), 1)
+
+    def test_ntfs_alternate_data_streams_rejected(self):
+        """Verifies NTFS alternate data streams (: in path after drive) are rejected as INVALID_FILENAME."""
+        for ads in ["file.txt:stream", "notes.txt:secret", "test.py:$DATA"]:
+            item, rej = ingest_file(ads, root_path=self.test_dir)
+            self.assertIsNone(item)
+            self.assertIsNotNone(rej)
+            self.assertEqual(rej.reason_code, "INVALID_FILENAME")
+            self.assertEqual(rej.message, "Filename contains invalid Unicode or non-decodable bytes")
+
+    def test_windows_directory_junction_containment(self):
+        """Verifies Windows directory junctions (mklink /J) are treated as symlinks/reparse points."""
+        if sys.platform != "win32":
+            self.skipTest("Directory junctions are Windows-specific")
+        import subprocess
+        junc_int = os.path.join(self.test_dir, "junc_int")
+        target_int = os.path.join(self.test_dir, "target_int")
+        os.makedirs(target_int, exist_ok=True)
+        try:
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", junc_int, target_int], capture_output=True, text=True)
+            if r.returncode != 0:
+                self.skipTest(f"mklink /J not permitted in current environment: {r.stderr}")
+        except Exception as e:
+            self.skipTest(f"mklink /J failed: {e}")
+
+        try:
+            rep = ingest_folder(self.test_dir)
+            self.assertIn("SYMLINK_DIRECTORY", rep.rejection_counts)
+        finally:
+            try:
+                os.rmdir(junc_int)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

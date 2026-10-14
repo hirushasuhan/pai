@@ -11,9 +11,9 @@
 
 #![deny(unsafe_code)]
 
-use std::io::{self, Read};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::{self, Read};
 
 use crate::ed25519;
 use crate::ingest::{
@@ -99,14 +99,10 @@ pub enum BridgeRequest {
     GetIngestLimits {},
 
     #[serde(rename = "is_secret_file")]
-    IsSecretFile {
-        path: String,
-    },
+    IsSecretFile { path: String },
 
     #[serde(rename = "is_junk_dir")]
-    IsJunkDir {
-        dirname: String,
-    },
+    IsJunkDir { dirname: String },
 
     #[serde(rename = "scan_secret_content")]
     ScanSecretContent {
@@ -116,9 +112,7 @@ pub enum BridgeRequest {
     },
 
     #[serde(rename = "sanitize_terminal_output")]
-    SanitizeTerminalOutput {
-        text: String,
-    },
+    SanitizeTerminalOutput { text: String },
 
     #[serde(rename = "sanitize_text_content")]
     SanitizeTextContent {
@@ -128,9 +122,7 @@ pub enum BridgeRequest {
     },
 
     #[serde(rename = "sanitize_header")]
-    SanitizeHeader {
-        header: String,
-    },
+    SanitizeHeader { header: String },
 
     #[serde(rename = "defang_envelope_markers")]
     DefangEnvelopeMarkers {
@@ -149,14 +141,10 @@ pub enum BridgeRequest {
     },
 
     #[serde(rename = "decode_envelope_json")]
-    DecodeEnvelopeJson {
-        raw_json: String,
-    },
+    DecodeEnvelopeJson { raw_json: String },
 
     #[serde(rename = "decode_value")]
-    DecodeValue {
-        envelope: Value,
-    },
+    DecodeValue { envelope: Value },
 
     #[serde(rename = "verify_verdict_frame")]
     VerifyVerdictFrame {
@@ -250,7 +238,9 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
 
         BridgeRequest::GetIngestLimits {} => match serde_json::to_value(get_ingest_limits()) {
             Ok(v) => BridgeResponse::ok(v),
-            Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+            Err(e) => {
+                BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError")
+            }
         },
 
         BridgeRequest::IsSecretFile { path } => {
@@ -272,7 +262,10 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             BridgeResponse::ok(Value::String(sanitize_terminal_output(&text)))
         }
 
-        BridgeRequest::SanitizeTextContent { text, max_line_length } => {
+        BridgeRequest::SanitizeTextContent {
+            text,
+            max_line_length,
+        } => {
             if max_line_length == 0 || max_line_length > 1_000_000 {
                 return BridgeResponse::err(
                     "max_line_length must be between 1 and 1000000",
@@ -286,17 +279,19 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             BridgeResponse::ok(Value::String(sanitize_header(&header)))
         }
 
-        BridgeRequest::DefangEnvelopeMarkers { text, nonce } => {
-            BridgeResponse::ok(Value::String(defang_envelope_markers(&text, nonce.as_deref())))
-        }
+        BridgeRequest::DefangEnvelopeMarkers { text, nonce } => BridgeResponse::ok(Value::String(
+            defang_envelope_markers(&text, nonce.as_deref()),
+        )),
 
-        BridgeRequest::WrapUntrustedEnvelope { content, header, nonce } => {
-            BridgeResponse::ok(Value::String(wrap_untrusted_envelope(
-                &content,
-                header.as_deref(),
-                &nonce,
-            )))
-        }
+        BridgeRequest::WrapUntrustedEnvelope {
+            content,
+            header,
+            nonce,
+        } => BridgeResponse::ok(Value::String(wrap_untrusted_envelope(
+            &content,
+            header.as_deref(),
+            &nonce,
+        ))),
 
         BridgeRequest::DecodeEnvelopeJson { raw_json } => match decode_envelope_json(&raw_json) {
             Ok(pai_val) => match encode_value(&pai_val) {
@@ -334,15 +329,22 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             );
             match serde_json::to_value(&res) {
                 Ok(v) => BridgeResponse::ok(v),
-                Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+                Err(e) => {
+                    BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError")
+                }
             }
         }
 
-        BridgeRequest::ExtractExampleAssertions { prompt, entry_point } => {
+        BridgeRequest::ExtractExampleAssertions {
+            prompt,
+            entry_point,
+        } => {
             let stmts = extract_example_assertions(&prompt, entry_point.as_deref());
             match serde_json::to_value(&stmts) {
                 Ok(v) => BridgeResponse::ok(v),
-                Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+                Err(e) => {
+                    BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError")
+                }
             }
         }
 
@@ -355,7 +357,8 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             let sig_clean = signature_hex.trim();
             let msg_clean = message_hex.trim();
 
-            if pk_clean.len() != 64 || sig_clean.len() != 128 || !msg_clean.len().is_multiple_of(2) {
+            if pk_clean.len() != 64 || sig_clean.len() != 128 || !msg_clean.len().is_multiple_of(2)
+            {
                 return BridgeResponse::ok(Value::Bool(false));
             }
 
@@ -396,7 +399,12 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
         } => {
             let trust_config: TrustConfig = match serde_json::from_str(&trust_root_json) {
                 Ok(c) => c,
-                Err(e) => return BridgeResponse::err(format!("Invalid trust configuration: {}", e), "InvalidTrustConfig"),
+                Err(e) => {
+                    return BridgeResponse::err(
+                        format!("Invalid trust configuration: {}", e),
+                        "InvalidTrustConfig",
+                    )
+                }
             };
 
             if let Err(e) = updater::validate_trust_config(&trust_config) {
@@ -412,7 +420,10 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             ) {
                 Ok(verified) => match serde_json::to_value(&verified) {
                     Ok(v) => BridgeResponse::ok(v),
-                    Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+                    Err(e) => BridgeResponse::err(
+                        format!("Serialization error: {}", e),
+                        "SerializationError",
+                    ),
                 },
                 Err(e) => BridgeResponse::err(e.0, "UpdateRejected"),
             }
@@ -521,29 +532,25 @@ pub fn handle_typed_bridge_request(req: BridgeRequest) -> BridgeResponse {
             );
             match serde_json::to_value(report) {
                 Ok(v) => BridgeResponse::ok(v),
-                Err(e) => BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError"),
+                Err(e) => {
+                    BridgeResponse::err(format!("Serialization error: {}", e), "SerializationError")
+                }
             }
         }
     }
 }
 
 pub fn handle_raw_bridge_request(raw_json: &str) -> BridgeResponse {
-    let strict_parsed = match parse_strict_json(
-        raw_json,
-        MAX_REQUEST_BYTES,
-        64,
-        100_000,
-        None,
-        true,
-    ) {
-        Ok(sj) => sj,
-        Err(err) => {
-            return BridgeResponse::err(
-                format!("Invalid request JSON: {}", err),
-                "JsonParseError",
-            );
-        }
-    };
+    let strict_parsed =
+        match parse_strict_json(raw_json, MAX_REQUEST_BYTES, 64, 100_000, None, true) {
+            Ok(sj) => sj,
+            Err(err) => {
+                return BridgeResponse::err(
+                    format!("Invalid request JSON: {}", err),
+                    "JsonParseError",
+                );
+            }
+        };
 
     let value = match strict_parsed.to_serde_value() {
         Ok(v) => v,
@@ -650,7 +657,10 @@ mod tests {
         let resp = handle_raw_bridge_request(req);
         assert_eq!(resp.status, "error");
         assert_eq!(resp.error_type, Some("InvalidRequest".to_string()));
-        assert!(resp.error.unwrap().contains("unknown field `extra_bogus_field`"));
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("unknown field `extra_bogus_field`"));
     }
 
     #[test]
@@ -691,7 +701,10 @@ mod tests {
         let resp = handle_raw_bridge_request(req);
         assert_eq!(resp.status, "error");
         assert_eq!(resp.error_type, Some("InvalidRequest".to_string()));
-        assert!(resp.error.unwrap().contains("unknown field `runner_status`"));
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("unknown field `runner_status`"));
     }
 
     #[test]
@@ -732,4 +745,3 @@ mod tests {
         assert_eq!(resp2.error_type, Some("InvalidTrustConfig".to_string()));
     }
 }
-

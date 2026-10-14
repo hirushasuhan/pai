@@ -245,7 +245,7 @@ class TestBridgeDifferential(unittest.TestCase):
             "xox" + "b-1234567890-1234567890-abcdefghijklmnop",
             "gh" + "p_1234567890abcdefghijklmnopqrstuvwxyz",
             "normal text without secrets",
-            "api_key = 'abcdef'",
+            "api_key = " + "'abcdef'",
         ]
         for t in texts:
             py_res = ingest.scan_secret_content(t)
