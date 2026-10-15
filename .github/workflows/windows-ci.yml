@@ -232,16 +232,17 @@ jobs:
       - name: Execute M2a Adversarial Containment Matrix on Linux CI
         working-directory: research
         run: |
-          python run_m2a_matrix.py
+          python run_m2a_matrix.py || { echo '=== M2A MATRIX EXECUTION LOG ON FAILURE ==='; cat ../docs/evidence/m2a_sandbox_raw.log 2>/dev/null || true; exit 1; }
 
       - name: Upload Linux M2a Sandbox Evidence Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: linux-m2a-sandbox-evidence
           path: |
             docs/evidence/m2a_sandbox_results.json
             docs/evidence/m2a_sandbox_raw.log
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Run Full Test Suite on Linux (Procfs Telemetry & Bubblewrap Sandbox)
         working-directory: research

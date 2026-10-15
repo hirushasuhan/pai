@@ -544,16 +544,18 @@ if libc is not None:
                 results.append("LEAK_NATIVE_NET_CONNECTED")
             else:
                 n_err = ctypes.get_errno()
-                # Host is listening on 127.0.0.1:{a8_port}. Under unshared network namespace (--unshare-net),
-                # loopback is down, so connect strictly fails with ENETUNREACH, ENETDOWN, EADDRNOTAVAIL, EPERM, or EACCES.
-                # ECONNREFUSED and ETIMEDOUT are strictly rejected because with an active host listener,
-                # ECONNREFUSED can never occur unless network isolation is absent and listener stopped.
+                # With host listener active on 127.0.0.1:{a8_port}:
+                # If network isolation were absent (shared host stack), connect() would succeed (rc=0, LEAK).
+                # In an unshared network namespace (--unshare-net), the host listener is inaccessible;
+                # connecting to 127.0.0.1:{a8_port} in the isolated namespace yields ECONNREFUSED (from container loopback),
+                # ENETUNREACH, ENETDOWN, EADDRNOTAVAIL, EPERM, or EACCES. ETIMEDOUT remains strictly rejected.
                 denied_net_errs = (
                     errno.ENETUNREACH,
                     errno.EPERM,
                     errno.EACCES,
                     getattr(errno, "ENETDOWN", 100),
                     getattr(errno, "EADDRNOTAVAIL", 99),
+                    errno.ECONNREFUSED,
                 )
                 if n_err in denied_net_errs:
                     results.append(f"CONTAINED_NATIVE_NET_DENIED: {{n_err}}")
