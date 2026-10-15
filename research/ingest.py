@@ -863,6 +863,38 @@ def ingest_file(
         raise ValueError("max_line_length must be between 1 and 1000000")
     if not (1 <= max_file_size <= 100_000_000):
         raise ValueError("max_file_size must be between 1 and 100000000")
+    basename = os.path.basename(file_path)
+
+    # 0. Fast-path filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
+    # Must run before os.path.realpath/os.path.abspath because on POSIX (Linux), os.path.realpath
+    # encodes filenames using strict UTF-8 and crashes with UnicodeEncodeError on lone surrogates.
+    if _is_invalid_filename(basename) or _is_invalid_filename(file_path) or has_ads_colon(basename) or has_ads_colon(file_path):
+        rel_display = file_path
+        if root_path is not None and os.path.isabs(file_path):
+            try:
+                rel_display = os.path.relpath(file_path, root_path)
+            except Exception:
+                rel_display = file_path
+        return None, IngestionRejection(
+            path=_lossy_utf8(rel_display),
+            reason_code="INVALID_FILENAME",
+            message="Filename contains invalid Unicode or non-decodable bytes",
+        )
+
+    # Reserved device name check (SPECIAL_FILE per platform-independent parity rule)
+    if is_reserved_device_name(basename):
+        rel_display = file_path
+        if root_path is not None and os.path.isabs(file_path):
+            try:
+                rel_display = os.path.relpath(file_path, root_path)
+            except Exception:
+                rel_display = file_path
+        return None, IngestionRejection(
+            path=rel_display,
+            reason_code="SPECIAL_FILE",
+            message=f"Target is a reserved device name: {basename}",
+        )
+
     if root_path is None:
         abs_raw = os.path.abspath(file_path)
         canonical_root = os.path.realpath(os.path.dirname(abs_raw))
@@ -899,22 +931,12 @@ def ingest_file(
     except ValueError:
         rel_path = file_path
 
-    basename = os.path.basename(file_path)
-
-    # 0. Filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
-    if _is_invalid_filename(basename) or _is_invalid_filename(file_path) or has_ads_colon(basename) or has_ads_colon(rel_path):
+    # Check for ADS colon in resolved relative path
+    if has_ads_colon(rel_path):
         return None, IngestionRejection(
             path=_lossy_utf8(rel_path),
             reason_code="INVALID_FILENAME",
             message="Filename contains invalid Unicode or non-decodable bytes",
-        )
-
-    # Reserved device name check (SPECIAL_FILE per platform-independent parity rule)
-    if is_reserved_device_name(basename):
-        return None, IngestionRejection(
-            path=rel_path,
-            reason_code="SPECIAL_FILE",
-            message=f"Target is a reserved device name: {basename}",
         )
 
     # 1. Existence check
