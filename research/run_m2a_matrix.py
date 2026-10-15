@@ -373,6 +373,12 @@ except Exception as e:
 
     # -------------------------------------------------------------------------
     # A6: Network Socket Egress
+    # NOTE (Finding L): Vector A6 connects to an external public address (1.1.1.1:80).
+    # On environments without outbound internet routing, A6 passes even if network
+    # isolation is unshared because the host itself cannot route to 1.1.1.1.
+    # Vector A8 is the discriminating network isolation check: it runs an active
+    # host-side loopback listener with a positive control to verify that loopback
+    # is unreachable from the isolated sandbox namespace.
     # -------------------------------------------------------------------------
     exec_sandbox_test(
         vec_id="A6",
@@ -602,6 +608,8 @@ with open("std_output.txt", "w", encoding="utf-8") as f:
             return False, "Missing positive control marker"
         if sys.platform != "win32" and "CONTAINED_NATIVE_NET_DENIED" not in comb:
             return False, "Missing native network containment marker"
+        if sys.platform != "win32" and not host_ctrl_verified:
+            return False, "Host listener positive control failed"
         return True, f"Native OS boundary call verified with host listener positive control (out={comb.strip()[:80]})"
 
     try:

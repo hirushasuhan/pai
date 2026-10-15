@@ -2338,3 +2338,52 @@ New findings:
 - I. Several mock-only tests are planned for Slice 6; at least one test per bridged operation must use the real binary, and the Windows job must be the one that runs them.
 
 Slice 6: go, after E is fixed and the draft is updated as listed in the previous addendum (single flag name, default of `PAI_USE_RUST_CORE` unchanged in this slice, doctor wording, rollback state test, real-binary tests). The owner's Windows run with comparison counts is still required before any default change. Agreement in these runs shows parity on the inputs tried; it does not show that either side is correct.
+
+### Addendum (f41514d): Re-check of findings E to I and the Windows shadow run (2026-10-15)
+Reviewed state: Linux, HEAD f41514d, clean working tree. Earlier lines of this file are unchanged. The GitHub Actions run and the Windows shadow run output below come from the owner's report; I have not seen either directly.
+
+Verified:
+- All 37 Python test modules pass on Linux: 445 tests (444 before, plus the new network-isolation mutation test). The Linux sandbox module ran 16 tests with 0 skips.
+- Differential modules with the real Rust binary on Linux: 54 tests, 0 failures, 2 skips (no bubblewrap in my cloud container; Windows junction test). The Rust sources are unchanged since 131e09e.
+- Finding E closed. `research/run_m2a_matrix.py` vector A8 now connects to a host-side listener on a random local port, records an outside positive control in the evidence file, and no longer accepts `ETIMEDOUT`. Mutation check of the real matrix on my machine (the `--unshare-net` option removed from the bubblewrap arguments, matrix otherwise unchanged): A8 reports `FAIL` with a leak, the normal run reports 10 of 10 passed. The new unit test `test_a8_network_isolation_mutation_check` does the same with a Python socket and passes.
+- Finding F closed by that mutation check. Finding G closed in part, see below. Finding H: the comment is added. Finding I: `test_rollback_state_handling_with_rust_core` exists and passes; it currently runs with Python authoritative, so it is a baseline that must be re-run unchanged once Rust is authoritative.
+- `is_rust_core_enabled()` reads the environment at call time. The module constant is kept and either one turns the flag on.
+
+Remaining, minor:
+- J. The allowed skip reasons are the same list for Windows and Linux. On Linux CI the reason "bwrap binary not found" should not be allowed, because bubblewrap is installed there by an earlier step and a skip for that reason would hide a real failure.
+- K. The evidence upload now uses `if-no-files-found: ignore`. A matrix run that exits 0 without writing evidence would pass. Keep `error` for the successful path, or check the file exists in the matrix step.
+- L. Vector A6 (Python socket to a public address) still passes in my mutation run because my machine has no outbound network; it discriminates only where the runner has internet. A8 is the discriminating one; say so next to A6.
+- M. The Windows shadow run reported in the owner's message covers one small folder, one document, one release and the doctor smoke checks: 16 comparisons, 0 discrepancies. That is parity on those inputs. It does not include symlinks or junctions, reserved names, a large tree, or non-ASCII folder names on the real file system. The test count printed for `python-research` (170) differs from my 445 on Linux; the step name in the workflow still says 170, and the real count from the log should be checked (Windows skips some Linux-only tests, but not 270).
+
+Slice 6: go. Order of work, as in the earlier addenda: single fallback flag name; `PAI_USE_RUST_CORE` default stays off in this slice; Rust authoritative for `verify_release`, `verify_ed25519`, `ingest_file`, `ingest_folder` when the flag is on and the fallback flag is off; a bridge failure raises, it never falls back silently; doctor wording "no mismatches observed"; the rollback test and the three differential modules re-run unchanged in both modes in CI on both platforms.
+
+### Addendum (Slice 6 Implementation & Verification): Rust Bridge Promoted to Authoritative with Fallback Control (2026-10-15)
+Owner state: Windows 11 host (12 cores, 4273.8 MB avail RAM, NVIDIA GeForce RTX 4050 GPU). Lines 1–2341 of this document remain strictly preserved and unmodified.
+
+Implemented & Verified:
+1. Fallback & Authority Control:
+   - Implemented single fallback flag `PAI_RUST_FALLBACK_PYTHON` with call-time evaluation helper `is_python_fallback_forced()` in `research/pai_core_bridge.py`.
+   - `PAI_USE_RUST_CORE` default remains `0` (off) in this slice.
+   - When `PAI_USE_RUST_CORE=1` and `PAI_RUST_FALLBACK_PYTHON` is unset: `verify_release`, `verify_ed25519`, `ingest_file`, and `ingest_folder` are promoted to Rust-authoritative.
+   - Strict fail-closed semantics: Any bridge failure raises `CoreBridgeUnavailableError` or corresponding error; silent fallback to Python reference is strictly forbidden.
+   - Shadow comparison against Python reference is conditionally executed only when `PAI_SHADOW_COMPARE=1`.
+   - `pai doctor` check detail wording updated to: `0 discrepancies in N comparisons (no mismatches observed)`.
+
+2. Resolution of Reviewer Findings J–M:
+   - Finding J: Platform-specific skip allowlists configured in `.github/workflows/windows-ci.yml`. On Linux CI, `ALLOWED_SKIP_REASONS` strictly contains only `['Directory junctions are Windows-specific']` (disallowing bwrap and symlink skips). In both Windows (`rust-core`) and Linux (`linux-portability`) CI jobs, a dual-mode loop executes differential test suites across both `PAI_USE_RUST_CORE=0` and `PAI_USE_RUST_CORE=1`.
+   - Finding K: Restored `if-no-files-found: error` on Linux M2a sandbox artifact upload, preceded by explicit assertions (`test -s`) ensuring both `m2a_sandbox_results.json` and `m2a_sandbox_raw.log` exist and are non-empty.
+   - Finding L: Vector A6 documented regarding dependency on outbound routing to 1.1.1.1 and pointing to Vector A8 as the discriminating network isolation check. Vector A8 in `research/run_m2a_matrix.py` explicitly asserts `host_ctrl_verified` on non-Win32 platforms in `_assert_a8`.
+   - Finding M: Workflow step in `python-research` renamed to `Run Full Python Test Suite (All 37 Modules)`.
+
+3. Test Verification:
+   - Differential integration test suites (`test_bridge_differential`, `test_ingest_differential`, `test_updater_differential`): 60/60 tests pass under both `PAI_USE_RUST_CORE=0` and `PAI_USE_RUST_CORE=1` (3 platform skips on Windows: junctions and symlink privilege).
+   - Real-binary tests (`test_real_binary_rust_authoritative_verify_release_and_ed25519`, `test_real_binary_rust_authoritative_ingest_file_and_folder`), fallback tests (`test_python_fallback_flag_bypasses_rust`, `test_python_fallback_flag_ingest`), and fail-closed tests pass cleanly.
+   - Rollback state test `test_rollback_state_handling_with_rust_core` re-verified and passes unchanged with Rust authoritative.
+   - Conformance vectors (`test_conformance.py`: 6/6 OK) and security claims (`test_claims.py`: 2/2 OK) pass.
+
+4. Owner Comprehensive Windows Real-Folder Parity Run:
+   - Generated a rich test tree on real NTFS filesystem: 63 entries, 424,308 bytes (~414.4 KB).
+   - Evaluated inputs include: Sinhala UTF-8 directory and filenames (`සිංහල_ෆෝල්ඩරය/විස්තරය.md`, `ක්‍රමලේඛනය.py`), Windows directory junction (`mklink /J junction_link`), Windows reserved device names (`CON.txt`, `NUL.py`, `PRN.log`, `AUX.dat` rejected as `SPECIAL_FILE`), NTFS Alternate Data Stream (`ads_test.txt:hidden_stream`), secret files (`.env`, `credentials.json` rejected as `SECRET_FILE`), junk directories (`.git`, `node_modules` rejected as `JUNK_DIRECTORY`), and a 35-file multi-level folder structure.
+   - Operations executed end-to-end: `pai analyze`, `pai docs`, `pai_core_bridge.ingest_file`, `pai_core_bridge.ingest_folder`, `Updater.verify_release`, and `pai doctor`.
+   - Result: 18 comparisons recorded, 0 discrepancies observed.
+

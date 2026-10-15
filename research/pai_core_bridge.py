@@ -67,11 +67,28 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger("pai.core_bridge")
 
 PAI_USE_RUST_CORE = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
+PAI_RUST_FALLBACK_PYTHON = os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes")
+PAI_SHADOW_COMPARE = os.environ.get("PAI_SHADOW_COMPARE", "1").lower() in ("1", "true", "yes")
+
+
+def is_python_fallback_forced() -> bool:
+    """Returns True if the 1-release fallback to Python is active."""
+    return bool(PAI_RUST_FALLBACK_PYTHON) or (os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes"))
 
 
 def is_rust_core_enabled() -> bool:
-    """Returns True if Rust core is enabled via module flag or PAI_USE_RUST_CORE environment variable."""
-    return PAI_USE_RUST_CORE or (os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes"))
+    """Returns True if Rust core is enabled and Python fallback is not forced."""
+    if is_python_fallback_forced():
+        return False
+    return bool(PAI_USE_RUST_CORE) or (os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes"))
+
+
+def is_shadow_compare_enabled() -> bool:
+    """Returns True if shadow comparison against the Python reference is enabled."""
+    env_val = os.environ.get("PAI_SHADOW_COMPARE")
+    if env_val is not None:
+        return env_val.lower() in ("1", "true", "yes")
+    return bool(PAI_SHADOW_COMPARE)
 
 MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16 MiB
 
@@ -674,17 +691,15 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
 def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
     """
     Verifies an Ed25519 signature over `message` with `public_key`.
-    In shadow mode (PAI_USE_RUST_CORE=1), verifies across both Python reference and
-    Rust core, recording any discrepancies while returning the authoritative Python verdict.
+    When PAI_USE_RUST_CORE is active (and fallback not forced), Rust core is authoritative.
+    When PAI_SHADOW_COMPARE is active, shadow comparison against Python reference is performed.
     """
     import ed25519_ref
-    py_ver = ed25519_ref.verify(public_key, message, signature)
 
     if not is_rust_core_enabled():
-        return py_ver
+        return ed25519_ref.verify(public_key, message, signature)
 
     find_core_binary()
-    record_shadow_comparison("verify_ed25519")
 
     try:
         rust_ver = call_core_bridge(
@@ -708,17 +723,20 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
             "verify_ed25519",
             f"Bridge returned non-bool: {type(rust_ver).__name__}",
         )
-        return py_ver
+        raise CoreBridgeUnavailableError(f"Bridge returned non-bool: {type(rust_ver).__name__}")
 
-    if py_ver != rust_ver:
-        record_shadow_discrepancy(
-            "verify_ed25519",
-            f"Ed25519 verification mismatch: py={py_ver} vs rust={rust_ver}",
-            py_res=py_ver,
-            rust_res=rust_ver,
-        )
+    if is_shadow_compare_enabled():
+        record_shadow_comparison("verify_ed25519")
+        py_ver = ed25519_ref.verify(public_key, message, signature)
+        if py_ver != rust_ver:
+            record_shadow_discrepancy(
+                "verify_ed25519",
+                f"Ed25519 verification mismatch: py={py_ver} vs rust={rust_ver}",
+                py_res=py_ver,
+                rust_res=rust_ver,
+            )
 
-    return py_ver
+    return rust_ver
 
 
 def verify_release(
@@ -756,21 +774,24 @@ def ingest_file(
 ) -> Tuple[Optional[IngestedItem], Optional[IngestionRejection]]:
     """
     Safely ingests a single file.
-    In shadow mode (PAI_USE_RUST_CORE=1), executes across both Python reference and
-    Rust core, recording any discrepancies while returning the authoritative Python result.
+    When PAI_USE_RUST_CORE is active (and fallback not forced), Rust core is authoritative.
+    When PAI_SHADOW_COMPARE is active, shadow comparison against Python reference is performed.
     """
-    py_item, py_rej = py_ingest_file(
-        file_path=file_path,
-        root_path=root_path,
-        max_file_size=max_file_size,
-        max_line_length=max_line_length,
-        deny_patterns=deny_patterns,
-    )
+    if max_line_length <= 0 or max_line_length > 1_000_000:
+        raise ValueError("max_line_length must be between 1 and 1000000")
+    if max_file_size <= 0 or max_file_size > 100_000_000:
+        raise ValueError("max_file_size must be between 1 and 100000000")
+
     if not is_rust_core_enabled():
-        return py_item, py_rej
+        return py_ingest_file(
+            file_path=file_path,
+            root_path=root_path,
+            max_file_size=max_file_size,
+            max_line_length=max_line_length,
+            deny_patterns=deny_patterns,
+        )
 
     find_core_binary()
-    record_shadow_comparison("ingest_file")
 
     bridge_kwargs: Dict[str, Any] = {
         "file_path": file_path,
@@ -788,7 +809,7 @@ def ingest_file(
         raw_rej = raw_res.get("rejection")
         rust_item = IngestedItem(**raw_item) if raw_item else None
         rust_rej = IngestionRejection(**raw_rej) if raw_rej else None
-    except CoreBridgeUnavailableError:
+    except (CoreBridgeUnavailableError, ValueError):
         raise
     except Exception as exc:
         record_shadow_discrepancy(
@@ -796,19 +817,28 @@ def ingest_file(
             f"Bridge invocation exception: {exc}",
             exception=type(exc).__name__,
         )
-        return py_item, py_rej
+        raise CoreBridgeUnavailableError(f"Bridge invocation exception: {exc}") from exc
 
-    if (rust_item != py_item) or (rust_rej != py_rej):
-        record_shadow_discrepancy(
-            "ingest_file",
-            f"Ingest file mismatch: py=({py_item!r}, {py_rej!r}) vs rust=({rust_item!r}, {rust_rej!r})",
-            py_item=py_item.to_dict() if py_item else None,
-            rust_item=rust_item.to_dict() if rust_item else None,
-            py_rej=py_rej.to_dict() if py_rej else None,
-            rust_rej=rust_rej.to_dict() if rust_rej else None,
+    if is_shadow_compare_enabled():
+        record_shadow_comparison("ingest_file")
+        py_item, py_rej = py_ingest_file(
+            file_path=file_path,
+            root_path=root_path,
+            max_file_size=max_file_size,
+            max_line_length=max_line_length,
+            deny_patterns=deny_patterns,
         )
+        if (rust_item != py_item) or (rust_rej != py_rej):
+            record_shadow_discrepancy(
+                "ingest_file",
+                f"Ingest file mismatch: py=({py_item!r}, {py_rej!r}) vs rust=({rust_item!r}, {rust_rej!r})",
+                py_item=py_item.to_dict() if py_item else None,
+                rust_item=rust_item.to_dict() if rust_item else None,
+                py_rej=py_rej.to_dict() if py_rej else None,
+                rust_rej=rust_rej.to_dict() if rust_rej else None,
+            )
 
-    return py_item, py_rej
+    return rust_item, rust_rej
 
 
 def ingest_folder(
@@ -826,27 +856,40 @@ def ingest_folder(
 ) -> IngestionReport:
     """
     Safely ingests a folder tree.
-    In shadow mode (PAI_USE_RUST_CORE=1), executes across both Python reference and
-    Rust core, recording any discrepancies while returning the authoritative Python result.
+    When PAI_USE_RUST_CORE is active (and fallback not forced), Rust core is authoritative.
+    When PAI_SHADOW_COMPARE is active, shadow comparison against Python reference is performed.
     """
-    py_report = py_ingest_folder(
-        folder_path=folder_path,
-        max_file_size=max_file_size,
-        max_total_bytes=max_total_bytes,
-        max_file_count=max_file_count,
-        max_depth=max_depth,
-        max_line_length=max_line_length,
-        deny_patterns=deny_patterns,
-        junk_patterns=junk_patterns,
-        include_junk=include_junk,
-        max_rejections_per_reason=max_rejections_per_reason,
-        max_total_rejections=max_total_rejections,
-    )
+    if max_line_length <= 0 or max_line_length > 1_000_000:
+        raise ValueError("max_line_length must be between 1 and 1000000")
+    if max_file_size <= 0 or max_file_size > 100_000_000:
+        raise ValueError("max_file_size must be between 1 and 100000000")
+    if max_total_bytes <= 0 or max_total_bytes > 1_000_000_000:
+        raise ValueError("max_total_bytes must be between 1 and 1000000000")
+    if max_file_count <= 0 or max_file_count > 1_000_000:
+        raise ValueError("max_file_count must be between 1 and 1000000")
+    if max_depth <= 0 or max_depth > 64:
+        raise ValueError("max_depth must be between 1 and 64")
+    if max_rejections_per_reason <= 0 or max_rejections_per_reason > 10_000:
+        raise ValueError("max_rejections_per_reason must be between 1 and 10000")
+    if max_total_rejections <= 0 or max_total_rejections > 50_000:
+        raise ValueError("max_total_rejections must be between 1 and 50000")
+
     if not is_rust_core_enabled():
-        return py_report
+        return py_ingest_folder(
+            folder_path=folder_path,
+            max_file_size=max_file_size,
+            max_total_bytes=max_total_bytes,
+            max_file_count=max_file_count,
+            max_depth=max_depth,
+            max_line_length=max_line_length,
+            deny_patterns=deny_patterns,
+            junk_patterns=junk_patterns,
+            include_junk=include_junk,
+            max_rejections_per_reason=max_rejections_per_reason,
+            max_total_rejections=max_total_rejections,
+        )
 
     find_core_binary()
-    record_shadow_comparison("ingest_folder")
 
     bridge_kwargs: Dict[str, Any] = {
         "folder_path": folder_path,
@@ -878,7 +921,7 @@ def ingest_folder(
             rejection_counts=raw_res.get("rejection_counts", {}),
             rejections_capped=raw_res.get("rejections_capped", False),
         )
-    except CoreBridgeUnavailableError:
+    except (CoreBridgeUnavailableError, ValueError):
         raise
     except Exception as exc:
         record_shadow_discrepancy(
@@ -886,17 +929,32 @@ def ingest_folder(
             f"Bridge invocation exception: {exc}",
             exception=type(exc).__name__,
         )
-        return py_report
+        raise CoreBridgeUnavailableError(f"Bridge invocation exception: {exc}") from exc
 
-    py_dict = py_report.to_dict()
-    rust_dict = rust_report.to_dict()
-    if py_dict != rust_dict:
-        record_shadow_discrepancy(
-            "ingest_folder",
-            f"Ingest folder mismatch: py={py_dict!r} vs rust={rust_dict!r}",
-            py_report=py_dict,
-            rust_report=rust_dict,
+    if is_shadow_compare_enabled():
+        record_shadow_comparison("ingest_folder")
+        py_report = py_ingest_folder(
+            folder_path=folder_path,
+            max_file_size=max_file_size,
+            max_total_bytes=max_total_bytes,
+            max_file_count=max_file_count,
+            max_depth=max_depth,
+            max_line_length=max_line_length,
+            deny_patterns=deny_patterns,
+            junk_patterns=junk_patterns,
+            include_junk=include_junk,
+            max_rejections_per_reason=max_rejections_per_reason,
+            max_total_rejections=max_total_rejections,
         )
+        py_dict = py_report.to_dict()
+        rust_dict = rust_report.to_dict()
+        if py_dict != rust_dict:
+            record_shadow_discrepancy(
+                "ingest_folder",
+                f"Ingest folder report mismatch: total_files (py={py_report.total_files} vs rust={rust_report.total_files}), total_bytes (py={py_report.total_bytes} vs rust={rust_report.total_bytes})",
+                py_report=py_dict,
+                rust_report=rust_dict,
+            )
 
-    return py_report
+    return rust_report
 

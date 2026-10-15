@@ -285,7 +285,6 @@ class Updater:
 
         # Fail-closed if binary missing or handshake fails
         pai_core_bridge.find_core_binary()
-        pai_core_bridge.record_shadow_comparison("verify_release")
 
         trust_cfg_json = getattr(self, "_raw_trust_json", None)
         if trust_cfg_json is None:
@@ -306,31 +305,38 @@ class Updater:
                 check_rollback=check_rollback,
                 highest_seen_version=highest,
             )
+        except pai_core_bridge.CoreBridgeUnavailableError:
+            raise
         except Exception as e:
             rust_err = e
 
-        py_res = None
-        py_err = None
-        try:
-            py_res = self._verify_release_py(release_dir, check_rollback=check_rollback)
-        except Exception as e:
-            py_err = e
+        if pai_core_bridge.is_shadow_compare_enabled():
+            pai_core_bridge.record_shadow_comparison("verify_release")
+            py_res = None
+            py_err = None
+            try:
+                py_res = self._verify_release_py(release_dir, check_rollback=check_rollback)
+            except Exception as e:
+                py_err = e
 
-        if (py_res is None) != (rust_res is None):
-            pai_core_bridge.record_shadow_discrepancy(
-                "verify_release",
-                f"Release verification outcome mismatch: py_res={py_res is not None} vs rust_res={rust_res is not None} (py_err={py_err}, rust_err={rust_err})",
-            )
-        elif py_res is not None and rust_res is not None:
-            if py_res.version != rust_res.get("version") or py_res.key_id != rust_res.get("key_id") or py_res.files != rust_res.get("files"):
+            if (py_res is None) != (rust_res is None):
                 pai_core_bridge.record_shadow_discrepancy(
                     "verify_release",
-                    f"Release metadata mismatch: py=({py_res.version}, {py_res.key_id}, {len(py_res.files)}) vs rust=({rust_res.get('version')}, {rust_res.get('key_id')}, {len(rust_res.get('files', []))})",
+                    f"Release verification outcome mismatch: py_res={py_res is not None} vs rust_res={rust_res is not None} (py_err={py_err}, rust_err={rust_err})",
                 )
+            elif py_res is not None and rust_res is not None:
+                if py_res.version != rust_res.get("version") or py_res.key_id != rust_res.get("key_id") or py_res.files != rust_res.get("files"):
+                    pai_core_bridge.record_shadow_discrepancy(
+                        "verify_release",
+                        f"Release metadata mismatch: py=({py_res.version}, {py_res.key_id}, {len(py_res.files)}) vs rust=({rust_res.get('version')}, {rust_res.get('key_id')}, {len(rust_res.get('files', []))})",
+                    )
 
-        if py_err is not None:
-            raise py_err
-        return py_res
+        if rust_err is not None:
+            if isinstance(rust_err, (UpdateRejected, pai_core_bridge.CoreBridgeUnavailableError)):
+                raise rust_err
+            raise UpdateRejected(str(rust_err)) from rust_err
+
+        return VerifiedRelease(rust_res["version"], rust_res["key_id"], list(rust_res["files"]), rust_res["manifest"])
 
     # ---------------------------------------------------------------- install
     def install(self, release_dir: str) -> VerifiedRelease:

@@ -781,6 +781,87 @@ class TestUpdaterDifferential(unittest.TestCase):
         finally:
             pai_core_bridge.PAI_USE_RUST_CORE = orig_flag
 
+    def test_real_binary_rust_authoritative_verify_release_and_ed25519(self):
+        """
+        Slice 6 Real-Binary Test:
+        Verifies that when PAI_USE_RUST_CORE=True and PAI_SHADOW_COMPARE=False:
+        1. Updater._verify_release_py is NOT called (asserted via mock).
+        2. ed25519_ref.verify is NOT called during verify_ed25519 (asserted via mock).
+        3. Real pai-core binary verifies valid releases and rejects tampered releases.
+        4. Real pai-core binary verifies valid ed25519 signatures and rejects tampered signatures.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        orig_shadow = pai_core_bridge.PAI_SHADOW_COMPARE
+        orig_fallback = pai_core_bridge.PAI_RUST_FALLBACK_PYTHON
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = False
+        pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+        try:
+            u = Updater(self.trust_dir, self.install_dir)
+            r_valid = make_test_release(self.src_dir, version="0.3.0")
+
+            def _py_ref_called(*args, **kwargs):
+                raise AssertionError("Python reference must not be called when PAI_SHADOW_COMPARE=0")
+
+            with mock.patch.object(Updater, "_verify_release_py", side_effect=_py_ref_called):
+                with mock.patch.object(ed25519_ref, "verify", side_effect=_py_ref_called):
+                    # Valid release verified authoritatively by real Rust core binary
+                    rel = u.verify_release(r_valid, check_rollback=True)
+                    self.assertEqual(rel.version, "0.3.0")
+                    self.assertEqual(rel.key_id, "rel-1")
+                    self.assertIn("pai_core.bin", rel.files)
+
+                    # Tampered release rejected authoritatively by real Rust core binary
+                    r_tampered = make_test_release(self.src_dir, version="0.3.1")
+                    with open(os.path.join(r_tampered, "pai_core.bin"), "wb") as f:
+                        f.write(b"tampered content")
+                    with self.assertRaises(UpdateRejected):
+                        u.verify_release(r_tampered, check_rollback=True)
+
+                    # Real binary Ed25519 verification
+                    msg = b"slice 6 authoritative ed25519 message"
+                    sig = ed25519_ref.sign(TEST_SEED, msg)
+                    self.assertTrue(pai_core_bridge.verify_ed25519(TEST_PUB, msg, sig))
+                    bad_sig = bytearray(sig)
+                    bad_sig[0] ^= 0xFF
+                    self.assertFalse(pai_core_bridge.verify_ed25519(TEST_PUB, msg, bytes(bad_sig)))
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+            pai_core_bridge.PAI_SHADOW_COMPARE = orig_shadow
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = orig_fallback
+
+    def test_python_fallback_flag_bypasses_rust(self):
+        """
+        Slice 6 Fallback Test:
+        Verifies that when PAI_USE_RUST_CORE=True but PAI_RUST_FALLBACK_PYTHON=True:
+        1. Rust binary is NOT called (find_core_binary mocked to fail if called).
+        2. Operations safely fall back to Python reference implementations.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        orig_fallback = pai_core_bridge.PAI_RUST_FALLBACK_PYTHON
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = True
+        try:
+            u = Updater(self.trust_dir, self.install_dir)
+            r_valid = make_test_release(self.src_dir, version="0.3.0")
+
+            def _rust_called(*args, **kwargs):
+                raise AssertionError("Rust core binary must not be invoked when PAI_RUST_FALLBACK_PYTHON=1")
+
+            with mock.patch("pai_core_bridge.find_core_binary", side_effect=_rust_called):
+                with mock.patch("pai_core_bridge.call_core_bridge", side_effect=_rust_called):
+                    rel = u.verify_release(r_valid, check_rollback=True)
+                    self.assertEqual(rel.version, "0.3.0")
+
+                    msg = b"fallback test"
+                    sig = ed25519_ref.sign(TEST_SEED, msg)
+                    self.assertTrue(pai_core_bridge.verify_ed25519(TEST_PUB, msg, sig))
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = orig_fallback
+
 
 if __name__ == "__main__":
     unittest.main()

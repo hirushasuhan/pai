@@ -722,6 +722,195 @@ class TestIngestDifferential(unittest.TestCase):
         self.assertEqual(py_rej.message, rust_rej["message"])
         self.assertEqual(py_rej.path, rust_rej["path"])
 
+    def test_real_binary_rust_authoritative_ingest_file_and_folder(self):
+        """
+        Slice 6 Real-Binary Test:
+        Verifies that when PAI_USE_RUST_CORE=True and PAI_SHADOW_COMPARE=False:
+        1. py_ingest_file and py_ingest_folder are NOT called (asserted via mock).
+        2. Real pai-core binary safely ingests valid files, rejects secret files (.env),
+           and ingests folder trees returning IngestionReport.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        orig_shadow = pai_core_bridge.PAI_SHADOW_COMPARE
+        orig_fallback = pai_core_bridge.PAI_RUST_FALLBACK_PYTHON
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = False
+        pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+        try:
+            # Create test files
+            repo_dir = os.path.join(self.test_dir, "auth_repo")
+            os.makedirs(repo_dir, exist_ok=True)
+            valid_file = os.path.join(repo_dir, "test.py")
+            with open(valid_file, "w", encoding="utf-8") as f:
+                f.write("def solve(): return 42\n")
+
+            secret_file = os.path.join(repo_dir, ".env")
+            with open(secret_file, "w", encoding="utf-8") as f:
+                f.write("API_KEY=super_secret\n")
+
+            def _py_ref_called(*args, **kwargs):
+                raise AssertionError("Python reference must not be called when PAI_SHADOW_COMPARE=0")
+
+            with mock.patch("pai_core_bridge.py_ingest_file", side_effect=_py_ref_called):
+                with mock.patch("pai_core_bridge.py_ingest_folder", side_effect=_py_ref_called):
+                    # Valid file via real Rust binary
+                    item, rej = pai_core_bridge.ingest_file(valid_file)
+                    self.assertIsNone(rej)
+                    self.assertIsNotNone(item)
+                    self.assertEqual(item.text, "def solve(): return 42\n")
+
+                    # Secret file rejected by real Rust binary
+                    item_sec, rej_sec = pai_core_bridge.ingest_file(secret_file)
+                    self.assertIsNone(item_sec)
+                    self.assertIsNotNone(rej_sec)
+                    self.assertEqual(rej_sec.reason_code, "SECRET_FILE")
+
+                    # Folder ingestion via real Rust binary
+                    rep = pai_core_bridge.ingest_folder(repo_dir)
+                    self.assertIsNotNone(rep)
+                    self.assertEqual(len(rep.items), 1)
+                    self.assertEqual(rep.items[0].text, "def solve(): return 42\n")
+                    self.assertTrue(any(r.reason_code == "SECRET_FILE" for r in rep.rejections))
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+            pai_core_bridge.PAI_SHADOW_COMPARE = orig_shadow
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = orig_fallback
+
+    def test_python_fallback_flag_ingest(self):
+        """
+        Slice 6 Fallback Test:
+        Verifies that when PAI_USE_RUST_CORE=True but PAI_RUST_FALLBACK_PYTHON=True:
+        1. Rust binary is NOT called (find_core_binary mocked to fail if called).
+        2. Ingest functions safely fall back to pure-Python implementations.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        orig_fallback = pai_core_bridge.PAI_RUST_FALLBACK_PYTHON
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = True
+        try:
+            repo_dir = os.path.join(self.test_dir, "fallback_repo")
+            os.makedirs(repo_dir, exist_ok=True)
+            f_path = os.path.join(repo_dir, "script.py")
+            with open(f_path, "w", encoding="utf-8") as f:
+                f.write("x = 10\n")
+
+            def _rust_called(*args, **kwargs):
+                raise AssertionError("Rust core binary must not be invoked when PAI_RUST_FALLBACK_PYTHON=1")
+
+            with mock.patch("pai_core_bridge.find_core_binary", side_effect=_rust_called):
+                with mock.patch("pai_core_bridge.call_core_bridge", side_effect=_rust_called):
+                    item, rej = pai_core_bridge.ingest_file(f_path)
+                    self.assertIsNone(rej)
+                    self.assertEqual(item.text, "x = 10\n")
+
+                    rep = pai_core_bridge.ingest_folder(repo_dir)
+                    self.assertEqual(len(rep.items), 1)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = orig_fallback
+
+    def test_bridge_failure_raises_fail_closed(self):
+        """
+        Slice 6 Fail-Closed Test:
+        Verifies that when PAI_USE_RUST_CORE=1 and the Rust bridge call raises an error,
+        ingest_file, ingest_folder, and verify_ed25519 raise CoreBridgeUnavailableError
+        instead of silently falling back to Python.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        orig_fallback = pai_core_bridge.PAI_RUST_FALLBACK_PYTHON
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+        try:
+            repo_dir = os.path.join(self.test_dir, "fail_repo")
+            os.makedirs(repo_dir, exist_ok=True)
+            f_path = os.path.join(repo_dir, "sample.py")
+            with open(f_path, "w", encoding="utf-8") as f:
+                f.write("y = 20\n")
+
+            with mock.patch("pai_core_bridge.call_core_bridge", side_effect=RuntimeError("Simulated IPC failure")):
+                with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
+                    pai_core_bridge.ingest_file(f_path)
+
+                with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
+                    pai_core_bridge.ingest_folder(repo_dir)
+
+                with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
+                    pai_core_bridge.verify_ed25519(bytes(32), b"msg", bytes(64))
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = orig_fallback
+
+    def test_pai_doctor_fallback_and_disabled_wording(self):
+        """
+        Verifies pai doctor report wording:
+        - When PAI_RUST_FALLBACK_PYTHON=1: 'fallback to Python active'
+        - When PAI_USE_RUST_CORE=1 and PAI_SHADOW_COMPARE=0: 'comparison disabled'
+        """
+        from unittest import mock
+        import argparse
+        import pai
+
+        args = argparse.Namespace(skip_smoke=True, clear_shadow=False, reset_shadow=False, json=True)
+        old_core = os.environ.get("PAI_USE_RUST_CORE")
+        old_fallback = os.environ.get("PAI_RUST_FALLBACK_PYTHON")
+        old_shadow = os.environ.get("PAI_SHADOW_COMPARE")
+
+        try:
+            # 1. Fallback active
+            os.environ["PAI_USE_RUST_CORE"] = "1"
+            os.environ["PAI_RUST_FALLBACK_PYTHON"] = "1"
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = True
+
+            with mock.patch("sandbox.probe_system_boundary", return_value=(True, "OK")):
+                with mock.patch("pai.probe_ollama_server", return_value={"reachable": False}):
+                    import io, contextlib, json
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf):
+                        pai.cmd_doctor(args)
+                    res = json.loads(buf.getvalue())
+                    shadow_check = next(c for c in res["checks"] if c["check"] == "core_bridge_shadow")
+                    self.assertEqual(shadow_check["detail"], "fallback to Python active")
+
+            # 2. Comparison disabled
+            os.environ["PAI_RUST_FALLBACK_PYTHON"] = "0"
+            os.environ["PAI_SHADOW_COMPARE"] = "0"
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+            pai_core_bridge.PAI_SHADOW_COMPARE = False
+
+            with mock.patch("sandbox.probe_system_boundary", return_value=(True, "OK")):
+                with mock.patch("pai.probe_ollama_server", return_value={"reachable": False}):
+                    buf = io.StringIO()
+                    with contextlib.redirect_stdout(buf):
+                        pai.cmd_doctor(args)
+                    res = json.loads(buf.getvalue())
+                    shadow_check = next(c for c in res["checks"] if c["check"] == "core_bridge_shadow")
+                    self.assertEqual(shadow_check["detail"], "comparison disabled")
+        finally:
+            if old_core is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_core
+                pai_core_bridge.PAI_USE_RUST_CORE = (old_core == "1")
+            else:
+                os.environ.pop("PAI_USE_RUST_CORE", None)
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+
+            if old_fallback is not None:
+                os.environ["PAI_RUST_FALLBACK_PYTHON"] = old_fallback
+                pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = (old_fallback == "1")
+            else:
+                os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+                pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+
+            if old_shadow is not None:
+                os.environ["PAI_SHADOW_COMPARE"] = old_shadow
+                pai_core_bridge.PAI_SHADOW_COMPARE = (old_shadow == "1")
+            else:
+                os.environ.pop("PAI_SHADOW_COMPARE", None)
+                pai_core_bridge.PAI_SHADOW_COMPARE = True
+
 
 if __name__ == "__main__":
     unittest.main()

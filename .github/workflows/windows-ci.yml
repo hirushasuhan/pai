@@ -25,7 +25,7 @@ jobs:
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
           pip install cryptography
 
-      - name: Run Test Suite (170 unit tests)
+      - name: Run Full Python Test Suite (All 37 Modules)
         working-directory: research
         run: |
           python -m unittest discover -s tests -v
@@ -132,39 +132,41 @@ jobs:
 
       - name: Differential Integration Test Suites (Rust Core vs Python Reference)
         working-directory: research
-        env:
-          PAI_USE_RUST_CORE: "1"
         run: |
           python -c "
           import sys, os, unittest
           sys.path.insert(0, 'tests')
           sys.path.insert(0, '.')
-          loader = unittest.TestLoader()
-          suites = [
-              loader.loadTestsFromName('test_bridge_differential'),
-              loader.loadTestsFromName('test_ingest_differential'),
-              loader.loadTestsFromName('test_updater_differential'),
-          ]
-          all_suite = unittest.TestSuite(suites)
-          runner = unittest.TextTestRunner(verbosity=2)
-          result = runner.run(all_suite)
-          if not result.wasSuccessful():
-              sys.exit(f'FATAL: Differential tests failed (failures={len(result.failures)}, errors={len(result.errors)})')
-          if result.testsRun < 45:
-              sys.exit(f'FATAL: Expected at least 45 differential tests, but only {result.testsRun} were executed!')
+
           ALLOWED_SKIP_REASONS = [
               'Directory junctions are Windows-specific',
               'Symlinks require privilege on Windows',
               'Symlinks not supported on this user/platform',
               'mklink /J not permitted in current environment',
               'mklink /J failed',
-              'bwrap binary not found; sandbox execution unsupported in this Linux environment',
           ]
-          for test_case, reason in result.skipped:
-              reason_str = str(reason).strip()
-              if not any(allowed in reason_str for allowed in ALLOWED_SKIP_REASONS):
-                  sys.exit(f'FATAL: Differential test \'{test_case}\' skipped with unauthorized reason: {reason_str}')
-          print(f'SUCCESS: All {result.testsRun} differential tests passed across 3 modules ({len(result.skipped)} allowed skips).')
+
+          for flag_val in ('0', '1'):
+              os.environ['PAI_USE_RUST_CORE'] = flag_val
+              print(f'=== RUNNING DIFFERENTIAL SUITES WITH PAI_USE_RUST_CORE={flag_val} ===')
+              loader = unittest.TestLoader()
+              suites = [
+                  loader.loadTestsFromName('test_bridge_differential'),
+                  loader.loadTestsFromName('test_ingest_differential'),
+                  loader.loadTestsFromName('test_updater_differential'),
+              ]
+              all_suite = unittest.TestSuite(suites)
+              runner = unittest.TextTestRunner(verbosity=2)
+              result = runner.run(all_suite)
+              if not result.wasSuccessful():
+                  sys.exit(f'FATAL: Differential tests failed with PAI_USE_RUST_CORE={flag_val} (failures={len(result.failures)}, errors={len(result.errors)})')
+              if result.testsRun < 45:
+                  sys.exit(f'FATAL: Expected at least 45 differential tests, but only {result.testsRun} were executed!')
+              for test_case, reason in result.skipped:
+                  reason_str = str(reason).strip()
+                  if not any(allowed in reason_str for allowed in ALLOWED_SKIP_REASONS):
+                      sys.exit(f'FATAL: Differential test \'{test_case}\' skipped with unauthorized reason: {reason_str}')
+              print(f'SUCCESS: All {result.testsRun} differential tests passed with PAI_USE_RUST_CORE={flag_val} ({len(result.skipped)} allowed skips).')
           "
 
   linux-portability:
@@ -233,6 +235,8 @@ jobs:
         working-directory: research
         run: |
           python run_m2a_matrix.py || { echo '=== M2A MATRIX EXECUTION LOG ON FAILURE ==='; cat ../docs/evidence/m2a_sandbox_raw.log 2>/dev/null || true; exit 1; }
+          test -s ../docs/evidence/m2a_sandbox_results.json || { echo "FATAL: m2a_sandbox_results.json is missing or empty"; exit 1; }
+          test -s ../docs/evidence/m2a_sandbox_raw.log || { echo "FATAL: m2a_sandbox_raw.log is missing or empty"; exit 1; }
 
       - name: Upload Linux M2a Sandbox Evidence Artifact
         if: always()
@@ -242,7 +246,7 @@ jobs:
           path: |
             docs/evidence/m2a_sandbox_results.json
             docs/evidence/m2a_sandbox_raw.log
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Run Full Test Suite on Linux (Procfs Telemetry & Bubblewrap Sandbox)
         working-directory: research
@@ -277,38 +281,36 @@ jobs:
 
       - name: Differential Integration Test Suites (Rust Core vs Python Reference on Linux)
         working-directory: research
-        env:
-          PAI_USE_RUST_CORE: "1"
         run: |
           python -c "
           import sys, os, unittest
           sys.path.insert(0, 'tests')
           sys.path.insert(0, '.')
-          loader = unittest.TestLoader()
-          suites = [
-              loader.loadTestsFromName('test_bridge_differential'),
-              loader.loadTestsFromName('test_ingest_differential'),
-              loader.loadTestsFromName('test_updater_differential'),
-          ]
-          all_suite = unittest.TestSuite(suites)
-          runner = unittest.TextTestRunner(verbosity=2)
-          result = runner.run(all_suite)
-          if not result.wasSuccessful():
-              sys.exit(f'FATAL: Linux differential tests failed (failures={len(result.failures)}, errors={len(result.errors)})')
-          if result.testsRun < 45:
-              sys.exit(f'FATAL: Expected at least 45 differential tests on Linux, but only {result.testsRun} were executed!')
+
           ALLOWED_SKIP_REASONS = [
               'Directory junctions are Windows-specific',
-              'Symlinks require privilege on Windows',
-              'Symlinks not supported on this user/platform',
-              'mklink /J not permitted in current environment',
-              'mklink /J failed',
-              'bwrap binary not found; sandbox execution unsupported in this Linux environment',
           ]
-          for test_case, reason in result.skipped:
-              reason_str = str(reason).strip()
-              if not any(allowed in reason_str for allowed in ALLOWED_SKIP_REASONS):
-                  sys.exit(f'FATAL: Linux differential test \'{test_case}\' skipped with unauthorized reason: {reason_str}')
-          print(f'SUCCESS: All {result.testsRun} differential tests passed on Linux ({len(result.skipped)} allowed skips).')
+
+          for flag_val in ('0', '1'):
+              os.environ['PAI_USE_RUST_CORE'] = flag_val
+              print(f'=== RUNNING DIFFERENTIAL SUITES ON LINUX WITH PAI_USE_RUST_CORE={flag_val} ===')
+              loader = unittest.TestLoader()
+              suites = [
+                  loader.loadTestsFromName('test_bridge_differential'),
+                  loader.loadTestsFromName('test_ingest_differential'),
+                  loader.loadTestsFromName('test_updater_differential'),
+              ]
+              all_suite = unittest.TestSuite(suites)
+              runner = unittest.TextTestRunner(verbosity=2)
+              result = runner.run(all_suite)
+              if not result.wasSuccessful():
+                  sys.exit(f'FATAL: Linux differential tests failed with PAI_USE_RUST_CORE={flag_val} (failures={len(result.failures)}, errors={len(result.errors)})')
+              if result.testsRun < 45:
+                  sys.exit(f'FATAL: Expected at least 45 differential tests on Linux, but only {result.testsRun} were executed!')
+              for test_case, reason in result.skipped:
+                  reason_str = str(reason).strip()
+                  if not any(allowed in reason_str for allowed in ALLOWED_SKIP_REASONS):
+                      sys.exit(f'FATAL: Linux differential test \'{test_case}\' skipped with unauthorized reason: {reason_str}')
+              print(f'SUCCESS: All {result.testsRun} differential tests passed on Linux with PAI_USE_RUST_CORE={flag_val} ({len(result.skipped)} allowed skips).')
           "
 

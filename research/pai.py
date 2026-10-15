@@ -450,38 +450,44 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         from pai_core_bridge import (
             PAI_USE_RUST_CORE,
+            is_python_fallback_forced,
             is_rust_core_enabled,
+            is_shadow_compare_enabled,
             get_shadow_stats,
         )
-        if not is_rust_core_enabled():
+        if is_python_fallback_forced():
+            checks_table.append({
+                "check": "core_bridge_shadow",
+                "passed": True,
+                "detail": "fallback to Python active",
+            })
+        elif not is_rust_core_enabled():
             checks_table.append({
                 "check": "core_bridge_shadow",
                 "passed": True,
                 "detail": "not active (flag off)",
             })
+        elif not is_shadow_compare_enabled():
+            checks_table.append({
+                "check": "core_bridge_shadow",
+                "passed": True,
+                "detail": "comparison disabled",
+            })
         else:
-            shadow_compare_enabled = os.environ.get("PAI_SHADOW_COMPARE", "1").lower() in ("1", "true", "yes")
-            if not shadow_compare_enabled:
-                checks_table.append({
-                    "check": "core_bridge_shadow",
-                    "passed": True,
-                    "detail": "comparison disabled",
-                })
+            comparisons, discrepancies, _ = get_shadow_stats()
+            if discrepancies > 0:
+                detail_str = f"{discrepancies} discrepancies in {comparisons} comparisons"
+                passed_val = False
+            elif comparisons == 0:
+                detail_str = "no comparisons yet (flag on)"
+                passed_val = True
             else:
-                comparisons, discrepancies, _ = get_shadow_stats()
-                if discrepancies > 0:
-                    detail_str = f"{discrepancies} discrepancies in {comparisons} comparisons"
-                    passed_val = False
-                elif comparisons == 0:
-                    detail_str = "no comparisons yet (flag on)"
-                    passed_val = True
-                else:
-                    detail_str = f"0 discrepancies in {comparisons} comparisons (no mismatches observed)"
-                    passed_val = True
+                detail_str = f"0 discrepancies in {comparisons} comparisons (no mismatches observed)"
+                passed_val = True
 
-                checks_table.append({
-                    "check": "core_bridge_shadow",
-                    "passed": passed_val,
+            checks_table.append({
+                "check": "core_bridge_shadow",
+                "passed": passed_val,
                 "detail": detail_str,
             })
     except Exception as e:
