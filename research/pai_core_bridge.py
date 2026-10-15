@@ -68,6 +68,11 @@ logger = logging.getLogger("pai.core_bridge")
 
 PAI_USE_RUST_CORE = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
 
+
+def is_rust_core_enabled() -> bool:
+    """Returns True if Rust core is enabled via module flag or PAI_USE_RUST_CORE environment variable."""
+    return PAI_USE_RUST_CORE or (os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes"))
+
 MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16 MiB
 
 _CORE_BIN_CACHE: Optional[str] = None
@@ -376,7 +381,7 @@ def call_core_bridge(op: str, **kwargs: Any) -> Any:
 # ============================================================================
 
 def is_secret_file(file_path: str) -> bool:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_is_secret_file(file_path)
     res = call_core_bridge("is_secret_file", path=file_path)
     if not isinstance(res, bool):
@@ -385,7 +390,7 @@ def is_secret_file(file_path: str) -> bool:
 
 
 def is_junk_dir(dirname: str) -> bool:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_is_junk_dir(dirname)
     res = call_core_bridge("is_junk_dir", dirname=dirname)
     if not isinstance(res, bool):
@@ -394,7 +399,7 @@ def is_junk_dir(dirname: str) -> bool:
 
 
 def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[str]:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_scan_secret_content(text, file_path=file_path)
     kwargs: Dict[str, Any] = {"text": text}
     if file_path is not None:
@@ -406,7 +411,7 @@ def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[
 
 
 def sanitize_terminal_output(text: str) -> str:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_sanitize_terminal_output(text)
     res = call_core_bridge("sanitize_terminal_output", text=text)
     if not isinstance(res, str):
@@ -417,7 +422,7 @@ def sanitize_terminal_output(text: str) -> str:
 def sanitize_text_content(raw_utf8: str, max_line_length: int = 4096) -> str:
     if max_line_length <= 0 or max_line_length > 1_000_000:
         raise ValueError(f"max_line_length must be between 1 and 1000000, got {max_line_length}")
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_sanitize_text_content(raw_utf8.encode("utf-8"), max_line_length=max_line_length)
     res = call_core_bridge("sanitize_text_content", text=raw_utf8, max_line_length=max_line_length)
     if not isinstance(res, str):
@@ -426,7 +431,7 @@ def sanitize_text_content(raw_utf8: str, max_line_length: int = 4096) -> str:
 
 
 def sanitize_header(header: str) -> str:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_sanitize_header(header)
     res = call_core_bridge("sanitize_header", header=header)
     if not isinstance(res, str):
@@ -435,7 +440,7 @@ def sanitize_header(header: str) -> str:
 
 
 def defang_envelope_markers(text: str, nonce: Optional[str] = None) -> str:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_defang_envelope_markers(text, nonce=nonce)
     kwargs: Dict[str, Any] = {"text": text}
     if nonce is not None:
@@ -447,7 +452,7 @@ def defang_envelope_markers(text: str, nonce: Optional[str] = None) -> str:
 
 
 def wrap_untrusted_envelope(content: str, header: Optional[str] = None, nonce: str = "") -> str:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_wrap_untrusted_envelope(content, header=header, nonce=nonce)
     kwargs: Dict[str, Any] = {"content": content, "nonce": nonce}
     if header is not None:
@@ -459,7 +464,7 @@ def wrap_untrusted_envelope(content: str, header: Optional[str] = None, nonce: s
 
 
 def get_ingest_limits() -> Dict[str, Any]:
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_get_ingest_limits()
     res = call_core_bridge("get_ingest_limits")
     if not isinstance(res, dict):
@@ -478,7 +483,7 @@ def decode_envelope_json(raw_json: str) -> Any:
     to Rust, receiving a canonical tagged envelope, which is then defensively decoded
     to Python types using `py_decode_value`.
     """
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_decode_envelope_json(raw_json)
 
     # Call Rust bridge
@@ -534,7 +539,7 @@ def verify_verdict_frame(
         res_status=res_status,
         expected_test_hash=expected_test_hash,
     )
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_res
 
     record_shadow_comparison("verify_verdict_frame")
@@ -602,7 +607,7 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
     - If Rust differs from Python or bridge call throws, records the discrepancy in a counter and returns Python assertions.
     """
     py_stmts = py_extract_example_assertions(prompt, entry_point=entry_point)
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_stmts
 
     record_shadow_comparison("extract_example_assertions")
@@ -675,7 +680,7 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
     import ed25519_ref
     py_ver = ed25519_ref.verify(public_key, message, signature)
 
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_ver
 
     find_core_binary()
@@ -761,7 +766,7 @@ def ingest_file(
         max_line_length=max_line_length,
         deny_patterns=deny_patterns,
     )
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_item, py_rej
 
     find_core_binary()
@@ -837,7 +842,7 @@ def ingest_folder(
         max_rejections_per_reason=max_rejections_per_reason,
         max_total_rejections=max_total_rejections,
     )
-    if not PAI_USE_RUST_CORE:
+    if not is_rust_core_enabled():
         return py_report
 
     find_core_binary()

@@ -663,20 +663,22 @@ class TestSafeIngestModule(unittest.TestCase):
             self.assertEqual(rej.message, "Filename contains invalid Unicode or non-decodable bytes")
 
         # Relative path in subdirectory without root_path (root_path=None) does not double directories
-        # Keep directory inside CWD so os.path.relpath is guaranteed to be on the same drive on Windows CI
-        sub_d = os.path.join(os.getcwd(), "_tmp_ingest_sub_test")
+        # Keep directory inside self.test_dir and chdir to avoid creating untracked folders in cwd
+        sub_d = os.path.join(self.test_dir, "sub_ingest_test")
         os.makedirs(sub_d, exist_ok=True)
+        sub_f = os.path.join(sub_d, "sample.py")
+        with open(sub_f, "w", encoding="utf-8") as f:
+            f.write("val = 42\n")
+        orig_cwd = os.getcwd()
         try:
-            sub_f = os.path.join(sub_d, "sample.py")
-            with open(sub_f, "w", encoding="utf-8") as f:
-                f.write("val = 42\n")
-            rel_sub = os.path.relpath(sub_f, os.getcwd())
+            os.chdir(self.test_dir)
+            rel_sub = os.path.relpath(sub_f, self.test_dir)
             item, rej = ingest_file(rel_sub)
             self.assertIsNone(rej)
             self.assertIsNotNone(item)
             self.assertEqual(item.text, "val = 42\n")
         finally:
-            shutil.rmtree(sub_d, ignore_errors=True)
+            os.chdir(orig_cwd)
 
     def test_windows_directory_junction_containment(self):
         """Verifies Windows directory junctions (mklink /J) are treated as symlinks/reparse points."""

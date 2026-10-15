@@ -723,6 +723,64 @@ class TestUpdaterDifferential(unittest.TestCase):
                 )
             self.assertIn("InvalidTrustConfig", str(cm.exception))
 
+    def test_rollback_state_handling_with_rust_core(self):
+        """
+        Slice 6: Verifies rollback state handling across Python and Rust bridge:
+        - Installing 0.2.0 updates current to 0.2.0, highest_seen to 0.2.0
+        - Installing 0.3.0 updates current to 0.3.0, highest_seen to 0.3.0, previous to 0.2.0
+        - Rollback reverts current to 0.2.0, but anti-rollback counter highest_seen strictly stays at 0.3.0
+        - Replay of 0.2.0 or intermediate 0.2.5 is rejected by both Python and Rust anti-rollback check
+        - Subsequent install of 0.4.0 succeeds across both implementations
+        """
+        orig_flag = pai_core_bridge.PAI_USE_RUST_CORE
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        try:
+            u = Updater(self.trust_dir, self.install_dir)
+
+            # 1. Install 0.2.0
+            r1 = make_test_release(self.src_dir, version="0.2.0")
+            u.install(r1)
+            self.assertEqual(u.current_version(), "0.2.0")
+            self.assertEqual(u._state()["highest_seen"], "0.2.0")
+
+            # 2. Install 0.3.0
+            r2 = make_test_release(self.src_dir, version="0.3.0")
+            u.install(r2)
+            self.assertEqual(u.current_version(), "0.3.0")
+            self.assertEqual(u._state()["highest_seen"], "0.3.0")
+
+            # 3. Rollback to 0.2.0
+            rolled_back = u.rollback()
+            self.assertEqual(rolled_back, "0.2.0")
+            self.assertEqual(u.current_version(), "0.2.0")
+            # Highest seen version must NOT be lowered (anti-rollback counter persists)
+            self.assertEqual(u._state()["highest_seen"], "0.3.0")
+
+            # 4. Attempting to reinstall 0.2.5 or re-verify 0.2.0 with check_rollback=True
+            # must be rejected by anti-rollback counter across both Python and Rust
+            r_replayed = make_test_release(self.src_dir, version="0.2.5")
+            with self.assertRaises(UpdateRejected):
+                u.verify_release(r_replayed, check_rollback=True)
+
+            with self.assertRaises(Exception) as cm:
+                pai_core_bridge.verify_release(
+                    release_dir=r_replayed,
+                    trust_config_json=json.dumps(self.trust_cfg),
+                    expected_product="pai-core",
+                    check_rollback=True,
+                    highest_seen_version="0.3.0",
+                )
+            self.assertIn("anti-rollback", str(cm.exception).lower())
+            self.assertIn("0.3.0", str(cm.exception))
+
+            # 5. Installing 0.4.0 (higher than 0.3.0) succeeds cleanly
+            r4 = make_test_release(self.src_dir, version="0.4.0")
+            u.install(r4)
+            self.assertEqual(u.current_version(), "0.4.0")
+            self.assertEqual(u._state()["highest_seen"], "0.4.0")
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_flag
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -406,6 +406,11 @@ except Exception as e:
     with open(canary_a8, "w", encoding="utf-8") as f:
         f.write(secret_a8)
 
+    listener_a8 = None
+    a8_port = 0
+    a8_port_net = 0
+    host_ctrl_verified = False
+
     if sys.platform == "win32":
         a8_code = f"""
 import sys, os
@@ -458,6 +463,28 @@ with open("std_output.txt", "w", encoding="utf-8") as f:
     f.write(out)
 """
     else:
+        # Start a host listener on a random ephemeral port so a leaked/shared network
+        # stack connects successfully (LEAK), whereas isolated network namespace fails.
+        import socket
+        try:
+            listener_a8 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener_a8.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener_a8.bind(("127.0.0.1", 0))
+            listener_a8.listen(5)
+            _, a8_port = listener_a8.getsockname()
+            a8_port_net = ((a8_port & 0xFF) << 8) | ((a8_port >> 8) & 0xFF)
+
+            # Positive control from host side: verify outside connect succeeds
+            host_probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            host_probe.connect(("127.0.0.1", a8_port))
+            acc_sock, _ = listener_a8.accept()
+            acc_sock.close()
+            host_probe.close()
+            host_ctrl_verified = True
+            log(f"[POSITIVE_CONTROL] Outside connect to 127.0.0.1:{a8_port} verified OK (rc=0)")
+        except Exception as e:
+            log(f"[WARN] Failed to establish A8 host listener: {e}")
+
         a8_code = f"""
 import sys, os, errno
 results = []
@@ -495,7 +522,7 @@ if libc is not None:
     else:
         results.append(f"FAIL_POSITIVE_CONTROL: {{ctypes.get_errno()}}")
 
-    # 2. Native socket connect (discriminating network check; rejects ECONNREFUSED)
+    # 2. Native socket connect against active host listener (discriminating check)
     try:
         libc.socket.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
         libc.socket.restype = ctypes.c_int
@@ -511,21 +538,22 @@ if libc is not None:
                     ("sin_addr", ctypes.c_uint32),
                     ("sin_zero", ctypes.c_char * 8),
                 ]
-            addr = sockaddr_in(2, 0x5000, 0x0100007F, b"\\x00" * 8)
+            addr = sockaddr_in(2, {a8_port_net}, 0x0100007F, b"\\x00" * 8)
             rc = libc.connect(sock_fd, ctypes.byref(addr), ctypes.sizeof(addr))
             if rc == 0:
                 results.append("LEAK_NATIVE_NET_CONNECTED")
             else:
                 n_err = ctypes.get_errno()
-                # Fresh network namespace has no route/loopback up; strictly accept ENETUNREACH/EPERM/EACCES/ENETDOWN/EADDRNOTAVAIL/ECONNREFUSED/ETIMEDOUT
+                # Host is listening on 127.0.0.1:{a8_port}. Under unshared network namespace (--unshare-net),
+                # loopback is down, so connect strictly fails with ENETUNREACH, ENETDOWN, EADDRNOTAVAIL, EPERM, or EACCES.
+                # ECONNREFUSED and ETIMEDOUT are strictly rejected because with an active host listener,
+                # ECONNREFUSED can never occur unless network isolation is absent and listener stopped.
                 denied_net_errs = (
                     errno.ENETUNREACH,
                     errno.EPERM,
                     errno.EACCES,
                     getattr(errno, "ENETDOWN", 100),
                     getattr(errno, "EADDRNOTAVAIL", 99),
-                    errno.ECONNREFUSED,
-                    errno.ETIMEDOUT,
                 )
                 if n_err in denied_net_errs:
                     results.append(f"CONTAINED_NATIVE_NET_DENIED: {{n_err}}")
@@ -570,7 +598,9 @@ with open("std_output.txt", "w", encoding="utf-8") as f:
             return False, "Missing native file containment marker"
         if "POSITIVE_CONTROL_NATIVE_OK" not in comb:
             return False, "Missing positive control marker"
-        return True, f"Native OS boundary call verified with positive control (out={comb.strip()[:80]})"
+        if sys.platform != "win32" and "CONTAINED_NATIVE_NET_DENIED" not in comb:
+            return False, "Missing native network containment marker"
+        return True, f"Native OS boundary call verified with host listener positive control (out={comb.strip()[:80]})"
 
     try:
         exec_sandbox_test(
@@ -580,7 +610,18 @@ with open("std_output.txt", "w", encoding="utf-8") as f:
             code=a8_code,
             assert_fn=_assert_a8,
         )
+        if sys.platform != "win32" and "A8" in matrix_results:
+            matrix_results["A8"]["host_network_positive_control"] = {
+                "verified": host_ctrl_verified,
+                "target": f"127.0.0.1:{a8_port}",
+                "detail": "Host-side listener active; outside connect succeeded with rc=0; sandbox connect was denied",
+            }
     finally:
+        if listener_a8 is not None:
+            try:
+                listener_a8.close()
+            except Exception:
+                pass
         if os.path.exists(canary_a8):
             try:
                 os.remove(canary_a8)

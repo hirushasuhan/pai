@@ -280,7 +280,7 @@ class Updater:
         return VerifiedRelease(version, key_id, sorted(files), m)
 
     def verify_release(self, release_dir: str, check_rollback: bool = True) -> VerifiedRelease:
-        if not pai_core_bridge.PAI_USE_RUST_CORE:
+        if not pai_core_bridge.is_rust_core_enabled():
             return self._verify_release_py(release_dir, check_rollback=check_rollback)
 
         # Fail-closed if binary missing or handshake fails

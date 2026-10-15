@@ -335,3 +335,58 @@ else:
         self.assertEqual(res.exit_code, 0, f"Script failed: {res.stderr}")
         self.assertIn("SECRET_RECEIVED_OK", res.stdout, f"Secret was not injected into sandbox: {res.stdout}")
 
+    def test_a8_network_isolation_mutation_check(self):
+        """
+        Mutation check for Vector A8 (Finding F):
+        With host listener active, standard sandbox (--unshare-net) strictly denies connection.
+        If --unshare-net is removed (mutated), connection to the host listener succeeds,
+        demonstrating that A8 is discriminating and reliably fails on a shared network stack.
+        """
+        import socket
+        from unittest import mock
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        _, port = listener.getsockname()
+
+        try:
+            # Positive control from host
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            c.connect(("127.0.0.1", port))
+            acc, _ = listener.accept()
+            acc.close()
+            c.close()
+
+            code = f"""
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(1.0)
+try:
+    s.connect(('127.0.0.1', {port}))
+    print('MUTATION_LEAK_CONNECTED')
+except Exception as e:
+    print(f'CONTAINED_DENIED: {{type(e).__name__}}')
+"""
+            script = self._write_script(code)
+
+            # 1. Standard sandbox run: must be CONTAINED
+            res_std = self.sandbox.execute(script)
+            self.assertIn("CONTAINED_DENIED", res_std.stdout)
+            self.assertNotIn("MUTATION_LEAK_CONNECTED", res_std.stdout)
+
+            # 2. Mutated sandbox run (without --unshare-net): must LEAK
+            orig_build = self.sandbox._build_bwrap_args
+
+            def mutated_build(*args, **kwargs):
+                argv = orig_build(*args, **kwargs)
+                return [arg for arg in argv if arg != "--unshare-net"]
+
+            with mock.patch.object(self.sandbox, "_build_bwrap_args", side_effect=mutated_build):
+                res_mutated = self.sandbox.execute(script)
+                self.assertIn("MUTATION_LEAK_CONNECTED", res_mutated.stdout, "Mutated sandbox without --unshare-net must connect to host listener")
+        finally:
+            listener.close()
+
+

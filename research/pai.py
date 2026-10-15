@@ -450,9 +450,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         from pai_core_bridge import (
             PAI_USE_RUST_CORE,
+            is_rust_core_enabled,
             get_shadow_stats,
         )
-        if not PAI_USE_RUST_CORE:
+        if not is_rust_core_enabled():
             checks_table.append({
                 "check": "core_bridge_shadow",
                 "passed": True,
