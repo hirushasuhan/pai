@@ -280,6 +280,21 @@ class Updater:
         return VerifiedRelease(version, key_id, sorted(files), m)
 
     def verify_release(self, release_dir: str, check_rollback: bool = True) -> VerifiedRelease:
+        """
+        Verifies a release directory.
+        When PAI_USE_RUST_CORE is active (and fallback not forced), Rust core is authoritative.
+        When PAI_SHADOW_COMPARE is active, shadow comparison against Python reference is performed.
+
+        Trust Placement Note (Finding P):
+        With PAI_USE_RUST_CORE=1, release signature verification is delegated to the `pai-core`
+        binary discovered under `core/target/{release,debug}` or on system `PATH`. The startup
+        handshake verifies protocol conformance and vector hashes, but the Python layer trusts
+        the local build/executable of `pai-core`. Because an adversary capable of modifying or
+        substituting the local binary also has access to modify local Python source files, this
+        delegation preserves the local execution trust boundary. In production release workflows,
+        the `pai-core` binary must originate from verified, reproducible CI artifacts signed by
+        the release authority.
+        """
         if not pai_core_bridge.is_rust_core_enabled():
             return self._verify_release_py(release_dir, check_rollback=check_rollback)
 

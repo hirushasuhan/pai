@@ -12,8 +12,9 @@ import io
 import json
 import os
 import sys
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -508,7 +509,146 @@ class TestPaiCLI(unittest.TestCase):
         self.assertEqual(chk_good["cited_point_forecasts"], [355.0, 370.0, 385.0])
         self.assertEqual(chk_good["unmatched_numbers"], [])
 
+    # -------------------------------------------------------------------------
+    # Finding N: CLI Crash Fix Tests
+    # -------------------------------------------------------------------------
+    def test_cli_max_files_zero_clean_one_line_error_exit_2(self):
+        """Verifies `pai analyze <folder> --max-files 0` catches ValueError and prints clean 1-line error with exit 2."""
+        with tempfile.TemporaryDirectory() as td:
+            f_err = io.StringIO()
+            with redirect_stderr(f_err):
+                rc = main(["analyze", td, "--max-files", "0"])
+            self.assertEqual(rc, 2)
+            err = f_err.getvalue()
+            self.assertNotIn("Traceback", err)
+            self.assertIn("Error: max_file_count must be between 1 and 1000000", err)
+            # Exactly one non-empty line
+            lines = [l for l in err.strip().splitlines() if l.strip()]
+            self.assertEqual(len(lines), 1)
+
+    def test_cli_missing_binary_clean_one_line_error_analyze_and_docs_exit_2(self):
+        """Verifies pai analyze and pai docs catch CoreBridgeUnavailableError with clean 1-line message and exit 2."""
+        from pai_core_bridge import CoreBridgeUnavailableError
+        import pai_core_bridge
+
+        old_core = os.environ.get("PAI_USE_RUST_CORE")
+        old_fb = os.environ.get("PAI_RUST_FALLBACK_PYTHON")
+        try:
+            os.environ["PAI_USE_RUST_CORE"] = "1"
+            os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+
+            with tempfile.TemporaryDirectory() as td:
+                test_doc = os.path.join(td, "doc.md")
+                with open(test_doc, "w") as f:
+                    f.write("# Sample Doc\n")
+
+                with patch("pai_core_bridge.find_core_binary", side_effect=CoreBridgeUnavailableError("pai-core binary not found")):
+                    # 1. pai analyze
+                    f_err1 = io.StringIO()
+                    with redirect_stderr(f_err1):
+                        rc1 = main(["analyze", td])
+                    self.assertEqual(rc1, 2)
+                    err1 = f_err1.getvalue()
+                    self.assertNotIn("Traceback", err1)
+                    self.assertIn("Error: pai-core binary not found", err1)
+                    self.assertIn("cargo build --release", err1)
+                    self.assertIn("PAI_RUST_FALLBACK_PYTHON=1", err1)
+                    lines1 = [l for l in err1.strip().splitlines() if l.strip()]
+                    self.assertEqual(len(lines1), 1)
+
+                    # 2. pai docs
+                    f_err2 = io.StringIO()
+                    with redirect_stderr(f_err2):
+                        rc2 = main(["docs", test_doc])
+                    self.assertEqual(rc2, 2)
+                    err2 = f_err2.getvalue()
+                    self.assertNotIn("Traceback", err2)
+                    self.assertIn("Error: pai-core binary not found", err2)
+                    self.assertIn("cargo build --release", err2)
+                    self.assertIn("PAI_RUST_FALLBACK_PYTHON=1", err2)
+                    lines2 = [l for l in err2.strip().splitlines() if l.strip()]
+                    self.assertEqual(len(lines2), 1)
+        finally:
+            if old_core is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_core
+                pai_core_bridge.PAI_USE_RUST_CORE = (old_core == "1")
+            else:
+                os.environ.pop("PAI_USE_RUST_CORE", None)
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+
+            if old_fb is not None:
+                os.environ["PAI_RUST_FALLBACK_PYTHON"] = old_fb
+                pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = (old_fb == "1")
+            else:
+                os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+                pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+
+    def test_cli_missing_binary_doctor_reports_failed_core_bridge_and_continues(self):
+        """Verifies pai doctor turns missing binary into a failed core_bridge check and continues remaining checks."""
+        from pai_core_bridge import CoreBridgeUnavailableError
+        import pai_core_bridge
+
+        old_core = os.environ.get("PAI_USE_RUST_CORE")
+        old_fb = os.environ.get("PAI_RUST_FALLBACK_PYTHON")
+        try:
+            os.environ["PAI_USE_RUST_CORE"] = "1"
+            os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+
+            with patch("pai_core_bridge.find_core_binary", side_effect=CoreBridgeUnavailableError("pai-core binary not found")):
+                # 1. JSON mode
+                f_json = io.StringIO()
+                with redirect_stdout(f_json):
+                    rc_json = main(["doctor", "--skip-smoke", "--json"])
+                self.assertEqual(rc_json, 1)
+                parsed = json.loads(f_json.getvalue())
+                self.assertFalse(parsed["all_passed"])
+
+                # Verify core_bridge check is marked failed with helpful message
+                cb_check = next(c for c in parsed["checks"] if c["check"] == "core_bridge")
+                self.assertFalse(cb_check["passed"])
+                self.assertIn("pai-core binary not found", cb_check["detail"])
+                self.assertIn("cargo build --release", cb_check["detail"])
+                self.assertIn("PAI_RUST_FALLBACK_PYTHON=1", cb_check["detail"])
+
+                # Verify other checks continued to run and passed
+                check_names = [c["check"] for c in parsed["checks"]]
+                self.assertIn("os_telemetry", check_names)
+                self.assertIn("sandbox_boundary", check_names)
+                self.assertIn("ram_admission", check_names)
+                self.assertIn("ingest_limits", check_names)
+
+                # 2. Text mode
+                f_text = io.StringIO()
+                with redirect_stdout(f_text):
+                    rc_text = main(["doctor", "--skip-smoke"])
+                self.assertEqual(rc_text, 1)
+                text = f_text.getvalue()
+                self.assertNotIn("Traceback", text)
+                self.assertIn("core_bridge", text)
+                self.assertIn("[FAIL]", text)
+                self.assertIn("pai-core binary not found", text)
+                self.assertIn("os_telemetry", text)
+        finally:
+            if old_core is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_core
+                pai_core_bridge.PAI_USE_RUST_CORE = (old_core == "1")
+            else:
+                os.environ.pop("PAI_USE_RUST_CORE", None)
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+
+            if old_fb is not None:
+                os.environ["PAI_RUST_FALLBACK_PYTHON"] = old_fb
+                pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = (old_fb == "1")
+            else:
+                os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+                pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

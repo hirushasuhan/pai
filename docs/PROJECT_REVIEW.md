@@ -2387,3 +2387,45 @@ Implemented & Verified:
    - Operations executed end-to-end: `pai analyze`, `pai docs`, `pai_core_bridge.ingest_file`, `pai_core_bridge.ingest_folder`, `Updater.verify_release`, and `pai doctor`.
    - Result: 18 comparisons recorded, 0 discrepancies observed.
 
+
+### Addendum (1059f6f): Review of Slice 6, Rust authoritative promotion, and what closes the phase (2026-10-15)
+Reviewed state: Linux, HEAD 1059f6f, clean working tree. Earlier lines of this file are unchanged (the diff against f41514d adds 49 lines and removes none). The GitHub Actions run and the Windows tree run are the owner's report; I did not see either.
+
+Verified:
+- All 37 Python test modules pass on Linux: 445 tests. The differential modules with the real Rust binary: 60 tests, 0 failures, with the flag set to 0 and to 1 (2 skips each: no bubblewrap in my cloud container, Windows junction test). The Rust sources are unchanged since 131e09e.
+- With `PAI_USE_RUST_CORE=1` and no binary present, `ingest_file`, `ingest_folder`, `verify_ed25519` and `sanitize_header` all raise `CoreBridgeUnavailableError`; there is no silent fallback. With `PAI_USE_RUST_CORE=1` and `PAI_RUST_FALLBACK_PYTHON=1` and no binary, the same four calls return the Python result. With the flag off they behave as before. `pai doctor` with the fallback flag reports "fallback to Python active".
+- `Updater.verify_release` now returns the Rust result and raises the Rust error; Python runs only when shadow comparison is on. The rollback test passes in this mode.
+- The limits that the Rust bridge enforces are now enforced in the Python wrappers too, so a call that is out of range fails the same way with the flag on or off.
+- Finding J, K, L, M: closed as described by the owner (Linux skip list reduced to the junction reason, evidence file checks and `if-no-files-found: error`, comment and assertion for A6 against A8, step name corrected).
+
+New findings:
+- N. User-facing crashes. With `PAI_USE_RUST_CORE=1` and no binary, `pai doctor` ends with a Python traceback (exit code 1) instead of reporting a failed check, and `pai analyze` and `pai docs` do the same. With the flag off, `pai analyze <folder> --max-files 0` ends with a traceback from `ValueError: max_file_count must be between 1 and 1000000`. The wrappers are right to raise; the command line must catch `CoreBridgeUnavailableError` and `ValueError` at the entry point, print one line (for the missing binary: what is missing, the build command, and that `PAI_RUST_FALLBACK_PYTHON=1` selects the Python path), and return a non-zero code. `pai doctor` must turn this into a failed `core_bridge` check and continue with the other checks.
+- O. `verify_ed25519` in the bridge is not called by product code; `Updater` verifies signatures through `ed25519_ref` in the Python path and inside the Rust `verify_release` in the Rust path. The wrapper is covered by tests only. Say so in the module, or route the Python path through it.
+- P. Trust placement. With the flag on, the release signature decision is taken by the binary found under `core/target/{release,debug}` or on `PATH`, and the startup handshake only proves the binary reports the expected protocol and vector hash. Anyone who can place a binary there can also edit the Python files, so this does not add a new attacker, but the documentation must state that the Rust path trusts the local build of `pai-core`, and the release process must say where the binary used for updates comes from.
+- Q. The dual loop in the CI differential step sets the environment variable between two runs in one process. Several tests set the module flag themselves, so the two runs overlap more than the name suggests. Treat the 0 and 1 runs as two passes of the same suite, not as two independent modes; the useful checks are the fallback tests and the real-binary tests.
+- R. The Windows tree run: 63 files with Sinhala names, a junction, reserved device names, an alternate data stream, secret files and junk directories, 18 comparisons, 0 discrepancies, reported with the expected rejection codes. That covers the hazards that were missing before. It is one tree on one machine; keep the run script in the repository (outside the shipped code) so it can be repeated after each Rust change.
+
+Phase status: Slice 6 is accepted after N is fixed and P and O are written into the documentation. Not part of this phase and not yet decided: switching the default of `PAI_USE_RUST_CORE` to on, and removing the Python fallback in the following release. Both need a stated number of clean runs on both platforms first.
+
+
+### Addendum: Phase 1 Closure — Finding N CLI Crash Fix, Trust Placement (P), and Tooling (R) (2026-10-15)
+
+1. **Finding N (CLI Crash Fix & Single-Line Actionable Messages)**:
+   - At the CLI entry point (`research/pai.py:main`), trapped `CoreBridgeUnavailableError` and `ValueError` to ensure that fatal invocation errors do not emit unhandled Python tracebacks.
+   - For missing core binary errors (`CoreBridgeUnavailableError`), the CLI writes a single clean message to `sys.stderr` detailing the missing binary, the build instruction (`cargo build --release` in `core/`), and that `PAI_RUST_FALLBACK_PYTHON=1` selects the Python reference path, exiting with code 2.
+   - For parameter validation errors (`ValueError`, e.g. `--max-files 0`), the CLI writes a single clean error line to `sys.stderr` (`Error: <message>`) and exits with code 2.
+   - In `pai doctor`, `find_core_binary()` is probed safely. When `CoreBridgeUnavailableError` is caught, `doctor` marks `core_bridge` as failed with the actionable build and fallback instructions, falls back to `py_get_ingest_limits()` for formatting limits, and proceeds to execute all remaining diagnostic checks (`os_telemetry`, `sandbox_boundary`, `ram_admission`, `ingest_limits`, smoke probes).
+   - Added unit tests in `research/tests/test_pai_cli.py`:
+     - `test_cli_max_files_zero_clean_one_line_error_exit_2`
+     - `test_cli_missing_binary_clean_one_line_error_analyze_and_docs_exit_2`
+     - `test_cli_missing_binary_doctor_reports_failed_core_bridge_and_continues`
+
+2. **Finding O (Docstring Verification Note for `verify_ed25519`)**:
+   - In `research/pai_core_bridge.py`, documented in the docstring of `verify_ed25519` that this bridge wrapper is maintained exclusively for vector conformance and cross-language differential testing, and is not invoked directly during production release updates (which use `ed25519_ref` on the Python reference path and compiled Rust internal verification on the Rust core path).
+
+3. **Finding P (Trust Placement & Production Release Integrity)**:
+   - In `research/updater.py:Updater.verify_release`, documented the trust placement: with `PAI_USE_RUST_CORE=1`, release verification is executed by `pai-core` under `core/target/{release,debug}` or on `PATH`. The startup handshake verifies protocol and vector hash conformity with the Python layer. Because any attacker capable of tampering with the local binary also possesses access to modify Python sources, delegating to the local binary preserves the existing host execution boundary. For production deployments, binaries must originate exclusively from reproducible CI release artifacts signed by the release authority.
+
+4. **Finding R (Comprehensive Windows Real-Tree Runner Script)**:
+   - Preserved the 63-entry adversarial Windows tree runner in the repository outside shipped code at `tools/windows_parity_run.py`.
+   - The script automates verification of Sinhala UTF-8 filenames, Windows directory junctions, 22 reserved device names, NTFS Alternate Data Streams (ADS), secret files, junk directories, and end-to-end CLI operations (`pai analyze`, `pai docs`, `pai doctor`, `verify_release`), asserting zero discrepancies across all comparisons.

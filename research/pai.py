@@ -317,15 +317,33 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             return 0
         except Exception as e:
             print(f"Failed to clear shadow log: {e}")
-            return 1
-
-    from pai_core_bridge import get_ingest_limits
+    # Check core bridge availability & ingest limits
+    core_bridge_ok = True
+    core_bridge_err_msg = ""
+    try:
+        from pai_core_bridge import (
+            CoreBridgeUnavailableError,
+            get_ingest_limits,
+            find_core_binary,
+            is_rust_core_enabled,
+            is_python_fallback_forced,
+        )
+        if is_rust_core_enabled() and not is_python_fallback_forced():
+            find_core_binary()
+        ingest_limits = get_ingest_limits()
+    except CoreBridgeUnavailableError:
+        core_bridge_ok = False
+        core_bridge_err_msg = (
+            "pai-core binary not found. Build with 'cargo build --release' in core/ "
+            "or set PAI_RUST_FALLBACK_PYTHON=1 to select the Python reference path."
+        )
+        from pai_core_bridge import py_get_ingest_limits
+        ingest_limits = py_get_ingest_limits()
 
     telem = HardwareTelemetry()
     snap = telem.get_system_snapshot()
     gpu_desc = probe_gpu()
     ollama_status = probe_ollama_server()
-    ingest_limits = get_ingest_limits()
 
     # Router & Profile diagnostics
     router = ModelRouter(load_system_profile=True)
@@ -455,7 +473,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             is_shadow_compare_enabled,
             get_shadow_stats,
         )
-        if is_python_fallback_forced():
+        if not core_bridge_ok:
+            checks_table.append({
+                "check": "core_bridge",
+                "passed": False,
+                "detail": core_bridge_err_msg,
+            })
+        elif is_python_fallback_forced():
             checks_table.append({
                 "check": "core_bridge_shadow",
                 "passed": True,
@@ -2775,41 +2799,58 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.print_help()
         return 0
 
-    if args.subcommand in ("generate",):
-        print(f"Notice: Direct command execution '{args.subcommand}' is deferred to Milestone M6+.")
-        print(f"        Use 'pai route {args.subcommand}' to evaluate adaptive routing decisions.")
-        return 0
+    try:
+        from pai_core_bridge import CoreBridgeUnavailableError
+    except ImportError:
+        class CoreBridgeUnavailableError(Exception):
+            pass
 
-    if args.subcommand == "code":
-        return cmd_code(args)
-    elif args.subcommand == "analyze":
-        return cmd_analyze(args)
-    elif args.subcommand == "docs":
-        return cmd_docs(args)
-    elif args.subcommand == "forecast":
-        return cmd_forecast(args)
-    elif args.subcommand == "chat":
-        return cmd_chat(args)
+    try:
+        if args.subcommand in ("generate",):
+            print(f"Notice: Direct command execution '{args.subcommand}' is deferred to Milestone M6+.")
+            print(f"        Use 'pai route {args.subcommand}' to evaluate adaptive routing decisions.")
+            return 0
 
-    if args.subcommand == "doctor":
-        return cmd_doctor(args)
-    elif args.subcommand == "clear-shadow":
-        from pai_core_bridge import clear_shadow_log
-        clear_shadow_log()
-        print("Shadow discrepancy telemetry log cleared.")
-        return 0
-    elif args.subcommand == "calibrate":
-        return cmd_calibrate(args)
-    elif args.subcommand == "models":
-        if getattr(args, "models_action", None) == "list" or not getattr(args, "models_action", None):
-            return cmd_models_list(args)
-        parser.print_help()
-        return 1
-    elif args.subcommand == "route":
-        return cmd_route(args)
-    else:
-        parser.print_help()
-        return 1
+        if args.subcommand == "code":
+            return cmd_code(args)
+        elif args.subcommand == "analyze":
+            return cmd_analyze(args)
+        elif args.subcommand == "docs":
+            return cmd_docs(args)
+        elif args.subcommand == "forecast":
+            return cmd_forecast(args)
+        elif args.subcommand == "chat":
+            return cmd_chat(args)
+
+        if args.subcommand == "doctor":
+            return cmd_doctor(args)
+        elif args.subcommand == "clear-shadow":
+            from pai_core_bridge import clear_shadow_log
+            clear_shadow_log()
+            print("Shadow discrepancy telemetry log cleared.")
+            return 0
+        elif args.subcommand == "calibrate":
+            return cmd_calibrate(args)
+        elif args.subcommand == "models":
+            if getattr(args, "models_action", None) == "list" or not getattr(args, "models_action", None):
+                return cmd_models_list(args)
+            parser.print_help()
+            return 1
+        elif args.subcommand == "route":
+            return cmd_route(args)
+        else:
+            parser.print_help()
+            return 1
+    except CoreBridgeUnavailableError:
+        msg = (
+            "Error: pai-core binary not found. Build with 'cargo build --release' in core/ "
+            "or set PAI_RUST_FALLBACK_PYTHON=1 to select the Python reference path."
+        )
+        print(msg, file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

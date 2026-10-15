@@ -693,6 +693,12 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
     Verifies an Ed25519 signature over `message` with `public_key`.
     When PAI_USE_RUST_CORE is active (and fallback not forced), Rust core is authoritative.
     When PAI_SHADOW_COMPARE is active, shadow comparison against Python reference is performed.
+
+    NOTE (Finding O): This bridge wrapper is maintained for vector conformance and differential
+    testing; it is not called directly by product code during release updates. In production:
+    - The Python path (`Updater.verify_release`) verifies signatures directly via `ed25519_ref`.
+    - The Rust path (`Updater.verify_release` via bridge `verify_release`) verifies signatures
+      internally inside the Rust core engine.
     """
     import ed25519_ref
 
