@@ -34,6 +34,14 @@ class TestTelemetryParity(unittest.TestCase):
     def test_rust_binary_exists(self):
         if sys.platform != "win32":
             self.skipTest("Win32 telemetry parity is Windows-specific")
+        if not os.path.exists(self.exe_path):
+            if os.environ.get("PAI_REQUIRE_RUST_CORE") == "1":
+                self.fail(
+                    f"pai-core executable not found at {self.exe_path}. Run `cargo build` first."
+                )
+            self.skipTest(
+                f"pai-core executable not found at {self.exe_path}. Run `cargo build` first."
+            )
         self.assertTrue(
             os.path.exists(self.exe_path),
             f"pai-core executable not found at {self.exe_path}. Run `cargo build` first.",

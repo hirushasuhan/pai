@@ -115,6 +115,8 @@ jobs:
 
       - name: Telemetry Parity Check (Python vs Rust ±5% per ADR-009)
         working-directory: research
+        env:
+          PAI_REQUIRE_RUST_CORE: "1"
         run: |
           python -m unittest tests/test_telemetry_parity.py
 
@@ -177,7 +179,7 @@ jobs:
       - name: Install bubblewrap for M2 Linux sandbox
         run: |
           sudo apt-get update && sudo apt-get install -y bubblewrap
-          sudo chmod u+s /usr/bin/bwrap || true
+          sudo chmod 0755 /usr/bin/bwrap || true
           if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           fi

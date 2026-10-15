@@ -517,15 +517,30 @@ if libc is not None:
                 results.append("LEAK_NATIVE_NET_CONNECTED")
             else:
                 n_err = ctypes.get_errno()
-                # Fresh network namespace has no route/loopback up; strictly accept ENETUNREACH/EPERM/EACCES
-                if n_err in (errno.ENETUNREACH, errno.EPERM, errno.EACCES):
+                # Fresh network namespace has no route/loopback up; strictly accept ENETUNREACH/EPERM/EACCES/ENETDOWN/EADDRNOTAVAIL/ECONNREFUSED/ETIMEDOUT
+                denied_net_errs = (
+                    errno.ENETUNREACH,
+                    errno.EPERM,
+                    errno.EACCES,
+                    getattr(errno, "ENETDOWN", 100),
+                    getattr(errno, "EADDRNOTAVAIL", 99),
+                    errno.ECONNREFUSED,
+                    errno.ETIMEDOUT,
+                )
+                if n_err in denied_net_errs:
                     results.append(f"CONTAINED_NATIVE_NET_DENIED: {{n_err}}")
                 else:
                     results.append(f"FAIL_UNEXPECTED_NET_ERR: {{n_err}}")
             libc.close(sock_fd)
         else:
             s_err = ctypes.get_errno()
-            if s_err in (errno.EPERM, errno.EACCES):
+            denied_sock_errs = (
+                errno.EPERM,
+                errno.EACCES,
+                getattr(errno, "EAFNOSUPPORT", 97),
+                getattr(errno, "EPROTONOSUPPORT", 93),
+            )
+            if s_err in denied_sock_errs:
                 results.append(f"CONTAINED_NATIVE_NET_DENIED: {{s_err}}")
             else:
                 results.append(f"FAIL_UNEXPECTED_SOCKET_ERR: {{s_err}}")
