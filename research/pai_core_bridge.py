@@ -35,6 +35,7 @@ from ingest import (
     IngestedItem,
     IngestionRejection,
     IngestionReport,
+    _is_invalid_filename,
     assemble_untrusted_context,
     defang_envelope_markers as py_defang_envelope_markers,
     format_untrusted_context,
@@ -120,6 +121,11 @@ def _get_discrepancy_log_path() -> Path:
 
 class CoreBridgeUnavailableError(RuntimeError):
     """Raised when PAI_USE_RUST_CORE is requested but pai-core binary is unavailable or cannot execute."""
+    pass
+
+
+class BridgeProtocolError(CoreBridgeUnavailableError):
+    """Raised when IPC communication with the pai-core bridge fails due to protocol or serialization errors."""
     pass
 
 
@@ -341,8 +347,12 @@ def call_core_bridge(op: str, **kwargs: Any) -> Any:
     """
     binary = find_core_binary()
     payload = {"op": op, **kwargs}
-    req_json = json.dumps(payload, ensure_ascii=False)
-    req_bytes = req_json.encode("utf-8")
+    try:
+        req_json = json.dumps(payload, ensure_ascii=False)
+        req_bytes = req_json.encode("utf-8")
+    except Exception as exc:
+        raise BridgeProtocolError(f"Failed to serialize bridge payload: {exc}") from exc
+
     if len(req_bytes) > MAX_REQUEST_BYTES:
         raise ValueError(f"Request payload size ({len(req_bytes)} bytes) exceeds maximum limit of 16 MiB")
 
@@ -358,20 +368,20 @@ def call_core_bridge(op: str, **kwargs: Any) -> Any:
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(f"pai-core bridge timed out for op '{op}'") from exc
     except Exception as exc:
-        raise RuntimeError(f"Failed to spawn pai-core bridge: {exc}") from exc
+        raise BridgeProtocolError(f"Failed to spawn pai-core bridge: {exc}") from exc
 
     if proc.returncode != 0:
         err_msg = proc.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"pai-core bridge failed (exit code {proc.returncode}): {err_msg}")
+        raise BridgeProtocolError(f"pai-core bridge failed (exit code {proc.returncode}): {err_msg}")
 
     stdout_str = proc.stdout.decode("utf-8", errors="replace").strip()
     if not stdout_str:
-        raise RuntimeError(f"pai-core bridge returned empty output for op '{op}'")
+        raise BridgeProtocolError(f"pai-core bridge returned empty output for op '{op}'")
 
     try:
         resp = json.loads(stdout_str)
     except Exception as exc:
-        raise RuntimeError(f"pai-core bridge returned invalid JSON: {stdout_str[:200]}") from exc
+        raise BridgeProtocolError(f"pai-core bridge returned invalid JSON: {stdout_str[:200]}") from exc
 
     if not isinstance(resp, dict):
         raise TypeError(f"pai-core bridge response must be a JSON object, got {type(resp).__name__}")
@@ -385,10 +395,12 @@ def call_core_bridge(op: str, **kwargs: Any) -> Any:
         if err_type == "UpdateRejected":
             from updater import UpdateRejected
             raise UpdateRejected(err_text)
+        if err_type == "JsonParseError":
+            raise BridgeProtocolError(f"Rust core bridge JSON error: {err_text}")
         raise ValueError(f"Rust core bridge error ({err_type}): {err_text}")
 
     if status != "ok":
-        raise ValueError(f"Unexpected bridge status '{status}'")
+        raise BridgeProtocolError(f"Unexpected bridge status '{status}'")
 
     return resp.get("result")
 
@@ -400,6 +412,8 @@ def call_core_bridge(op: str, **kwargs: Any) -> Any:
 def is_secret_file(file_path: str) -> bool:
     if not is_rust_core_enabled():
         return py_is_secret_file(file_path)
+    if _is_invalid_filename(file_path):
+        return py_is_secret_file(file_path)
     res = call_core_bridge("is_secret_file", path=file_path)
     if not isinstance(res, bool):
         raise TypeError(f"is_secret_file expected bool from bridge, got {type(res).__name__}")
@@ -409,6 +423,8 @@ def is_secret_file(file_path: str) -> bool:
 def is_junk_dir(dirname: str) -> bool:
     if not is_rust_core_enabled():
         return py_is_junk_dir(dirname)
+    if _is_invalid_filename(dirname):
+        return py_is_junk_dir(dirname)
     res = call_core_bridge("is_junk_dir", dirname=dirname)
     if not isinstance(res, bool):
         raise TypeError(f"is_junk_dir expected bool from bridge, got {type(res).__name__}")
@@ -417,6 +433,8 @@ def is_junk_dir(dirname: str) -> bool:
 
 def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[str]:
     if not is_rust_core_enabled():
+        return py_scan_secret_content(text, file_path=file_path)
+    if _is_invalid_filename(text) or (file_path is not None and _is_invalid_filename(file_path)):
         return py_scan_secret_content(text, file_path=file_path)
     kwargs: Dict[str, Any] = {"text": text}
     if file_path is not None:
@@ -714,7 +732,7 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
             message_hex=message.hex(),
             signature_hex=signature.hex(),
         )
-    except CoreBridgeUnavailableError:
+    except (CoreBridgeUnavailableError, BridgeProtocolError):
         raise
     except Exception as exc:
         record_shadow_discrepancy(
@@ -722,14 +740,14 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
             f"Bridge invocation exception: {exc}",
             exception=type(exc).__name__,
         )
-        raise CoreBridgeUnavailableError(f"Bridge invocation exception: {exc}") from exc
+        raise BridgeProtocolError(f"Bridge invocation exception: {exc}") from exc
 
     if not isinstance(rust_ver, bool):
         record_shadow_discrepancy(
             "verify_ed25519",
             f"Bridge returned non-bool: {type(rust_ver).__name__}",
         )
-        raise CoreBridgeUnavailableError(f"Bridge returned non-bool: {type(rust_ver).__name__}")
+        raise BridgeProtocolError(f"Bridge returned non-bool: {type(rust_ver).__name__}")
 
     if is_shadow_compare_enabled():
         record_shadow_comparison("verify_ed25519")
@@ -799,6 +817,17 @@ def ingest_file(
 
     find_core_binary()
 
+    # Fast-path check for lone surrogates or unencodable paths that cannot cross the bridge.
+    # Return Python reference fast-path rejection directly.
+    if _is_invalid_filename(file_path) or _is_invalid_filename(os.path.basename(file_path)) or (root_path is not None and _is_invalid_filename(root_path)):
+        return py_ingest_file(
+            file_path=file_path,
+            root_path=root_path,
+            max_file_size=max_file_size,
+            max_line_length=max_line_length,
+            deny_patterns=deny_patterns,
+        )
+
     bridge_kwargs: Dict[str, Any] = {
         "file_path": file_path,
         "max_file_size": max_file_size,
@@ -815,7 +844,7 @@ def ingest_file(
         raw_rej = raw_res.get("rejection")
         rust_item = IngestedItem(**raw_item) if raw_item else None
         rust_rej = IngestionRejection(**raw_rej) if raw_rej else None
-    except (CoreBridgeUnavailableError, ValueError):
+    except (CoreBridgeUnavailableError, ValueError, BridgeProtocolError):
         raise
     except Exception as exc:
         record_shadow_discrepancy(
@@ -823,7 +852,7 @@ def ingest_file(
             f"Bridge invocation exception: {exc}",
             exception=type(exc).__name__,
         )
-        raise CoreBridgeUnavailableError(f"Bridge invocation exception: {exc}") from exc
+        raise BridgeProtocolError(f"Bridge invocation exception: {exc}") from exc
 
     if is_shadow_compare_enabled():
         record_shadow_comparison("ingest_file")
@@ -927,7 +956,7 @@ def ingest_folder(
             rejection_counts=raw_res.get("rejection_counts", {}),
             rejections_capped=raw_res.get("rejections_capped", False),
         )
-    except (CoreBridgeUnavailableError, ValueError):
+    except (CoreBridgeUnavailableError, ValueError, BridgeProtocolError):
         raise
     except Exception as exc:
         record_shadow_discrepancy(
@@ -935,7 +964,7 @@ def ingest_folder(
             f"Bridge invocation exception: {exc}",
             exception=type(exc).__name__,
         )
-        raise CoreBridgeUnavailableError(f"Bridge invocation exception: {exc}") from exc
+        raise BridgeProtocolError(f"Bridge invocation exception: {exc}") from exc
 
     if is_shadow_compare_enabled():
         record_shadow_comparison("ingest_folder")

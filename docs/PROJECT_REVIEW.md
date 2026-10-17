@@ -2467,3 +2467,33 @@ Phase 1 is closed. S, T and U are the first tasks of the next phase, or can go i
 3. **Finding U (CI Regression Gate on Windows Runner)**:
    - Integrated `tools/windows_parity_run.py` into `.github/workflows/windows-ci.yml` under the `rust-core` job immediately following the release build and differential integration suites.
    - Every push to `master` now automatically runs the comprehensive adversarial hazard tree verification on GitHub Actions Windows runners with fail-closed assertions.
+
+### Addendum (9590703): Check of findings S, T, U and two parity gaps found in the new path code (2026-10-18)
+Reviewed state: Linux, HEAD 9590703, clean working tree. Earlier lines of this file are unchanged (the diff against 5ff8290 adds 38 lines and removes none). The GitHub Actions run and the Windows parity run are the owner's report; I did not see them.
+
+Verified on Linux:
+- All 37 Python test modules pass: 450 tests.
+- Finding S closed in the code I can read: the `ValueError` handling is now local to the `ingest_folder` call in `cmd_analyze` and the `ingest_file` call in `cmd_docs`, with `PAI_DEBUG=1` re-raising, and the global handler in `main()` is gone. Two new tests cover `PAI_DEBUG` and an unrelated `ValueError`.
+- Findings T and U: I read `tools/windows_parity_run.py` and the workflow change; they need Windows and I could not run them. The owner's reported figures (19 comparisons, 0 discrepancies, five rejection codes present) are not checked by me.
+
+New findings, both from the `ingest.py` change that came with this commit (display path for absolute file names when no root is given):
+- V. The change covers an absolute path without a root. A relative path that contains a directory, without a root, still differs between Python and Rust in the early rejections for invalid and reserved names. I ran `ingest_file` on both sides for 11 file names (alternate data stream, reserved names, undecodable names, ordinary names) in absolute and relative form, with and without a root: for `sub/NUL` and `sub/x.py:ads` given as relative paths without a root, Python reports the path `sub/NUL` and Rust reports `NUL`. Every other combination of those names agrees. The shadow comparison will log a discrepancy for `pai docs sub/CON.txt`. Pick one rule (the existing rule for ordinary files is the base name when no root is given) and apply it on the Python side, with a differential test for relative paths with a directory part.
+- W. A file name that contains an undecodable byte (a lone surrogate in the Python string) cannot cross the bridge: the bridge answers "Invalid request JSON: Lone high surrogate", and the wrapper turns that into `CoreBridgeUnavailableError`. In Rust-authoritative mode `pai docs <such file>` therefore ends with the message "pai-core binary not found", which is the wrong diagnosis; the correct result is the `INVALID_FILENAME` rejection that Python already produces. `ingest_folder` is not affected, because Rust reads the names itself. Fix in the wrapper: reject a path with lone surrogates before the bridge call, with the same rejection as the Python fast path, and keep `CoreBridgeUnavailableError` for a missing binary or a failed handshake; a protocol error from the bridge should have its own message.
+
+Phase 1 stays closed. V and W are small and belong in the first commit of the next phase.
+
+### Implementation Addendum: Resolution of Findings V and W (Phase 2, Commit 1)
+
+1. **Finding V (Relative Path Parity with Directory Components when root_path=None)**:
+   - In `research/ingest.py` (`ingest_file`), aligned the early fast-path rejection path resolution for invalid filenames (`_is_invalid_filename`, `has_ads_colon`) and reserved device names (`is_reserved_device_name`): when `root_path is None` and the target path contains directory components, the rejection display path is now evaluated relative to its parent directory (`os.path.relpath(file_path, parent)`), exactly matching the behavior of ordinary files and the Rust core (`NUL`, `CON.txt`, `x.py:ads`).
+   - Added differential unit test `test_relative_path_with_directory_component_without_root_parity` in `research/tests/test_ingest_differential.py` verifying full parity across relative path combinations with directory prefixes.
+
+2. **Finding W (Lone Surrogate Filename Handling in Rust-Authoritative Mode)**:
+   - In `research/pai_core_bridge.py`:
+     - Introduced `BridgeProtocolError(CoreBridgeUnavailableError)` to clearly distinguish bridge IPC / serialization / process communication failures from missing binary / handshake errors (`CoreBridgeUnavailableError`).
+     - In `ingest_file`, added pre-bridge detection of lone surrogates and unencodable paths (`_is_invalid_filename`), returning the Python fast-path `INVALID_FILENAME` rejection directly before bridge invocation. This prevents `json.dumps` serialization errors or `serde_json` lone surrogate rejections from failing IPC.
+     - Also guarded `is_secret_file`, `is_junk_dir`, and `scan_secret_content` against lone surrogates to safely fall back to the reference path without bridge serialization failure.
+   - In `research/pai.py`:
+     - Scoped CLI error handling to catch `BridgeProtocolError` with a distinct `Error: pai-core bridge protocol error: ...` message (exit 2) while reserving `CoreBridgeUnavailableError` strictly for missing binary / handshake failure.
+     - Document CLI (`pai docs`) with lone surrogate filenames now cleanly outputs `INVALID_FILENAME` rejection with exit code 1 instead of crashing or falsely reporting missing binary.
+   - Added unit and differential test coverage in `research/tests/test_ingest_differential.py` and `research/tests/test_pai_cli.py`.

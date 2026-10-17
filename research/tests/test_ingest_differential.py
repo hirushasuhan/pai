@@ -911,6 +911,83 @@ class TestIngestDifferential(unittest.TestCase):
                 os.environ.pop("PAI_SHADOW_COMPARE", None)
                 pai_core_bridge.PAI_SHADOW_COMPARE = True
 
+    def test_relative_path_with_directory_component_without_root_parity(self):
+        """
+        Finding V: Verifies that relative paths containing directory components without root_path
+        (e.g., 'sub/CON.txt', 'sub/NUL', 'sub/x.py:ads') evaluate rejections relative to parent
+        directory identically in Python reference and Rust core.
+        """
+        test_cases = [
+            ("sub/CON.txt", "CON.txt", "SPECIAL_FILE"),
+            ("sub/NUL", "NUL", "SPECIAL_FILE"),
+            ("sub/x.py:ads", "x.py:ads", "INVALID_FILENAME"),
+            ("a/b/PRN", "PRN", "SPECIAL_FILE"),
+        ]
+        for rel_path, expected_rej_path, expected_code in test_cases:
+            # 1. Python reference
+            py_item, py_rej = ingest.ingest_file(rel_path, root_path=None)
+            self.assertIsNone(py_item)
+            self.assertIsNotNone(py_rej)
+            self.assertEqual(py_rej.path, expected_rej_path, f"Python path mismatch for {rel_path}")
+            self.assertEqual(py_rej.reason_code, expected_code, f"Python code mismatch for {rel_path}")
+
+            # 2. Rust core bridge (when binary available)
+            try:
+                pai_core_bridge.find_core_binary()
+                has_binary = True
+            except pai_core_bridge.CoreBridgeUnavailableError:
+                has_binary = False
+
+            if has_binary:
+                orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+                try:
+                    pai_core_bridge.PAI_USE_RUST_CORE = True
+                    rust_item, rust_rej = pai_core_bridge.ingest_file(rel_path, root_path=None)
+                    self.assertIsNone(rust_item)
+                    self.assertIsNotNone(rust_rej)
+                    self.assertEqual(rust_rej.path, expected_rej_path, f"Rust path mismatch for {rel_path}")
+                    self.assertEqual(rust_rej.reason_code, expected_code, f"Rust code mismatch for {rel_path}")
+                    self.assertEqual(py_rej.path, rust_rej.path)
+                    self.assertEqual(py_rej.reason_code, rust_rej.reason_code)
+                finally:
+                    pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+
+    def test_lone_surrogate_filename_handled_without_bridge_crash(self):
+        """
+        Finding W: Verifies that a filename containing a lone surrogate (unpaired surrogate)
+        does not crash the IPC bridge or falsely report CoreBridgeUnavailableError,
+        returning an INVALID_FILENAME rejection in both Python and Rust-authoritative mode.
+        """
+        surrogate_path = "bad_\ud800_name.txt"
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        try:
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            item, rej = pai_core_bridge.ingest_file(surrogate_path)
+            self.assertIsNone(item)
+            self.assertIsNotNone(rej)
+            self.assertEqual(rej.reason_code, "INVALID_FILENAME")
+            self.assertIn("\ufffd", rej.path)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+
+    def test_bridge_protocol_error_distinction(self):
+        """
+        Finding W: Verifies that BridgeProtocolError is distinct and raised on bridge
+        protocol/process failures rather than reporting missing binary.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        try:
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            with mock.patch("pai_core_bridge.find_core_binary", return_value="dummy_bin"):
+                with mock.patch("subprocess.run") as mock_proc:
+                    mock_proc.return_value = mock.Mock(returncode=1, stderr=b"Bridge syntax error", stdout=b"")
+                    with self.assertRaises(pai_core_bridge.BridgeProtocolError) as ctx:
+                        pai_core_bridge.call_core_bridge("test_op")
+                    self.assertIn("pai-core bridge failed", str(ctx.exception))
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+
 
 if __name__ == "__main__":
     unittest.main()

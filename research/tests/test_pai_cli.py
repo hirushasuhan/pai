@@ -668,6 +668,60 @@ class TestPaiCLI(unittest.TestCase):
                 os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
                 pai_core_bridge.PAI_RUST_FALLBACK_PYTHON = False
 
+    def test_pai_docs_lone_surrogate_filename_rust_mode_rejects_with_exit_1(self):
+        """
+        Finding W: Verifies that pai docs on a lone surrogate filename in Rust mode
+        exits with code 1 and outputs an INVALID_FILENAME rejection rather than
+        falsely reporting pai-core binary not found.
+        """
+        import pai_core_bridge
+        old_core = os.environ.get("PAI_USE_RUST_CORE")
+        try:
+            os.environ["PAI_USE_RUST_CORE"] = "1"
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+
+            with patch("os.path.exists", return_value=True), \
+                 patch("os.path.isdir", return_value=False), \
+                 patch("pai.enforce_sandbox_boundary"):
+                # 1. Text mode
+                f_err = io.StringIO()
+                with redirect_stderr(f_err):
+                    rc = main(["docs", "bad_\ud800_name.txt"])
+                self.assertEqual(rc, 1)
+                err_output = f_err.getvalue()
+                self.assertIn("Filename contains invalid Unicode", err_output)
+                self.assertNotIn("pai-core binary not found", err_output)
+
+                # 2. JSON mode
+                f_out = io.StringIO()
+                with redirect_stdout(f_out):
+                    rc_json = main(["docs", "bad_\ud800_name.txt", "--json"])
+                self.assertEqual(rc_json, 1)
+                parsed = json.loads(f_out.getvalue())
+                self.assertEqual(parsed["error"], "INVALID_FILENAME")
+        finally:
+            if old_core is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_core
+                pai_core_bridge.PAI_USE_RUST_CORE = (old_core == "1")
+            else:
+                os.environ.pop("PAI_USE_RUST_CORE", None)
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+
+    def test_pai_cli_bridge_protocol_error_distinct_message(self):
+        """
+        Finding W: Verifies that BridgeProtocolError produces a distinct error message
+        referencing bridge protocol error rather than missing binary, exiting with code 2.
+        """
+        from pai_core_bridge import BridgeProtocolError
+        with patch("pai.cmd_analyze", side_effect=BridgeProtocolError("JSON syntax failure")):
+            f_err = io.StringIO()
+            with redirect_stderr(f_err):
+                rc = main(["analyze", "."])
+            self.assertEqual(rc, 2)
+            err_output = f_err.getvalue()
+            self.assertIn("Error: pai-core bridge protocol error: JSON syntax failure", err_output)
+            self.assertNotIn("pai-core binary not found", err_output)
+
 
 if __name__ == "__main__":
     unittest.main()

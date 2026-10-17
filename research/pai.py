@@ -2811,9 +2811,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     try:
-        from pai_core_bridge import CoreBridgeUnavailableError
+        from pai_core_bridge import BridgeProtocolError, CoreBridgeUnavailableError
     except ImportError:
         class CoreBridgeUnavailableError(Exception):
+            pass
+        class BridgeProtocolError(Exception):
             pass
 
     try:
@@ -2852,6 +2854,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             parser.print_help()
             return 1
+    except BridgeProtocolError as e:
+        msg = f"Error: pai-core bridge protocol error: {e}"
+        print(msg, file=sys.stderr)
+        return 2
     except CoreBridgeUnavailableError:
         msg = (
             "Error: pai-core binary not found. Build with 'cargo build --release' in core/ "

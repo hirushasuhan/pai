@@ -875,10 +875,14 @@ def ingest_file(
                 rel_display = os.path.relpath(file_path, root_path)
             except Exception:
                 rel_display = file_path
-        elif root_path is None and os.path.isabs(file_path):
-            try:
-                rel_display = os.path.relpath(file_path, os.path.dirname(file_path))
-            except Exception:
+        elif root_path is None:
+            parent = os.path.dirname(file_path)
+            if parent:
+                try:
+                    rel_display = os.path.relpath(file_path, parent)
+                except Exception:
+                    rel_display = basename
+            else:
                 rel_display = file_path
         return None, IngestionRejection(
             path=_lossy_utf8(rel_display),
@@ -894,10 +898,14 @@ def ingest_file(
                 rel_display = os.path.relpath(file_path, root_path)
             except Exception:
                 rel_display = file_path
-        elif root_path is None and os.path.isabs(file_path):
-            try:
-                rel_display = os.path.relpath(file_path, os.path.dirname(file_path))
-            except Exception:
+        elif root_path is None:
+            parent = os.path.dirname(file_path)
+            if parent:
+                try:
+                    rel_display = os.path.relpath(file_path, parent)
+                except Exception:
+                    rel_display = basename
+            else:
                 rel_display = file_path
         return None, IngestionRejection(
             path=rel_display,
