@@ -815,10 +815,8 @@ def ingest_file(
             deny_patterns=deny_patterns,
         )
 
-    find_core_binary()
-
     # Fast-path check for lone surrogates or unencodable paths that cannot cross the bridge.
-    # Return Python reference fast-path rejection directly.
+    # Return Python reference fast-path rejection directly before bridge lookup.
     if _is_invalid_filename(file_path) or _is_invalid_filename(os.path.basename(file_path)) or (root_path is not None and _is_invalid_filename(root_path)):
         return py_ingest_file(
             file_path=file_path,
@@ -827,6 +825,8 @@ def ingest_file(
             max_line_length=max_line_length,
             deny_patterns=deny_patterns,
         )
+
+    find_core_binary()
 
     bridge_kwargs: Dict[str, Any] = {
         "file_path": file_path,
