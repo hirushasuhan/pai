@@ -988,6 +988,35 @@ class TestIngestDifferential(unittest.TestCase):
         finally:
             pai_core_bridge.PAI_USE_RUST_CORE = orig_core
 
+    def test_scan_secret_content_with_replacement_char_calls_bridge(self):
+        """
+        Finding X: Verifies that scan_secret_content with decoded text containing
+        U+FFFD replacement characters invokes the Rust bridge rather than erroneously
+        treating it as an invalid filename. Lone surrogates still bypass the bridge.
+        """
+        from unittest import mock
+        orig_core = pai_core_bridge.PAI_USE_RUST_CORE
+        try:
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            try:
+                pai_core_bridge.find_core_binary()
+                has_bin = True
+            except pai_core_bridge.CoreBridgeUnavailableError:
+                has_bin = False
+
+            if has_bin:
+                with mock.patch("pai_core_bridge.call_core_bridge", wraps=pai_core_bridge.call_core_bridge) as spy:
+                    res = pai_core_bridge.scan_secret_content("normal text with \ufffd replacement character")
+                    self.assertTrue(spy.called, "call_core_bridge must be invoked for text containing U+FFFD")
+                    self.assertIsNone(res)
+
+                    spy.reset_mock()
+                    res_surrogate = pai_core_bridge.scan_secret_content("text with \ud800 surrogate")
+                    self.assertFalse(spy.called, "call_core_bridge must NOT be invoked for text with lone surrogates")
+                    self.assertIsNone(res_surrogate)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = orig_core
+
 
 if __name__ == "__main__":
     unittest.main()

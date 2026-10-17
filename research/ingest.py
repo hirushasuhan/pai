@@ -792,6 +792,15 @@ def _is_invalid_filename(name: str) -> bool:
         return True
 
 
+def _has_lone_surrogates(s: str) -> bool:
+    """Returns True if string contains unpaired UTF-16 surrogates (U+D800 to U+DFFF)."""
+    try:
+        s.encode("utf-8")
+        return False
+    except UnicodeEncodeError:
+        return True
+
+
 def _lossy_utf8(s: str) -> str:
     cleaned = "".join("\ufffd" if 0xD800 <= ord(c) <= 0xDFFF else c for c in s)
     return cleaned.encode("utf-8", errors="replace").decode("utf-8")

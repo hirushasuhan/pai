@@ -2497,3 +2497,32 @@ Phase 1 stays closed. V and W are small and belong in the first commit of the ne
      - Scoped CLI error handling to catch `BridgeProtocolError` with a distinct `Error: pai-core bridge protocol error: ...` message (exit 2) while reserving `CoreBridgeUnavailableError` strictly for missing binary / handshake failure.
      - Document CLI (`pai docs`) with lone surrogate filenames now cleanly outputs `INVALID_FILENAME` rejection with exit code 1 instead of crashing or falsely reporting missing binary.
    - Added unit and differential test coverage in `research/tests/test_ingest_differential.py` and `research/tests/test_pai_cli.py`.
+
+### Addendum (cae9aa3): Check of findings V and W (2026-10-19)
+Reviewed state: Linux, HEAD cae9aa3, clean working tree. Earlier lines of this file are unchanged (the diff against 9590703 adds 30 lines and removes none). The GitHub Actions run, the Windows parity run and the owner's test counts (515 tests, 27 skips) are the owner's report; on Linux I count 452 tests.
+
+Verified on Linux:
+- All 37 Python test modules pass: 452 tests. The differential modules with the real Rust binary: 63 tests, 0 failures, with the flag at 0 and at 1 (2 skips each: no bubblewrap in my container, Windows junction test).
+- Finding V closed. I repeated my 11-name probe (alternate data stream, reserved names, undecodable names, ordinary names; absolute and relative; with and without a root): no difference remains except the undecodable names, which cannot be sent through the bridge at all and are now handled before it. The earlier differences for `sub/NUL` and `sub/x.py:ads` are gone. 400 more random trees: 0 differences. The only differences left in my hand cases are the process id inside `/proc/self/environ` (artefact of my harness) and `max_file_size=0` (both sides reject, with different exception types).
+- Finding W closed. With `PAI_USE_RUST_CORE=1`, an undecodable file name given to `ingest_file` returns the `INVALID_FILENAME` rejection and makes no bridge call; an ordinary file still goes through the bridge. `BridgeProtocolError` is a subclass of `CoreBridgeUnavailableError` and `main()` handles it first, so it prints its own message and not the missing-binary message.
+
+New finding, minor:
+- X. The guards added to `is_secret_file`, `is_junk_dir` and `scan_secret_content` use the file-name validity test, which is also true when the text contains the replacement character U+FFFD. File content decoded with replacement characters is common. With `PAI_USE_RUST_CORE=1`, `scan_secret_content` on a text that contains U+FFFD makes no bridge call and returns the Python result (checked with a spy on `call_core_bridge`: plain text, one call; text with U+FFFD, no call). The answer is the same here, but Rust is not the deciding side for those inputs and no comparison is recorded. Use a test that is true only for lone surrogates (code points D800 to DFFF) for text, and keep the file-name test for names.
+
+Phase 1 stays closed. X is a small fix for the first commit of the next phase.
+
+Next phase, decision to record before any code: switching the default of `PAI_USE_RUST_CORE` to on. A condition set I would use (the owner may choose different numbers, but they should be written down first): the Windows parity runner and both differential gates green on each commit that touches `core/` for a stated number of consecutive commits; the shadow log of the owner's own daily use free of discrepancies for a stated period, with the comparison count reported; the default changes in one release with `PAI_RUST_FALLBACK_PYTHON=1` kept as the way back; the fallback is removed in a later release, only after that release has run clean. This is a judgement on risk, not a measured threshold.
+
+### Implementation Addendum: Resolution of Finding X & Quantified Gates for Default-On Phase (2026-10-19)
+
+1. **Finding X Resolution (U+FFFD Replacement Character in Text vs Filenames)**:
+   - In `research/ingest.py`, implemented `_has_lone_surrogates(s: str) -> bool` to strictly isolate unpaired UTF-16 surrogates (`0xD800`–`0xDFFF`) via `s.encode('utf-8')` without false-positiving on the valid Unicode replacement character `U+FFFD`.
+   - In `research/pai_core_bridge.py` (`scan_secret_content`), updated the guard condition so that decoded text content is checked via `_has_lone_surrogates(text)` while `file_path` retains `_is_invalid_filename(file_path)`. Decoded text containing `U+FFFD` now directly invokes the Rust core bridge (`pai-core --bridge`), allowing Rust to authoritative decide the classification and recording shadow comparisons.
+   - Added unit and differential test `test_scan_secret_content_with_replacement_char_calls_bridge` in `research/tests/test_ingest_differential.py`.
+
+2. **Quantified Gates and Rollout Criteria for Default-On Phase (`PAI_USE_RUST_CORE=1`)**:
+   - **Gate 1 (Commit & CI Consistency Threshold)**: A minimum of **5 consecutive commits** that touch `core/` or `research/` must maintain 100% green CI across all three jobs (`rust-core`, `linux-portability`, `python-research`), verifying 0 failures on all differential test modules and 0 discrepancies on the Windows real-tree adversarial parity runner (`tools/windows_parity_run.py`).
+   - **Gate 2 (Shadow Volume & Telemetry Window)**: A minimum of **1,000 real-world shadow comparisons** recorded across daily CLI and agent invocations across at least **7 consecutive days** with **0 recorded discrepancies** (`total_discrepancies == 0`).
+   - **Gate 3 (Staged Release Rollout Protocol)**:
+     - *Release N (Default-On with Escape Hatch)*: Set `PAI_USE_RUST_CORE` default to `1`. Maintain `PAI_RUST_FALLBACK_PYTHON=1` as an active operational fallback mechanism.
+     - *Release N+1 (Reference Decommissioning)*: The Python reference fallback will only be removed in Release N+1 after Release N has completed its lifecycle without core bridge failure reports.

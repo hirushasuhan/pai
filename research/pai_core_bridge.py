@@ -35,6 +35,7 @@ from ingest import (
     IngestedItem,
     IngestionRejection,
     IngestionReport,
+    _has_lone_surrogates,
     _is_invalid_filename,
     assemble_untrusted_context,
     defang_envelope_markers as py_defang_envelope_markers,
@@ -434,7 +435,7 @@ def is_junk_dir(dirname: str) -> bool:
 def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[str]:
     if not is_rust_core_enabled():
         return py_scan_secret_content(text, file_path=file_path)
-    if _is_invalid_filename(text) or (file_path is not None and _is_invalid_filename(file_path)):
+    if _has_lone_surrogates(text) or (file_path is not None and _is_invalid_filename(file_path)):
         return py_scan_secret_content(text, file_path=file_path)
     kwargs: Dict[str, Any] = {"text": text}
     if file_path is not None:
