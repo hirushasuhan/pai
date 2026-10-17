@@ -2429,3 +2429,41 @@ Phase status: Slice 6 is accepted after N is fixed and P and O are written into 
 4. **Finding R (Comprehensive Windows Real-Tree Runner Script)**:
    - Preserved the 63-entry adversarial Windows tree runner in the repository outside shipped code at `tools/windows_parity_run.py`.
    - The script automates verification of Sinhala UTF-8 filenames, Windows directory junctions, 22 reserved device names, NTFS Alternate Data Streams (ADS), secret files, junk directories, and end-to-end CLI operations (`pai analyze`, `pai docs`, `pai doctor`, `verify_release`), asserting zero discrepancies across all comparisons.
+
+### Addendum (5ff8290): Check of findings N, O, P, R and closing of Phase 1 (2026-10-17)
+Reviewed state: Linux, HEAD 5ff8290, clean working tree. Earlier lines of this file are unchanged (the diff against 1059f6f adds 42 lines and removes none). The GitHub Actions run and any Windows run are the owner's report; I did not see them.
+
+Verified on Linux (no Rust binary on this machine, which makes it a good place to test the missing-binary paths):
+- All 37 Python test modules pass: 448 tests. `test_pai_cli` runs 16 tests, including the 3 new ones.
+- Finding N closed. `pai analyze <folder> --max-files 0` prints one line (`Error: max_file_count must be between 1 and 1000000`) and exits 2. With `PAI_USE_RUST_CORE=1` and no binary, `pai analyze` prints one line naming the missing binary, the build command and `PAI_RUST_FALLBACK_PYTHON=1`, and exits 2. `pai doctor` in the same situation reports `core_bridge [FAIL]` with that message, continues with the other checks (the checks that need ingestion also fail, as expected) and exits 1 with no traceback. With the fallback flag set, `pai doctor` reports "fallback to Python active".
+- Finding O closed (docstring in `pai_core_bridge.py`). Finding P closed (trust placement note in `Updater.verify_release`). Finding R: `tools/windows_parity_run.py` is in the repository, outside the shipped code; I have read it but could not run it, because it needs Windows.
+
+Remaining, small:
+- S. The new `except ValueError` in `main()` wraps every subcommand. A `ValueError` raised by an unrelated bug (forecast, router, parsing) now becomes a one-line message and exit 2 with no traceback, which hides the failure site. Catch it only where limits and arguments are validated, or print the traceback when an environment variable such as `PAI_DEBUG=1` is set.
+- T. `tools/windows_parity_run.py` creates the junction, reserved names and alternate data stream on a best-effort basis (a failed `mklink /J` prints an info line and the run goes on) and its only pass condition is 0 discrepancies. A run on a machine where those hazards could not be created would still print the parity verdict. Make it fail when a hazard cannot be created or when the expected rejection codes (`SYMLINK_DIRECTORY`, `SPECIAL_FILE`, `INVALID_FILENAME`, the secret and junk codes) are not present in the Rust report, and require a minimum comparison count. The final line should read "no mismatches observed on this tree" instead of "100% PARITY CONFIRMED".
+- U. The script is not run by CI. The Windows runner can create junctions, so a step in the `rust-core` job after the release build would turn the script into a regression gate.
+
+Phase 1 is closed. S, T and U are the first tasks of the next phase, or can go into one small commit before it. Decisions that belong to the next phase and are not made here: the default of `PAI_USE_RUST_CORE`, the removal of the Python fallback, and the number of clean runs on each platform that those two need.
+
+
+### Addendum: Resolution of Findings S, T, and U (2026-10-17)
+
+1. **Finding S (Subcommand ValueError Scoping & PAI_DEBUG Traceback Support)**:
+   - Removed the blanket `except ValueError` from `research/pai.py:main()`, preventing internal subcommands (such as forecast, router, code repair) from masking unhandled `ValueError` bugs into generic one-line exits without tracebacks.
+   - Scoped `ValueError` handling specifically to parameter and argument validation at ingestion call sites (`cmd_analyze` around `ingest_folder` and `cmd_docs` around `ingest_file`).
+   - Added `PAI_DEBUG=1` environment check: when `PAI_DEBUG=1` is present, `ValueError` is re-raised with full traceback for debugging; otherwise, a single clean message (`Error: <message>`) is written to `sys.stderr` with exit code 2.
+   - Added unit tests in `research/tests/test_pai_cli.py`:
+     - `test_cli_pai_debug_re_raises_value_error`
+     - `test_cli_unrelated_value_error_in_subcommand_not_swallowed_by_main`
+
+2. **Finding T (Strict Hazard Creation, Rejection Code Assertions & Parity Verdict)**:
+   - Updated `tools/windows_parity_run.py` to fail fast if any hazard creation operation fails: directory junction (`mklink /J`), reserved device names (`CON.txt`, `NUL.py`, `PRN.log`, `AUX.dat` created via verbatim Win32 paths), NTFS Alternate Data Streams (`ads_test.txt:hidden_stream`), or lone surrogate filenames (`bad_\ud800_name.txt`).
+   - Added explicit assertion that the Rust core folder ingestion report contains all required hazard rejection codes: `SYMLINK_DIRECTORY`, `SPECIAL_FILE`, `INVALID_FILENAME`, `SECRET_FILE`, and `JUNK_DIRECTORY`.
+   - Added explicit single-file ingestion test on the ADS stream asserting `INVALID_FILENAME` rejection.
+   - Fixed `research/ingest.py` fast-path rejection relative path calculation when `root_path is None` and an absolute path is provided, ensuring identical relative paths (`ads.txt:hidden`) between Python and Rust.
+   - Enforced a minimum shadow comparison threshold (`MIN_SHADOW_COMPARISONS = 15`), failing the gate if fewer comparisons are recorded.
+   - Updated the final verdict line to `"Verdict                    : no mismatches observed on this tree"`.
+
+3. **Finding U (CI Regression Gate on Windows Runner)**:
+   - Integrated `tools/windows_parity_run.py` into `.github/workflows/windows-ci.yml` under the `rust-core` job immediately following the release build and differential integration suites.
+   - Every push to `master` now automatically runs the comprehensive adversarial hazard tree verification on GitHub Actions Windows runners with fail-closed assertions.

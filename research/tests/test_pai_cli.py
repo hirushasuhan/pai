@@ -526,6 +526,27 @@ class TestPaiCLI(unittest.TestCase):
             lines = [l for l in err.strip().splitlines() if l.strip()]
             self.assertEqual(len(lines), 1)
 
+    def test_cli_pai_debug_re_raises_value_error(self):
+        """Verifies PAI_DEBUG=1 causes cmd_analyze to re-raise ValueError rather than swallowing it into exit 2."""
+        old_debug = os.environ.get("PAI_DEBUG")
+        try:
+            os.environ["PAI_DEBUG"] = "1"
+            with tempfile.TemporaryDirectory() as td:
+                with self.assertRaises(ValueError):
+                    main(["analyze", td, "--max-files", "0"])
+        finally:
+            if old_debug is not None:
+                os.environ["PAI_DEBUG"] = old_debug
+            else:
+                os.environ.pop("PAI_DEBUG", None)
+
+    def test_cli_unrelated_value_error_in_subcommand_not_swallowed_by_main(self):
+        """Verifies an unexpected ValueError in another subcommand is not caught/masked by main()."""
+        with patch("pai.cmd_forecast", side_effect=ValueError("internal bug in forecast")):
+            with self.assertRaises(ValueError) as ctx:
+                main(["forecast", "dummy"])
+            self.assertEqual(str(ctx.exception), "internal bug in forecast")
+
     def test_cli_missing_binary_clean_one_line_error_analyze_and_docs_exit_2(self):
         """Verifies pai analyze and pai docs catch CoreBridgeUnavailableError with clean 1-line message and exit 2."""
         from pai_core_bridge import CoreBridgeUnavailableError

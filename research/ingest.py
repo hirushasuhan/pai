@@ -875,6 +875,11 @@ def ingest_file(
                 rel_display = os.path.relpath(file_path, root_path)
             except Exception:
                 rel_display = file_path
+        elif root_path is None and os.path.isabs(file_path):
+            try:
+                rel_display = os.path.relpath(file_path, os.path.dirname(file_path))
+            except Exception:
+                rel_display = file_path
         return None, IngestionRejection(
             path=_lossy_utf8(rel_display),
             reason_code="INVALID_FILENAME",
@@ -887,6 +892,11 @@ def ingest_file(
         if root_path is not None and os.path.isabs(file_path):
             try:
                 rel_display = os.path.relpath(file_path, root_path)
+            except Exception:
+                rel_display = file_path
+        elif root_path is None and os.path.isabs(file_path):
+            try:
+                rel_display = os.path.relpath(file_path, os.path.dirname(file_path))
             except Exception:
                 rel_display = file_path
         return None, IngestionRejection(

@@ -1597,8 +1597,13 @@ def cmd_analyze(args) -> int:
         ingest_kwargs["max_file_count"] = args.max_files
     if getattr(args, "max_bytes", None) is not None:
         ingest_kwargs["max_total_bytes"] = args.max_bytes
-
-    report = ingest_folder(target_folder, **ingest_kwargs)
+    try:
+        report = ingest_folder(target_folder, **ingest_kwargs)
+    except ValueError as e:
+        if os.environ.get("PAI_DEBUG") == "1":
+            raise
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
 
     if not report.items:
         if getattr(args, "json", False):
@@ -2124,7 +2129,13 @@ def cmd_docs(args) -> int:
             return 4
 
     # 1. Ingest document via safe-ingestion module
-    item, rejection = ingest_file(target_file)
+    try:
+        item, rejection = ingest_file(target_file)
+    except ValueError as e:
+        if os.environ.get("PAI_DEBUG") == "1":
+            raise
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
     if rejection or not item:
         reason = rejection.reason_code if rejection else "READ_ERROR"
         detail = rejection.message if rejection else "Failed to read document."
@@ -2847,9 +2858,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "or set PAI_RUST_FALLBACK_PYTHON=1 to select the Python reference path."
         )
         print(msg, file=sys.stderr)
-        return 2
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
         return 2
 
 

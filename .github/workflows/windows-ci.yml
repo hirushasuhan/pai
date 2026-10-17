@@ -169,6 +169,10 @@ jobs:
               print(f'SUCCESS: All {result.testsRun} differential tests passed with PAI_USE_RUST_CORE={flag_val} ({len(result.skipped)} allowed skips).')
           "
 
+      - name: Windows Real-Tree Parity Regression Gate (Adversarial Hazards & Shadow Verification)
+        run: |
+          python tools/windows_parity_run.py
+
   linux-portability:
     runs-on: ubuntu-latest
     steps:

@@ -137,14 +137,20 @@ def run_windows_parity() -> int:
             f.write("def එකතුව(අ, ආ):\n    return අ + ආ\n\nprint(එකතුව(10, 20))\n")
 
         # B. Reserved device names (CON.txt, NUL.py, PRN.log, AUX.dat)
+        reserved_verbatim_paths = []
         for res_name in ["CON.txt", "NUL.py", "PRN.log", "AUX.dat"]:
             try:
-                p = os.path.join(root_dir, res_name)
-                with open(p, "w", encoding="utf-8") as f:
+                vp = "\\\\?\\" + os.path.abspath(os.path.join(root_dir, res_name))
+                with open(vp, "w", encoding="utf-8") as f:
                     f.write("reserved device test")
-                print(f"[OK] Created reserved name file: {res_name}")
+                if not os.path.exists(vp):
+                    print(f"FATAL: Reserved name file does not exist after creation: {res_name}", file=sys.stderr)
+                    return 1
+                reserved_verbatim_paths.append(vp)
+                print(f"[OK] Created reserved name file via verbatim path: {res_name}")
             except Exception as e:
-                print(f"[INFO] Reserved name {res_name} blocked by Win32 OS (expected): {e}")
+                print(f"FATAL: Failed to create reserved name file {res_name}: {e}", file=sys.stderr)
+                return 1
 
         # C. NTFS Alternate Data Stream
         ads_base = os.path.join(root_dir, "ads_test.txt")
@@ -155,7 +161,21 @@ def run_windows_parity() -> int:
                 f.write("Secret ADS hidden content")
             print("[OK] Successfully wrote NTFS Alternate Data Stream ads_test.txt:hidden_stream")
         except Exception as e:
-            print(f"[INFO] ADS creation note: {e}")
+            print(f"FATAL: Failed to create NTFS Alternate Data Stream: {e}", file=sys.stderr)
+            return 1
+
+        # C2. Lone surrogate non-decodable filename (INVALID_FILENAME hazard)
+        surrogate_file = "\\\\?\\" + os.path.abspath(os.path.join(root_dir, "bad_\ud800_name.txt"))
+        try:
+            with open(surrogate_file, "w", encoding="utf-8") as f:
+                f.write("lone surrogate test content")
+            if not os.path.exists(surrogate_file):
+                print("FATAL: Lone surrogate file does not exist after creation", file=sys.stderr)
+                return 1
+            print("[OK] Created lone surrogate filename: bad_\\ud800_name.txt")
+        except Exception as e:
+            print(f"FATAL: Failed to create lone surrogate filename: {e}", file=sys.stderr)
+            return 1
 
         # D. Secret deny files
         with open(os.path.join(root_dir, ".env"), "w", encoding="utf-8") as f:
@@ -193,12 +213,13 @@ def run_windows_parity() -> int:
                 capture_output=True,
                 text=True
             )
-            if res.returncode == 0:
-                print(f"[OK] Created directory junction: {junction_target} -> {junction_source}")
-            else:
-                print(f"[INFO] mklink /J returned {res.returncode}: {res.stderr.strip()}")
+            if res.returncode != 0:
+                print(f"FATAL: Failed to create directory junction (mklink /J returned {res.returncode}): {res.stderr.strip()}", file=sys.stderr)
+                return 1
+            print(f"[OK] Created directory junction: {junction_target} -> {junction_source}")
         except Exception as e:
-            print(f"[INFO] Junction creation note: {e}")
+            print(f"FATAL: Failed to execute mklink /J: {e}", file=sys.stderr)
+            return 1
 
         # H. Symlinks (if permitted on user environment)
         symlink_target = os.path.join(root_dir, "symlink_file.txt")
@@ -231,12 +252,40 @@ def run_windows_parity() -> int:
             print(f"FATAL: ingest_file failed: item={item}, rej={rej}", file=sys.stderr)
             return 1
 
+        print("\n--- Step 3b: pai_core_bridge.ingest_file ADS check ---")
+        ads_path = ads_base + ":hidden_stream"
+        ads_item, ads_rej = pai_core_bridge.ingest_file(ads_path)
+        if ads_item is not None or ads_rej is None or ads_rej.reason_code != "INVALID_FILENAME":
+            print(f"FATAL: ADS did not reject with INVALID_FILENAME: item={ads_item}, rej={ads_rej}", file=sys.stderr)
+            return 1
+        print(f"[OK] Verified ADS stream rejected as INVALID_FILENAME: {ads_rej.message}")
+
         print("\n--- Step 4: pai_core_bridge.ingest_folder ---")
         res_folder = pai_core_bridge.ingest_folder(root_dir)
         if not res_folder.items:
             print(f"FATAL: ingest_folder returned 0 items", file=sys.stderr)
             return 1
         print(f"Ingested {len(res_folder.items)} items, rejected {len(res_folder.rejections)} items.")
+        print(f"Rejection counts: {res_folder.rejection_counts}")
+
+        # Assert all expected hazard rejection codes are present in the Rust report
+        EXPECTED_REJECTION_CODES = [
+            "SYMLINK_DIRECTORY",
+            "SPECIAL_FILE",
+            "INVALID_FILENAME",
+            "SECRET_FILE",
+            "JUNK_DIRECTORY",
+        ]
+        for expected_code in EXPECTED_REJECTION_CODES:
+            count = res_folder.rejection_counts.get(expected_code, 0)
+            if count < 1:
+                print(
+                    f"FATAL: Expected rejection code '{expected_code}' not found in folder ingest report: "
+                    f"{res_folder.rejection_counts}",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"[OK] Verified expected rejection code '{expected_code}' (count={count}) in report.")
 
         print("\n--- Step 5: Updater.verify_release ---")
         rel_root = tempfile.mkdtemp(prefix="pai_rel_bundle_")
@@ -278,18 +327,39 @@ def run_windows_parity() -> int:
                 print(f"  {rec}", file=sys.stderr)
             return 1
 
+        MIN_SHADOW_COMPARISONS = 15
+        if comps < MIN_SHADOW_COMPARISONS:
+            print(
+                f"FATAL: Insufficient shadow comparisons recorded ({comps} < {MIN_SHADOW_COMPARISONS}). "
+                f"Parity gate requires at least {MIN_SHADOW_COMPARISONS} operations.",
+                file=sys.stderr,
+            )
+            return 1
+
         print("\n================================================================================")
         print("                 WINDOWS SHADOW PARITY RUN FINAL REPORT                         ")
         print("================================================================================")
         print(f"Target tree entries        : {total_entries} entries, {total_size/1024:.1f} KB")
         print(f"Total shadow comparisons   : {comps}")
         print(f"Total shadow discrepancies : {discreps}")
-        print("Verdict                    : 100% PARITY CONFIRMED (0 DISCREPANCIES)")
+        print("Verdict                    : no mismatches observed on this tree")
         print("================================================================================")
         return 0
 
     finally:
         server.shutdown()
+        # Clean up verbatim path files that standard rmtree might fail on
+        if 'reserved_verbatim_paths' in locals():
+            for vp in reserved_verbatim_paths:
+                try:
+                    os.remove(vp)
+                except Exception:
+                    pass
+        if 'surrogate_file' in locals():
+            try:
+                os.remove(surrogate_file)
+            except Exception:
+                pass
         shutil.rmtree(root_dir, ignore_errors=True)
         if orig_core is not None:
             os.environ["PAI_USE_RUST_CORE"] = orig_core
