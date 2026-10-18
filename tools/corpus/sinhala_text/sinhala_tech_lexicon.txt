@@ -1,0 +1,16 @@
+පරිගණක විද්‍යාව සහ මෘදුකාංග ඉංජිනේරු ශබ්දකෝෂය (Sinhala Technical Terms)
+
+1. පරිගණක පද්ධති - Computer Systems
+2. දත්ත සමුදාය - Database Internals
+3. මෙහෙයුම් පද්ධතිය - Operating System
+4. කෘත්‍රිම බුද්ධිය - Artificial Intelligence
+5. ස්වයංක්‍රීය ඉංජිනේරු පද්ධතිය - Autonomous Agentic Architecture
+6. මතක කළමනාකරණය - Memory Management and Allocation
+7. සමමුහුර්තකරණය - Synchronization and Concurrency
+8. බෙදාහැරුණු පද්ධති - Distributed Computing Topologies
+9. සංකේතන ප්‍රමිතිය - Character Encoding and Unicode Parsing
+10. අක්ෂර වින්‍යාස නීති - Orthographic Grapheme Cluster Rules
+11. විරාම ලකුණු සහ සංකේත - Virama and Zero-Width Diacritics
+12. පරිවර්තක ක්‍රියාවලිය - Compilation, Transpilation, and JIT
+13. ආරක්ෂිත පරිසරය - Sandboxed Isolation Environment
+14. විභේදනය සහ පිරික්සුම - Differential Telemetry and Governance

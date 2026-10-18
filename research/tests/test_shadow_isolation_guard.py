@@ -623,14 +623,19 @@ class TestShadowIsolationGuard(unittest.TestCase):
 
     def test_content_digest_and_driver_tagging(self):
         """
-        Finding AP: Verifies that:
+        Finding AP/AQ: Verifies that:
         1. Driver comparisons are tagged with driver: True while retaining source: 'cli'.
         2. Content digests are recorded and tracked as distinct unique inputs in get_shadow_telemetry_summary().
         3. Driver comparisons and manual comparisons are accurately segregated in doctor summary.
+        4. Non-cli records carrying driver: True or unique digests do not contaminate CLI counts.
         """
         test_log = self.mock_home / "digest_driver_test.jsonl"
         with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(test_log)}):
             pai_core_bridge.clear_shadow_log()
+
+            # Record non-CLI comparisons with driver=True and unique digests (Finding AQ)
+            pai_core_bridge.record_shadow_comparison("ingest_file", source="runner", driver=True, content_digest="runner_digest_1")
+            pai_core_bridge.record_shadow_comparison("ingest_folder", source="test", driver=True, content_digest="test_digest_1")
 
             # Record manual CLI comparison with content digest
             pai_core_bridge.record_shadow_comparison("ingest_file", source="cli", content_digest="sha256_input_1")
@@ -643,21 +648,25 @@ class TestShadowIsolationGuard(unittest.TestCase):
             pai_core_bridge.set_telemetry_driver(False)
 
             summary = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertEqual(summary["total_comparisons"], 5)
             self.assertEqual(summary["cli_comparisons"], 3)
+            # driver_comparisons and distinct digests strictly count source='cli'
             self.assertEqual(summary["driver_comparisons"], 2)
             self.assertEqual(summary["manual_comparisons"], 1)
             self.assertEqual(summary["distinct_content_digests_count"], 2)
             self.assertEqual(summary["distinct_inputs_by_op"]["ingest_file"], 2)
+            self.assertNotIn("ingest_folder", summary["distinct_inputs_by_op"])
 
             pai_core_bridge.clear_shadow_log()
 
     def test_window_complete_conditions(self):
         """
-        Finding AK/AN: Verifies that window_complete is strictly computed based on:
+        Finding AK/AN/AQ: Verifies that window_complete is strictly computed based on:
         1. window_active is True
         2. cli_comparisons >= 1000
         3. All per-operation quotas satisfied (ingest_file >= 250, ingest_folder >= 100, verify_verdict_frame >= 25)
-        4. Elapsed CLI span >= 7 days (604,800 seconds)
+        4. Distinct input minimums satisfied (ingest_file >= 50, ingest_folder >= 20)
+        5. Elapsed CLI span >= 7 days (604,800 seconds)
         """
         test_log = Path(self.tmpdir.name) / "window_complete_test.jsonl"
         with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(test_log)}):
@@ -676,35 +685,125 @@ class TestShadowIsolationGuard(unittest.TestCase):
             self.assertTrue(s1["window_active"])
             self.assertFalse(s1["window_complete"], "Window should not be complete with 500 comparisons")
 
-            # Case 2: Complete volume (1000) but short time span (under 7 days)
+            # Case 2: Complete volume (1000) & distinct inputs satisfied, but short time span (under 7 days)
             recs_span_short = []
             for i in range(300):
-                recs_span_short.append({"timestamp": now + i * 10, "type": "comparison", "op": "ingest_file", "source": "cli"})
+                recs_span_short.append({
+                    "timestamp": now + i * 10,
+                    "type": "comparison",
+                    "op": "ingest_file",
+                    "source": "cli",
+                    "content_digest": f"file_digest_{i}",
+                })
             for i in range(150):
-                recs_span_short.append({"timestamp": now + i * 10, "type": "comparison", "op": "ingest_folder", "source": "cli"})
+                recs_span_short.append({
+                    "timestamp": now + i * 10,
+                    "type": "comparison",
+                    "op": "ingest_folder",
+                    "source": "cli",
+                    "content_digest": f"folder_digest_{i}",
+                })
             for i in range(550):
-                recs_span_short.append({"timestamp": now + i * 10, "type": "comparison", "op": "verify_verdict_frame", "source": "cli"})
+                recs_span_short.append({
+                    "timestamp": now + i * 10,
+                    "type": "comparison",
+                    "op": "verify_verdict_frame",
+                    "source": "cli",
+                    "content_digest": f"verdict_digest_{i}",
+                })
             with open(test_log, "w", encoding="utf-8") as f:
                 for r in recs_span_short:
                     f.write(json.dumps(r) + "\n")
 
             s2 = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertTrue(s2["volume_quotas_met"])
+            self.assertTrue(s2["distinct_inputs_met"])
             self.assertTrue(s2["quotas_met"])
             self.assertFalse(s2["span_met"], "Span should not be met under 7 days")
             self.assertFalse(s2["window_complete"])
 
-            # Case 3: Complete volume, quotas met, AND span >= 7 days (604,800s)
+            # Case 3: Complete volume, quotas met, distinct inputs met, AND span >= 7 days (604,800s)
             span_7d = 7 * 86400.0 + 100.0
             recs_complete = list(recs_span_short)
-            recs_complete.append({"timestamp": now + span_7d, "type": "comparison", "op": "ingest_file", "source": "cli"})
+            recs_complete.append({
+                "timestamp": now + span_7d,
+                "type": "comparison",
+                "op": "ingest_file",
+                "source": "cli",
+                "content_digest": "file_digest_end",
+            })
             with open(test_log, "w", encoding="utf-8") as f:
                 for r in recs_complete:
                     f.write(json.dumps(r) + "\n")
 
             s3 = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertTrue(s3["volume_quotas_met"])
+            self.assertTrue(s3["distinct_inputs_met"])
             self.assertTrue(s3["quotas_met"])
             self.assertTrue(s3["span_met"])
             self.assertTrue(s3["window_complete"], "All criteria satisfied: window_complete must be True")
+
+    def test_distinct_input_minimums_enforced_in_gate(self):
+        """
+        Finding AQ: Verifies that distinct-input minimums (ingest_file: 50, ingest_folder: 20)
+        are strictly enforced in quotas_met and window_complete.
+        If a log has 1,000 CLI comparisons across only 3 content digests (even if operation volume
+        thresholds and 7-day span are met), quotas_met and window_complete must remain False.
+        """
+        test_log = Path(self.tmpdir.name) / "distinct_gate_test.jsonl"
+        with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(test_log)}):
+            pai_core_bridge.clear_shadow_log()
+
+            now = 1700000000.0
+            span_7d = 7 * 86400.0 + 100.0
+            recs = []
+            # 500 ingest_file records across only 2 distinct digests
+            for i in range(500):
+                d = "digest_file_1" if (i % 2 == 0) else "digest_file_2"
+                recs.append({
+                    "timestamp": now + (i * 10),
+                    "type": "comparison",
+                    "op": "ingest_file",
+                    "source": "cli",
+                    "content_digest": d,
+                })
+            # 250 ingest_folder records across only 1 distinct digest
+            for i in range(250):
+                recs.append({
+                    "timestamp": now + (i * 10),
+                    "type": "comparison",
+                    "op": "ingest_folder",
+                    "source": "cli",
+                    "content_digest": "digest_folder_1",
+                })
+            # 250 verify_verdict_frame records
+            for i in range(250):
+                ts = now + span_7d if i == 249 else now + (i * 10)
+                recs.append({
+                    "timestamp": ts,
+                    "type": "comparison",
+                    "op": "verify_verdict_frame",
+                    "source": "cli",
+                    "content_digest": "digest_verdict_1",
+                })
+
+            with open(test_log, "w", encoding="utf-8") as f:
+                for r in recs:
+                    f.write(json.dumps(r) + "\n")
+
+            summary = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertEqual(summary["cli_comparisons"], 1000)
+            self.assertTrue(summary["volume_quotas_met"])
+            self.assertTrue(summary["span_met"])
+            self.assertTrue(summary["window_active"])
+            # Distinct inputs for ingest_file is 2 (< 50) and ingest_folder is 1 (< 20)
+            self.assertEqual(summary["distinct_inputs_by_op"]["ingest_file"], 2)
+            self.assertEqual(summary["distinct_inputs_by_op"]["ingest_folder"], 1)
+            self.assertEqual(summary["distinct_content_digests_count"], 4)
+            self.assertFalse(summary["distinct_inputs_met"])
+            self.assertFalse(summary["quotas_met"])
+            self.assertFalse(summary["window_complete"], "window_complete must be False when distinct input minimums are not met")
+
 
 
 if __name__ == "__main__":

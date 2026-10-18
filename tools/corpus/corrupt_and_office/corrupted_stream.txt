@@ -1,0 +1,3 @@
+Valid UTF-8 prefix
+Invalid UTF-8 sequence follows: ÿş€
+End of file.

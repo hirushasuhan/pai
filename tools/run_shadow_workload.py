@@ -39,7 +39,7 @@ def get_default_docs_files(repo_root: Path) -> List[Path]:
     Ensures high corpus diversity with a minimum of 50 distinct real source/doc files.
     """
     ignore_parts = {"target", ".git", "__pycache__", ".pytest_cache", "venv", "env", ".pai"}
-    valid_exts = {".py", ".md", ".rs", ".json", ".toml", ".yml", ".yaml"}
+    valid_exts = {".py", ".md", ".rs", ".json", ".toml", ".yml", ".yaml", ".txt", ".csv", ".markdown"}
     discovered: List[Path] = []
 
     for p in repo_root.rglob("*"):

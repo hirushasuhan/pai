@@ -103,6 +103,20 @@ _LOG_WRITE_FAILURES_COUNT: int = 0
 
 _CURRENT_TELEMETRY_SOURCE: str = "unknown"
 
+# Calibrated evaluation window quotas (Findings AN & AQ)
+REQUIRED_CLI_OP_QUOTAS: Dict[str, int] = {
+    "ingest_file": 250,
+    "ingest_folder": 100,
+    "verify_verdict_frame": 25,
+}
+REQUIRED_DISTINCT_INPUTS: Dict[str, int] = {
+    "ingest_file": 50,
+    "ingest_folder": 20,
+}
+REQUIRED_DISTINCT_CLI_INPUTS: Dict[str, int] = REQUIRED_DISTINCT_INPUTS
+REQUIRED_TOTAL_CLI_COMPARISONS: int = 1000
+REQUIRED_WINDOW_SECONDS: float = 7.0 * 86400.0  # 604,800 seconds (7 full days)
+
 
 def set_telemetry_source(source: str) -> None:
     """Sets the current telemetry source tag ('cli', 'doctor', 'runner', 'test', 'unknown')."""
@@ -468,15 +482,15 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
                         total_comparisons += 1
                         op_rec["comparisons"] += 1
                         src_rec["comparisons"] += 1
-                        if obj.get("driver") is True:
-                            driver_comparisons += 1
-                        cd = obj.get("content_digest")
-                        if cd and isinstance(cd, str):
-                            distinct_digests.add(cd)
-                            distinct_inputs_by_op.setdefault(op_name, set()).add(cd)
 
                         if source_name == "cli":
                             cli_comparisons += 1
+                            if obj.get("driver") is True:
+                                driver_comparisons += 1
+                            cd = obj.get("content_digest")
+                            if cd and isinstance(cd, str):
+                                distinct_digests.add(cd)
+                                distinct_inputs_by_op.setdefault(op_name, set()).add(cd)
                             if cli_op_rec is not None:
                                 cli_op_rec["comparisons"] += 1
 
@@ -549,15 +563,6 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
 
     total_write_failures = max(_LOG_WRITE_FAILURES_COUNT, durable_failures)
 
-    # Calibrated realistic per-operation quotas (Finding AN)
-    REQUIRED_CLI_OP_QUOTAS: Dict[str, int] = {
-        "ingest_file": 250,
-        "ingest_folder": 100,
-        "verify_verdict_frame": 25,
-    }
-    REQUIRED_TOTAL_CLI_COMPARISONS: int = 1000
-    REQUIRED_WINDOW_SECONDS: float = 7.0 * 86400.0  # 604,800 seconds (7 full days)
-
     if total_write_failures > 0:
         total_discrepancies += total_write_failures
         cli_discrepancies += total_write_failures
@@ -574,13 +579,18 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         and total_write_failures == 0
     )
 
-    quotas_met = bool(
+    volume_met = bool(
         cli_comparisons >= REQUIRED_TOTAL_CLI_COMPARISONS
         and all(
             cli_ops.get(op, {}).get("comparisons", 0) >= req_min
             for op, req_min in REQUIRED_CLI_OP_QUOTAS.items()
         )
     )
+    distinct_inputs_met = all(
+        len(distinct_inputs_by_op.get(op, set())) >= req_distinct
+        for op, req_distinct in REQUIRED_DISTINCT_INPUTS.items()
+    )
+    quotas_met = bool(volume_met and distinct_inputs_met)
     span_met = bool(cli_span_seconds >= REQUIRED_WINDOW_SECONDS)
     window_complete = bool(window_active and quotas_met and span_met)
 
@@ -608,7 +618,10 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         "cli_span_seconds": cli_span_seconds,
         "required_total_cli_comparisons": REQUIRED_TOTAL_CLI_COMPARISONS,
         "required_cli_quotas": REQUIRED_CLI_OP_QUOTAS,
+        "required_distinct_inputs": REQUIRED_DISTINCT_INPUTS,
         "required_window_seconds": REQUIRED_WINDOW_SECONDS,
+        "volume_quotas_met": volume_met,
+        "distinct_inputs_met": distinct_inputs_met,
         "quotas_met": quotas_met,
         "span_met": span_met,
         "window_started": window_started,
