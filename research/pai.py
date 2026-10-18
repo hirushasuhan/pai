@@ -472,6 +472,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             is_rust_core_enabled,
             is_shadow_compare_enabled,
             get_shadow_stats,
+            get_shadow_telemetry_summary,
+            get_shadow_discrepancies,
         )
         if not core_bridge_ok:
             checks_table.append({
@@ -530,6 +532,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     all_passed = all(ch["passed"] for ch in checks_table)
 
+    try:
+        from pai_core_bridge import get_shadow_telemetry_summary, get_shadow_discrepancies
+        shadow_summary = get_shadow_telemetry_summary()
+        shadow_discrepancies_list = get_shadow_discrepancies()
+    except Exception:
+        shadow_summary = {
+            "total_comparisons": 0,
+            "total_discrepancies": 0,
+            "first_comparison_iso": None,
+            "last_comparison_iso": None,
+            "operations": {},
+        }
+        shadow_discrepancies_list = []
+
     doc_data = {
         "all_passed": all_passed,
         "os": {
@@ -552,7 +568,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "sandbox": sandbox_info,
         "smoke_tests": smoke_results,
         "checks": checks_table,
-        "shadow_discrepancies": get_shadow_discrepancies() if "get_shadow_discrepancies" in locals() else [],
+        "shadow_discrepancies": shadow_discrepancies_list,
+        "shadow_telemetry": shadow_summary,
     }
 
     if getattr(args, "json", False):
@@ -618,6 +635,23 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for c in candidates_status:
         fit_lbl = "[ELIGIBLE]" if c["eligible"] else "[INSUFFICIENT RAM]"
         print(f"{c['name']:<22} {c['required_ram_mb']:<10.1f}MB {c['calibration_status']:<24} {c['license_status']:<12} {fit_lbl}")
+
+    print("\n--- Core Bridge Shadow Telemetry ---")
+    st = doc_data.get("shadow_telemetry", {})
+    t_comp = st.get("total_comparisons", 0)
+    t_disc = st.get("total_discrepancies", 0)
+    w_start = st.get("first_comparison_iso") or "none"
+    w_end = st.get("last_comparison_iso") or "none"
+    print(f"Total Comparisons    : {t_comp}")
+    print(f"Total Discrepancies  : {t_disc}")
+    print(f"Telemetry Window     : {w_start} -> {w_end}")
+    ops = st.get("operations", {})
+    if ops:
+        print("Operations Breakdown :")
+        for op_name, op_data in sorted(ops.items()):
+            print(f"  * {op_name:<24}: {op_data.get('comparisons', 0):>4} comps, {op_data.get('discrepancies', 0):>2} disc")
+    else:
+        print("Operations Breakdown : None recorded yet")
 
     print("\n--- End-to-End Doctor Pass/Fail Table ---")
     print(f"{'Check Name':<22} {'Status':<10} {'Details'}")

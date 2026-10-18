@@ -41,6 +41,7 @@ class TestPaiCLI(unittest.TestCase):
             self.assertIn("PAI SYSTEM & HARDWARE DOCTOR", out_text)
             self.assertIn("RAM Total / Avail", out_text)
             self.assertIn("Candidate Eligibility Report", out_text)
+            self.assertIn("Core Bridge Shadow Telemetry", out_text)
             self.assertIn("End-to-End Doctor Pass/Fail Table", out_text)
             self.assertIn("smoke_code", out_text)
             self.assertIn("smoke_analyze", out_text)
@@ -59,6 +60,10 @@ class TestPaiCLI(unittest.TestCase):
             self.assertIn("candidates", parsed)
             self.assertIn("smoke_tests", parsed)
             self.assertIn("checks", parsed)
+            self.assertIn("shadow_telemetry", parsed)
+            self.assertIn("total_comparisons", parsed["shadow_telemetry"])
+            self.assertIn("total_discrepancies", parsed["shadow_telemetry"])
+            self.assertIn("operations", parsed["shadow_telemetry"])
             self.assertEqual(len(parsed["smoke_tests"]), 4)
             self.assertTrue(all(sm["passed"] for sm in parsed["smoke_tests"]))
             self.assertTrue(len(parsed["candidates"]) >= 5)
@@ -721,6 +726,46 @@ class TestPaiCLI(unittest.TestCase):
             err_output = f_err.getvalue()
             self.assertIn("Error: pai-core bridge protocol error: JSON syntax failure", err_output)
             self.assertNotIn("pai-core binary not found", err_output)
+
+
+    def test_pai_doctor_json_shadow_telemetry_granular_operations(self):
+        """
+        Finding AB: Verifies that pai doctor --json reports granular shadow telemetry:
+        per-operation comparisons, first and last timestamps, and discrepancy counts.
+        """
+        import tempfile
+        from pathlib import Path
+        import pai_core_bridge
+        with tempfile.TemporaryDirectory() as td:
+            log_path = Path(td) / "test_shadow.jsonl"
+            records = [
+                {"timestamp": 1700000000.0, "type": "comparison", "op": "ingest_file"},
+                {"timestamp": 1700000100.0, "type": "comparison", "op": "ingest_file"},
+                {"timestamp": 1700000200.0, "type": "comparison", "op": "ingest_folder"},
+                {"timestamp": 1700000300.0, "type": "discrepancy", "op": "ingest_file", "detail": "test mismatch"},
+            ]
+            with open(log_path, "w", encoding="utf-8") as f:
+                for r in records:
+                    f.write(json.dumps(r) + "\n")
+
+            with patch("pai_core_bridge._get_discrepancy_log_path", return_value=log_path):
+                f_json = io.StringIO()
+                with redirect_stdout(f_json):
+                    rc = main(["doctor", "--skip-smoke", "--json"])
+                self.assertEqual(rc, 0)
+                parsed = json.loads(f_json.getvalue())
+                self.assertIn("shadow_telemetry", parsed)
+                st = parsed["shadow_telemetry"]
+                self.assertEqual(st["total_comparisons"], 3)
+                self.assertEqual(st["total_discrepancies"], 1)
+                self.assertIsNotNone(st["first_comparison_iso"])
+                self.assertIsNotNone(st["last_comparison_iso"])
+                self.assertIn("ingest_file", st["operations"])
+                self.assertIn("ingest_folder", st["operations"])
+                self.assertEqual(st["operations"]["ingest_file"]["comparisons"], 2)
+                self.assertEqual(st["operations"]["ingest_file"]["discrepancies"], 1)
+                self.assertEqual(st["operations"]["ingest_folder"]["comparisons"], 1)
+                self.assertEqual(st["operations"]["ingest_folder"]["discrepancies"], 0)
 
 
 if __name__ == "__main__":

@@ -2526,3 +2526,59 @@ Next phase, decision to record before any code: switching the default of `PAI_US
    - **Gate 3 (Staged Release Rollout Protocol)**:
      - *Release N (Default-On with Escape Hatch)*: Set `PAI_USE_RUST_CORE` default to `1`. Maintain `PAI_RUST_FALLBACK_PYTHON=1` as an active operational fallback mechanism.
      - *Release N+1 (Reference Decommissioning)*: The Python reference fallback will only be removed in Release N+1 after Release N has completed its lifecycle without core bridge failure reports.
+
+### Addendum (76189c9): Check of finding X and of the default-on gates (2026-10-20)
+Reviewed state: Linux, HEAD 76189c9, clean working tree. Earlier lines of this file are unchanged (the diff against cae9aa3 adds 29 lines and removes none). The GitHub Actions run and the Windows parity run are the owner's report; I did not see them.
+
+Verified on Linux: all 37 Python test modules pass, 452 tests; the differential modules with the real Rust binary: 64 tests, 0 failures, 2 skips (no bubblewrap in my container, Windows junction test). Finding X closed: with `PAI_USE_RUST_CORE=1`, `scan_secret_content` on a text that contains U+FFFD now calls the bridge (spy on `call_core_bridge`: one call, same answer as plain text), and a lone surrogate in the file name still returns `INVALID_FILENAME` without a bridge call.
+
+The gates written by the owner (5 consecutive green commits; 1,000 real shadow comparisons over 7 days with 0 discrepancies; default on in release N with the fallback flag kept, fallback removed in N+1) are accepted as a start. They have these gaps, which should be closed in the text before the clock starts:
+- Y. The evidence can be reset or thinned. `pai clear-shadow` deletes the shadow log, and a count of 1,000 can be made of one kind of operation on one folder. State that the log is not cleared during the window, record the start date and the start count, and require a minimum number of comparisons per operation (`ingest_file`, `ingest_folder`) and a separate way to cover `verify_release`, which only runs at an update: the parity runner and the release-update tests are that cover, and they should be named as the evidence for it.
+- Z. What a discrepancy does is not written. Say that any discrepancy stops the window, is investigated down to which side is wrong, gets a regression test, and the 7 days start again from the fix.
+- AA. The window covers one person on one Windows machine. Linux gets no real use in the window, only CI. Either say that the default-on release is validated for Windows use and for Linux by CI only, or add a Linux period.
+- AB. The doctor output shows totals only. For the gate to be checkable by someone else, `pai doctor --json` (or a new command) should report comparisons per operation, the first and last comparison time, and the discrepancy count.
+- AC. "Release N completes its lifecycle without bridge failure reports" has no length and no meaning for a single-user tool. Define it as a number of days of use, or a number of runs, with `BridgeProtocolError` and `CoreBridgeUnavailableError` counted from the log, and decide who reads the log.
+
+Phase 1 stays closed. Y to AC are text and small telemetry changes; none blocks starting the shadow window now if the log is left alone from today.
+
+### Implementation Addendum: Resolution of Reviewer Items Y–AC & Operationalization of Default-On Gates (2026-10-20)
+
+This addendum defines the operational specifications for Findings Y through AC to govern the 7-day shadow telemetry window prior to switching `PAI_USE_RUST_CORE=1` default-on:
+
+1. **Finding Y (Evidence Continuity, Start State & Per-Operation Quotas)**:
+   - **Log Immutability Contract**: The persistent shadow discrepancy log (`~/.pai/shadow_discrepancies.jsonl`) must remain continuous and unmodified throughout the 7-day evaluation window. Running `pai clear-shadow` or `pai doctor --clear-shadow` during this active window will invalidate the evaluation period and force a restart.
+   - **Official Window Baseline Start**:
+     - *Start Timestamp*: `2026-10-18T14:45:00Z` (`1792264906.65` epoch).
+     - *Baseline Initial Count*: 19 comparisons, 0 discrepancies across 4 operations (`verify_verdict_frame: 11`, `ingest_file: 4`, `ingest_folder: 3`, `verify_release: 1`).
+   - **Per-Operation Volume Requirements**: To prevent a single operation on a single directory structure from artificially fulfilling the volume threshold, the 1,000 comparisons must satisfy:
+     - `ingest_file`: At least **250 comparisons** across distinct files of varied sizes and formats.
+     - `ingest_folder`: At least **100 comparisons** across varied directory trees.
+     - `scan_secret_content` / `verify_verdict_frame`: At least **250 comparisons**.
+     - Total aggregate comparisons across all operations: At least **1,000 comparisons**.
+   - **`verify_release` Evidence Qualification**: Because `verify_release` runs exclusively during update verification, its parity evidence is established by the automated differential test suite (`research/tests/test_updater_differential.py`) and the Windows adversarial real-tree parity runner (`tools/windows_parity_run.py`), which exercise trust root validation, signature verification, and archive digest comparisons on every CI commit.
+
+2. **Finding Z (Zero-Discrepancy Invalidation, Root-Cause Analysis & Reset Protocol)**:
+   - **Single-Mismatch Invalidation**: If any discrepancy occurs during the 7-day window (`total_discrepancies > 0`), the window is immediately halted and invalidated.
+   - **Triage & Diagnosis**: The failing operation, target input, and divergence between Rust core and Python reference must be isolated and root-caused to determine which side deviated from spec.
+   - **Regression Coverage**: A dedicated, deterministic differential test reproducing the exact input and mismatch must be added to `research/tests/`.
+   - **Reset Protocol**: Once the corrective fix is committed, reviewed, and all CI checks pass, the shadow log may be archived and a new 7-day evaluation window begins from Day 1.
+
+3. **Finding AA (Platform Scope & Environment Asymmetry)**:
+   - Real-world shadow telemetry in this evaluation window is specifically validated on the user's **Windows host machine** during day-to-day CLI and agent usage.
+   - Linux platform parity is validated through automated continuous integration (`linux-portability` and differential runners), executing comprehensive dual-path suites and containerized boundary checks on every push.
+
+4. **Finding AB (Granular Shadow Telemetry Schema in `pai doctor --json`)**:
+   - `pai doctor --json` now outputs a structured `"shadow_telemetry"` object exposing per-operation breakdown, timestamps, and discrepancies:
+     - `total_comparisons`: Total comparison count across all operations.
+     - `total_discrepancies`: Total discrepancy count across all operations.
+     - `first_comparison_iso`: ISO-8601 UTC timestamp of the earliest recorded comparison.
+     - `last_comparison_iso`: ISO-8601 UTC timestamp of the most recent comparison.
+     - `operations`: Dictionary mapping each operation name (`ingest_file`, `ingest_folder`, `verify_verdict_frame`, `scan_secret_content`, `verify_release`, etc.) to its own `comparisons`, `discrepancies`, `first_comparison_iso`, and `last_comparison_iso`.
+   - The human-readable `pai doctor` output surfaces this breakdown under `--- Core Bridge Shadow Telemetry ---`, allowing immediate inspection without manual log parsing.
+
+5. **Finding AC (Quantified Release N Lifecycle & Fallback Decommissioning)**:
+   - The operational lifecycle criteria for Release N (default-on with `PAI_RUST_FALLBACK_PYTHON=1` escape hatch) are defined as:
+     - Minimum Duration: At least **14 calendar days** in active release status OR at least **500 real-world CLI/agent invocations**, whichever is longer.
+     - Zero Core Bridge Exceptions: Exactly **0 unhandled occurrences** of `BridgeProtocolError` or `CoreBridgeUnavailableError` (when binary is installed) in operational logs.
+     - Audit Authority: Telemetry is audited directly from `pai doctor --json` and the local diagnostic log (`~/.pai/shadow_discrepancies.jsonl`), inspected and verified by the repository owner/user.
+   - Release N+1 will decommission and remove the Python reference fallback only after Release N satisfies these quantified criteria.

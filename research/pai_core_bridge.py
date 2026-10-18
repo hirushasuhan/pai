@@ -208,6 +208,99 @@ def get_shadow_discrepancy_count() -> int:
     return count
 
 
+def _format_iso(ts: Optional[float]) -> Optional[str]:
+    if ts is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def get_shadow_telemetry_summary() -> Dict[str, Any]:
+    """
+    Returns aggregated shadow telemetry summary:
+    - total_comparisons
+    - total_discrepancies
+    - first_comparison_timestamp / first_comparison_iso
+    - last_comparison_timestamp / last_comparison_iso
+    - operations: mapping of op name to comparisons, discrepancies, first/last comparison ISO timestamps.
+    """
+    total_comparisons = 0
+    total_discrepancies = 0
+    first_ts: Optional[float] = None
+    last_ts: Optional[float] = None
+    ops: Dict[str, Dict[str, Any]] = {}
+
+    def _ensure_op(op_name: str) -> Dict[str, Any]:
+        if op_name not in ops:
+            ops[op_name] = {
+                "comparisons": 0,
+                "discrepancies": 0,
+                "first_comparison_timestamp": None,
+                "first_comparison_iso": None,
+                "last_comparison_timestamp": None,
+                "last_comparison_iso": None,
+            }
+        return ops[op_name]
+
+    try:
+        log_file = _get_discrepancy_log_path()
+        if log_file.exists():
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(obj, dict):
+                        continue
+
+                    entry_type = obj.get("type")
+                    op_name = str(obj.get("op") or "unknown")
+                    ts = obj.get("timestamp")
+                    if isinstance(ts, (int, float)):
+                        if first_ts is None or ts < first_ts:
+                            first_ts = ts
+                        if last_ts is None or ts > last_ts:
+                            last_ts = ts
+
+                    op_rec = _ensure_op(op_name)
+
+                    if entry_type == "comparison":
+                        total_comparisons += 1
+                        op_rec["comparisons"] += 1
+                        if isinstance(ts, (int, float)):
+                            if op_rec["first_comparison_timestamp"] is None or ts < op_rec["first_comparison_timestamp"]:
+                                op_rec["first_comparison_timestamp"] = ts
+                                op_rec["first_comparison_iso"] = _format_iso(ts)
+                            if op_rec["last_comparison_timestamp"] is None or ts > op_rec["last_comparison_timestamp"]:
+                                op_rec["last_comparison_timestamp"] = ts
+                                op_rec["last_comparison_iso"] = _format_iso(ts)
+                    elif entry_type == "discrepancy":
+                        total_discrepancies += 1
+                        op_rec["discrepancies"] += 1
+                    else:
+                        total_discrepancies += 1
+                        op_rec["discrepancies"] += 1
+    except Exception as e:
+        logger.warning("Failed to parse shadow telemetry summary: %s", e)
+
+    if total_comparisons == 0 and _SHADOW_COMPARISONS_COUNT > 0:
+        total_comparisons = _SHADOW_COMPARISONS_COUNT
+        total_discrepancies = len(_SHADOW_DISCREPANCIES)
+
+    return {
+        "total_comparisons": total_comparisons,
+        "total_discrepancies": total_discrepancies,
+        "first_comparison_timestamp": first_ts,
+        "first_comparison_iso": _format_iso(first_ts),
+        "last_comparison_timestamp": last_ts,
+        "last_comparison_iso": _format_iso(last_ts),
+        "operations": ops,
+    }
+
+
 def clear_shadow_log() -> None:
     """Clears the persistent shadow comparison/discrepancy log file."""
     reset_shadow_discrepancies()
