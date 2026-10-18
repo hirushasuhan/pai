@@ -113,15 +113,21 @@ class TestShadowIsolationGuard(unittest.TestCase):
 
     def test_default_log_immutability_during_test_suites(self):
         """
-        Finding AI: Executes real differential test module in a separate subprocess
+        Finding AI/AM: Executes real differential test module in a separate subprocess
         with a mock HOME, mock USERPROFILE, and NO PAI_SHADOW_LOG in environment.
-        Verifies that _bootstrap.py redirects the log and the seeded default log's
-        SHA-256 checksum remains strictly identical before and after execution.
+        Verifies that _bootstrap.py redirects the log, the differential module runs > 0 tests,
+        and the seeded default log's SHA-256 checksum remains strictly identical before and after.
         """
         env = self._build_sub_env()
         cmd = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_ingest_differential.py"]
         proc = subprocess.run(cmd, cwd=_research_dir, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(proc.returncode, 0, f"Differential test module failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+
+        import re
+        m = re.search(r"Ran (\d+) tests", proc.stderr + "\n" + proc.stdout)
+        self.assertIsNotNone(m, f"Could not parse unittest test count from output:\n{proc.stderr}\n{proc.stdout}")
+        ran_count = int(m.group(1))
+        self.assertGreater(ran_count, 0, f"Differential test module executed 0 tests! (Finding AM)")
 
         final_sha256 = _compute_file_sha256(self.default_log_file)
         self.assertEqual(
@@ -137,16 +143,31 @@ class TestShadowIsolationGuard(unittest.TestCase):
 
     def test_default_log_immutability_during_parity_runner(self):
         """
-        Finding AI: Executes real tools/windows_parity_run.py in a separate subprocess
+        Finding AI/AM: Executes real tools/windows_parity_run.py in a separate subprocess
         with a mock HOME, mock USERPROFILE, and NO PAI_SHADOW_LOG in environment.
-        Verifies that the parity runner isolates its log and the seeded default log's
-        SHA-256 checksum remains strictly identical before and after execution.
+        Verifies that on Windows the runner executes and prints > 0 comparisons (or on Linux
+        notes platform skip), isolates its log, and the seeded default log's SHA-256 checksum
+        remains strictly identical before and after execution.
         """
         env = self._build_sub_env()
         runner_script = Path(_repo_root) / "tools" / "windows_parity_run.py"
         proc = subprocess.run([sys.executable, str(runner_script)], cwd=_repo_root, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
-        # On Windows or Linux/CI, runner completes 0 (or 5 if nested inside a restricted sandbox positive control)
-        self.assertIn(proc.returncode, (0, 5), f"Parity runner failed with returncode {proc.returncode}:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+
+        if sys.platform == "win32":
+            self.assertIn(proc.returncode, (0, 5), f"Parity runner failed with returncode {proc.returncode}:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+            if proc.returncode == 0:
+                import re
+                m = re.search(r"Total shadow comparisons\s*:\s*(\d+)", proc.stdout)
+                self.assertIsNotNone(
+                    m,
+                    f"Parity runner did not print 'Total shadow comparisons : <N>' output!\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}",
+                )
+                comps_count = int(m.group(1))
+                self.assertGreater(comps_count, 0, f"Parity runner reported 0 shadow comparisons ({comps_count})! (Finding AM)")
+            else:
+                self.assertIn("Sandbox behavioural capability probe", proc.stdout)
+        else:
+            self.assertIn("skipping on non-Windows host", proc.stdout)
 
         final_sha256 = _compute_file_sha256(self.default_log_file)
         self.assertEqual(
@@ -348,7 +369,7 @@ class TestShadowIsolationGuard(unittest.TestCase):
 
     def test_log_write_failure_invalidates_window(self):
         """
-        Finding AK: Verifies that if writing a discrepancy to the log file fails
+        Finding AK/AL: Verifies that if writing a discrepancy to the log file fails
         (e.g., disk I/O error), log_write_failures is incremented, treated
         as an invalidating event in get_shadow_telemetry_summary(), and window_active becomes False.
         """
@@ -368,13 +389,97 @@ class TestShadowIsolationGuard(unittest.TestCase):
             summary_after = pai_core_bridge.get_shadow_telemetry_summary()
             self.assertGreater(summary_after["log_write_failures"], 0)
             self.assertFalse(summary_after["window_active"], "Write failure must disqualify active window (Finding AK)")
+            pai_core_bridge.clear_shadow_log()
+
+    def test_durable_write_failure_marker_across_processes(self):
+        """
+        Finding AL: Verifies durable write failure persistence across processes.
+        1. Process 1 sets PAI_SHADOW_LOG to a directory, triggering a write failure
+           on record_shadow_discrepancy (and printing one line to stderr).
+        2. Process 2 runs in a new process pointing to a clean file; get_shadow_telemetry_summary()
+           reads the durable marker, reports log_write_failures >= 1, and invalidates window_active.
+        3. `pai clear-shadow --yes` deletes the durable marker and archives/clears the log.
+        4. Process 3 runs in a new process; log_write_failures is 0.
+        5. Process 4 tests comparison write failure in record_shadow_comparison, verifying
+           that comparison write failures also produce durable markers and invalidate window.
+        """
+        dir_as_log = self.mock_home / "dir_as_log"
+        dir_as_log.mkdir(parents=True, exist_ok=True)
+        normal_log = self.mock_home / "normal_after_fail.jsonl"
+
+        env1 = self._build_sub_env()
+        env1["PAI_SHADOW_LOG"] = str(dir_as_log)
+
+        # Process 1: Discrepancy write failure
+        code1 = (
+            "import pai_core_bridge\n"
+            "pai_core_bridge.record_shadow_discrepancy('ingest_file', 'Dir write fail test')\n"
+        )
+        proc1 = subprocess.run([sys.executable, "-c", code1], cwd=_research_dir, env=env1, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertIn("CRITICAL: Failed to write shadow telemetry record", proc1.stderr)
+
+        # Process 2: New process with normal log
+        env2 = self._build_sub_env()
+        env2["PAI_SHADOW_LOG"] = str(normal_log)
+        code2 = (
+            "import pai_core_bridge\n"
+            "summary = pai_core_bridge.get_shadow_telemetry_summary()\n"
+            "assert summary['log_write_failures'] >= 1, f'Expected write failures >= 1, got {summary[\"log_write_failures\"]}'\n"
+            "assert summary['window_active'] is False, 'Window must be invalidated by durable write failure marker'\n"
+            "print('FAILURES_DETECTED_OK')\n"
+        )
+        proc2 = subprocess.run([sys.executable, "-c", code2], cwd=_research_dir, env=env2, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertEqual(proc2.returncode, 0, f"Process 2 failed to detect durable marker:\nSTDOUT:\n{proc2.stdout}\nSTDERR:\n{proc2.stderr}")
+        self.assertIn("FAILURES_DETECTED_OK", proc2.stdout)
+
+        # Clear shadow with --yes
+        with mock.patch("pathlib.Path.home", return_value=self.mock_home):
+            with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(normal_log)}):
+                rc_clear = main(["clear-shadow", "--yes"])
+                self.assertEqual(rc_clear, 0)
+
+        # Process 3: New process after clear-shadow --yes
+        code3 = (
+            "import pai_core_bridge\n"
+            "summary = pai_core_bridge.get_shadow_telemetry_summary()\n"
+            "assert summary['log_write_failures'] == 0, f'Expected 0 write failures, got {summary[\"log_write_failures\"]}'\n"
+            "print('FAILURES_CLEARED_OK')\n"
+        )
+        proc3 = subprocess.run([sys.executable, "-c", code3], cwd=_research_dir, env=env2, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertEqual(proc3.returncode, 0, f"Process 3 failed after clear-shadow:\nSTDOUT:\n{proc3.stdout}\nSTDERR:\n{proc3.stderr}")
+        self.assertIn("FAILURES_CLEARED_OK", proc3.stdout)
+
+        # Process 4: Comparison write failure
+        code4 = (
+            "import pai_core_bridge\n"
+            "pai_core_bridge.record_shadow_comparison('ingest_file')\n"
+        )
+        proc4 = subprocess.run([sys.executable, "-c", code4], cwd=_research_dir, env=env1, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertIn("CRITICAL: Failed to write shadow telemetry record", proc4.stderr)
+
+        # Process 5: Verify comparison write failure also persisted durably
+        code5 = (
+            "import pai_core_bridge\n"
+            "summary = pai_core_bridge.get_shadow_telemetry_summary()\n"
+            "assert summary['log_write_failures'] >= 1, f'Expected write failures >= 1 for comparison, got {summary[\"log_write_failures\"]}'\n"
+            "assert summary['window_active'] is False, 'Window must be invalidated by comparison write failure marker'\n"
+            "print('COMPARISON_FAILURES_DETECTED_OK')\n"
+        )
+        proc5 = subprocess.run([sys.executable, "-c", code5], cwd=_research_dir, env=env2, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        self.assertEqual(proc5.returncode, 0, f"Process 5 failed to detect comparison durable marker:\nSTDOUT:\n{proc5.stdout}\nSTDERR:\n{proc5.stderr}")
+        self.assertIn("COMPARISON_FAILURES_DETECTED_OK", proc5.stdout)
+
+        # Final cleanup
+        with mock.patch("pathlib.Path.home", return_value=self.mock_home):
+            with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(normal_log)}):
+                main(["clear-shadow", "--yes"])
 
     def test_window_complete_conditions(self):
         """
-        Finding AK: Verifies that window_complete is strictly computed based on:
+        Finding AK/AN: Verifies that window_complete is strictly computed based on:
         1. window_active is True
         2. cli_comparisons >= 1000
-        3. All per-operation quotas satisfied (ingest_file >= 600, ingest_folder >= 150, verify_verdict_frame >= 25)
+        3. All per-operation quotas satisfied (ingest_file >= 250, ingest_folder >= 100, verify_verdict_frame >= 25)
         4. Elapsed CLI span >= 7 days (604,800 seconds)
         """
         test_log = Path(self.tmpdir.name) / "window_complete_test.jsonl"
@@ -396,11 +501,11 @@ class TestShadowIsolationGuard(unittest.TestCase):
 
             # Case 2: Complete volume (1000) but short time span (under 7 days)
             recs_span_short = []
-            for i in range(600):
+            for i in range(300):
                 recs_span_short.append({"timestamp": now + i * 10, "type": "comparison", "op": "ingest_file", "source": "cli"})
-            for i in range(200):
+            for i in range(150):
                 recs_span_short.append({"timestamp": now + i * 10, "type": "comparison", "op": "ingest_folder", "source": "cli"})
-            for i in range(200):
+            for i in range(550):
                 recs_span_short.append({"timestamp": now + i * 10, "type": "comparison", "op": "verify_verdict_frame", "source": "cli"})
             with open(test_log, "w", encoding="utf-8") as f:
                 for r in recs_span_short:

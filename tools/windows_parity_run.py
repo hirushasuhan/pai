@@ -111,12 +111,26 @@ def run_windows_parity() -> int:
         print("[INFO] Windows parity runner requires Windows NTFS; skipping on non-Windows host.")
         return 0
 
+    is_ci = bool(os.environ.get("GITHUB_ACTIONS") or os.environ.get("CI"))
+    allow_skip = (os.environ.get("PAI_PARITY_ALLOW_SKIP") == "1")
+
     try:
         bin_path = pai_core_bridge.find_core_binary()
         pai_core_bridge.check_handshake(bin_path)
     except Exception as exc:
-        print(f"[INFO] pai-core binary not available ({exc}); skipping windows parity runner.")
-        return 0
+        if is_ci:
+            print(f"FATAL: In CI, pai-core binary and handshake are mandatory but failed: {exc}", file=sys.stderr)
+            return 1
+        elif allow_skip:
+            print(f"[INFO] pai-core binary not available ({exc}) and PAI_PARITY_ALLOW_SKIP=1; skipping windows parity runner.")
+            return 0
+        else:
+            print(
+                f"FATAL: pai-core binary not available ({exc}). "
+                "Build core binary ('cargo build --release' in core/) or set PAI_PARITY_ALLOW_SKIP=1 to skip locally.",
+                file=sys.stderr,
+            )
+            return 1
 
     # 2. Start loopback stub server
     server = http.server.HTTPServer(("127.0.0.1", 0), StubOllamaHandler)

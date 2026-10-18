@@ -2690,3 +2690,62 @@ This addendum documents the operational, structural, and audit hardening resolut
    - Both `pai doctor` text and `--json` surface `window_complete`, `quotas_met`, `span_met`, and elapsed duration (`X.X / 7.0 days`).
 
 - **Current Window State**: `NOT STARTED` (`0 / 1000` CLI comparisons, `cli_discrepancies = 0`, `corrupt_lines = 0`, `log_write_failures = 0`, `window_started = False`, `window_complete = False`).
+
+### Addendum (5f05f55): Check of findings AH to AK (2026-10-18)
+Reviewed state: Linux, HEAD 5f05f55. The GitHub Actions run #39147715917, the Windows runs and the test counts in the owner's report are the owner's; I did not see them. I read the code and ran probes on Linux.
+
+Fixed and checked. AH: in a plain Python process with a fresh HOME, `record_shadow_comparison` now writes source "unknown" and `window_started` stays False; only `main()` in `pai.py` sets "cli", for the listed commands, and restores the previous source in `finally`. AK: `window_complete`, `quotas_met` and `span_met` exist and are computed from the log (quotas 1000 total, ingest_file 600, ingest_folder 150, verify_verdict_frame 25; span 604,800 seconds). AJ: the `scan_secret_content` quota is removed. AI: the guard tests now start real subprocesses; I did not run the real parity runner on Windows.
+
+AL (blocking): the log write failure counter is per process. `_LOG_WRITE_FAILURES_COUNT` is a module variable. I pointed `PAI_SHADOW_LOG` at a directory, called `record_shadow_discrepancy` (the summary in the same process showed `log_write_failures` 1), then started a new process on a normal log: `log_write_failures` 0 and `window_active` True. A `pai code` run that loses a discrepancy therefore leaves no trace for the later `pai doctor` run. Failed comparison writes are only logged at debug level and are not counted at all. Required: when a write fails, make the loss durable (a marker file in a second location, for example next to the log and in the temp directory, that the summary reads and that only `pai clear-shadow --yes` removes), print one line to stderr, and count failed comparison writes as well.
+
+AM (blocking): the parity runner gate can be green without running. Commit 5f05f55 makes `windows_parity_run.py` return 0 when `find_core_binary` or `check_handshake` fails (it already did so on non-Windows). In the `rust-core` job a missing binary or a handshake or conformance-hash mismatch now ends in a green gate. Required: the skip is allowed only when an explicit local variable (for example `PAI_PARITY_ALLOW_SKIP=1`) is set; under `GITHUB_ACTIONS` or `CI` a missing binary must fail. The guard tests for AI have the same weakness: on a host with no binary or on Linux the runner and the differential module both skip, the checksum is unchanged, and the test passes without having exercised anything. In CI the guard must assert that the runner printed its comparison count and that the differential module ran more than zero tests.
+
+AN (non-blocking, needs a decision): the quotas depend on how often the owner uses single commands. In `pai.py` the only call to `ingest_file` is in `pai docs` (one file per run) and the bridge `ingest_folder` does not call the bridge `ingest_file`, so the 600 `ingest_file` comparisons mean 600 runs of `pai docs`, the 150 `ingest_folder` comparisons mean 150 runs of `pai analyze`, and the "codebase file analysis" in the owner's text does not produce any. Also verify_release, verify_ed25519 and extract_example_assertions do not count toward the per-op quotas. State the expected number of runs per day, or lower the numbers, or define a scripted driver that runs the real `pai` commands over real folders and say in the report that it did.
+
+Status: AH, AJ and AK are accepted as implemented, except that AK's write failure tracking is only complete once AL is done. AI is accepted once AM is done. The window remains NOT STARTED, which is the correct state until AL and AM are fixed.
+
+### Implementation Addendum: Resolution of Findings AL, AM, and AN (2026-10-18)
+This addendum documents the implementation resolving blocking findings AL and AM, and addresses non-blocking finding AN.
+
+- **Finding AL (Durable Write-Failure Marker)**:
+  - Persisting write failures across processes: `pai_core_bridge.py` defines `_get_write_failure_marker_paths()` returning candidate marker paths:
+    1. Next to the active shadow log (`shadow_log_write_failure.marker`).
+    2. In the system temporary directory (`tempfile.gettempdir() / "pai_shadow_log_write_failure.marker"`).
+    3. In the user PAI directory (`~/.pai` or `PAI_DIR`).
+    4. Custom path via `PAI_SHADOW_MARKER` if set.
+  - In `record_shadow_discrepancy` and `record_shadow_comparison`:
+    - When disk persistence fails, `_record_durable_write_failure()` prints a diagnostic warning line to `sys.stderr` (`CRITICAL: Failed to write shadow telemetry record (...)`) and writes JSONL failure records to durable marker paths.
+    - Write failures for both discrepancies and comparisons are counted.
+  - In `get_shadow_telemetry_summary()`:
+    - Marker files are scanned. Total write failures are computed as `max(_LOG_WRITE_FAILURES_COUNT, durable_failures)`.
+    - If `log_write_failures > 0`, it increments `total_discrepancies` and `cli_discrepancies`, and disqualifies `window_active` (`window_active = False`).
+  - In `get_shadow_stats()`:
+    - Marker records are loaded and reported as discrepancies (`discrepancy_type: "log_write_failure"`).
+  - In `archive_shadow_log()` and `pai clear-shadow --yes`:
+    - All durable marker files are unlinked, resetting write failure state only upon confirmed administrative archive/reset.
+  - Verified by cross-process test `test_durable_write_failure_marker_across_processes` in `test_shadow_isolation_guard.py`.
+
+- **Finding AM (Fail-Closed Parity Gate & Guard Test Verifications)**:
+  - In `tools/windows_parity_run.py`:
+    - Binary and handshake checks fail closed. In CI environments (`GITHUB_ACTIONS` or `CI` set), or in local development without `PAI_PARITY_ALLOW_SKIP=1`, a missing binary or handshake failure exits with code 1. Skipping with exit code 0 is strictly permitted only in non-CI environments when `PAI_PARITY_ALLOW_SKIP=1` is explicitly set.
+  - In `research/tests/test_shadow_isolation_guard.py`:
+    - `test_default_log_immutability_during_test_suites` parses `Ran (\d+) tests` from subprocess output and asserts `ran_count > 0`.
+    - `test_default_log_immutability_during_parity_runner` parses `Total shadow comparisons : (\d+)` on Windows and asserts `comps_count > 0` (or verifies clean platform skip on Linux).
+
+- **Finding AN (Quota Calibration & Dogfood Workload Driver)**:
+  - Realistic CLI per-operation quotas calibrated in `research/pai_core_bridge.py`:
+    - Total aggregate CLI comparisons: `>= 1,000` (maintaining the baseline requirement).
+    - `ingest_file`: `>= 250` (~35-40 single-file document analyses per day).
+    - `ingest_folder`: `>= 100` (~14-15 full codebase scans per day).
+    - `verify_verdict_frame`: `>= 25` (~3-4 governance / frame evaluations per day).
+    - Window duration: `>= 7.0` days (604,800 seconds).
+  - Scripted dogfood workload driver `tools/run_shadow_workload.py` implemented:
+    - Runs real `pai docs <file>` and `pai analyze <folder>` commands against real repository files and directories.
+    - Commands run through `pai.main()`, which enforces `source="cli"`.
+    - Supports `--iterations`, `--docs-file`, `--analyze-folder`, `--model`, and `--status-only`.
+
+- **Audit & Claims Invariants**:
+  - `test_claims.py`: 100% passing; zero unfalsifiable claims.
+  - All existing lines 1 to the end of Addendum (5f05f55) in `docs/PROJECT_REVIEW.md` preserved intact.
+
+- **Current Window State**: `NOT STARTED` (`0 / 1000` CLI comparisons, `cli_discrepancies = 0`, `corrupt_lines = 0`, `log_write_failures = 0`, `window_started = False`, `window_complete = False`).

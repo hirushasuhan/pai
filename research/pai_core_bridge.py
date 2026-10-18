@@ -148,6 +148,90 @@ class BridgeProtocolError(CoreBridgeUnavailableError):
     pass
 
 
+def _get_write_failure_marker_paths() -> List[Path]:
+    """
+    Returns candidate paths for the durable shadow write-failure marker file (Finding AL).
+    Checks:
+    1. Custom path in PAI_SHADOW_MARKER environment variable (if specified).
+    2. Next to the active shadow log path (parent directory, or inside directory if log is a directory).
+    3. Next to the active log path's parent directory if log path is a directory.
+    4. In the system temporary directory (tempfile.gettempdir()).
+    5. In the user PAI directory (~/.pai or PAI_DIR).
+    """
+    import tempfile
+    candidates: List[Path] = []
+    custom = os.environ.get("PAI_SHADOW_MARKER")
+    if custom:
+        candidates.append(Path(custom))
+
+    try:
+        log_path = _get_discrepancy_log_path()
+        if log_path.is_dir():
+            candidates.append(log_path / "shadow_log_write_failure.marker")
+            candidates.append(log_path.parent / "shadow_log_write_failure.marker")
+        else:
+            candidates.append(log_path.parent / "shadow_log_write_failure.marker")
+    except Exception:
+        pass
+
+    try:
+        candidates.append(Path(tempfile.gettempdir()) / "pai_shadow_log_write_failure.marker")
+    except Exception:
+        pass
+
+    try:
+        pai_dir_env = os.environ.get("PAI_DIR")
+        pai_dir = Path(pai_dir_env) if pai_dir_env else Path.home() / ".pai"
+        candidates.append(pai_dir / "shadow_log_write_failure.marker")
+    except Exception:
+        pass
+
+    dedup: List[Path] = []
+    seen = set()
+    for p in candidates:
+        try:
+            res = p.resolve()
+            if res not in seen:
+                seen.add(res)
+                dedup.append(p)
+        except Exception:
+            if p not in dedup:
+                dedup.append(p)
+    return dedup
+
+
+def _record_durable_write_failure(op: str, record_type: str, exc: Exception, source: str) -> None:
+    """
+    Persists a durable write failure marker across processes upon disk write errors (Finding AL).
+    Prints a single diagnostic line to sys.stderr and writes JSONL marker entries to durable paths.
+    """
+    global _LOG_WRITE_FAILURES_COUNT
+    _LOG_WRITE_FAILURES_COUNT += 1
+
+    msg = f"CRITICAL: Failed to write shadow telemetry record ({exc}); durable write-failure marker recorded.\n"
+    try:
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+    entry = {
+        "timestamp": time.time(),
+        "op": op,
+        "type": record_type,
+        "error": str(exc),
+        "source": source,
+    }
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
+    for marker_path in _get_write_failure_marker_paths():
+        try:
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(marker_path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass
+
+
 def record_shadow_comparison(op: str, **extra: Any) -> None:
     """Records that a shadow comparison was executed."""
     global _SHADOW_COMPARISONS_COUNT
@@ -165,7 +249,8 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
-        logger.debug("Failed to persist shadow comparison: %s", e)
+        _record_durable_write_failure(op, "comparison", e, source=src)
+        logger.warning("Failed to persist shadow comparison to file: %s", e)
 
 
 def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
@@ -185,8 +270,7 @@ def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
-        global _LOG_WRITE_FAILURES_COUNT
-        _LOG_WRITE_FAILURES_COUNT += 1
+        _record_durable_write_failure(op, "discrepancy", e, source=src)
         logger.warning("Failed to persist shadow discrepancy to file: %s", e)
     logger.warning("[SHADOW DISCREPANCY] op=%s source=%s: %s", op, src, detail)
 
@@ -199,7 +283,7 @@ def get_shadow_stats() -> Tuple[int, int, List[Dict[str, Any]]]:
     discrepancies: List[Dict[str, Any]] = []
     try:
         log_file = _get_discrepancy_log_path()
-        if log_file.exists():
+        if log_file.exists() and log_file.is_file():
             with open(log_file, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -214,10 +298,36 @@ def get_shadow_stats() -> Tuple[int, int, List[Dict[str, Any]]]:
                                 discrepancies.append({"corrupted": line})
                         except Exception:
                             discrepancies.append({"corrupted": line})
-            return comparisons, len(discrepancies), discrepancies
     except Exception as e:
         logger.warning("Failed to read shadow discrepancies log: %s", e)
-    return _SHADOW_COMPARISONS_COUNT, len(_SHADOW_DISCREPANCIES), list(_SHADOW_DISCREPANCIES)
+
+    # Incorporate durable write failure markers as discrepancies (Finding AL)
+    marker_discrepancies: List[Dict[str, Any]] = []
+    for marker_path in _get_write_failure_marker_paths():
+        try:
+            if marker_path.exists() and marker_path.is_file():
+                with open(marker_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                obj = json.loads(line)
+                                obj["discrepancy_type"] = "log_write_failure"
+                                if obj not in marker_discrepancies:
+                                    marker_discrepancies.append(obj)
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+    if marker_discrepancies:
+        discrepancies.extend(marker_discrepancies)
+
+    if not discrepancies and _SHADOW_DISCREPANCIES:
+        discrepancies = list(_SHADOW_DISCREPANCIES)
+    if comparisons == 0 and _SHADOW_COMPARISONS_COUNT > 0:
+        comparisons = _SHADOW_COMPARISONS_COUNT
+
+    return comparisons, len(discrepancies), discrepancies
 
 
 def get_shadow_discrepancies() -> List[Dict[str, Any]]:
@@ -289,7 +399,7 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
 
     try:
         log_file = _get_discrepancy_log_path()
-        if log_file.exists():
+        if log_file.exists() and log_file.is_file():
             with open(log_file, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -379,17 +489,34 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
             cli_comparisons = total_comparisons
             cli_discrepancies = total_discrepancies
 
+    # Check durable write failure markers on disk (Finding AL)
+    durable_failures = 0
+    for marker_path in _get_write_failure_marker_paths():
+        try:
+            if marker_path.exists() and marker_path.is_file():
+                with open(marker_path, "r", encoding="utf-8") as f:
+                    cnt = 0
+                    for line in f:
+                        if line.strip():
+                            cnt += 1
+                    durable_failures = max(durable_failures, cnt if cnt > 0 else 1)
+        except Exception:
+            pass
+
+    total_write_failures = max(_LOG_WRITE_FAILURES_COUNT, durable_failures)
+
+    # Calibrated realistic per-operation quotas (Finding AN)
     REQUIRED_CLI_OP_QUOTAS: Dict[str, int] = {
-        "ingest_file": 600,
-        "ingest_folder": 150,
+        "ingest_file": 250,
+        "ingest_folder": 100,
         "verify_verdict_frame": 25,
     }
     REQUIRED_TOTAL_CLI_COMPARISONS: int = 1000
     REQUIRED_WINDOW_SECONDS: float = 7.0 * 86400.0  # 604,800 seconds (7 full days)
 
-    if _LOG_WRITE_FAILURES_COUNT > 0:
-        total_discrepancies += _LOG_WRITE_FAILURES_COUNT
-        cli_discrepancies += _LOG_WRITE_FAILURES_COUNT
+    if total_write_failures > 0:
+        total_discrepancies += total_write_failures
+        cli_discrepancies += total_write_failures
 
     cli_span_seconds = 0.0
     if first_cli_ts is not None and last_cli_ts is not None:
@@ -400,7 +527,7 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         window_started
         and cli_discrepancies == 0
         and corrupt_lines == 0
-        and _LOG_WRITE_FAILURES_COUNT == 0
+        and total_write_failures == 0
     )
 
     quotas_met = bool(
@@ -417,7 +544,7 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         "total_comparisons": total_comparisons,
         "total_discrepancies": total_discrepancies,
         "corrupt_lines": corrupt_lines,
-        "log_write_failures": _LOG_WRITE_FAILURES_COUNT,
+        "log_write_failures": total_write_failures,
         "cli_comparisons": cli_comparisons,
         "cli_discrepancies": cli_discrepancies,
         "first_comparison_timestamp": first_ts,
@@ -446,12 +573,21 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
 def archive_shadow_log() -> Optional[Path]:
     """
     Archives the persistent shadow comparison/discrepancy log file by renaming it
-    to a timestamped backup and zeroing in-memory counters.
+    to a timestamped backup, zeroing in-memory counters, and removing durable markers.
     """
     global _SHADOW_COMPARISONS_COUNT, _LOG_WRITE_FAILURES_COUNT
     _SHADOW_COMPARISONS_COUNT = 0
     _LOG_WRITE_FAILURES_COUNT = 0
     _SHADOW_DISCREPANCIES.clear()
+
+    # Remove all durable write failure markers (Finding AL)
+    for marker_path in _get_write_failure_marker_paths():
+        try:
+            if marker_path.exists():
+                marker_path.unlink()
+        except OSError:
+            pass
+
     try:
         log_file = _get_discrepancy_log_path()
         if log_file.exists() and log_file.stat().st_size > 0:
