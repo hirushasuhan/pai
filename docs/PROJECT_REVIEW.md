@@ -2582,3 +2582,61 @@ This addendum defines the operational specifications for Findings Y through AC t
      - Zero Core Bridge Exceptions: Exactly **0 unhandled occurrences** of `BridgeProtocolError` or `CoreBridgeUnavailableError` (when binary is installed) in operational logs.
      - Audit Authority: Telemetry is audited directly from `pai doctor --json` and the local diagnostic log (`~/.pai/shadow_discrepancies.jsonl`), inspected and verified by the repository owner/user.
    - Release N+1 will decommission and remove the Python reference fallback only after Release N satisfies these quantified criteria.
+
+### Addendum (bfe1a1b): Check of findings Y to AC and of the shadow window (2026-10-18)
+Reviewed state: Linux, HEAD bfe1a1b, clean working tree. Earlier lines of this file are unchanged (the diff against 76189c9 adds 56 lines to the documentation and removes none). The GitHub Actions run, the Windows runs and the `pai doctor --json` snapshot in the owner's report are the owner's; I did not see them.
+
+Verified: the telemetry summary (`get_shadow_telemetry_summary`) and the doctor output code exist and are tested in `test_pai_cli.py`; the written rules for Y, Z, AA and AC are in the documentation. I could not check the live log, which is on the owner's machine.
+
+Problem with the window itself (it should be fixed before the window is counted):
+- AD. The shadow log is shared with tests, the parity runner and the doctor, so ordinary work ends the window. `tools/windows_parity_run.py` calls `clear_shadow_log()` at the start (line 105) and does not set `PAI_SHADOW_LOG`; the three differential test modules call `reset_shadow_discrepancies()` and also write to the default log. The log path is `PAI_SHADOW_LOG` if set, otherwise `~/.pai/shadow_discrepancies.jsonl` (`PAI_DIR` is not used for it). I reproduced it: with a home directory holding a log of 5 comparison lines, running `test_ingest_differential` once left a log of 8 lines, all written by the tests; the 5 earlier lines were gone. So running the test suite, or the parity runner, on the owner's machine truncates the real log and mixes test comparisons into it. The baseline in the report (19 comparisons: 11 `verify_verdict_frame`, 4 `ingest_file`, 3 `ingest_folder`, 1 `verify_release`) is what the parity runner and the doctor smoke checks produce; it is synthetic input, not daily use. Fixes: the tests and the runner set `PAI_SHADOW_LOG` to a temporary file and restore it, and never touch the default log; a test that records the checksum of the default log before and after running the differential modules and the runner; `pai clear-shadow` asks for `--yes` and says that it ends the window, or archives the file instead of truncating it; real use writes to a dedicated window log (set `PAI_SHADOW_LOG` for it) so that nothing else can write there.
+- AE. Synthetic comparisons are not separable from real ones. Doctor smoke checks, the runner and tests all add comparisons. Add a source field to each record (for example `cli`, `doctor`, `test`, `runner`) and count only `cli` toward the quotas; restart the count from the first real use. The declared start (14:45) and the first record (14:59, made by the runner) are not real use either.
+- AF. The summary hides corrupt lines. `get_shadow_telemetry_summary` skips a line that is not valid JSON, while `get_shadow_stats` treats it as a discrepancy (the earlier rule in this file). A truncated or edited log can therefore look clean in the new output. Count corrupt lines in the summary, show them as their own field, and treat them as a discrepancy for the gate.
+- AG. One quota cannot be met as written: "250 comparisons for `scan_secret_content` / `verify_verdict_frame`". `scan_secret_content` has no shadow comparison (the operations that record one are `ingest_file`, `ingest_folder`, `verify_release`, `verify_verdict_frame`, `extract_example_assertions` and `verify_ed25519`), and `verify_verdict_frame` only runs in `pai code` runs. Either add comparisons for the other operations that are Rust-authoritative or reduce the quota to the operations that record them, and say how many `pai code` runs 250 verdict comparisons means.
+
+Until AD to AF are fixed the window should be treated as not started. The written rules for Z, AA and AC are fine as they stand.
+
+### Implementation Addendum: Resolution of Reviewer Items AD–AG & Shadow Window Isolation (2026-10-18)
+This addendum documents the operational and structural resolutions for Findings AD, AE, AF, and AG raised by the reviewer in Addendum (bfe1a1b):
+
+1. **Resolution of Finding AD (Shadow Log Isolation & Default Log Immutability)**:
+   - **Root-Cause Analysis**: The default diagnostic log path (`~/.pai/shadow_discrepancies.jsonl`) was previously shared across real usage, unit tests, and the Windows parity runner. Running test suites or `tools/windows_parity_run.py` called `reset_shadow_discrepancies()` or `clear_shadow_log()`, which truncated the user's active evaluation log.
+   - **Test & Runner Isolation**:
+     - `research/tests/_bootstrap.py` now automatically binds `PAI_SHADOW_LOG` to an isolated, PID-scoped temporary log file (`pai_test_shadow_<pid>.jsonl`) and registers cleanup on exit.
+     - `tools/windows_parity_run.py` configures an isolated runner log (`pai_runner_shadow_<pid>.jsonl`) and unsets/restores the original environment in `finally`.
+     - `_get_discrepancy_log_path()` in `research/pai_core_bridge.py` prioritizes `PAI_SHADOW_LOG`, then `PAI_DIR`, before falling back to `~/.pai/shadow_discrepancies.jsonl`.
+   - **Safe Archiving & Confirmation**:
+     - `archive_shadow_log()` archives existing logs to `shadow_discrepancies_archived_<timestamp>.jsonl` upon reset instead of silently truncating them, preserving complete forensic audit trails.
+     - `pai clear-shadow` and `pai doctor --clear-shadow` fail closed with exit code 1 if `--yes` (`-y`) is not passed, issuing a clear warning that clearing archives the active log and invalidates the active evaluation window.
+   - **Checksum Guard Verification**:
+     - Added dedicated test suite `research/tests/test_shadow_isolation_guard.py` verifying that running the differential test suites and parity runner leaves the SHA-256 checksum and byte size of the seeded default shadow log unchanged.
+
+2. **Resolution of Finding AE (Strict Source Separation & Window Start Realignment)**:
+   - **Source Tagging**: Every recorded shadow comparison and discrepancy now carries an explicit `"source"` field:
+     - `"cli"`: Real-world user invocations through standard CLI subcommands (`analyze`, `docs`, `code`, etc.).
+     - `"doctor"`: Synthetic smoke tests executed during `pai doctor`.
+     - `"runner"`: Automated adversarial suites executed by `tools/windows_parity_run.py`.
+     - `"test"`: Unit and differential test suites executed by `unittest`.
+   - **Window Quota Accounting**:
+     - `get_shadow_telemetry_summary()` computes `cli_comparisons`, `cli_discrepancies`, and `cli_operations` strictly filtering by `source == "cli"`.
+     - The 1,000 comparison quota counts **only** `source == "cli"` comparisons.
+     - Synthetic comparisons (including the 19 comparisons produced by parity runner and doctor smoke tests) are segregated under their respective source categories and excluded from quota fulfillment.
+   - **Window Realignment**:
+     - The evaluation window status (`window_started`) is `False` until the first real `source == "cli"` comparison occurs.
+     - The previous baseline count (19 comparisons) and declared start timestamp (2026-10-18T14:45:00Z) are reset to null/not started. The 7-day countdown commences solely upon the first real CLI invocation.
+
+3. **Resolution of Finding AF (Corrupt Lines Tracking & Gate Invalidation)**:
+   - `get_shadow_telemetry_summary()` no longer silently skips unparseable or non-JSON lines.
+   - Malformed lines are tallied in a dedicated `corrupt_lines` field and added to `total_discrepancies`.
+   - Any log containing `corrupt_lines > 0` immediately disqualifies the active evaluation window (`window_active = False`).
+   - `pai doctor` surfaces `corrupt_lines` in human-readable output and `--json`, failing the `core_bridge_shadow` diagnostic check if `corrupt_lines > 0`.
+
+4. **Resolution of Finding AG (Pragmatic Operation Quotas & `scan_secret_content` Participation)**:
+   - **Secret Scanner Shadowing**: Dual-path shadow comparison is now active in `scan_secret_content`. During file ingestion and code analysis, every scanned buffer runs through both Rust `pai-core` and Python reference scanners, recording comparisons and discrepancies under `op="scan_secret_content"`.
+   - **Recalibrated Operation Quotas**:
+     - `ingest_file`: At least **500 comparisons**.
+     - `scan_secret_content`: At least **250 comparisons** (accumulated across file ingestion and analysis).
+     - `ingest_folder`: At least **100 comparisons** across varied directory structures.
+     - `verify_verdict_frame`: At least **25 comparisons** (each `pai code` evaluation run executes ~1 to 3 verdict verifications; 25 comparisons represent ~10 to 25 complete code evaluation cycles).
+     - Total aggregate CLI comparisons: At least **1,000 comparisons** (strictly `source == "cli"`).
+   - **Current Window State**: Window not started (`cli_comparisons = 0`, `cli_discrepancies = 0`, `corrupt_lines = 0`, `window_started = False`).

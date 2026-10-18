@@ -101,7 +101,16 @@ def run_windows_parity() -> int:
     server_thread.start()
     stub_url = f"http://127.0.0.1:{port}"
 
-    # 2. Reset / clear shadow log
+    # 2. Configure dedicated runner shadow log to strictly isolate from default log
+    runner_shadow_log = os.path.join(tempfile.gettempdir(), f"pai_runner_shadow_{os.getpid()}.jsonl")
+    orig_shadow_log = os.environ.get("PAI_SHADOW_LOG")
+    orig_telemetry_source = os.environ.get("PAI_TELEMETRY_SOURCE")
+
+    os.environ["PAI_SHADOW_LOG"] = runner_shadow_log
+    os.environ["PAI_TELEMETRY_SOURCE"] = "runner"
+    pai_core_bridge.set_telemetry_source("runner")
+
+    # Clear only the runner's isolated shadow log
     pai_core_bridge.clear_shadow_log()
 
     # 3. Configure environment
@@ -384,6 +393,23 @@ def run_windows_parity() -> int:
             os.environ["OLLAMA_BASE_URL"] = orig_ollama_url
         else:
             os.environ.pop("OLLAMA_BASE_URL", None)
+
+        if orig_shadow_log is not None:
+            os.environ["PAI_SHADOW_LOG"] = orig_shadow_log
+        else:
+            os.environ.pop("PAI_SHADOW_LOG", None)
+
+        if orig_telemetry_source is not None:
+            os.environ["PAI_TELEMETRY_SOURCE"] = orig_telemetry_source
+        else:
+            os.environ.pop("PAI_TELEMETRY_SOURCE", None)
+        pai_core_bridge.set_telemetry_source("cli")
+
+        try:
+            if os.path.exists(runner_shadow_log):
+                os.remove(runner_shadow_log)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

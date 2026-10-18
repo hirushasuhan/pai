@@ -100,10 +100,27 @@ _SHADOW_DISCREPANCIES: List[Dict[str, Any]] = []
 _SHADOW_COMPARISONS_COUNT: int = 0
 
 
+_CURRENT_TELEMETRY_SOURCE: str = "cli"
+
+
+def set_telemetry_source(source: str) -> None:
+    """Sets the current telemetry source tag ('cli', 'doctor', 'runner', 'test')."""
+    global _CURRENT_TELEMETRY_SOURCE
+    _CURRENT_TELEMETRY_SOURCE = source
+
+
+def get_telemetry_source() -> str:
+    """Returns the active telemetry source, prioritizing PAI_TELEMETRY_SOURCE env var."""
+    return os.environ.get("PAI_TELEMETRY_SOURCE") or _CURRENT_TELEMETRY_SOURCE
+
+
 def _get_discrepancy_log_path() -> Path:
     override = os.environ.get("PAI_SHADOW_LOG")
     if override:
         return Path(override)
+    pai_dir_env = os.environ.get("PAI_DIR")
+    if pai_dir_env:
+        return Path(pai_dir_env) / "shadow_discrepancies.jsonl"
     pai_dir = Path.home() / ".pai"
     try:
         pai_dir.mkdir(parents=True, exist_ok=True)
@@ -134,10 +151,12 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
     """Records that a shadow comparison was executed."""
     global _SHADOW_COMPARISONS_COUNT
     _SHADOW_COMPARISONS_COUNT += 1
+    src = extra.pop("source", None) or get_telemetry_source()
     rec = {
         "timestamp": time.time(),
         "type": "comparison",
         "op": op,
+        "source": src,
         **extra,
     }
     try:
@@ -150,11 +169,13 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
 
 def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
     """Records a shadow discrepancy for visibility in run reports and pai doctor."""
+    src = extra.pop("source", None) or get_telemetry_source()
     rec = {
         "timestamp": time.time(),
         "type": "discrepancy",
         "op": op,
         "detail": detail,
+        "source": src,
         **extra,
     }
     _SHADOW_DISCREPANCIES.append(rec)
@@ -164,7 +185,7 @@ def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
         logger.warning("Failed to persist shadow discrepancy to file: %s", e)
-    logger.warning("[SHADOW DISCREPANCY] op=%s: %s", op, detail)
+    logger.warning("[SHADOW DISCREPANCY] op=%s source=%s: %s", op, src, detail)
 
 
 def get_shadow_stats() -> Tuple[int, int, List[Dict[str, Any]]]:
@@ -219,19 +240,36 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
     Returns aggregated shadow telemetry summary:
     - total_comparisons
     - total_discrepancies
+    - corrupt_lines
+    - cli_comparisons
+    - cli_discrepancies
     - first_comparison_timestamp / first_comparison_iso
     - last_comparison_timestamp / last_comparison_iso
+    - first_cli_comparison_timestamp / first_cli_comparison_iso
+    - last_cli_comparison_timestamp / last_cli_comparison_iso
+    - window_started
+    - window_active
     - operations: mapping of op name to comparisons, discrepancies, first/last comparison ISO timestamps.
+    - cli_operations: mapping of op name to comparisons, discrepancies, first/last comparison ISO timestamps for source='cli'.
+    - sources: mapping of source name to comparisons and discrepancies.
     """
     total_comparisons = 0
     total_discrepancies = 0
+    corrupt_lines = 0
     first_ts: Optional[float] = None
     last_ts: Optional[float] = None
-    ops: Dict[str, Dict[str, Any]] = {}
+    first_cli_ts: Optional[float] = None
+    last_cli_ts: Optional[float] = None
+    cli_comparisons = 0
+    cli_discrepancies = 0
 
-    def _ensure_op(op_name: str) -> Dict[str, Any]:
-        if op_name not in ops:
-            ops[op_name] = {
+    ops: Dict[str, Dict[str, Any]] = {}
+    cli_ops: Dict[str, Dict[str, Any]] = {}
+    sources: Dict[str, Dict[str, int]] = {}
+
+    def _ensure_op(target_dict: Dict[str, Dict[str, Any]], op_name: str) -> Dict[str, Any]:
+        if op_name not in target_dict:
+            target_dict[op_name] = {
                 "comparisons": 0,
                 "discrepancies": 0,
                 "first_comparison_timestamp": None,
@@ -239,7 +277,12 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
                 "last_comparison_timestamp": None,
                 "last_comparison_iso": None,
             }
-        return ops[op_name]
+        return target_dict[op_name]
+
+    def _ensure_source(src_name: str) -> Dict[str, int]:
+        if src_name not in sources:
+            sources[src_name] = {"comparisons": 0, "discrepancies": 0}
+        return sources[src_name]
 
     try:
         log_file = _get_discrepancy_log_path()
@@ -252,24 +295,45 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
                     try:
                         obj = json.loads(line)
                     except Exception:
+                        corrupt_lines += 1
+                        total_discrepancies += 1
+                        cli_discrepancies += 1
                         continue
                     if not isinstance(obj, dict):
+                        corrupt_lines += 1
+                        total_discrepancies += 1
+                        cli_discrepancies += 1
                         continue
 
                     entry_type = obj.get("type")
                     op_name = str(obj.get("op") or "unknown")
+                    source_name = str(obj.get("source") or "unknown")
                     ts = obj.get("timestamp")
+
                     if isinstance(ts, (int, float)):
                         if first_ts is None or ts < first_ts:
                             first_ts = ts
                         if last_ts is None or ts > last_ts:
                             last_ts = ts
+                        if source_name == "cli":
+                            if first_cli_ts is None or ts < first_cli_ts:
+                                first_cli_ts = ts
+                            if last_cli_ts is None or ts > last_cli_ts:
+                                last_cli_ts = ts
 
-                    op_rec = _ensure_op(op_name)
+                    op_rec = _ensure_op(ops, op_name)
+                    src_rec = _ensure_source(source_name)
+                    cli_op_rec = _ensure_op(cli_ops, op_name) if source_name == "cli" else None
 
                     if entry_type == "comparison":
                         total_comparisons += 1
                         op_rec["comparisons"] += 1
+                        src_rec["comparisons"] += 1
+                        if source_name == "cli":
+                            cli_comparisons += 1
+                            if cli_op_rec is not None:
+                                cli_op_rec["comparisons"] += 1
+
                         if isinstance(ts, (int, float)):
                             if op_rec["first_comparison_timestamp"] is None or ts < op_rec["first_comparison_timestamp"]:
                                 op_rec["first_comparison_timestamp"] = ts
@@ -277,47 +341,110 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
                             if op_rec["last_comparison_timestamp"] is None or ts > op_rec["last_comparison_timestamp"]:
                                 op_rec["last_comparison_timestamp"] = ts
                                 op_rec["last_comparison_iso"] = _format_iso(ts)
+
+                            if source_name == "cli" and cli_op_rec is not None:
+                                if cli_op_rec["first_comparison_timestamp"] is None or ts < cli_op_rec["first_comparison_timestamp"]:
+                                    cli_op_rec["first_comparison_timestamp"] = ts
+                                    cli_op_rec["first_comparison_iso"] = _format_iso(ts)
+                                if cli_op_rec["last_comparison_timestamp"] is None or ts > cli_op_rec["last_comparison_timestamp"]:
+                                    cli_op_rec["last_comparison_timestamp"] = ts
+                                    cli_op_rec["last_comparison_iso"] = _format_iso(ts)
+
                     elif entry_type == "discrepancy":
                         total_discrepancies += 1
                         op_rec["discrepancies"] += 1
+                        src_rec["discrepancies"] += 1
+                        if source_name == "cli":
+                            cli_discrepancies += 1
+                            if cli_op_rec is not None:
+                                cli_op_rec["discrepancies"] += 1
                     else:
                         total_discrepancies += 1
                         op_rec["discrepancies"] += 1
+                        src_rec["discrepancies"] += 1
+                        if source_name == "cli":
+                            cli_discrepancies += 1
+                            if cli_op_rec is not None:
+                                cli_op_rec["discrepancies"] += 1
     except Exception as e:
         logger.warning("Failed to parse shadow telemetry summary: %s", e)
 
     if total_comparisons == 0 and _SHADOW_COMPARISONS_COUNT > 0:
         total_comparisons = _SHADOW_COMPARISONS_COUNT
         total_discrepancies = len(_SHADOW_DISCREPANCIES)
+        if get_telemetry_source() == "cli":
+            cli_comparisons = total_comparisons
+            cli_discrepancies = total_discrepancies
+
+    window_started = bool(cli_comparisons > 0)
+    window_active = bool(window_started and cli_discrepancies == 0 and corrupt_lines == 0)
 
     return {
         "total_comparisons": total_comparisons,
         "total_discrepancies": total_discrepancies,
+        "corrupt_lines": corrupt_lines,
+        "cli_comparisons": cli_comparisons,
+        "cli_discrepancies": cli_discrepancies,
         "first_comparison_timestamp": first_ts,
         "first_comparison_iso": _format_iso(first_ts),
         "last_comparison_timestamp": last_ts,
         "last_comparison_iso": _format_iso(last_ts),
+        "first_cli_comparison_timestamp": first_cli_ts,
+        "first_cli_comparison_iso": _format_iso(first_cli_ts),
+        "last_cli_comparison_timestamp": last_cli_ts,
+        "last_cli_comparison_iso": _format_iso(last_cli_ts),
+        "window_started": window_started,
+        "window_active": window_active,
         "operations": ops,
+        "cli_operations": cli_ops,
+        "sources": sources,
     }
 
 
-def clear_shadow_log() -> None:
-    """Clears the persistent shadow comparison/discrepancy log file."""
-    reset_shadow_discrepancies()
-
-
-def reset_shadow_discrepancies() -> None:
-    """Resets both in-memory and persistent shadow discrepancies log."""
+def archive_shadow_log() -> Optional[Path]:
+    """
+    Archives the persistent shadow comparison/discrepancy log file by renaming it
+    to a timestamped backup and zeroing in-memory counters.
+    """
     global _SHADOW_COMPARISONS_COUNT
     _SHADOW_COMPARISONS_COUNT = 0
     _SHADOW_DISCREPANCIES.clear()
     try:
         log_file = _get_discrepancy_log_path()
-        if log_file.exists():
+        if log_file.exists() and log_file.stat().st_size > 0:
+            ts_str = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+            archive_name = f"shadow_discrepancies_archived_{ts_str}.jsonl"
+            archive_path = log_file.parent / archive_name
+            counter = 1
+            while archive_path.exists():
+                archive_name = f"shadow_discrepancies_archived_{ts_str}_{counter}.jsonl"
+                archive_path = log_file.parent / archive_name
+                counter += 1
+            try:
+                log_file.rename(archive_path)
+                return archive_path
+            except OSError:
+                import shutil
+                shutil.copy2(log_file, archive_path)
+                with open(log_file, "w", encoding="utf-8") as f:
+                    f.truncate(0)
+                return archive_path
+        elif log_file.exists():
             with open(log_file, "w", encoding="utf-8") as f:
                 f.truncate(0)
     except Exception as e:
-        logger.warning("Failed to truncate shadow discrepancies log: %s", e)
+        logger.warning("Failed to archive shadow log: %s", e)
+    return None
+
+
+def clear_shadow_log() -> Optional[Path]:
+    """Archives the persistent shadow log file and resets in-memory counters."""
+    return archive_shadow_log()
+
+
+def reset_shadow_discrepancies() -> None:
+    """Resets both in-memory and persistent shadow discrepancies log safely via archiving."""
+    archive_shadow_log()
 
 
 
@@ -536,6 +663,20 @@ def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[
     res = call_core_bridge("scan_secret_content", **kwargs)
     if res is not None and not isinstance(res, str):
         raise TypeError(f"scan_secret_content expected str or None, got {type(res).__name__}")
+    if is_shadow_compare_enabled():
+        record_shadow_comparison("scan_secret_content")
+        try:
+            py_res = py_scan_secret_content(text, file_path=file_path)
+            if py_res != res:
+                record_shadow_discrepancy(
+                    "scan_secret_content",
+                    f"Python={py_res!r} vs Rust={res!r}",
+                )
+        except Exception as exc:
+            record_shadow_discrepancy(
+                "scan_secret_content",
+                f"Python shadow comparison exception: {exc}",
+            )
     return res
 
 

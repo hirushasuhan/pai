@@ -310,13 +310,24 @@ def _run_doctor_smoke_tests() -> List[Dict[str, Any]]:
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Runs comprehensive system diagnostics, candidate eligibility, ingestion limits, and e2e smoke checks."""
     if getattr(args, "clear_shadow", False) or getattr(args, "reset_shadow", False):
+        if not getattr(args, "yes", False):
+            print(
+                "Error: Clearing the shadow log archives the active log and permanently invalidates the active 7-day evaluation window.\n"
+                "Pass --yes to confirm.",
+                file=sys.stderr,
+            )
+            return 1
         try:
             from pai_core_bridge import clear_shadow_log
-            clear_shadow_log()
-            print("Shadow discrepancy telemetry log cleared.")
+            archived = clear_shadow_log()
+            if archived:
+                print(f"Warning: Active evaluation window invalidated. Shadow log archived to {archived}.")
+            else:
+                print("Shadow discrepancy telemetry log reset.")
             return 0
         except Exception as e:
-            print(f"Failed to clear shadow log: {e}")
+            print(f"Failed to clear shadow log: {e}", file=sys.stderr)
+            return 1
     # Check core bridge availability & ingest limits
     core_bridge_ok = True
     core_bridge_err_msg = ""
@@ -425,7 +436,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if getattr(args, "skip_smoke", False):
         smoke_results = []
     else:
-        smoke_results = _run_doctor_smoke_tests()
+        try:
+            from pai_core_bridge import set_telemetry_source
+            set_telemetry_source("doctor")
+        except ImportError:
+            pass
+        try:
+            smoke_results = _run_doctor_smoke_tests()
+        finally:
+            try:
+                from pai_core_bridge import set_telemetry_source
+                set_telemetry_source("cli")
+            except ImportError:
+                pass
 
     # Build end-to-end pass/fail check table
     os_ok = bool((snap.get("cpu_cores") or 0) > 0 and avail_ram > 0)
@@ -501,14 +524,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             })
         else:
             comparisons, discrepancies, _ = get_shadow_stats()
-            if discrepancies > 0:
-                detail_str = f"{discrepancies} discrepancies in {comparisons} comparisons"
+            summary = get_shadow_telemetry_summary()
+            cli_comps = summary.get("cli_comparisons", 0)
+            cli_disc = summary.get("cli_discrepancies", 0)
+            corrupt = summary.get("corrupt_lines", 0)
+
+            if corrupt > 0:
+                detail_str = f"{corrupt} corrupt line(s) in shadow log (window invalidated)"
                 passed_val = False
-            elif comparisons == 0:
-                detail_str = "no comparisons yet (flag on)"
+            elif cli_disc > 0:
+                detail_str = f"{cli_disc} discrepancies in {cli_comps} CLI comparisons (window invalidated)"
+                passed_val = False
+            elif cli_comps == 0:
+                detail_str = f"0 CLI comparisons (window not started; {comparisons} synthetic comparisons excluded)"
                 passed_val = True
             else:
-                detail_str = f"0 discrepancies in {comparisons} comparisons (no mismatches observed)"
+                detail_str = f"0 discrepancies in {cli_comps} CLI comparisons (active window clean)"
                 passed_val = True
 
             checks_table.append({
@@ -638,20 +669,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     print("\n--- Core Bridge Shadow Telemetry ---")
     st = doc_data.get("shadow_telemetry", {})
-    t_comp = st.get("total_comparisons", 0)
-    t_disc = st.get("total_discrepancies", 0)
-    w_start = st.get("first_comparison_iso") or "none"
-    w_end = st.get("last_comparison_iso") or "none"
-    print(f"Total Comparisons    : {t_comp}")
-    print(f"Total Discrepancies  : {t_disc}")
-    print(f"Telemetry Window     : {w_start} -> {w_end}")
-    ops = st.get("operations", {})
-    if ops:
-        print("Operations Breakdown :")
-        for op_name, op_data in sorted(ops.items()):
+    cli_comp = st.get("cli_comparisons", 0)
+    cli_disc = st.get("cli_discrepancies", 0)
+    tot_comp = st.get("total_comparisons", 0)
+    tot_disc = st.get("total_discrepancies", 0)
+    corrupt = st.get("corrupt_lines", 0)
+    w_start = st.get("first_cli_comparison_iso") or "Window not started (awaits first CLI comparison)"
+    w_end = st.get("last_cli_comparison_iso") or "n/a"
+    w_status = "ACTIVE" if st.get("window_active") else ("NOT STARTED" if not st.get("window_started") else "INVALIDATED")
+
+    print(f"Evaluation Window    : [{w_status}]")
+    print(f"CLI Comparisons (Req): {cli_comp:>5} / 1000 (discrepancies: {cli_disc})")
+    print(f"Total Log Records    : {tot_comp} comparisons, {tot_disc} discrepancies, {corrupt} corrupt lines")
+    print(f"CLI Window Span      : {w_start} -> {w_end}")
+
+    cli_ops = st.get("cli_operations", {})
+    if cli_ops:
+        print("CLI Operations Breakdown (Counting Toward Quota):")
+        for op_name, op_data in sorted(cli_ops.items()):
             print(f"  * {op_name:<24}: {op_data.get('comparisons', 0):>4} comps, {op_data.get('discrepancies', 0):>2} disc")
     else:
-        print("Operations Breakdown : None recorded yet")
+        print("CLI Operations Breakdown : None recorded yet")
 
     print("\n--- End-to-End Doctor Pass/Fail Table ---")
     print(f"{'Check Name':<22} {'Status':<10} {'Details'}")
@@ -1037,10 +1075,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc = subparsers.add_parser("doctor", help="Hardware diagnostics, safety boundaries, and command smoke tests")
     p_doc.add_argument("--json", action="store_true", help="Output diagnostics in JSON format")
     p_doc.add_argument("--skip-smoke", action="store_true", help="Skip command smoke tests during diagnostics")
-    p_doc.add_argument("--clear-shadow", "--reset-shadow", dest="clear_shadow", action="store_true", help="Clear persistent shadow discrepancy telemetry log")
+    p_doc.add_argument("--clear-shadow", "--reset-shadow", dest="clear_shadow", action="store_true", help="Archive and reset persistent shadow discrepancy telemetry log")
+    p_doc.add_argument("-y", "--yes", dest="yes", action="store_true", help="Confirm archiving shadow log (invalidates active evaluation window)")
 
     # clear-shadow
-    subparsers.add_parser("clear-shadow", help="Clear persistent shadow discrepancy telemetry log")
+    p_clear = subparsers.add_parser("clear-shadow", help="Archive and reset persistent shadow discrepancy telemetry log")
+    p_clear.add_argument("-y", "--yes", dest="yes", action="store_true", help="Confirm archiving shadow log (invalidates active evaluation window)")
 
     # calibrate
     p_cal = subparsers.add_parser("calibrate", help="Empirical 5-run cold RAM & latency calibration")
@@ -2872,9 +2912,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.subcommand == "doctor":
             return cmd_doctor(args)
         elif args.subcommand == "clear-shadow":
+            if not getattr(args, "yes", False):
+                print(
+                    "Error: Clearing the shadow log archives the active log and permanently invalidates the active 7-day evaluation window.\n"
+                    "Pass --yes to confirm.",
+                    file=sys.stderr,
+                )
+                return 1
             from pai_core_bridge import clear_shadow_log
-            clear_shadow_log()
-            print("Shadow discrepancy telemetry log cleared.")
+            archived = clear_shadow_log()
+            if archived:
+                print(f"Warning: Active evaluation window invalidated. Shadow log archived to {archived}.")
+            else:
+                print("Shadow discrepancy telemetry log reset.")
             return 0
         elif args.subcommand == "calibrate":
             return cmd_calibrate(args)

@@ -17,6 +17,8 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from unittest.mock import MagicMock, patch
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _bootstrap  # noqa: F401
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pai import main, probe_gpu, probe_ollama_server
 
@@ -31,7 +33,8 @@ class TestPaiCLI(unittest.TestCase):
         mock_snap["avail_ram_gb"] = max(float(real_snap.get("avail_ram_gb") or 0.0), 8.0)
         mock_snap["memory_load_pct"] = min(int(real_snap.get("memory_load_pct") or 50), 50)
 
-        with patch("pai.HardwareTelemetry.get_system_snapshot", return_value=mock_snap):
+        with patch("pai.HardwareTelemetry.get_system_snapshot", return_value=mock_snap), \
+             patch("sandbox.probe_system_boundary", return_value=(True, "OK")):
             # 1. Standard text mode
             f_text = io.StringIO()
             with redirect_stdout(f_text):
@@ -748,7 +751,16 @@ class TestPaiCLI(unittest.TestCase):
                 for r in records:
                     f.write(json.dumps(r) + "\n")
 
-            with patch("pai_core_bridge._get_discrepancy_log_path", return_value=log_path):
+            from hardware_telemetry import HardwareTelemetry
+            real_snap = HardwareTelemetry().get_system_snapshot()
+            mock_snap = dict(real_snap)
+            mock_snap["avail_ram_mb"] = max(float(real_snap.get("avail_ram_mb") or 0.0), 8192.0)
+            mock_snap["avail_ram_gb"] = max(float(real_snap.get("avail_ram_gb") or 0.0), 8.0)
+            mock_snap["memory_load_pct"] = min(int(real_snap.get("memory_load_pct") or 50), 50)
+
+            with patch("pai_core_bridge._get_discrepancy_log_path", return_value=log_path), \
+                 patch("sandbox.probe_system_boundary", return_value=(True, "OK")), \
+                 patch("pai.HardwareTelemetry.get_system_snapshot", return_value=mock_snap):
                 f_json = io.StringIO()
                 with redirect_stdout(f_json):
                     rc = main(["doctor", "--skip-smoke", "--json"])
@@ -766,6 +778,22 @@ class TestPaiCLI(unittest.TestCase):
                 self.assertEqual(st["operations"]["ingest_file"]["discrepancies"], 1)
                 self.assertEqual(st["operations"]["ingest_folder"]["comparisons"], 1)
                 self.assertEqual(st["operations"]["ingest_folder"]["discrepancies"], 0)
+
+    def test_pai_cli_clear_shadow_requires_yes(self):
+        """
+        Finding AD: `pai clear-shadow` and `pai doctor --clear-shadow` fail closed without --yes.
+        """
+        f_err = io.StringIO()
+        with redirect_stderr(f_err):
+            rc = main(["clear-shadow"])
+        self.assertEqual(rc, 1)
+        self.assertIn("Pass --yes to confirm", f_err.getvalue())
+
+        f_err_doc = io.StringIO()
+        with redirect_stderr(f_err_doc):
+            rc_doc = main(["doctor", "--clear-shadow"])
+        self.assertEqual(rc_doc, 1)
+        self.assertIn("Pass --yes to confirm", f_err_doc.getvalue())
 
 
 if __name__ == "__main__":
