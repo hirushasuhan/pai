@@ -115,6 +115,23 @@ def get_telemetry_source() -> str:
     return os.environ.get("PAI_TELEMETRY_SOURCE") or _CURRENT_TELEMETRY_SOURCE
 
 
+_CURRENT_TELEMETRY_DRIVER: bool = False
+
+
+def set_telemetry_driver(is_driver: bool) -> None:
+    """Sets whether the current execution is tagged as an automated driver run (Finding AP)."""
+    global _CURRENT_TELEMETRY_DRIVER
+    _CURRENT_TELEMETRY_DRIVER = bool(is_driver)
+
+
+def is_telemetry_driver() -> bool:
+    """Returns True if the current execution is driven by the automated workload driver."""
+    env_val = os.environ.get("PAI_TELEMETRY_DRIVER")
+    if env_val is not None:
+        return env_val.lower() in ("1", "true", "yes")
+    return _CURRENT_TELEMETRY_DRIVER
+
+
 def _get_discrepancy_log_path() -> Path:
     override = os.environ.get("PAI_SHADOW_LOG")
     if override:
@@ -148,41 +165,45 @@ class BridgeProtocolError(CoreBridgeUnavailableError):
     pass
 
 
-def _get_write_failure_marker_paths() -> List[Path]:
+def _get_write_failure_marker_paths(log_path: Optional[Path] = None) -> List[Path]:
     """
-    Returns candidate paths for the durable shadow write-failure marker file (Finding AL).
-    Checks:
-    1. Custom path in PAI_SHADOW_MARKER environment variable (if specified).
-    2. Next to the active shadow log path (parent directory, or inside directory if log is a directory).
-    3. Next to the active log path's parent directory if log path is a directory.
-    4. In the system temporary directory (tempfile.gettempdir()).
-    5. In the user PAI directory (~/.pai or PAI_DIR).
+    Returns candidate paths for the durable shadow write-failure marker file (Findings AL & AO).
+    Derives marker filename from the active log path's resolved hash so that different logs
+    (e.g., test suites vs host dogfood window) never share or delete each other's marker files.
     """
+    import hashlib
     import tempfile
+
+    if log_path is None:
+        log_path = _get_discrepancy_log_path()
+
+    try:
+        resolved_log = log_path.resolve()
+    except Exception:
+        resolved_log = log_path
+
+    log_hash = hashlib.sha256(str(resolved_log).encode("utf-8")).hexdigest()[:16]
+    marker_name = f"shadow_log_write_failure_{log_hash}.marker"
+
     candidates: List[Path] = []
     custom = os.environ.get("PAI_SHADOW_MARKER")
     if custom:
         candidates.append(Path(custom))
 
     try:
-        log_path = _get_discrepancy_log_path()
-        if log_path.is_dir():
-            candidates.append(log_path / "shadow_log_write_failure.marker")
-            candidates.append(log_path.parent / "shadow_log_write_failure.marker")
-        else:
-            candidates.append(log_path.parent / "shadow_log_write_failure.marker")
+        candidates.append(resolved_log.parent / marker_name)
     except Exception:
         pass
 
     try:
-        candidates.append(Path(tempfile.gettempdir()) / "pai_shadow_log_write_failure.marker")
+        candidates.append(Path(tempfile.gettempdir()) / f"pai_{marker_name}")
     except Exception:
         pass
 
     try:
         pai_dir_env = os.environ.get("PAI_DIR")
         pai_dir = Path(pai_dir_env) if pai_dir_env else Path.home() / ".pai"
-        candidates.append(pai_dir / "shadow_log_write_failure.marker")
+        candidates.append(pai_dir / marker_name)
     except Exception:
         pass
 
@@ -237,6 +258,8 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
     global _SHADOW_COMPARISONS_COUNT
     _SHADOW_COMPARISONS_COUNT += 1
     src = extra.pop("source", None) or get_telemetry_source()
+    if "driver" not in extra and is_telemetry_driver():
+        extra["driver"] = True
     rec = {
         "timestamp": time.time(),
         "type": "comparison",
@@ -375,6 +398,9 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
     last_cli_ts: Optional[float] = None
     cli_comparisons = 0
     cli_discrepancies = 0
+    driver_comparisons = 0
+    distinct_digests: Set[str] = set()
+    distinct_inputs_by_op: Dict[str, Set[str]] = {}
 
     ops: Dict[str, Dict[str, Any]] = {}
     cli_ops: Dict[str, Dict[str, Any]] = {}
@@ -442,6 +468,13 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
                         total_comparisons += 1
                         op_rec["comparisons"] += 1
                         src_rec["comparisons"] += 1
+                        if obj.get("driver") is True:
+                            driver_comparisons += 1
+                        cd = obj.get("content_digest")
+                        if cd and isinstance(cd, str):
+                            distinct_digests.add(cd)
+                            distinct_inputs_by_op.setdefault(op_name, set()).add(cd)
+
                         if source_name == "cli":
                             cli_comparisons += 1
                             if cli_op_rec is not None:
@@ -489,16 +522,27 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
             cli_comparisons = total_comparisons
             cli_discrepancies = total_discrepancies
 
-    # Check durable write failure markers on disk (Finding AL)
+    # Check durable write failure markers on disk (Findings AL & AO)
     durable_failures = 0
+    first_marker_path: Optional[str] = None
+    first_marker_entry: Optional[Dict[str, Any]] = None
+
     for marker_path in _get_write_failure_marker_paths():
         try:
             if marker_path.exists() and marker_path.is_file():
                 with open(marker_path, "r", encoding="utf-8") as f:
                     cnt = 0
                     for line in f:
-                        if line.strip():
+                        line_s = line.strip()
+                        if line_s:
                             cnt += 1
+                            if first_marker_entry is None:
+                                try:
+                                    first_marker_entry = json.loads(line_s)
+                                    first_marker_path = str(marker_path)
+                                except Exception:
+                                    first_marker_entry = {"corrupt": line_s}
+                                    first_marker_path = str(marker_path)
                     durable_failures = max(durable_failures, cnt if cnt > 0 else 1)
         except Exception:
             pass
@@ -545,8 +589,14 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         "total_discrepancies": total_discrepancies,
         "corrupt_lines": corrupt_lines,
         "log_write_failures": total_write_failures,
+        "write_failure_marker_path": first_marker_path,
+        "write_failure_first_entry": first_marker_entry,
         "cli_comparisons": cli_comparisons,
         "cli_discrepancies": cli_discrepancies,
+        "driver_comparisons": driver_comparisons,
+        "manual_comparisons": max(0, cli_comparisons - driver_comparisons),
+        "distinct_content_digests_count": len(distinct_digests),
+        "distinct_inputs_by_op": {op: len(s) for op, s in distinct_inputs_by_op.items()},
         "first_comparison_timestamp": first_ts,
         "first_comparison_iso": _format_iso(first_ts),
         "last_comparison_timestamp": last_ts,
@@ -991,7 +1041,12 @@ def verify_verdict_frame(
     if not is_rust_core_enabled():
         return py_res
 
-    record_shadow_comparison("verify_verdict_frame")
+    content_digest: Optional[str] = None
+    try:
+        content_digest = hashlib.sha256(comb_out.encode("utf-8")).hexdigest()
+    except Exception:
+        pass
+    record_shadow_comparison("verify_verdict_frame", content_digest=content_digest)
 
     bridge_kwargs: Dict[str, Any] = {
         "comb_out": comb_out,
@@ -1269,7 +1324,13 @@ def ingest_file(
         raise BridgeProtocolError(f"Bridge invocation exception: {exc}") from exc
 
     if is_shadow_compare_enabled():
-        record_shadow_comparison("ingest_file")
+        content_digest: Optional[str] = None
+        try:
+            with open(file_path, "rb") as f_in:
+                content_digest = hashlib.sha256(f_in.read()).hexdigest()
+        except Exception:
+            pass
+        record_shadow_comparison("ingest_file", content_digest=content_digest)
         py_item, py_rej = py_ingest_file(
             file_path=file_path,
             root_path=root_path,
@@ -1381,7 +1442,19 @@ def ingest_folder(
         raise BridgeProtocolError(f"Bridge invocation exception: {exc}") from exc
 
     if is_shadow_compare_enabled():
-        record_shadow_comparison("ingest_folder")
+        content_digest: Optional[str] = None
+        try:
+            h = hashlib.sha256()
+            for it in sorted(rust_items, key=lambda x: x.rel_path):
+                h.update(it.rel_path.encode("utf-8"))
+                if it.content_sha256:
+                    h.update(it.content_sha256.encode("utf-8"))
+                elif it.content:
+                    h.update(it.content.encode("utf-8"))
+            content_digest = h.hexdigest()
+        except Exception:
+            pass
+        record_shadow_comparison("ingest_folder", content_digest=content_digest)
         py_report = py_ingest_folder(
             folder_path=folder_path,
             max_file_size=max_file_size,

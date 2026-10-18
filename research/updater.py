@@ -326,7 +326,15 @@ class Updater:
             rust_err = e
 
         if pai_core_bridge.is_shadow_compare_enabled():
-            pai_core_bridge.record_shadow_comparison("verify_release")
+            content_digest = None
+            try:
+                m_path = os.path.join(release_dir, "manifest.json")
+                if os.path.exists(m_path):
+                    with open(m_path, "rb") as mf:
+                        content_digest = hashlib.sha256(mf.read()).hexdigest()
+            except Exception:
+                pass
+            pai_core_bridge.record_shadow_comparison("verify_release", content_digest=content_digest)
             py_res = None
             py_err = None
             try:

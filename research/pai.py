@@ -697,8 +697,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     print(f"Evaluation Window    : [{w_status}]")
     print(f"Window Complete      : {w_comp} (Quotas met: {st.get('quotas_met', False)}, Span met: {st.get('span_met', False)})")
-    print(f"CLI Comparisons (Req): {cli_comp:>5} / 1000 (discrepancies: {cli_disc})")
+    driver_comp = st.get("driver_comparisons", 0)
+    manual_comp = st.get("manual_comparisons", 0)
+    distinct_inputs = st.get("distinct_content_digests_count", 0)
+    print(f"CLI Comparisons (Req): {cli_comp:>5} / 1000 (driver: {driver_comp}, manual: {manual_comp}, discrepancies: {cli_disc})")
+    print(f"Distinct Content Dig : {distinct_inputs} unique content inputs")
     print(f"Total Log Records    : {tot_comp} comparisons, {tot_disc} discrepancies, {corrupt} corrupt lines, {log_write_fail} write failures")
+    if log_write_fail > 0:
+        marker_p = st.get("write_failure_marker_path")
+        marker_entry = st.get("write_failure_first_entry")
+        if marker_p:
+            print(f"Write Failure Marker : {marker_p}")
+        if marker_entry:
+            op_f = marker_entry.get("op", "unknown")
+            type_f = marker_entry.get("type", "unknown")
+            err_f = marker_entry.get("error", "unknown")
+            ts_val = marker_entry.get("timestamp")
+            ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts_val)) if isinstance(ts_val, (int, float)) else "unknown"
+            print(f"First Marker Entry   : [{ts_str}] op={op_f} type={type_f} error={err_f}")
     print(f"CLI Window Span      : {w_start} -> {w_end} ({w_span_days:.1f} / 7.0 days)")
 
     cli_ops = st.get("cli_operations", {})
