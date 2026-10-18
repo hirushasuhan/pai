@@ -25,6 +25,14 @@ jobs:
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
           pip install cryptography
 
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Release Rust Core Binary
+        working-directory: core
+        run: |
+          cargo build --release
+
       - name: Run Full Python Test Suite (All 37 Modules)
         working-directory: research
         run: |
@@ -252,6 +260,14 @@ jobs:
             docs/evidence/m2a_sandbox_raw.log
           if-no-files-found: error
 
+      - name: Set up Rust toolchain for Linux Differential Gate
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Release Rust Core Binary on Linux
+        working-directory: core
+        run: |
+          cargo build --release
+
       - name: Run Full Test Suite on Linux (Procfs Telemetry & Bubblewrap Sandbox)
         working-directory: research
         run: |
@@ -274,14 +290,6 @@ jobs:
         run: |
           python pai.py route code --explain-route
           python pai.py route chat --explain-route
-
-      - name: Set up Rust toolchain for Linux Differential Gate
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build Release Rust Core Binary on Linux
-        working-directory: core
-        run: |
-          cargo build --release
 
       - name: Differential Integration Test Suites (Rust Core vs Python Reference on Linux)
         working-directory: research
