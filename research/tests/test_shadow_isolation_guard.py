@@ -27,7 +27,16 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_tests_dir = os.path.dirname(os.path.abspath(__file__))
+_research_dir = os.path.dirname(_tests_dir)
+_repo_root = os.path.dirname(_research_dir)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+if _research_dir not in sys.path:
+    sys.path.insert(0, _research_dir)
+if _tests_dir not in sys.path:
+    sys.path.insert(0, _tests_dir)
+
 import _bootstrap  # noqa: F401
 import pai_core_bridge
 from pai import main
