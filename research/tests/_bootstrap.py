@@ -7,7 +7,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Isolate all tests from the persistent default shadow log
-if "PAI_SHADOW_LOG" not in os.environ:
+if "PAI_SHADOW_LOG" not in os.environ and os.environ.get("PAI_DISABLE_TEST_LOG_ISOLATION") != "1":
     _test_log = os.path.join(tempfile.gettempdir(), f"pai_test_shadow_{os.getpid()}.jsonl")
     os.environ["PAI_SHADOW_LOG"] = _test_log
 
@@ -20,5 +20,5 @@ if "PAI_SHADOW_LOG" not in os.environ:
 
     atexit.register(_cleanup_test_shadow_log)
 
-if "PAI_TELEMETRY_SOURCE" not in os.environ:
+if "PAI_TELEMETRY_SOURCE" not in os.environ and os.environ.get("PAI_DISABLE_TEST_LOG_ISOLATION") != "1":
     os.environ["PAI_TELEMETRY_SOURCE"] = "test"

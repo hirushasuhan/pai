@@ -446,7 +446,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         finally:
             try:
                 from pai_core_bridge import set_telemetry_source
-                set_telemetry_source("cli")
+                set_telemetry_source("unknown")
             except ImportError:
                 pass
 
@@ -528,8 +528,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             cli_comps = summary.get("cli_comparisons", 0)
             cli_disc = summary.get("cli_discrepancies", 0)
             corrupt = summary.get("corrupt_lines", 0)
+            log_write_fail = summary.get("log_write_failures", 0)
 
-            if corrupt > 0:
+            if log_write_fail > 0:
+                detail_str = f"Log write failure detected ({log_write_fail} failure(s)); discrepancy could not be persisted (window invalidated)"
+                passed_val = False
+            elif corrupt > 0:
                 detail_str = f"{corrupt} corrupt line(s) in shadow log (window invalidated)"
                 passed_val = False
             elif cli_disc > 0:
@@ -539,7 +543,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 detail_str = f"0 CLI comparisons (window not started; {comparisons} synthetic comparisons excluded)"
                 passed_val = True
             else:
-                detail_str = f"0 discrepancies in {cli_comps} CLI comparisons (active window clean)"
+                w_comp = summary.get("window_complete", False)
+                comp_status = "WINDOW COMPLETE" if w_comp else "active window clean"
+                detail_str = f"0 discrepancies in {cli_comps} CLI comparisons ({comp_status})"
                 passed_val = True
 
             checks_table.append({
@@ -674,14 +680,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     tot_comp = st.get("total_comparisons", 0)
     tot_disc = st.get("total_discrepancies", 0)
     corrupt = st.get("corrupt_lines", 0)
+    log_write_fail = st.get("log_write_failures", 0)
     w_start = st.get("first_cli_comparison_iso") or "Window not started (awaits first CLI comparison)"
     w_end = st.get("last_cli_comparison_iso") or "n/a"
-    w_status = "ACTIVE" if st.get("window_active") else ("NOT STARTED" if not st.get("window_started") else "INVALIDATED")
+    w_span_sec = st.get("cli_span_seconds", 0.0)
+    w_span_days = w_span_sec / 86400.0
+    w_comp = st.get("window_complete", False)
+    if w_comp:
+        w_status = "COMPLETE"
+    elif st.get("window_active"):
+        w_status = "ACTIVE"
+    elif not st.get("window_started"):
+        w_status = "NOT STARTED"
+    else:
+        w_status = "INVALIDATED"
 
     print(f"Evaluation Window    : [{w_status}]")
+    print(f"Window Complete      : {w_comp} (Quotas met: {st.get('quotas_met', False)}, Span met: {st.get('span_met', False)})")
     print(f"CLI Comparisons (Req): {cli_comp:>5} / 1000 (discrepancies: {cli_disc})")
-    print(f"Total Log Records    : {tot_comp} comparisons, {tot_disc} discrepancies, {corrupt} corrupt lines")
-    print(f"CLI Window Span      : {w_start} -> {w_end}")
+    print(f"Total Log Records    : {tot_comp} comparisons, {tot_disc} discrepancies, {corrupt} corrupt lines, {log_write_fail} write failures")
+    print(f"CLI Window Span      : {w_start} -> {w_end} ({w_span_days:.1f} / 7.0 days)")
 
     cli_ops = st.get("cli_operations", {})
     if cli_ops:
@@ -2884,6 +2902,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.print_help()
         return 0
 
+    orig_source = "unknown"
+    try:
+        from pai_core_bridge import get_telemetry_source, set_telemetry_source
+        orig_source = get_telemetry_source()
+    except ImportError:
+        pass
+
+    is_cli_cmd = args.subcommand in ("code", "analyze", "docs", "forecast", "chat", "route", "models", "calibrate")
+    if is_cli_cmd:
+        try:
+            from pai_core_bridge import set_telemetry_source
+            set_telemetry_source("cli")
+        except ImportError:
+            pass
+
     try:
         from pai_core_bridge import BridgeProtocolError, CoreBridgeUnavailableError
     except ImportError:
@@ -2949,6 +2982,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         print(msg, file=sys.stderr)
         return 2
+    finally:
+        if is_cli_cmd:
+            try:
+                from pai_core_bridge import set_telemetry_source
+                set_telemetry_source(orig_source)
+            except ImportError:
+                pass
 
 
 if __name__ == "__main__":

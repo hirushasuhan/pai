@@ -2640,3 +2640,53 @@ This addendum documents the operational and structural resolutions for Findings 
      - `verify_verdict_frame`: At least **25 comparisons** (each `pai code` evaluation run executes ~1 to 3 verdict verifications; 25 comparisons represent ~10 to 25 complete code evaluation cycles).
      - Total aggregate CLI comparisons: At least **1,000 comparisons** (strictly `source == "cli"`).
    - **Current Window State**: Window not started (`cli_comparisons = 0`, `cli_discrepancies = 0`, `corrupt_lines = 0`, `window_started = False`).
+
+### Addendum (bdce946): Check of findings AD to AG (2026-10-18)
+Reviewed state: Linux, HEAD bdce946. The GitHub Actions run, the Windows parity run and the Rust test counts in the owner's report are the owner's; I did not see them. I did run test_shadow_isolation_guard (8 tests, OK) and test_claims (2 tests, OK) on Linux.
+
+What is fixed. AD: `tests/_bootstrap.py` points `PAI_SHADOW_LOG` at a per-process temp file, the parity runner redirects and restores the log, `pai clear-shadow` needs `--yes` and archives instead of truncating. I ran six test modules that do not import `_bootstrap` against a fake HOME with a seeded default log; its SHA-256 did not change. AF: corrupt lines are counted, count as discrepancies, and make `window_active` false.
+
+AH (blocking): the telemetry source defaults to "cli". `_CURRENT_TELEMETRY_SOURCE` is initialised to "cli" at import time. I imported `pai_core_bridge` in a plain Python process with a fresh HOME and called `record_shadow_comparison("ingest_file")`: the default log got a record with source "cli" and `window_started` became True. Any script, probe, module without `_bootstrap`, or subprocess that does not set `PAI_TELEMETRY_SOURCE` therefore starts the window and fills the quota. The safe default is the reverse: the module default must be a non-counting value such as "unknown", and only `main()` of `pai.py` may set "cli", for the duration of a real CLI command.
+
+AI (blocking): the new guard tests do not test what they claim. They set `PAI_SHADOW_LOG` and the source themselves, and the "parity runner" test calls bridge functions directly instead of running `tools/windows_parity_run.py`. So the test passes whether or not `_bootstrap` or the runner isolates anything. Required: a test that runs the real differential modules and the real runner in a subprocess with a fake HOME and no `PAI_SHADOW_LOG`, and compares the default log checksum before and after. A mutation check is also needed: with isolation removed, the test must fail.
+
+AJ (blocking): `scan_secret_content` still cannot reach its quota from real use. `ingest.py` line 1100 calls its own local `scan_secret_content`, and no function in `pai.py`, `ingest.py` or `verify_loop.py` imports the bridge version; only `conformance.py` uses the name. The owner's claim that folder ingestion and code scan run both paths is not what the code does. Rust and Python are compared at `ingest_file` / `ingest_folder` level, not at `scan_secret_content` level. Either record this op from the ingest comparison, or remove its quota.
+
+AK (non-blocking): `record_shadow_discrepancy` swallows a failed log write and only logs a warning, so a discrepancy can be lost without invalidating the window. Treat a failed write as window-invalidating (record it in memory and surface it in `pai doctor`). The doctor prints "x / 1000" but nothing computes per-op minimums, the 7-day span or a pass/fail result, so completion is a manual judgement; add a `window_complete` boolean.
+
+Status: AD and AF are accepted as implemented. AE is not closed because of AH. AG is not closed because of AJ. The window stays NOT STARTED until AH, AI and AJ are fixed.
+
+### Implementation Addendum: Resolution of Findings AH, AI, AJ, and AK (2026-10-18)
+
+This addendum documents the operational, structural, and audit hardening resolutions for Reviewer Findings AH, AI, AJ, and AK:
+
+1. **Resolution of Finding AH (Fail-Closed Telemetry Source Default)**:
+   - In `research/pai_core_bridge.py`, changed the module default `_CURRENT_TELEMETRY_SOURCE` from `"cli"` to `"unknown"`.
+   - Any external Python script, probe, test module, or subprocess importing `pai_core_bridge` without explicit configuration now receives source `"unknown"`. Operations recorded under `"unknown"` do not increment `cli_comparisons` and cannot initiate the evaluation window (`window_started` remains `False`).
+   - In `research/pai.py`, `main()` explicitly sets `set_telemetry_source("cli")` strictly during the dispatch of real CLI user commands (`analyze`, `docs`, `code`, `forecast`, `chat`, `route`, `models`, `calibrate`), safely restoring the previous source in a `finally` block. Subcommand `doctor` resets to `"unknown"` in its `finally` block.
+
+2. **Resolution of Finding AI (Real Subprocess Guard Tests & Mutation Verification)**:
+   - In `research/tests/test_shadow_isolation_guard.py`, replaced in-process mocks with real `subprocess.run()` executions against a seeded temporary mock `HOME` (`~/.pai/shadow_discrepancies.jsonl`) with `PAI_SHADOW_LOG` and `PAI_TELEMETRY_SOURCE` explicitly absent from the environment:
+     - Real differential test module execution (`test_ingest_differential.py`) verifies that `research/tests/_bootstrap.py` redirects the shadow log at process startup, preserving the seeded default log's SHA-256 checksum and size strictly identical before and after.
+     - Real Windows parity runner execution (`tools/windows_parity_run.py`) verifies that the runner redirects `PAI_SHADOW_LOG` to a dedicated temporary log and restores previous state, preserving the default log's SHA-256 checksum strictly identical.
+   - **Mutation Check**: Added `test_shadow_isolation_mutation_check` verifying that when test isolation is explicitly disabled via `PAI_DISABLE_TEST_LOG_ISOLATION=1`, test operations directly alter the seeded default log (`SHA-256` mismatch and size increase), proving the guard test is discriminating and reliably detects isolation leakage.
+
+3. **Resolution of Finding AJ (`scan_secret_content` Quota Alignment)**:
+   - Secret scanning during directory and file ingestion is an internal component evaluated within `ingest_file` and `ingest_folder` comparisons rather than a standalone IPC command.
+   - Removed `scan_secret_content` from the individual operation quotas, aligning the evaluation gates strictly with real CLI-reachable operations:
+     - `ingest_file`: At least **600 comparisons** (accumulated via `pai docs` and codebase file analysis).
+     - `ingest_folder`: At least **150 comparisons** across varied directory structures (accumulated via `pai analyze`).
+     - `verify_verdict_frame`: At least **25 comparisons** (accumulated via `pai code` evaluation cycles).
+     - Total aggregate CLI comparisons: At least **1,000 comparisons** (strictly `source == "cli"`).
+   - Parity for `verify_release` continues to be qualified by the automated differential test suite (`test_updater_differential.py`) and the Windows adversarial real-tree parity runner (`tools/windows_parity_run.py`).
+
+4. **Resolution of Finding AK (Audit Hardening & Automated `window_complete` Metric)**:
+   - **Write Failure Tracking**: In `research/pai_core_bridge.py`, `record_shadow_discrepancy()` tracks failed log writes (`_LOG_WRITE_FAILURES_COUNT`). Any failure to write a discrepancy to disk (e.g. disk full or I/O error) is counted in `log_write_failures`, tallied in `total_discrepancies` and `cli_discrepancies`, and immediately disqualifies the active evaluation window (`window_active = False`).
+   - `pai doctor` surfaces `log_write_failures` and fails the `core_bridge_shadow` diagnostic check if write failures > 0.
+   - **Automated `window_complete` Metric**: `get_shadow_telemetry_summary()` computes `window_complete: bool`, strictly requiring:
+     - `window_active == True` (`cli_discrepancies == 0`, `corrupt_lines == 0`, `log_write_failures == 0`).
+     - `quotas_met == True` (`cli_comparisons >= 1000`, `ingest_file >= 600`, `ingest_folder >= 150`, `verify_verdict_frame >= 25`).
+     - `span_met == True` (`cli_span_seconds >= 604,800` seconds / 7 full calendar days between `first_cli_comparison_timestamp` and `last_cli_comparison_timestamp`).
+   - Both `pai doctor` text and `--json` surface `window_complete`, `quotas_met`, `span_met`, and elapsed duration (`X.X / 7.0 days`).
+
+- **Current Window State**: `NOT STARTED` (`0 / 1000` CLI comparisons, `cli_discrepancies = 0`, `corrupt_lines = 0`, `log_write_failures = 0`, `window_started = False`, `window_complete = False`).

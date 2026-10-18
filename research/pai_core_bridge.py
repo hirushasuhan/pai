@@ -98,13 +98,14 @@ _CORE_BIN_CACHE: Optional[str] = None
 
 _SHADOW_DISCREPANCIES: List[Dict[str, Any]] = []
 _SHADOW_COMPARISONS_COUNT: int = 0
+_LOG_WRITE_FAILURES_COUNT: int = 0
 
 
-_CURRENT_TELEMETRY_SOURCE: str = "cli"
+_CURRENT_TELEMETRY_SOURCE: str = "unknown"
 
 
 def set_telemetry_source(source: str) -> None:
-    """Sets the current telemetry source tag ('cli', 'doctor', 'runner', 'test')."""
+    """Sets the current telemetry source tag ('cli', 'doctor', 'runner', 'test', 'unknown')."""
     global _CURRENT_TELEMETRY_SOURCE
     _CURRENT_TELEMETRY_SOURCE = source
 
@@ -184,6 +185,8 @@ def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
+        global _LOG_WRITE_FAILURES_COUNT
+        _LOG_WRITE_FAILURES_COUNT += 1
         logger.warning("Failed to persist shadow discrepancy to file: %s", e)
     logger.warning("[SHADOW DISCREPANCY] op=%s source=%s: %s", op, src, detail)
 
@@ -376,13 +379,45 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
             cli_comparisons = total_comparisons
             cli_discrepancies = total_discrepancies
 
+    REQUIRED_CLI_OP_QUOTAS: Dict[str, int] = {
+        "ingest_file": 600,
+        "ingest_folder": 150,
+        "verify_verdict_frame": 25,
+    }
+    REQUIRED_TOTAL_CLI_COMPARISONS: int = 1000
+    REQUIRED_WINDOW_SECONDS: float = 7.0 * 86400.0  # 604,800 seconds (7 full days)
+
+    if _LOG_WRITE_FAILURES_COUNT > 0:
+        total_discrepancies += _LOG_WRITE_FAILURES_COUNT
+        cli_discrepancies += _LOG_WRITE_FAILURES_COUNT
+
+    cli_span_seconds = 0.0
+    if first_cli_ts is not None and last_cli_ts is not None:
+        cli_span_seconds = max(0.0, last_cli_ts - first_cli_ts)
+
     window_started = bool(cli_comparisons > 0)
-    window_active = bool(window_started and cli_discrepancies == 0 and corrupt_lines == 0)
+    window_active = bool(
+        window_started
+        and cli_discrepancies == 0
+        and corrupt_lines == 0
+        and _LOG_WRITE_FAILURES_COUNT == 0
+    )
+
+    quotas_met = bool(
+        cli_comparisons >= REQUIRED_TOTAL_CLI_COMPARISONS
+        and all(
+            cli_ops.get(op, {}).get("comparisons", 0) >= req_min
+            for op, req_min in REQUIRED_CLI_OP_QUOTAS.items()
+        )
+    )
+    span_met = bool(cli_span_seconds >= REQUIRED_WINDOW_SECONDS)
+    window_complete = bool(window_active and quotas_met and span_met)
 
     return {
         "total_comparisons": total_comparisons,
         "total_discrepancies": total_discrepancies,
         "corrupt_lines": corrupt_lines,
+        "log_write_failures": _LOG_WRITE_FAILURES_COUNT,
         "cli_comparisons": cli_comparisons,
         "cli_discrepancies": cli_discrepancies,
         "first_comparison_timestamp": first_ts,
@@ -393,8 +428,15 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         "first_cli_comparison_iso": _format_iso(first_cli_ts),
         "last_cli_comparison_timestamp": last_cli_ts,
         "last_cli_comparison_iso": _format_iso(last_cli_ts),
+        "cli_span_seconds": cli_span_seconds,
+        "required_total_cli_comparisons": REQUIRED_TOTAL_CLI_COMPARISONS,
+        "required_cli_quotas": REQUIRED_CLI_OP_QUOTAS,
+        "required_window_seconds": REQUIRED_WINDOW_SECONDS,
+        "quotas_met": quotas_met,
+        "span_met": span_met,
         "window_started": window_started,
         "window_active": window_active,
+        "window_complete": window_complete,
         "operations": ops,
         "cli_operations": cli_ops,
         "sources": sources,
@@ -406,8 +448,9 @@ def archive_shadow_log() -> Optional[Path]:
     Archives the persistent shadow comparison/discrepancy log file by renaming it
     to a timestamped backup and zeroing in-memory counters.
     """
-    global _SHADOW_COMPARISONS_COUNT
+    global _SHADOW_COMPARISONS_COUNT, _LOG_WRITE_FAILURES_COUNT
     _SHADOW_COMPARISONS_COUNT = 0
+    _LOG_WRITE_FAILURES_COUNT = 0
     _SHADOW_DISCREPANCIES.clear()
     try:
         log_file = _get_discrepancy_log_path()
