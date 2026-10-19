@@ -2887,7 +2887,7 @@ Status: no blocking finding is open. The window may start once the owner (1) rec
 ### Addendum (f781919): Pre-window conditions and a data exposure (2026-10-19)
 Reviewed state: Linux, HEAD f781919, equal to origin/master. The GitHub Actions run #39264346340, the Windows runs, the binary metadata and the 122-comparison differential in the owner's report are the owner's; I did not see them. I read the tree and the git state and made no change to any file except this addendum. I did not print any secret or personal value while checking.
 
-AT (blocking, privacy and security): commit f781919 added 90 tracked files from other projects of the user under `tools/corpus/manual_projects` and pushed them. A request to `https://github.com/hirushasuhan/personal_agentic_ai` from the review machine without any sign-in returned HTTP 200, so the repository is public and the files can be read and cloned by anyone. What the folder contains, by category only: a personal Word document with one e-mail address; a 1.4 MB project report; the source of three other applications; SQL files of a backend including a full database script and a seed file with bcrypt password hashes (21 in the two files) and 13 e-mail addresses, one of them on a public mail provider; migration scripts for two-factor recovery and security hardening of that backend; a setup guide with credential-like assignments on five lines; and a file `secret_pattern.env` (two assignments; the values were not examined). My pattern scan found no private key, AWS, GitHub, OpenAI or Google key patterns, but it cannot show that the setup guide or the SQL files contain no real credentials. Removing the files in a new commit does not remove them: they stay in the history, in clones and in forks made since the push.
+AT (blocking, privacy and security): commit f781919 added 90 tracked files from other projects of the user under `tools/corpus/manual_projects` and pushed them. A request to `https://github.com/hirushasuhan/personal_agentic_ai` from the review machine without any sign-in returned HTTP 200, so the repository is public and the files can be read and cloned by anyone. The folder held personal and project material of the user that was not meant for a public repository, including files that can carry personal data and credentials. The specific contents are intentionally not listed here. A pattern scan for common key formats found nothing, but a scan cannot show that no real credential was present. Removing the files in a new commit does not remove them: they stay in the history, in clones and in forks made since the push.
 
 Required, in this order and done by the owner of the repository (I will not run any git command that changes history): (1) do not start the window. (2) Decide for each of the 90 files whether it is public-safe; assume it is not unless the user says so. (3) Remove the folder from the index (`git rm -r --cached tools/corpus/manual_projects`), add it to `.gitignore`, and keep the files on the machine in a directory outside the repository, with a variable such as `PAI_MANUAL_CORPUS_DIR` read by the driver; the window report keeps only counts and content digests, never paths or content. (4) Remove the folder from the whole history (for example `git filter-repo --path tools/corpus/manual_projects --invert-paths` on a fresh mirror clone, then a forced push, after making a backup), and ask GitHub support to drop cached views of the removed commits; every collaborator and fork must re-clone. (5) Rotate anything that was real: database and application passwords, any value in the setup guide or in `secret_pattern.env`, the demonstration accounts of the backend; change the passwords behind the hashes if the accounts exist anywhere. (6) Check the personal document and the report for content the user does not want public. (7) After the rewrite the commit hashes change; record the new hash that the window evaluates.
 
@@ -2913,3 +2913,46 @@ Status: the pre-window conditions are not yet complete. Condition 1 needs the co
 - **Window State**:
   - Evaluation window remains strictly `NOT STARTED` (`0 / 1000` CLI comparisons, `cli_discrepancies = 0`, `window_started = False`, `window_complete = False`).
   - Durable write-failure markers and shadow discrepancy logs reset via `pai clear-shadow --yes`.
+
+### Addendum (a7576cc): Check of findings AT and AU after the history rewrite (2026-10-19)
+Reviewed state: Linux, HEAD a7576cc, equal to origin/master. The GitHub Actions run #39277265743, the Windows runs, the contents of the owner's external corpus directory, the credential rotation and the clean `pai doctor` snapshot on the Windows host are the owner's; I did not see them. I changed one earlier paragraph of my own addendum (f781919): the list of what the exposed folder contained is replaced by a general sentence, because that list in a public repository describes what was once exposed. No other earlier line is changed.
+
+Verified. The reachable history has 124 commits and no object under `tools/corpus/manual_projects`; `git fsck` finds no unreachable commit and the reflog holds no old entry; the directory is in `.gitignore` and not in the tree; the remote tip is a7576cc. The driver refuses to run without an evaluated commit (a dry run without `--commit`, `PAI_EVALUATED_COMMIT` or `tools/corpus/EVALUATED_COMMIT` stops with an error naming Finding AU). The frozen snapshot directory that exists locally was built from a51315d and holds no file from the removed folder.
+
+AV (blocking until the user acts, security): the removed commit is still public. `https://github.com/hirushasuhan/personal_agentic_ai/commit/f781919`, requested without sign-in, returned HTTP 200 after the force push. GitHub keeps unreferenced commits reachable by their hash until they are collected or removed on request. The history rewrite therefore reduced but did not end the exposure. Required of the user: set the repository to private now and keep it private until GitHub has removed the commit (a private repository is not served to anonymous requests); send the removal request to GitHub Support, naming the commit hash and asking for removal of cached views and the objects; rotate every credential that appears in the removed files, and treat the hashes and addresses in them as public; if someone may have cloned or forked the repository since the push, assume they have the files. The review window itself does not depend on this, but the user should not postpone it.
+
+AW (blocking for the window): the driver does not turn on the path it measures. `tools/run_shadow_workload.py` never sets `PAI_USE_RUST_CORE`, and in `pai_core_bridge.py` that variable defaults to off, in which case every wrapper returns the Python result and no comparison is recorded. A driver run started from a shell without `PAI_USE_RUST_CORE=1` produces zero comparisons and looks like a quiet success. Required: the driver checks at start, before any command, that the Rust core is enabled, shadow comparison is enabled and `PAI_RUST_FALLBACK_PYTHON` is not set, that the binary is found and passes the handshake, and that `PAI_SHADOW_LOG` is not pointing at a test log; otherwise it stops with an error. It prints the effective values, the log path and the evaluated commit before the first run. The same state must be true for the hand sessions with `pai code`, so the window instructions should name the three variables.
+
+AX (non-blocking): the window does not say which binary it measured. Comparison records carry no identifier of the binary. A rebuild of `core/` during the seven days (on the same machine, with a new compiler or changed dependencies) changes the code under test without changing `research/` or `core/` sources. Required: store the SHA-256 of the binary in the handshake result and in each comparison record, show the set of binary hashes in `pai doctor`, and treat a second hash as a restart of the window.
+
+AY (non-blocking): `ensure_frozen_snapshot` extracts the archive into the existing snapshot directory without clearing it. Files that exist in an older snapshot and not in the new commit stay and are counted as inputs. Clear the directory before extraction, or extract into a new directory named by the commit hash.
+
+Status: AT is technically fixed in the repository history. AU is accepted (pinning is fail-closed). The window may start after AW is fixed and the user has made the repository private (AV) or has accepted in writing that the removed commit stays public until GitHub removes it. The evaluated commit is a7576cc plus any later commit that changes neither `research/` nor `core/`.
+
+### Addendum: Resolution of Findings AW, AX, AY and Implementation of Shadow Pre-flight Gate (2026-10-19)
+- **Resolution of Finding AW (Mandatory Pre-Flight Shadow Evaluation Gate)**:
+  - `tools/run_shadow_workload.py` implements `verify_shadow_evaluation_gate(repo_root)` which executes fail-closed checks before running any commands:
+    1. Enforces `PAI_USE_RUST_CORE=1` in the calling environment (stops with explicit error if unset or 0).
+    2. Enforces `PAI_SHADOW_COMPARE=1`.
+    3. Enforces `PAI_RUST_FALLBACK_PYTHON=0` (no forced fallback).
+    4. Validates that `pai-core` binary exists and is executable.
+    5. Validates that `check_handshake()` succeeds with the binary.
+    6. Verifies that `PAI_SHADOW_LOG` does not point to a temporary/test fixture log path.
+  - Before starting workload commands, the driver prints effective values: `PAI_USE_RUST_CORE`, `PAI_SHADOW_COMPARE`, `PAI_RUST_FALLBACK`, binary path, binary SHA-256, effective shadow log path, and evaluated commit SHA.
+  - Environment variables required for manual `pai code` sessions:
+    - PowerShell: `$env:PAI_USE_RUST_CORE="1" ; $env:PAI_SHADOW_COMPARE="1" ; $env:PAI_RUST_FALLBACK_PYTHON="0"`
+    - Bash: `export PAI_USE_RUST_CORE=1 PAI_SHADOW_COMPARE=1 PAI_RUST_FALLBACK_PYTHON=0`
+
+- **Resolution of Finding AX (Binary SHA-256 Identification)**:
+  - Driver computes and records the SHA-256 hash of the evaluated binary (`core/target/release/pai-core.exe` SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`).
+  - Workload driver verifies that this binary hash remains consistent across runs.
+
+- **Resolution of Finding AY (Pristine Snapshot Directory Clearing)**:
+  - `ensure_frozen_snapshot` in `tools/run_shadow_workload.py` clears any pre-existing snapshot directory contents via `shutil.rmtree(snapshot_dir)` prior to unzipping the fresh git archive, preventing stale files from older commits from lingering.
+
+- **Evaluated Commit & Code Invariance**:
+  - Pinned evaluated commit: `a7576ccabdba74dca92629ed88d98492df602af6` recorded in `tools/corpus/EVALUATED_COMMIT`.
+  - Zero code changes made to `research/` or `core/` (only tooling in `tools/` and documentation in `docs/`). The evaluated codebase under test remains identical to `a7576cc`.
+
+- **Current Window State**:
+  - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).

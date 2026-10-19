@@ -2,8 +2,8 @@
 """
 tools/run_shadow_workload.py - Dogfood Workload Driver for PAI Shadow Evaluation Window.
 
-Finding AN: Provides a scripted driver executing real `pai` CLI commands against real
-files and repositories to generate legitimate `source="cli"` shadow comparisons.
+Finding AN: Scripted driver executing real `pai` CLI commands against real
+            files and repositories to generate legitimate `source="cli"` shadow comparisons.
 Finding AS: Extracts and operates on a frozen snapshot of the evaluated commit.
 Finding AT: Supports external manual projects directory (PAI_MANUAL_CORPUS_DIR),
             keeping private/personal files completely outside the Git repository.
@@ -11,6 +11,12 @@ Finding AT: Supports external manual projects directory (PAI_MANUAL_CORPUS_DIR),
 Finding AU: Pins the evaluated commit hash explicitly. Refuses to default to floating HEAD.
             Governance rule: ANY MODIFICATION TO research/ OR core/ INVALIDATES & RESTARTS
             THE 7-DAY SHADOW EVALUATION WINDOW.
+Finding AW: Mandatory pre-flight gate. Verifies before any workload execution that
+            PAI_USE_RUST_CORE=1, PAI_SHADOW_COMPARE=1, PAI_RUST_FALLBACK_PYTHON=0,
+            pai-core binary exists, bridge handshake passes, and PAI_SHADOW_LOG is not
+            pointing to a test log. Prints effective values before the first run.
+Finding AX: Inspects, records, and displays the SHA-256 digest of the evaluated pai-core binary.
+Finding AY: Clears snapshot directory completely before extracting archive to prevent stale files.
 
 Executes:
 1. `pai docs <file>` - Single-file document analyses (drives `ingest_file`).
@@ -24,7 +30,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -40,6 +48,76 @@ if str(RESEARCH_DIR) not in sys.path:
 
 import pai
 import pai_core_bridge
+
+
+def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
+    """
+    Finding AW Gate: Verifies that the host environment is properly configured
+    to exercise and measure the Rust core shadow comparison path before workload execution.
+    Fails closed if:
+    1. PAI_USE_RUST_CORE != '1'
+    2. PAI_SHADOW_COMPARE != '1'
+    3. PAI_RUST_FALLBACK_PYTHON is active ('1')
+    4. Rust core binary is missing or cannot be located
+    5. Rust core binary bridge handshake fails
+    6. PAI_SHADOW_LOG is set to an invalid or test/temporary log path
+    """
+    use_rust = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
+    if not use_rust or not pai_core_bridge.is_rust_core_enabled():
+        raise RuntimeError(
+            "Finding AW Gate Failed: PAI_USE_RUST_CORE must be explicitly set to '1' in the calling environment. "
+            "When disabled, pai CLI commands bypass Rust shadow comparisons entirely. "
+            "Set $env:PAI_USE_RUST_CORE='1' (PowerShell) or export PAI_USE_RUST_CORE=1 (Bash) before starting the workload."
+        )
+
+    shadow_compare = os.environ.get("PAI_SHADOW_COMPARE", "1").lower() in ("1", "true", "yes")
+    if not shadow_compare or not pai_core_bridge.is_shadow_compare_enabled():
+        raise RuntimeError(
+            "Finding AW Gate Failed: PAI_SHADOW_COMPARE must be enabled ('1'). "
+            "Set $env:PAI_SHADOW_COMPARE='1' or export PAI_SHADOW_COMPARE=1."
+        )
+
+    fallback_python = os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes")
+    if fallback_python or pai_core_bridge.is_python_fallback_forced():
+        raise RuntimeError(
+            "Finding AW Gate Failed: PAI_RUST_FALLBACK_PYTHON is set to '1' (Python fallback forced). "
+            "Unset PAI_RUST_FALLBACK_PYTHON or set it to '0' so that Rust core is primary."
+        )
+
+    bin_path_str = pai_core_bridge.find_core_binary()
+    if not bin_path_str or not os.path.isfile(bin_path_str):
+        raise RuntimeError(
+            "Finding AW Gate Failed: pai-core binary not found. "
+            "Build binary with 'cargo build --release --manifest-path core/Cargo.toml' before running driver."
+        )
+    bin_path = Path(bin_path_str).resolve()
+
+    with open(bin_path, "rb") as bf:
+        bin_hash = hashlib.sha256(bf.read()).hexdigest()
+
+    try:
+        handshake_resp = pai_core_bridge.check_handshake(bin_path_str)
+    except Exception as e:
+        raise RuntimeError(f"Finding AW Gate Failed: pai-core bridge handshake failed ({e}).")
+
+    shadow_log_env = os.environ.get("PAI_SHADOW_LOG")
+    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
+    if shadow_log_env:
+        log_str = shadow_log_env.lower()
+        if any(frag in log_str for frag in ["test", "fixture", "tmp", "temp"]):
+            raise RuntimeError(
+                f"Finding AW Gate Failed: PAI_SHADOW_LOG points to a test or temporary path ({shadow_log_env}). "
+                "Unset PAI_SHADOW_LOG to use the canonical dogfood telemetry log."
+            )
+
+    return {
+        "use_rust_core": True,
+        "shadow_compare": True,
+        "fallback_python": False,
+        "bin_path": bin_path,
+        "bin_hash": bin_hash,
+        "effective_log": effective_log,
+    }
 
 
 def resolve_evaluated_commit(cli_commit: Optional[str] = None, repo_root: Optional[Path] = None) -> str:
@@ -85,9 +163,8 @@ def resolve_evaluated_commit(cli_commit: Optional[str] = None, repo_root: Option
 
 def ensure_frozen_snapshot(repo_root: Path, commit_sha: str) -> Tuple[Path, str]:
     """
-    Extracts a frozen snapshot from git archive of the target commit (Finding AS).
-    Ensures that live repository edits during the 7-day window cannot create new content
-    digests or inflate distinct input metrics.
+    Extracts a frozen snapshot from git archive of the target commit (Findings AS & AY).
+    Clears the snapshot directory before extraction to prevent stale files from lingering.
     Returns (snapshot_dir, resolved_commit_sha).
     """
     resolved_sha = commit_sha
@@ -114,7 +191,7 @@ def ensure_frozen_snapshot(repo_root: Path, commit_sha: str) -> Tuple[Path, str]
         except Exception:
             pass
 
-    # Extract git archive of named commit into snapshot_dir
+    # Extract git archive of named commit into snapshot_dir after clearing existing contents (Finding AY)
     zip_tmp = repo_root / "tools" / "corpus" / f"snapshot_{int(time.time())}.zip"
     try:
         subprocess.run(
@@ -122,6 +199,8 @@ def ensure_frozen_snapshot(repo_root: Path, commit_sha: str) -> Tuple[Path, str]
             cwd=str(repo_root),
             check=True,
         )
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zip_tmp, "r") as z:
             z.extractall(snapshot_dir)
@@ -312,8 +391,11 @@ def run_workload(
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
+    # Finding AW Gate Verification: strictly enforced before running any commands
+    gate_info = verify_shadow_evaluation_gate(REPO_ROOT)
+
     print("=" * 70)
-    print("         PAI SHADOW WORKLOAD DOGFOOD DRIVER (Findings AN, AP, AS, AT, AU)")
+    print("         PAI SHADOW WORKLOAD DOGFOOD DRIVER (Findings AN, AW, AX, AY)")
     print("=" * 70)
 
     manual_projects_dir = resolve_manual_projects_dir(manual_dir_override, REPO_ROOT)
@@ -334,10 +416,17 @@ def run_workload(
     else:
         resolved_commit = resolve_evaluated_commit(commit_sha, REPO_ROOT)
         snapshot_dir, resolved_commit = ensure_frozen_snapshot(REPO_ROOT, commit_sha=resolved_commit)
-        print(f"Corpus Mode           : FROZEN SNAPSHOT (Finding AS)")
+        print(f"Corpus Mode           : FROZEN SNAPSHOT (Finding AS & AY)")
         print(f"Frozen Commit SHA     : {resolved_commit} (Finding AU pinned)")
         print(f"Snapshot Directory    : {snapshot_dir}")
 
+    print("Shadow Gate Status    : PASSED (Finding AW verified)")
+    print(f"PAI_USE_RUST_CORE     : 1")
+    print(f"PAI_SHADOW_COMPARE    : 1")
+    print(f"PAI_RUST_FALLBACK     : 0")
+    print(f"Rust Core Binary      : {gate_info['bin_path']}")
+    print(f"Rust Core Binary SHA  : {gate_info['bin_hash']} (Finding AX)")
+    print(f"Effective Shadow Log  : {gate_info['effective_log']}")
     print("Governance Rule       : ANY MODIFICATION TO research/ OR core/ INVALIDATES & RESTARTS THE EVALUATION WINDOW.")
 
     if not docs_files:
