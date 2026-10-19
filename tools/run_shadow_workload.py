@@ -51,9 +51,50 @@ import pai
 import pai_core_bridge
 
 
-def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
+def resolve_evaluated_commit(cli_commit: Optional[str] = None, repo_root: Optional[Path] = None) -> str:
     """
-    Finding AW & AZ Gate: Verifies that the host environment is properly configured
+    Resolves the pinned evaluated commit hash (Findings AS & AU).
+    Refuses to default to floating 'HEAD' without explicit pinning.
+    Order of resolution:
+    1. CLI argument --commit <SHA>
+    2. Environment variable PAI_EVALUATED_COMMIT
+    3. Pinned commit file tools/corpus/EVALUATED_COMMIT
+    """
+    root = repo_root or REPO_ROOT
+    commit_val: Optional[str] = None
+
+    if cli_commit:
+        commit_val = cli_commit.strip()
+    elif os.environ.get("PAI_EVALUATED_COMMIT"):
+        commit_val = os.environ.get("PAI_EVALUATED_COMMIT", "").strip()
+    else:
+        commit_file = root / "tools" / "corpus" / "EVALUATED_COMMIT"
+        if commit_file.exists():
+            commit_val = commit_file.read_text("utf-8").strip()
+
+    if not commit_val:
+        raise ValueError(
+            "Mandatory evaluated commit not specified (Finding AU). "
+            "Pass --commit <SHA>, set PAI_EVALUATED_COMMIT, or write SHA to tools/corpus/EVALUATED_COMMIT. "
+            "Floating 'HEAD' is disallowed to ensure corpus stability across the 7-day window."
+        )
+
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", commit_val],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return proc.stdout.strip()
+    except Exception as e:
+        raise ValueError(f"Finding AU Gate Failed: Could not resolve git commit '{commit_val}': {e}")
+
+
+def verify_shadow_evaluation_gate(repo_root: Path, evaluated_commit: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Finding AW, AZ & BA Gate: Verifies that the host environment and working tree are properly configured
     to exercise and measure the Rust core shadow comparison path before workload execution.
     Fails closed if:
     1. PAI_TELEMETRY_SOURCE is present in os.environ (Finding AZ)
@@ -65,6 +106,9 @@ def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
     7. PAI_RUST_FALLBACK_PYTHON is active ('1') (Finding AW)
     8. Rust core binary is missing or cannot be located (Finding AW)
     9. Rust core binary bridge handshake fails (Finding AW)
+    10. Working tree contains uncommitted changes in research/ or core/ (Finding BA)
+    11. Working tree differs from pinned evaluated commit in research/ or core/ (Finding BA)
+    12. HEAD tree IDs do not match pinned commit tree IDs for research/ and core/ (Finding BA)
     """
     if "PAI_TELEMETRY_SOURCE" in os.environ:
         raise RuntimeError(
@@ -133,6 +177,91 @@ def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
     except Exception as e:
         raise RuntimeError(f"Finding AW Gate Failed: pai-core bridge handshake failed ({e}).")
 
+    target_commit = evaluated_commit or resolve_evaluated_commit(repo_root=repo_root)
+
+    # Finding BA: Assert working tree and index have zero uncommitted changes in research/ or core/
+    try:
+        status_proc = subprocess.run(
+            ["git", "status", "--porcelain", "--", "research", "core"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if status_proc.stdout.strip():
+            raise RuntimeError(
+                f"Finding BA Gate Failed: Working tree contains uncommitted changes in research/ or core/:\n"
+                f"{status_proc.stdout.strip()}\n"
+                f"All hand sessions and evaluation driver runs must execute on a clean working tree matching "
+                f"pinned commit '{target_commit}'."
+            )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Finding BA Gate Failed: git status check failed: {e}")
+
+    # Finding BA: Assert working tree has zero diff against the pinned evaluated commit in research/ and core/
+    diff_proc = subprocess.run(
+        ["git", "diff", "--quiet", target_commit, "--", "research", "core"],
+        cwd=str(repo_root),
+    )
+    if diff_proc.returncode != 0:
+        raise RuntimeError(
+            f"Finding BA Gate Failed: Working tree differs from pinned evaluated commit '{target_commit}' "
+            f"in research/ or core/. Any modification to research/ or core/ invalidates and restarts "
+            f"the 7-day evaluation window."
+        )
+
+    # Finding BA: Compute git tree IDs for research/ and core/ in the pinned evaluated commit
+    try:
+        proc_rtree = subprocess.run(
+            ["git", "rev-parse", f"{target_commit}:research"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        research_tree_id = proc_rtree.stdout.strip()
+    except Exception as e:
+        raise RuntimeError(f"Finding BA Gate Failed: Could not resolve git tree ID for '{target_commit}:research': {e}")
+
+    try:
+        proc_ctree = subprocess.run(
+            ["git", "rev-parse", f"{target_commit}:core"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        core_tree_id = proc_ctree.stdout.strip()
+    except Exception as e:
+        raise RuntimeError(f"Finding BA Gate Failed: Could not resolve git tree ID for '{target_commit}:core': {e}")
+
+    # Finding BA: Verify working tree HEAD matches the pinned tree IDs
+    try:
+        head_rtree = subprocess.run(
+            ["git", "rev-parse", "HEAD:research"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        head_ctree = subprocess.run(
+            ["git", "rev-parse", "HEAD:core"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if head_rtree != research_tree_id or head_ctree != core_tree_id:
+            raise RuntimeError(
+                f"Finding BA Gate Failed: HEAD tree IDs (research: {head_rtree}, core: {head_ctree}) "
+                f"differ from pinned commit tree IDs (research: {research_tree_id}, core: {core_tree_id}). "
+                f"Evaluation runs must execute strictly against pinned commit '{target_commit}'."
+            )
+    except Exception as e:
+        if isinstance(e, RuntimeError):
+            raise
+        raise RuntimeError(f"Finding BA Gate Failed: Could not verify HEAD tree IDs against pinned commit: {e}")
+
     return {
         "use_rust_core": True,
         "shadow_compare": True,
@@ -141,6 +270,9 @@ def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
         "bin_hash": bin_hash,
         "effective_log": effective_log,
         "canonical_log": canonical_log,
+        "evaluated_commit": target_commit,
+        "research_tree_id": research_tree_id,
+        "core_tree_id": core_tree_id,
     }
 
 
@@ -148,12 +280,14 @@ def check_or_update_evaluation_manifest(
     log_dir: Path,
     evaluated_commit: str,
     binary_hash: str,
+    research_tree_id: Optional[str] = None,
+    core_tree_id: Optional[str] = None,
 ) -> Path:
     """
-    Finding AX Manifest: Writes or verifies the durable evaluation manifest
+    Finding AX & BA Manifest: Writes or verifies the durable evaluation manifest
     next to the shadow discrepancy log.
-    If manifest exists, enforces that the current run's commit SHA and binary hash
-    match the manifest. If they differ, fails closed with an error indicating that
+    If manifest exists, enforces that the current run's commit SHA, binary hash,
+    and tree IDs match the manifest. If they differ, fails closed with an error indicating that
     a rebuild or code change occurred and the window must be explicitly restarted.
     """
     manifest_path = log_dir / "evaluation_manifest.json"
@@ -162,10 +296,12 @@ def check_or_update_evaluation_manifest(
             with open(manifest_path, "r", encoding="utf-8") as mf:
                 data = json.load(mf)
         except Exception as e:
-            raise RuntimeError(f"Finding AX Gate Failed: Evaluation manifest at {manifest_path} is corrupt: {e}")
+            raise RuntimeError(f"Finding AX/BA Gate Failed: Evaluation manifest at {manifest_path} is corrupt: {e}")
 
         manifest_commit = data.get("evaluated_commit")
         manifest_hash = data.get("binary_hash")
+        manifest_rtree = data.get("research_tree_id")
+        manifest_ctree = data.get("core_tree_id")
 
         if manifest_commit and manifest_commit != evaluated_commit:
             raise RuntimeError(
@@ -182,6 +318,23 @@ def check_or_update_evaluation_manifest(
                 "Binary rebuild during the evaluation window is prohibited. "
                 "Run `pai clear-shadow --yes` to reset the window if this was intentional."
             )
+
+        if research_tree_id and manifest_rtree and manifest_rtree != research_tree_id:
+            raise RuntimeError(
+                f"Finding BA Gate Failed: research/ tree ID '{research_tree_id}' differs from "
+                f"active window manifest research/ tree ID '{manifest_rtree}'. "
+                "Any modification to research/ invalidates and restarts the 7-day evaluation window. "
+                "Run `pai clear-shadow --yes` to reset the window if this was intentional."
+            )
+
+        if core_tree_id and manifest_ctree and manifest_ctree != core_tree_id:
+            raise RuntimeError(
+                f"Finding BA Gate Failed: core/ tree ID '{core_tree_id}' differs from "
+                f"active window manifest core/ tree ID '{manifest_ctree}'. "
+                "Any modification to core/ invalidates and restarts the 7-day evaluation window. "
+                "Run `pai clear-shadow --yes` to reset the window if this was intentional."
+            )
+
         return manifest_path
 
     manifest_data = {
@@ -190,54 +343,18 @@ def check_or_update_evaluation_manifest(
         "created_at": time.time(),
         "created_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if research_tree_id:
+        manifest_data["research_tree_id"] = research_tree_id
+    if core_tree_id:
+        manifest_data["core_tree_id"] = core_tree_id
+
     try:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         with open(manifest_path, "w", encoding="utf-8") as mf:
             json.dump(manifest_data, mf, indent=2)
     except Exception as e:
-        raise RuntimeError(f"Finding AX Gate Failed: Could not write evaluation manifest to {manifest_path}: {e}")
+        raise RuntimeError(f"Finding AX/BA Gate Failed: Could not write evaluation manifest to {manifest_path}: {e}")
     return manifest_path
-
-
-def resolve_evaluated_commit(cli_commit: Optional[str] = None, repo_root: Optional[Path] = None) -> str:
-    """
-    Resolves the pinned evaluated commit hash (Findings AS & AU).
-    Refuses to default to floating 'HEAD' without explicit pinning.
-    Order of resolution:
-    1. CLI argument --commit <SHA>
-    2. Environment variable PAI_EVALUATED_COMMIT
-    3. Pinned commit file tools/corpus/EVALUATED_COMMIT
-    """
-    root = repo_root or REPO_ROOT
-    commit_val: Optional[str] = None
-
-    if cli_commit:
-        commit_val = cli_commit.strip()
-    elif os.environ.get("PAI_EVALUATED_COMMIT"):
-        commit_val = os.environ.get("PAI_EVALUATED_COMMIT", "").strip()
-    else:
-        commit_file = root / "tools" / "corpus" / "EVALUATED_COMMIT"
-        if commit_file.exists():
-            commit_val = commit_file.read_text("utf-8").strip()
-
-    if not commit_val:
-        raise ValueError(
-            "Mandatory evaluated commit not specified (Finding AU). "
-            "Pass --commit <SHA>, set PAI_EVALUATED_COMMIT, or write SHA to tools/corpus/EVALUATED_COMMIT. "
-            "Floating 'HEAD' is disallowed to ensure corpus stability across the 7-day window."
-        )
-
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", commit_val],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return proc.stdout.strip()
-    except Exception:
-        return commit_val
 
 
 def ensure_frozen_snapshot(repo_root: Path, commit_sha: str) -> Tuple[Path, str]:
@@ -470,13 +587,6 @@ def run_workload(
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
-    # Finding AW Gate Verification: strictly enforced before running any commands
-    gate_info = verify_shadow_evaluation_gate(REPO_ROOT)
-
-    print("=" * 70)
-    print("         PAI SHADOW WORKLOAD DOGFOOD DRIVER (Findings AN, AW, AX, AY)")
-    print("=" * 70)
-
     manual_projects_dir = resolve_manual_projects_dir(manual_dir_override, REPO_ROOT)
     if manual_projects_dir:
         print(f"Manual Corpus Source  : External Directory ({manual_projects_dir}) [Finding AT]")
@@ -499,12 +609,21 @@ def run_workload(
         print(f"Frozen Commit SHA     : {resolved_commit} (Finding AU pinned)")
         print(f"Snapshot Directory    : {snapshot_dir}")
 
-    print("Shadow Gate Status    : PASSED (Finding AW verified)")
+    # Finding AW, AZ & BA Gate Verification: strictly enforced before running any commands
+    gate_info = verify_shadow_evaluation_gate(REPO_ROOT, evaluated_commit=resolved_commit if resolved_commit != "LIVE" else None)
+
+    print("=" * 70)
+    print("         PAI SHADOW WORKLOAD DOGFOOD DRIVER (Findings AN, AW, AX, AY, BA)")
+    print("=" * 70)
+    print("Shadow Gate Status    : PASSED (Findings AW, AZ, BA verified)")
     print(f"PAI_USE_RUST_CORE     : 1")
     print(f"PAI_SHADOW_COMPARE    : 1")
     print(f"PAI_RUST_FALLBACK     : 0")
     print(f"Rust Core Binary      : {gate_info['bin_path']}")
     print(f"Rust Core Binary SHA  : {gate_info['bin_hash']} (Finding AX)")
+    if gate_info.get("research_tree_id"):
+        print(f"Research Tree ID      : {gate_info['research_tree_id']} (Finding BA)")
+        print(f"Core Tree ID          : {gate_info['core_tree_id']} (Finding BA)")
     print(f"Effective Shadow Log  : {gate_info['effective_log']}")
     print("Governance Rule       : ANY MODIFICATION TO research/ OR core/ INVALIDATES & RESTARTS THE EVALUATION WINDOW.")
 
@@ -514,8 +633,10 @@ def run_workload(
             gate_info["effective_log"].parent,
             resolved_commit,
             gate_info["bin_hash"],
+            gate_info.get("research_tree_id"),
+            gate_info.get("core_tree_id"),
         )
-        print(f"Evaluation Manifest   : {manifest_path} (Finding AX verified)")
+        print(f"Evaluation Manifest   : {manifest_path} (Findings AX & BA verified)")
     else:
         print("Evaluation Manifest   : Skipped (dry-run mode)")
 

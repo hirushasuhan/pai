@@ -3014,3 +3014,48 @@ Status: no code defect blocks the window apart from AZ and AX. Start conditions:
 - **Current Window State**:
   - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).
 
+
+### Addendum (eb924f2): Check of findings AZ and AX (2026-10-19)
+Reviewed state: Linux, HEAD eb924f2. The pinned evaluated commit is 9ac1bc5; eb924f2 differs from it only in `tools/corpus/EVALUATED_COMMIT`, so `research/` and `core/` are the code of 9ac1bc5. I ran `test_shadow_isolation_guard.py` on Linux with a fake HOME: 19 tests, OK. The GitHub Actions run #39285910738, the Windows runs and the clean `pai doctor` snapshot on the Windows host are the owner's; I did not see them.
+
+AZ is fixed in the code: the gate refuses to run when `PAI_TELEMETRY_SOURCE`, `PAI_SHADOW_LOG` or `PAI_DIR` is set and when the effective log is not exactly `~/.pai/shadow_discrepancies.jsonl`; after iteration 1 the driver stops with an error if `cli_comparisons` did not increase. AX is fixed in both forms: every comparison and discrepancy record carries `binary_hash`, `get_shadow_telemetry_summary` returns `binary_hashes` and `binary_rebuild_detected` (a second hash makes `window_active` False), `pai doctor` shows the hashes and fails the shadow check, and the driver keeps `evaluation_manifest.json` next to the log, which `clear-shadow --yes` removes.
+
+AV is still open. At the time of this check the repository page and the page of the removed commit f781919 still returned HTTP 200 when requested without sign-in. The user has not yet stated a choice.
+
+BA (blocking, tools only): nothing checks that the code that runs is the code that was pinned. The driver compares the pinned commit with a manifest that holds the same pinned commit, and it only calls `git rev-parse` on it. The measured code is the working tree (`research/pai.py` and the modules it imports run in the same process), not the snapshot, which is only a corpus. An edit to `research/` after the start, the thing the restart rule forbids, leaves the manifest valid and the driver running; only a rebuilt binary would be noticed. The rule is therefore a promise, not a check. Required: at the start of every driver run, and refusing to continue otherwise, check that `git diff --quiet <pinned> -- research core` and `git status --porcelain -- research core` show no difference and no uncommitted change (compare git tree ids of the two directories: `git rev-parse <pinned>:research` and `<pinned>:core` against the working tree); write both tree ids into the manifest at the first run and compare them on every later run. Hand sessions with `pai code` do not pass through the driver, so the window instructions must say that a hand session starts from a clean working tree, and the final report must show that the tree ids in the manifest still equal those of the pinned commit when the window ends. This changes only `tools/` and does not restart anything.
+
+Status: AZ and AX are accepted. The window may start once BA is in place (tools only) and the user has stated the decision on AV. Neither needs a change in `research/` or `core/`.
+
+### Resolution of Finding BA (Working Tree Cleanliness Gate & Tree ID Verification)
+
+- **Finding BA Background & Threat Model**:
+  The evaluation driver executes Python code by importing `research/pai.py` and `research/pai_core_bridge.py` directly into its active Python runtime. While the frozen corpus snapshot guarantees input document stability, changes made to `research/` or `core/` during an active evaluation window could alter evaluated behavior without violating manifest commit or binary hash checks.
+  
+- **Implemented Fixes (Confined Strictly to `tools/` and `docs/`)**:
+  1. **Working Tree Cleanliness Enforcement**:
+     In `verify_shadow_evaluation_gate` within `tools/run_shadow_workload.py`:
+     - Executes `git status --porcelain -- research core`. If any staged, modified, or untracked changes exist in `research/` or `core/`, execution halts immediately with `RuntimeError: Finding BA Gate Failed: Working tree contains uncommitted changes...`.
+     - Executes `git diff --quiet <pinned> -- research core`. If any difference exists between the working tree/index and the pinned evaluated commit, execution halts immediately with `RuntimeError: Finding BA Gate Failed: Working tree differs from pinned evaluated commit...`.
+  2. **Git Tree Object ID Verification**:
+     - Resolves the git tree object IDs for both core subdirectories from the pinned commit:
+       - `research/` tree ID: `git rev-parse 9ac1bc5:research` (`6e0fb90123f282caa68ea51d54ee3816a96fb4fd`)
+       - `core/` tree ID: `git rev-parse 9ac1bc5:core` (`14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`)
+     - Verifies `HEAD:research` and `HEAD:core` equal the pinned tree IDs.
+  3. **Manifest Persistence & Integrity Check**:
+     - In `check_or_update_evaluation_manifest` (`tools/run_shadow_workload.py`):
+       - On the initial run, persists `research_tree_id` and `core_tree_id` into `evaluation_manifest.json`.
+       - On every subsequent run, asserts that current tree IDs match `manifest["research_tree_id"]` and `manifest["core_tree_id"]`. Any deviation halts execution and requires an explicit `pai clear-shadow --yes` window reset.
+  4. **Interactive Hand Sessions Governance (`pai code`)**:
+     - Interactive manual sessions using `pai code` do not execute through the automated driver.
+     - **Mandatory Procedure for Hand Sessions**:
+       1. The user must verify a clean working tree matching pinned commit `9ac1bc5` before initiating manual sessions (`git status --porcelain -- research core` must return empty).
+       2. No modifications to `research/` or `core/` may be made during manual sessions.
+       3. At the conclusion of the 7-day evaluation window, the completion report must demonstrate that `git rev-parse HEAD:research` and `git rev-parse HEAD:core` still precisely match the tree IDs recorded in `evaluation_manifest.json` (`6e0fb90123f282caa68ea51d54ee3816a96fb4fd` and `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`).
+  5. **Verification & Automated Tests**:
+     - Unit test suite added in `tools/test_shadow_ba_gate.py` verifying fail-closed behavior on uncommitted changes, git diff mismatches, and manifest tree ID mismatches (all passing).
+     - Full test suite passes: `test_shadow_isolation_guard.py` (19/19 OK), `test_claims.py` (2/2 OK), `cargo test` (54/54 OK).
+
+- **Current Window State**:
+  - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).
+  - Awaiting user decision on Finding AV and reviewer start signal.
+
