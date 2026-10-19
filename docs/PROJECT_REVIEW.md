@@ -3089,3 +3089,10 @@ Status: no open finding blocks the window except the user's decision on AV. BB c
   - Research tree ID: `6e0fb90123f282caa68ea51d54ee3816a96fb4fd`.
   - Core tree ID: `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`.
   - Binary SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`.
+
+### Addendum (bf7ce9b): Check of finding BB (2026-10-19)
+Reviewed state: Linux, HEAD bf7ce9b. The `research/` and `core/` trees of HEAD are 6e0fb90123f282caa68ea51d54ee3816a96fb4fd and 14c60746ca9a41d91aafd88cc0c7d98719cfe3a9, equal to the pinned commit 9ac1bc5b056f53fb88c1206fec896df9ffc85c1f; `git diff 9ac1bc5 HEAD -- research core` is empty. The GitHub Actions run for bf7ce9b and the Windows runs are the owner's; I did not see them.
+
+BB is accepted. I ran `tools/test_shadow_ba_gate.py` on Linux with none of the `PAI_*` variables set and a fake HOME: 4 tests, OK, including the test that commits a change in a temporary clone of the repository and expects the gate to stop. No file was left in the working tree, and `tools/corpus/_test_manifest_ba` is gone. The workflow runs the file in two jobs (lines 43 and 282 of `windows-ci.yml`).
+
+AV is the only open item and it is the user's decision: at the time of this check the repository page and the page of the removed commit f781919 still returned HTTP 200 without sign-in.
