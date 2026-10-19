@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -52,16 +53,48 @@ import pai_core_bridge
 
 def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
     """
-    Finding AW Gate: Verifies that the host environment is properly configured
+    Finding AW & AZ Gate: Verifies that the host environment is properly configured
     to exercise and measure the Rust core shadow comparison path before workload execution.
     Fails closed if:
-    1. PAI_USE_RUST_CORE != '1'
-    2. PAI_SHADOW_COMPARE != '1'
-    3. PAI_RUST_FALLBACK_PYTHON is active ('1')
-    4. Rust core binary is missing or cannot be located
-    5. Rust core binary bridge handshake fails
-    6. PAI_SHADOW_LOG is set to an invalid or test/temporary log path
+    1. PAI_TELEMETRY_SOURCE is present in os.environ (Finding AZ)
+    2. PAI_SHADOW_LOG is present in os.environ (Finding AZ)
+    3. PAI_DIR is present in os.environ (Finding AZ)
+    4. Effective log path != canonical path ~/.pai/shadow_discrepancies.jsonl (Finding AZ)
+    5. PAI_USE_RUST_CORE != '1' (Finding AW)
+    6. PAI_SHADOW_COMPARE != '1' (Finding AW)
+    7. PAI_RUST_FALLBACK_PYTHON is active ('1') (Finding AW)
+    8. Rust core binary is missing or cannot be located (Finding AW)
+    9. Rust core binary bridge handshake fails (Finding AW)
     """
+    if "PAI_TELEMETRY_SOURCE" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_TELEMETRY_SOURCE is set in os.environ ('{os.environ['PAI_TELEMETRY_SOURCE']}'). "
+            "This environment variable overrides CLI telemetry tagging and causes comparisons to bypass source='cli'. "
+            "Unset PAI_TELEMETRY_SOURCE before running the driver."
+        )
+
+    if "PAI_SHADOW_LOG" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_SHADOW_LOG is set in os.environ ('{os.environ['PAI_SHADOW_LOG']}'). "
+            "Overriding the shadow log path is prohibited during evaluation window runs. "
+            "Unset PAI_SHADOW_LOG so that telemetry writes to the canonical dogfood log."
+        )
+
+    if "PAI_DIR" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_DIR is set in os.environ ('{os.environ['PAI_DIR']}'). "
+            "Overriding PAI_DIR is prohibited during evaluation window runs. "
+            "Unset PAI_DIR so that telemetry lands in ~/.pai/shadow_discrepancies.jsonl."
+        )
+
+    canonical_log = (Path.home() / ".pai" / "shadow_discrepancies.jsonl").resolve()
+    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
+    if effective_log != canonical_log:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: Effective shadow log path '{effective_log}' does not match "
+            f"the canonical dogfood telemetry path '{canonical_log}'. Ensure ~/.pai is writable and environment is clean."
+        )
+
     use_rust = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
     if not use_rust or not pai_core_bridge.is_rust_core_enabled():
         raise RuntimeError(
@@ -100,16 +133,6 @@ def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
     except Exception as e:
         raise RuntimeError(f"Finding AW Gate Failed: pai-core bridge handshake failed ({e}).")
 
-    shadow_log_env = os.environ.get("PAI_SHADOW_LOG")
-    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
-    if shadow_log_env:
-        log_str = shadow_log_env.lower()
-        if any(frag in log_str for frag in ["test", "fixture", "tmp", "temp"]):
-            raise RuntimeError(
-                f"Finding AW Gate Failed: PAI_SHADOW_LOG points to a test or temporary path ({shadow_log_env}). "
-                "Unset PAI_SHADOW_LOG to use the canonical dogfood telemetry log."
-            )
-
     return {
         "use_rust_core": True,
         "shadow_compare": True,
@@ -117,7 +140,63 @@ def verify_shadow_evaluation_gate(repo_root: Path) -> Dict[str, Any]:
         "bin_path": bin_path,
         "bin_hash": bin_hash,
         "effective_log": effective_log,
+        "canonical_log": canonical_log,
     }
+
+
+def check_or_update_evaluation_manifest(
+    log_dir: Path,
+    evaluated_commit: str,
+    binary_hash: str,
+) -> Path:
+    """
+    Finding AX Manifest: Writes or verifies the durable evaluation manifest
+    next to the shadow discrepancy log.
+    If manifest exists, enforces that the current run's commit SHA and binary hash
+    match the manifest. If they differ, fails closed with an error indicating that
+    a rebuild or code change occurred and the window must be explicitly restarted.
+    """
+    manifest_path = log_dir / "evaluation_manifest.json"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                data = json.load(mf)
+        except Exception as e:
+            raise RuntimeError(f"Finding AX Gate Failed: Evaluation manifest at {manifest_path} is corrupt: {e}")
+
+        manifest_commit = data.get("evaluated_commit")
+        manifest_hash = data.get("binary_hash")
+
+        if manifest_commit and manifest_commit != evaluated_commit:
+            raise RuntimeError(
+                f"Finding AX Gate Failed: Evaluated commit '{evaluated_commit}' differs from "
+                f"active window manifest commit '{manifest_commit}'. "
+                "Any code change invalidates and restarts the 7-day evaluation window. "
+                "Run `pai clear-shadow --yes` to reset the window if this was intentional."
+            )
+
+        if manifest_hash and manifest_hash != binary_hash:
+            raise RuntimeError(
+                f"Finding AX Gate Failed: pai-core binary SHA-256 '{binary_hash}' differs from "
+                f"active window manifest binary SHA-256 '{manifest_hash}'. "
+                "Binary rebuild during the evaluation window is prohibited. "
+                "Run `pai clear-shadow --yes` to reset the window if this was intentional."
+            )
+        return manifest_path
+
+    manifest_data = {
+        "evaluated_commit": evaluated_commit,
+        "binary_hash": binary_hash,
+        "created_at": time.time(),
+        "created_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_path, "w", encoding="utf-8") as mf:
+            json.dump(manifest_data, mf, indent=2)
+    except Exception as e:
+        raise RuntimeError(f"Finding AX Gate Failed: Could not write evaluation manifest to {manifest_path}: {e}")
+    return manifest_path
 
 
 def resolve_evaluated_commit(cli_commit: Optional[str] = None, repo_root: Optional[Path] = None) -> str:
@@ -429,6 +508,17 @@ def run_workload(
     print(f"Effective Shadow Log  : {gate_info['effective_log']}")
     print("Governance Rule       : ANY MODIFICATION TO research/ OR core/ INVALIDATES & RESTARTS THE EVALUATION WINDOW.")
 
+    manifest_path = None
+    if not dry_run:
+        manifest_path = check_or_update_evaluation_manifest(
+            gate_info["effective_log"].parent,
+            resolved_commit,
+            gate_info["bin_hash"],
+        )
+        print(f"Evaluation Manifest   : {manifest_path} (Finding AX verified)")
+    else:
+        print("Evaluation Manifest   : Skipped (dry-run mode)")
+
     if not docs_files:
         docs_files = get_default_docs_files(REPO_ROOT, snapshot_dir=snapshot_dir, manual_projects_dir=manual_projects_dir)
     if not analyze_folders:
@@ -484,6 +574,18 @@ def run_workload(
             rc_ana = pai.main(["analyze", str(target_folder), "--model", model, "--json"])
             if rc_ana != 0:
                 print(f"Warning: pai analyze failed with code {rc_ana}", file=sys.stderr)
+
+            # Finding AZ Gate: Verify that iteration 1 generated new CLI comparisons
+            if it == 1:
+                cur_summary = pai_core_bridge.get_shadow_telemetry_summary()
+                cur_diff = cur_summary.get("cli_comparisons", 0) - summary_before.get("cli_comparisons", 0)
+                if cur_diff <= 0:
+                    raise RuntimeError(
+                        f"Finding AZ Gate Failed: Iteration 1 completed but no new CLI comparisons were recorded "
+                        f"(initial: {summary_before.get('cli_comparisons', 0)}, current: {cur_summary.get('cli_comparisons', 0)}). "
+                        "Commands must generate source='cli' comparisons with Rust core active. "
+                        "Verify that PAI_USE_RUST_CORE=1, PAI_SHADOW_COMPARE=1, and telemetry source is untampered."
+                    )
     finally:
         os.environ.pop("PAI_TELEMETRY_DRIVER", None)
         pai_core_bridge.set_telemetry_driver(False)

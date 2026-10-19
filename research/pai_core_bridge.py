@@ -95,6 +95,26 @@ def is_shadow_compare_enabled() -> bool:
 MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16 MiB
 
 _CORE_BIN_CACHE: Optional[str] = None
+_CORE_BIN_HASH_CACHE: Optional[Tuple[str, float, str]] = None
+
+
+def get_core_binary_hash() -> Optional[str]:
+    """Computes and caches the SHA-256 digest of the active pai-core binary (Finding AX)."""
+    global _CORE_BIN_HASH_CACHE
+    try:
+        bin_path = find_core_binary()
+        if bin_path and os.path.isfile(bin_path):
+            mtime = os.path.getmtime(bin_path)
+            if _CORE_BIN_HASH_CACHE and _CORE_BIN_HASH_CACHE[0] == bin_path and _CORE_BIN_HASH_CACHE[1] == mtime:
+                return _CORE_BIN_HASH_CACHE[2]
+            import hashlib
+            with open(bin_path, "rb") as bf:
+                h = hashlib.sha256(bf.read()).hexdigest()
+            _CORE_BIN_HASH_CACHE = (bin_path, mtime, h)
+            return h
+    except Exception:
+        pass
+    return None
 
 _SHADOW_DISCREPANCIES: List[Dict[str, Any]] = []
 _SHADOW_COMPARISONS_COUNT: int = 0
@@ -274,6 +294,10 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
     src = extra.pop("source", None) or get_telemetry_source()
     if "driver" not in extra and is_telemetry_driver():
         extra["driver"] = True
+    if "binary_hash" not in extra:
+        bin_h = get_core_binary_hash()
+        if bin_h:
+            extra["binary_hash"] = bin_h
     rec = {
         "timestamp": time.time(),
         "type": "comparison",
@@ -293,6 +317,10 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
 def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
     """Records a shadow discrepancy for visibility in run reports and pai doctor."""
     src = extra.pop("source", None) or get_telemetry_source()
+    if "binary_hash" not in extra:
+        bin_h = get_core_binary_hash()
+        if bin_h:
+            extra["binary_hash"] = bin_h
     rec = {
         "timestamp": time.time(),
         "type": "discrepancy",
@@ -415,6 +443,7 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
     driver_comparisons = 0
     distinct_digests: Set[str] = set()
     distinct_inputs_by_op: Dict[str, Set[str]] = {}
+    binary_hashes: Set[str] = set()
 
     ops: Dict[str, Dict[str, Any]] = {}
     cli_ops: Dict[str, Dict[str, Any]] = {}
@@ -478,6 +507,10 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
                     src_rec = _ensure_source(source_name)
                     cli_op_rec = _ensure_op(cli_ops, op_name) if source_name == "cli" else None
 
+                    bh = obj.get("binary_hash")
+                    if bh and isinstance(bh, str):
+                        binary_hashes.add(bh)
+
                     if entry_type == "comparison":
                         total_comparisons += 1
                         op_rec["comparisons"] += 1
@@ -535,6 +568,9 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         if get_telemetry_source() == "cli":
             cli_comparisons = total_comparisons
             cli_discrepancies = total_discrepancies
+        curr_bh = get_core_binary_hash()
+        if curr_bh:
+            binary_hashes.add(curr_bh)
 
     # Check durable write failure markers on disk (Findings AL & AO)
     durable_failures = 0
@@ -571,12 +607,15 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
     if first_cli_ts is not None and last_cli_ts is not None:
         cli_span_seconds = max(0.0, last_cli_ts - first_cli_ts)
 
+    binary_rebuild_detected = bool(len(binary_hashes) > 1)
+
     window_started = bool(cli_comparisons > 0)
     window_active = bool(
         window_started
         and cli_discrepancies == 0
         and corrupt_lines == 0
         and total_write_failures == 0
+        and not binary_rebuild_detected
     )
 
     volume_met = bool(
@@ -627,6 +666,8 @@ def get_shadow_telemetry_summary() -> Dict[str, Any]:
         "window_started": window_started,
         "window_active": window_active,
         "window_complete": window_complete,
+        "binary_hashes": sorted(list(binary_hashes)),
+        "binary_rebuild_detected": binary_rebuild_detected,
         "operations": ops,
         "cli_operations": cli_ops,
         "sources": sources,
@@ -650,6 +691,15 @@ def archive_shadow_log() -> Optional[Path]:
                 marker_path.unlink()
         except OSError:
             pass
+
+    # Remove evaluation manifest next to log file if present (Finding AX)
+    try:
+        log_file_p = _get_discrepancy_log_path()
+        manifest_file = log_file_p.parent / "evaluation_manifest.json"
+        if manifest_file.exists():
+            manifest_file.unlink()
+    except OSError:
+        pass
 
     try:
         log_file = _get_discrepancy_log_path()
@@ -756,6 +806,18 @@ def check_handshake(binary_path: str) -> Dict[str, Any]:
             f"binary={binary_vectors_hash} vs repo={repo_vectors_hash}. "
             f"Run `cargo build --release --manifest-path core/Cargo.toml`."
         )
+
+    # Attach verified binary SHA-256 digest to handshake result (Finding AX)
+    try:
+        bin_sha = get_core_binary_hash()
+        if not bin_sha and os.path.isfile(binary_path):
+            import hashlib
+            with open(binary_path, "rb") as bf:
+                bin_sha = hashlib.sha256(bf.read()).hexdigest()
+        if bin_sha:
+            result["binary_hash"] = bin_sha
+    except Exception:
+        pass
 
     return result
 

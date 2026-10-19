@@ -2956,3 +2956,61 @@ Status: AT is technically fixed in the repository history. AU is accepted (pinni
 
 - **Current Window State**:
   - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).
+
+### Addendum (fe115b0): Check of findings AW to AY (2026-10-19)
+Reviewed state: Linux, HEAD fe115b0, equal to origin/master. The difference to a7576cc is `docs/PROJECT_REVIEW.md`, `tools/corpus/EVALUATED_COMMIT` and `tools/run_shadow_workload.py`; `research/` and `core/` are unchanged, so the evaluated code is still a7576cc. The GitHub Actions status, the Windows pre-flight output, the binary hash and the clean `pai doctor` snapshot on the Windows host are the owner's; I did not see them.
+
+AV is still open. Requested without sign-in at the time of this check, the repository page and the page of the removed commit f781919 both returned HTTP 200. The repository is public and the removed commit is served. This is the user's decision (set the repository private and send the removal request, or accept the exposure in writing); nothing in the code can settle it.
+
+AW is accepted with one gap (AZ). `verify_shadow_evaluation_gate` is called before any command and fails closed on a disabled Rust core, a disabled shadow compare, a forced Python fallback, a missing or non-handshaking binary and a test-like `PAI_SHADOW_LOG`. AY: the snapshot directory is cleared before extraction (read in the code; I did not run it).
+
+AZ (blocking, small): the gate does not see the variable that decides whether records count. `get_telemetry_source()` returns `PAI_TELEMETRY_SOURCE` from the environment before the value that `main()` sets, so a shell in which a test session left `PAI_TELEMETRY_SOURCE=test` writes every comparison with source "test"; the driver then ends normally, the window does not start, and nothing says why. The driver also never checks that a run produced comparisons: it prints `New CLI comparisons generated` and goes on. Two weaker points in the same function: the test-path check matches the substrings test, tmp, temp and fixture in the text of `PAI_SHADOW_LOG`, so a legitimate path containing "latest" is refused, while a log selected through `PAI_DIR` is not examined at all; it is simpler to compare the effective log path with the single canonical path. Required: the gate refuses to run when `PAI_TELEMETRY_SOURCE`, `PAI_SHADOW_LOG` or `PAI_DIR` is set (or when the effective log is not exactly the canonical path); after the first iteration the driver reads the summary and stops with an error if `cli_comparisons` did not increase; the same variable check goes into the window instructions for `pai code` sessions, because those do not pass through the driver.
+
+AX is only partly done. The binary hash is printed at the start of a driver run; it is not stored anywhere that a later run or `pai doctor` can compare. A rebuild of `core/` in the middle of the window would go unnoticed, which is what AX asked to prevent. Because the window has not started, a change in `research/` costs nothing now, so the better form is available: add the binary SHA-256 to the handshake result and to every comparison record and show the set of hashes in `pai doctor`. A smaller form that touches only `tools/`: on the first run the driver writes a manifest next to the log (evaluated commit, binary hash, start time) and every later run refuses to continue if the binary hash or the commit differs from the manifest, until the owner restarts the window on purpose. Either form must be in place and tested before the first record.
+
+Status: no code defect blocks the window apart from AZ and AX. Start conditions: AZ fixed, AX in one of the two forms, a decision on AV by the user, and a clean log immediately before the first run. Any later change to `research/` or `core/` (including the AX form that changes `research/`, if done after the start) restarts the window.
+
+### Addendum (Commit Resolution for AZ and AX): Canonical Telemetry Environment and Durable Binary Hash Verification (2026-10-19)
+
+- **Resolution of Finding AZ (Canonical Telemetry Environment & Driver Iteration Assertion)**:
+  - **Environment Gate Hardening**: `verify_shadow_evaluation_gate` in `tools/run_shadow_workload.py` fails closed before executing any command if `PAI_TELEMETRY_SOURCE`, `PAI_SHADOW_LOG`, or `PAI_DIR` are present in `os.environ`. This eliminates the silent failure mode where lingering test environment variables cause comparison records to bypass `source="cli"`.
+  - **Canonical Path Strict Identity**: Instead of substring pattern matching, the gate asserts that the resolved effective log path strictly equals the single canonical dogfood path (`(Path.home() / ".pai" / "shadow_discrepancies.jsonl").resolve()`).
+  - **Iteration 1 Comparison Assertion**: After iteration 1 completes in `run_workload`, the driver queries `get_shadow_telemetry_summary()` and asserts `cli_comparisons > initial_cli_comparisons`. If zero new CLI comparisons were recorded, the driver terminates immediately with an explicit error.
+  - **Environment Instructions for Interactive `pai code` Sessions**:
+    - For manual testing and dogfood sessions outside the driver, operators must verify that the shell environment has:
+      ```bash
+      # Mandatory active flags:
+      export PAI_USE_RUST_CORE=1
+      export PAI_SHADOW_COMPARE=1
+      export PAI_RUST_FALLBACK_PYTHON=0
+
+      # Prohibited overrides (must be unset):
+      unset PAI_TELEMETRY_SOURCE
+      unset PAI_SHADOW_LOG
+      unset PAI_DIR
+      ```
+    - In PowerShell on Windows:
+      ```powershell
+      $env:PAI_USE_RUST_CORE = "1"
+      $env:PAI_SHADOW_COMPARE = "1"
+      $env:PAI_RUST_FALLBACK_PYTHON = "0"
+      Remove-Item env:PAI_TELEMETRY_SOURCE -ErrorAction SilentlyContinue
+      Remove-Item env:PAI_SHADOW_LOG -ErrorAction SilentlyContinue
+      Remove-Item env:PAI_DIR -ErrorAction SilentlyContinue
+      ```
+
+- **Resolution of Finding AX (Dual-Layer Binary Hash Identification & Rebuild Invalidation)**:
+  - **Telemetry Record Embedding**: `record_shadow_comparison` and `record_shadow_discrepancy` in `research/pai_core_bridge.py` compute and inject the active pai-core binary SHA-256 (`get_core_binary_hash()`) into every JSONL record.
+  - **Handshake Verification**: `check_handshake()` attaches the verified binary SHA-256 to the handshake result dictionary.
+  - **Rebuild Invalidation**: `get_shadow_telemetry_summary()` aggregates all unique binary SHA-256 hashes across the log. If more than one distinct binary hash is found (`len(binary_hashes) > 1`), `binary_rebuild_detected` is set to `True` and `window_active` is set to `False`.
+  - **Doctor Inspection**: `cmd_doctor` in `research/pai.py` displays the list of recorded binary hashes and reports a failure in `core_bridge_shadow` if `binary_rebuild_detected` is triggered.
+  - **Durable Driver Manifest**: `tools/run_shadow_workload.py` manages `evaluation_manifest.json` alongside the log, persisting `evaluated_commit` and `binary_hash`. Every driver run verifies identity against the manifest and refuses execution if the binary or commit has changed.
+  - **Manifest Clearing on Reset**: `archive_shadow_log()` deletes `evaluation_manifest.json` when the shadow log is archived via `pai clear-shadow --yes`.
+
+- **Finding AV (Repository Visibility & Orphaned Commit Status)**:
+  - Commit `f781919` remains orphaned from all repository refs and unreachable from git history (`git fsck` confirms zero unreachable loose objects).
+  - Web accessibility of unreferenced commits on GitHub is determined by platform-level garbage collection. The user must decide whether to set the repository to private and request an immediate purge from GitHub Support, or accept the residual exposure in writing.
+
+- **Current Window State**:
+  - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).
+

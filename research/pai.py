@@ -529,8 +529,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             cli_disc = summary.get("cli_discrepancies", 0)
             corrupt = summary.get("corrupt_lines", 0)
             log_write_fail = summary.get("log_write_failures", 0)
+            binary_rebuild = summary.get("binary_rebuild_detected", False)
+            bin_hashes = summary.get("binary_hashes", [])
 
-            if log_write_fail > 0:
+            if binary_rebuild:
+                detail_str = f"Multiple pai-core binary hashes detected ({bin_hashes}); binary rebuild occurred during window (window invalidated)"
+                passed_val = False
+            elif log_write_fail > 0:
                 detail_str = f"Log write failure detected ({log_write_fail} failure(s)); discrepancy could not be persisted (window invalidated)"
                 passed_val = False
             elif corrupt > 0:
@@ -710,6 +715,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print(f"CLI Comparisons (Req): {cli_comp:>5} / 1000 (driver: {driver_comp}, manual: {manual_comp}, discrepancies: {cli_disc})")
     print(f"CLI Distinct Inputs  : ingest_file {file_dist}/{file_req}, ingest_folder {folder_dist}/{folder_req} (Met: {dist_met}, Total Unique: {distinct_inputs})")
     print(f"Total Log Records    : {tot_comp} comparisons, {tot_disc} discrepancies, {corrupt} corrupt lines, {log_write_fail} write failures")
+    bin_hashes_list = st.get("binary_hashes", [])
+    bin_hash_str = ", ".join(bin_hashes_list) if bin_hashes_list else "None recorded"
+    print(f"Recorded Binary Hash : {bin_hash_str}")
+    if st.get("binary_rebuild_detected"):
+        print("  WARNING: Multiple pai-core binary hashes detected in log! Binary was rebuilt during evaluation window.")
     if log_write_fail > 0:
         marker_p = st.get("write_failure_marker_path")
         marker_entry = st.get("write_failure_first_entry")

@@ -804,6 +804,122 @@ class TestShadowIsolationGuard(unittest.TestCase):
             self.assertFalse(summary["quotas_met"])
             self.assertFalse(summary["window_complete"], "window_complete must be False when distinct input minimums are not met")
 
+    def test_binary_hash_tracking_and_rebuild_invalidation(self):
+        """
+        Finding AX: Verifies that comparison records track binary_hash,
+        and multiple distinct binary_hashes cause binary_rebuild_detected=True,
+        which strictly invalidates window_active.
+        """
+        test_log = Path(self.tmpdir.name) / "binary_hash_test.jsonl"
+        with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(test_log)}):
+            pai_core_bridge.clear_shadow_log()
+
+            # Record comparison with binary hash A
+            pai_core_bridge.record_shadow_comparison("ingest_file", source="cli", binary_hash="hash_aaa111")
+            s1 = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertEqual(s1["binary_hashes"], ["hash_aaa111"])
+            self.assertFalse(s1["binary_rebuild_detected"])
+            self.assertTrue(s1["window_active"])
+
+            # Record another comparison with the same binary hash A
+            pai_core_bridge.record_shadow_comparison("ingest_file", source="cli", binary_hash="hash_aaa111")
+            s2 = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertEqual(s2["binary_hashes"], ["hash_aaa111"])
+            self.assertFalse(s2["binary_rebuild_detected"])
+            self.assertTrue(s2["window_active"])
+
+            # Record comparison with different binary hash B (simulating mid-window binary rebuild)
+            pai_core_bridge.record_shadow_comparison("ingest_file", source="cli", binary_hash="hash_bbb222")
+            s3 = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertEqual(s3["binary_hashes"], ["hash_aaa111", "hash_bbb222"])
+            self.assertTrue(s3["binary_rebuild_detected"], "Multiple binary hashes must trigger binary_rebuild_detected")
+            self.assertFalse(s3["window_active"], "Binary rebuild must invalidate window_active")
+
+            # Resetting log clears binary hashes and restores clean state
+            pai_core_bridge.clear_shadow_log()
+            s4 = pai_core_bridge.get_shadow_telemetry_summary()
+            self.assertEqual(s4["binary_hashes"], [])
+            self.assertFalse(s4["binary_rebuild_detected"])
+
+    def test_evaluation_manifest_lifecycle(self):
+        """
+        Finding AX: Verifies that evaluation_manifest.json is created, verified,
+        detects commit or binary hash mismatch, and is removed upon archive/clear.
+        """
+        import sys
+        sys.path.insert(0, str(Path(_repo_root) / "tools"))
+        import run_shadow_workload
+
+        manifest_dir = Path(self.tmpdir.name) / "manifest_test"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+
+        commit_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        hash_a = "1111111111111111111111111111111111111111111111111111111111111111"
+        commit_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        hash_b = "2222222222222222222222222222222222222222222222222222222222222222"
+
+        # 1. Create manifest
+        m_path = run_shadow_workload.check_or_update_evaluation_manifest(manifest_dir, commit_a, hash_a)
+        self.assertTrue(m_path.exists())
+
+        # 2. Matching check succeeds
+        m_path2 = run_shadow_workload.check_or_update_evaluation_manifest(manifest_dir, commit_a, hash_a)
+        self.assertEqual(m_path, m_path2)
+
+        # 3. Commit mismatch fails closed
+        with self.assertRaises(RuntimeError) as cm_commit:
+            run_shadow_workload.check_or_update_evaluation_manifest(manifest_dir, commit_b, hash_a)
+        self.assertIn("differs from active window manifest commit", str(cm_commit.exception))
+
+        # 4. Binary hash mismatch fails closed
+        with self.assertRaises(RuntimeError) as cm_hash:
+            run_shadow_workload.check_or_update_evaluation_manifest(manifest_dir, commit_a, hash_b)
+        self.assertIn("differs from active window manifest binary SHA-256", str(cm_hash.exception))
+
+        # 5. Archive removes manifest
+        test_log = manifest_dir / "shadow_discrepancies.jsonl"
+        with mock.patch.dict(os.environ, {"PAI_SHADOW_LOG": str(test_log)}):
+            pai_core_bridge.clear_shadow_log()
+            self.assertFalse(m_path.exists(), "archive_shadow_log must delete evaluation_manifest.json")
+
+    def test_shadow_evaluation_gate_environment_isolation(self):
+        """
+        Finding AZ: Verifies that verify_shadow_evaluation_gate strictly fails closed
+        if PAI_TELEMETRY_SOURCE, PAI_SHADOW_LOG, or PAI_DIR are present in os.environ,
+        or if effective_log does not match the canonical path ~/.pai/shadow_discrepancies.jsonl.
+        """
+        import sys
+        sys.path.insert(0, str(Path(_repo_root) / "tools"))
+        import run_shadow_workload
+
+        base_clean = os.environ.copy()
+        base_clean.pop("PAI_TELEMETRY_SOURCE", None)
+        base_clean.pop("PAI_SHADOW_LOG", None)
+        base_clean.pop("PAI_DIR", None)
+
+        # Test PAI_TELEMETRY_SOURCE rejection
+        env_src = base_clean.copy()
+        env_src["PAI_TELEMETRY_SOURCE"] = "test"
+        with mock.patch.dict(os.environ, env_src, clear=True):
+            with self.assertRaises(RuntimeError) as ctx_src:
+                run_shadow_workload.verify_shadow_evaluation_gate(Path(_repo_root))
+            self.assertIn("PAI_TELEMETRY_SOURCE is set in os.environ", str(ctx_src.exception))
+
+        # Test PAI_SHADOW_LOG rejection
+        env_log = base_clean.copy()
+        env_log["PAI_SHADOW_LOG"] = "/tmp/custom.jsonl"
+        with mock.patch.dict(os.environ, env_log, clear=True):
+            with self.assertRaises(RuntimeError) as ctx_log:
+                run_shadow_workload.verify_shadow_evaluation_gate(Path(_repo_root))
+            self.assertIn("PAI_SHADOW_LOG is set in os.environ", str(ctx_log.exception))
+
+        # Test PAI_DIR rejection
+        env_dir = base_clean.copy()
+        env_dir["PAI_DIR"] = "/tmp/pai_dir"
+        with mock.patch.dict(os.environ, env_dir, clear=True):
+            with self.assertRaises(RuntimeError) as ctx_dir:
+                run_shadow_workload.verify_shadow_evaluation_gate(Path(_repo_root))
+            self.assertIn("PAI_DIR is set in os.environ", str(ctx_dir.exception))
 
 
 if __name__ == "__main__":
