@@ -97,86 +97,19 @@ def verify_shadow_evaluation_gate(repo_root: Path, evaluated_commit: Optional[st
     Finding AW, AZ & BA Gate: Verifies that the host environment and working tree are properly configured
     to exercise and measure the Rust core shadow comparison path before workload execution.
     Fails closed if:
-    1. PAI_TELEMETRY_SOURCE is present in os.environ (Finding AZ)
-    2. PAI_SHADOW_LOG is present in os.environ (Finding AZ)
-    3. PAI_DIR is present in os.environ (Finding AZ)
-    4. Effective log path != canonical path ~/.pai/shadow_discrepancies.jsonl (Finding AZ)
-    5. PAI_USE_RUST_CORE != '1' (Finding AW)
-    6. PAI_SHADOW_COMPARE != '1' (Finding AW)
-    7. PAI_RUST_FALLBACK_PYTHON is active ('1') (Finding AW)
-    8. Rust core binary is missing or cannot be located (Finding AW)
-    9. Rust core binary bridge handshake fails (Finding AW)
-    10. Working tree contains uncommitted changes in research/ or core/ (Finding BA)
-    11. Working tree differs from pinned evaluated commit in research/ or core/ (Finding BA)
-    12. HEAD tree IDs do not match pinned commit tree IDs for research/ and core/ (Finding BA)
+    1. Working tree contains uncommitted changes in research/ or core/ (Finding BA)
+    2. Working tree differs from pinned evaluated commit in research/ or core/ (Finding BA)
+    3. HEAD tree IDs do not match pinned commit tree IDs for research/ and core/ (Finding BA)
+    4. PAI_TELEMETRY_SOURCE is present in os.environ (Finding AZ)
+    5. PAI_SHADOW_LOG is present in os.environ (Finding AZ)
+    6. PAI_DIR is present in os.environ (Finding AZ)
+    7. Effective log path != canonical path ~/.pai/shadow_discrepancies.jsonl (Finding AZ)
+    8. PAI_USE_RUST_CORE != '1' (Finding AW)
+    9. PAI_SHADOW_COMPARE != '1' (Finding AW)
+    10. PAI_RUST_FALLBACK_PYTHON is active ('1') (Finding AW)
+    11. Rust core binary is missing or cannot be located (Finding AW)
+    12. Rust core binary bridge handshake fails (Finding AW)
     """
-    if "PAI_TELEMETRY_SOURCE" in os.environ:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: PAI_TELEMETRY_SOURCE is set in os.environ ('{os.environ['PAI_TELEMETRY_SOURCE']}'). "
-            "This environment variable overrides CLI telemetry tagging and causes comparisons to bypass source='cli'. "
-            "Unset PAI_TELEMETRY_SOURCE before running the driver."
-        )
-
-    if "PAI_SHADOW_LOG" in os.environ:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: PAI_SHADOW_LOG is set in os.environ ('{os.environ['PAI_SHADOW_LOG']}'). "
-            "Overriding the shadow log path is prohibited during evaluation window runs. "
-            "Unset PAI_SHADOW_LOG so that telemetry writes to the canonical dogfood log."
-        )
-
-    if "PAI_DIR" in os.environ:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: PAI_DIR is set in os.environ ('{os.environ['PAI_DIR']}'). "
-            "Overriding PAI_DIR is prohibited during evaluation window runs. "
-            "Unset PAI_DIR so that telemetry lands in ~/.pai/shadow_discrepancies.jsonl."
-        )
-
-    canonical_log = (Path.home() / ".pai" / "shadow_discrepancies.jsonl").resolve()
-    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
-    if effective_log != canonical_log:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: Effective shadow log path '{effective_log}' does not match "
-            f"the canonical dogfood telemetry path '{canonical_log}'. Ensure ~/.pai is writable and environment is clean."
-        )
-
-    use_rust = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
-    if not use_rust or not pai_core_bridge.is_rust_core_enabled():
-        raise RuntimeError(
-            "Finding AW Gate Failed: PAI_USE_RUST_CORE must be explicitly set to '1' in the calling environment. "
-            "When disabled, pai CLI commands bypass Rust shadow comparisons entirely. "
-            "Set $env:PAI_USE_RUST_CORE='1' (PowerShell) or export PAI_USE_RUST_CORE=1 (Bash) before starting the workload."
-        )
-
-    shadow_compare = os.environ.get("PAI_SHADOW_COMPARE", "1").lower() in ("1", "true", "yes")
-    if not shadow_compare or not pai_core_bridge.is_shadow_compare_enabled():
-        raise RuntimeError(
-            "Finding AW Gate Failed: PAI_SHADOW_COMPARE must be enabled ('1'). "
-            "Set $env:PAI_SHADOW_COMPARE='1' or export PAI_SHADOW_COMPARE=1."
-        )
-
-    fallback_python = os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes")
-    if fallback_python or pai_core_bridge.is_python_fallback_forced():
-        raise RuntimeError(
-            "Finding AW Gate Failed: PAI_RUST_FALLBACK_PYTHON is set to '1' (Python fallback forced). "
-            "Unset PAI_RUST_FALLBACK_PYTHON or set it to '0' so that Rust core is primary."
-        )
-
-    bin_path_str = pai_core_bridge.find_core_binary()
-    if not bin_path_str or not os.path.isfile(bin_path_str):
-        raise RuntimeError(
-            "Finding AW Gate Failed: pai-core binary not found. "
-            "Build binary with 'cargo build --release --manifest-path core/Cargo.toml' before running driver."
-        )
-    bin_path = Path(bin_path_str).resolve()
-
-    with open(bin_path, "rb") as bf:
-        bin_hash = hashlib.sha256(bf.read()).hexdigest()
-
-    try:
-        handshake_resp = pai_core_bridge.check_handshake(bin_path_str)
-    except Exception as e:
-        raise RuntimeError(f"Finding AW Gate Failed: pai-core bridge handshake failed ({e}).")
-
     target_commit = evaluated_commit or resolve_evaluated_commit(repo_root=repo_root)
 
     # Finding BA: Assert working tree and index have zero uncommitted changes in research/ or core/
@@ -261,6 +194,75 @@ def verify_shadow_evaluation_gate(repo_root: Path, evaluated_commit: Optional[st
         if isinstance(e, RuntimeError):
             raise
         raise RuntimeError(f"Finding BA Gate Failed: Could not verify HEAD tree IDs against pinned commit: {e}")
+
+    # Finding AZ: Environment isolation checks
+    if "PAI_TELEMETRY_SOURCE" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_TELEMETRY_SOURCE is set in os.environ ('{os.environ['PAI_TELEMETRY_SOURCE']}'). "
+            "This environment variable overrides CLI telemetry tagging and causes comparisons to bypass source='cli'. "
+            "Unset PAI_TELEMETRY_SOURCE before running the driver."
+        )
+
+    if "PAI_SHADOW_LOG" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_SHADOW_LOG is set in os.environ ('{os.environ['PAI_SHADOW_LOG']}'). "
+            "Overriding the shadow log path is prohibited during evaluation window runs. "
+            "Unset PAI_SHADOW_LOG so that telemetry writes to the canonical dogfood log."
+        )
+
+    if "PAI_DIR" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_DIR is set in os.environ ('{os.environ['PAI_DIR']}'). "
+            "Overriding PAI_DIR is prohibited during evaluation window runs. "
+            "Unset PAI_DIR so that telemetry lands in ~/.pai/shadow_discrepancies.jsonl."
+        )
+
+    canonical_log = (Path.home() / ".pai" / "shadow_discrepancies.jsonl").resolve()
+    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
+    if effective_log != canonical_log:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: Effective shadow log path '{effective_log}' does not match "
+            f"the canonical dogfood telemetry path '{canonical_log}'. Ensure ~/.pai is writable and environment is clean."
+        )
+
+    # Finding AW: Host Rust core execution checks
+    use_rust = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
+    if not use_rust or not pai_core_bridge.is_rust_core_enabled():
+        raise RuntimeError(
+            "Finding AW Gate Failed: PAI_USE_RUST_CORE must be explicitly set to '1' in the calling environment. "
+            "When disabled, pai CLI commands bypass Rust shadow comparisons entirely. "
+            "Set $env:PAI_USE_RUST_CORE='1' (PowerShell) or export PAI_USE_RUST_CORE=1 (Bash) before starting the workload."
+        )
+
+    shadow_compare = os.environ.get("PAI_SHADOW_COMPARE", "1").lower() in ("1", "true", "yes")
+    if not shadow_compare or not pai_core_bridge.is_shadow_compare_enabled():
+        raise RuntimeError(
+            "Finding AW Gate Failed: PAI_SHADOW_COMPARE must be enabled ('1'). "
+            "Set $env:PAI_SHADOW_COMPARE='1' or export PAI_SHADOW_COMPARE=1."
+        )
+
+    fallback_python = os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes")
+    if fallback_python or pai_core_bridge.is_python_fallback_forced():
+        raise RuntimeError(
+            "Finding AW Gate Failed: PAI_RUST_FALLBACK_PYTHON is set to '1' (Python fallback forced). "
+            "Unset PAI_RUST_FALLBACK_PYTHON or set it to '0' so that Rust core is primary."
+        )
+
+    bin_path_str = pai_core_bridge.find_core_binary()
+    if not bin_path_str or not os.path.isfile(bin_path_str):
+        raise RuntimeError(
+            "Finding AW Gate Failed: pai-core binary not found. "
+            "Build binary with 'cargo build --release --manifest-path core/Cargo.toml' before running driver."
+        )
+    bin_path = Path(bin_path_str).resolve()
+
+    with open(bin_path, "rb") as bf:
+        bin_hash = hashlib.sha256(bf.read()).hexdigest()
+
+    try:
+        handshake_resp = pai_core_bridge.check_handshake(bin_path_str)
+    except Exception as e:
+        raise RuntimeError(f"Finding AW Gate Failed: pai-core bridge handshake failed ({e}).")
 
     return {
         "use_rust_core": True,

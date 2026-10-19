@@ -3059,3 +3059,33 @@ Status: AZ and AX are accepted. The window may start once BA is in place (tools 
   - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).
   - Awaiting user decision on Finding AV and reviewer start signal.
 
+
+### Addendum (3a6ba86): Check of finding BA (2026-10-19)
+Reviewed state: Linux, HEAD 3a6ba86. The GitHub Actions run #39294895489 and the Windows runs are the owner's; I did not see them. `research/` and `core/` of HEAD have the git tree ids 6e0fb90123f282caa68ea51d54ee3816a96fb4fd and 14c60746ca9a41d91aafd88cc0c7d98719cfe3a9, the same as in 9ac1bc5, and `git diff 9ac1bc5 HEAD -- research core` is empty. The evaluated commit is 9ac1bc5b056f53fb88c1206fec896df9ffc85c1f. An earlier report and the message of commit eb924f2 give the value 9ac1bc5b2e9565507ca2f42a677ca5362ffb76fb; that object does not exist in the repository, and the pin file now holds the correct value.
+
+BA is accepted. The gate checks `git status --porcelain -- research core` for an empty result, `git diff --quiet <pinned> -- research core`, and the tree ids of `research` and `core` in the pinned commit against those of HEAD; the first run writes the two tree ids to `evaluation_manifest.json` and later runs compare them. I read the code; I did not run the gate against a modified tree.
+
+BB (non-blocking, tools only): `tools/test_shadow_ba_gate.py` depends on the shell. The two gate tests call `verify_shadow_evaluation_gate` directly, and that function first checks `PAI_USE_RUST_CORE`, `PAI_SHADOW_COMPARE`, the binary and the handshake, so the tree checks are only reached on a host that has those set and the binary built. On Linux without them both tests fail on the AW message (2 of 3 fail with no variables; with the variables set and no binary they fail on the missing binary). The file is not run by the GitHub Actions workflow, and the first test writes into `tools/corpus/_test_manifest_ba` inside the repository instead of a temporary directory; on a host that refuses deletion the directory stays behind, which is what happened here: one untracked directory `tools/corpus/_test_manifest_ba` with one manifest file is left in the working tree and the owner should remove it. Required: run the repository checks before the environment and binary checks, or patch the environment and the binary lookup in the tests; use `tempfile.TemporaryDirectory`; add the file to the workflow; add one test that modifies a tracked file in a temporary clone of the repository and expects the gate to stop.
+
+AV is still open: at the time of this check the repository page and the page of the removed commit f781919 returned HTTP 200 without sign-in.
+
+Status: no open finding blocks the window except the user's decision on AV. BB can be done at any time, since a change in `tools/` does not restart the window.
+
+### Resolution of Finding BB (Isolation, Ordering, and CI Integration for BA Gate Tests)
+
+- **Finding BB Improvements Implemented (`tools/`, `.github/workflows/`, and `docs/` only)**:
+  1. **Gate Verification Ordering**:
+     - `verify_shadow_evaluation_gate` in `tools/run_shadow_workload.py` reordered so that repository integrity checks (`git status --porcelain -- research core`, `git diff --quiet <pinned> -- research core`, and directory tree ID equality) execute at the very top of the gate before environment variables (`PAI_USE_RUST_CORE`) or binary checks.
+  2. **Filesystem and Temporary Directory Isolation**:
+     - `tools/test_shadow_ba_gate.py` updated to use `tempfile.TemporaryDirectory` for manifest creation and verification. Removed leftover directory `tools/corpus/_test_manifest_ba`. Zero untracked files are produced.
+  3. **Real Git Clone Integration Testing**:
+     - Added `test_real_git_clone_adversarial_modification_halts_gate` in `tools/test_shadow_ba_gate.py`: creates a shared local clone (`git clone -s`), introduces an uncommitted modification to `research/pai.py`, and asserts that `verify_shadow_evaluation_gate` halts execution immediately. It then commits the adversarial modification and asserts that `verify_shadow_evaluation_gate` halts execution due to commit drift against the pinned evaluated commit.
+  4. **GitHub Actions CI Workflow Integration**:
+     - Added `Run Shadow BA & BB Gate Tests` step to both `python-research` (Windows) and `linux-portability` (Ubuntu Linux) jobs in `.github/workflows/windows-ci.yml`.
+
+- **Current Window State**:
+  - Evaluation window strictly `NOT STARTED` (`0 / 1000` CLI comparisons).
+  - Pinned evaluated commit: `9ac1bc5b056f53fb88c1206fec896df9ffc85c1f`.
+  - Research tree ID: `6e0fb90123f282caa68ea51d54ee3816a96fb4fd`.
+  - Core tree ID: `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`.
+  - Binary SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`.
