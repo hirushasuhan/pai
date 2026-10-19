@@ -1299,7 +1299,9 @@ def ingest_file(
 
     # Fast-path check for lone surrogates or unencodable paths that cannot cross the bridge.
     # Return Python reference fast-path rejection directly before bridge lookup.
-    if _is_invalid_filename(file_path) or _is_invalid_filename(os.path.basename(file_path)) or (root_path is not None and _is_invalid_filename(root_path)):
+    f_str = str(file_path)
+    r_str = str(root_path) if root_path is not None else None
+    if _is_invalid_filename(f_str) or _is_invalid_filename(os.path.basename(f_str)) or (r_str is not None and _is_invalid_filename(r_str)):
         return py_ingest_file(
             file_path=file_path,
             root_path=root_path,
@@ -1311,7 +1313,7 @@ def ingest_file(
     find_core_binary()
 
     bridge_kwargs: Dict[str, Any] = {
-        "file_path": file_path,
+        "file_path": f_str,
         "max_file_size": max_file_size,
         "max_line_length": max_line_length,
     }
@@ -1415,7 +1417,7 @@ def ingest_folder(
     find_core_binary()
 
     bridge_kwargs: Dict[str, Any] = {
-        "folder_path": folder_path,
+        "folder_path": str(folder_path),
         "max_file_size": max_file_size,
         "max_total_bytes": max_total_bytes,
         "max_file_count": max_file_count,

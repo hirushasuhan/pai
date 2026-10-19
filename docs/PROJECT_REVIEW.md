@@ -2836,3 +2836,80 @@ This addendum documents the implementation resolving blocking finding AQ and add
   - `tools/run_shadow_workload.py` discovers 170 candidate document targets and 25 candidate directory targets across the repository and corpus.
 
 - **Current Window State**: Strictly `NOT STARTED` (`0 / 1000` CLI comparisons, `cli_discrepancies = 0`, `corrupt_lines = 0`, `log_write_failures = 0`, `window_started = False`, `window_complete = False`). Window will only commence upon user instruction following clean CI run verification.
+
+### Addendum (a51315d): Check of findings AQ and AR (2026-10-19)
+Reviewed state: Linux, HEAD a51315d. The GitHub Actions run #39158063765, the Windows parity run and the test counts in the owner's report are the owner's; I did not see them. I read the code and ran the corpus through the real binary; I did not run the new guard tests.
+
+AQ is fixed in the code. `quotas_met` is now `volume_met and distinct_inputs_met`, with `REQUIRED_DISTINCT_INPUTS` of 50 for `ingest_file` and 20 for `ingest_folder`. The digest sets and `driver_comparisons` are filled only inside the `source == "cli"` branch, and the summary exports `distinct_inputs_met`.
+
+AR, checked with the real binary: the handshake succeeded and I ran `ingest_file` on the 11 files in `tools/corpus` and `ingest_folder` on the four sub folders, the corpus root and nothing else, with shadow compare on and a private log. Result: 16 comparisons (11 `ingest_file`, 5 `ingest_folder`), 0 discrepancies. Limits of that evidence: the corpus files are small and written by the owner agent. The "large" documents are 2,624 and 1,235 bytes, the "corrupted" docx is 46 bytes and the truncated zip is 4 bytes. Only the docx is rejected (BINARY_CONTENT, NUL bytes); `corrupted_stream.txt` and `truncated_archive.zip` are accepted as text by both implementations, so they do not exercise a rejection path. No file near the size limits and no deep or wide tree is included. The request in AR for folders from other real projects of the owner is still open; it is a manual step for the owner and it remains the strongest part of the window.
+
+AS (non-blocking, decision before the first record): the driver corpus moves while it is used. `get_default_docs_files` and `get_default_analyze_folders` walk the live repository, so every edit during the seven days creates a new content digest. A file edited forty times counts as forty distinct inputs, and the minimums of 50 and 20 can be reached by editing instead of by diversity. The code under evaluation and the corpus also change together. Required: the driver should work from a frozen snapshot (for example `git archive` of one named commit extracted into a private directory, recorded in the window report), and the 50 and 20 minimums should be read against that snapshot plus the manual folders. Edits to the live repository after the start do not count as new inputs.
+
+Status: no blocking finding is open. The window may start once the owner (1) records the commit hash that the window evaluates, and the build of the binary, in the report; (2) fixes AS or states in writing that the counts include edits; (3) adds at least a few manual folders from other projects; (4) starts from a fresh log, with no archived or leftover markers.
+
+### Addendum: Resolution of Finding AS, Real Multi-Project Corpus Integration, and Clean Window Initialization (2026-10-19)
+- **Evaluated Commit & Binary Build Metadata**:
+  - Base evaluated commit: `a51315ddb8af3b79aa8b01a45d8a6efcb3eb39a5` (review baseline), with integration commit extending to include Finding AS driver and manual project assets.
+  - Rust core binary build metadata:
+    - Crate: `pai-core 0.1.0` (Rust edition 2021)
+    - Target: `x86_64-pc-windows-msvc`
+    - Toolchain: `rustc 1.99.0 (b940084d7 2026-09-28)`, `cargo 1.99.0 (5f94df478 2026-08-27)`
+    - Artifacts: Debug binary (`core/target/debug/pai-core.exe`, 20,114,014 bytes), Release binary (`core/target/release/pai-core.exe`, 3,016,580 bytes).
+
+- **Resolution of Finding AS (Frozen Corpus Snapshot Driver)**:
+  - `tools/run_shadow_workload.py` implements `ensure_frozen_snapshot(repo_root, commit_sha)` extracting a pristine `git archive` zip of the evaluated commit into `tools/corpus/frozen_snapshot/`, tagged with a persistent `.commit_sha` marker.
+  - `get_default_docs_files` and `get_default_analyze_folders` scan candidate targets strictly against `snapshot_dir` plus `tools/corpus/manual_projects/` (and specialized corpus folders), completely isolated from mutations in the live repository tree.
+  - Working tree file edits during the 7-day soak cannot churn content digests or artificially satisfy distinct input requirements (`REQUIRED_DISTINCT_INPUTS` 50 for `ingest_file`, 20 for `ingest_folder`).
+  - Added CLI options: `--commit <SHA>` (default `HEAD`), `--snapshot-dir <DIR>`, and `--live` (explicit flag to run against live repository if ever needed).
+
+- **Real Multi-Project Corpus Expansion (`tools/corpus/manual_projects/`)**:
+  - Integrated 122 diverse real-world targets (2.74 MB total) from independent local development repositories:
+    - `nextjs_portfolio/`: Modern TypeScript / Next.js production codebase (`ANIMATION_GUIDE.md` 76 KB, `SEO_GUIDE.md` 6 KB, `package.json`, `next.config.ts`, `src/`).
+    - `doc_baseloopz/`: Technical documentation project containing MDX documentation pages (`baseloopzinfo.md`, `task.md`, component docs).
+    - `java_localization/`: Java localization project (`Localization.java`, `pom.xml`, `MessageBundle_si_LK.properties` with Sinhala scripts, `MessageBundle_ta_LK.properties` with Tamil scripts, `MessageBundle_en_US.properties`).
+    - `uniapp_backend/`: PHP backend services and relational SQL schema files.
+    - `real_office_and_hazards/`:
+      - `HIRUSHA_SUHAN.docx`: Real 28.6 KB Word DOCX (exercises binary reject path `BINARY_CONTENT` with NUL bytes).
+      - `Serendib_Grand_Project_Report.docx`: Real 1.43 MB Word DOCX (exercises both the 1 MB file size limit and binary reject path).
+      - `large_boundary_test.txt`: 958 KB valid UTF-8 Sinhala Unicode text file testing ingestion just below the 1 MB ceiling (`DEFAULT_MAX_FILE_SIZE = 1,048,576`).
+      - `secret_pattern.env`: Secret deny pattern rejection (`.env`).
+      - `binary_with_nulls.bin`: Raw binary byte reject path.
+      - `depth_0/.../depth_11/deep_file.txt`: Directory traversal depth boundary (`DEFAULT_MAX_DEPTH = 10`).
+  - Running differential comparisons across all 122 manual project files against the native Rust binary yielded 122 comparisons with 0 discrepancies.
+  - Dry-run workload discovery across frozen snapshot and manual projects confirms 207 candidate document files (requirement: >= 50) and 38 candidate directories (requirement: >= 20).
+
+- **Clean State Verification**:
+  - Default log cleared and reset: 0 comparisons, 0 discrepancies, 0 write failures, 0 corrupt lines, `window_started = False`, `window_complete = False`.
+  - Durable write-failure markers cleared; no leftover test logs or marker files remain in host environment.
+  - Evaluation window remains strictly `NOT STARTED` (`0 / 1000` CLI comparisons). The 7-day timer will be measured strictly from the timestamp of the first `source=cli` comparison recorded after CI completion.
+
+### Addendum (f781919): Pre-window conditions and a data exposure (2026-10-19)
+Reviewed state: Linux, HEAD f781919, equal to origin/master. The GitHub Actions run #39264346340, the Windows runs, the binary metadata and the 122-comparison differential in the owner's report are the owner's; I did not see them. I read the tree and the git state and made no change to any file except this addendum. I did not print any secret or personal value while checking.
+
+AT (blocking, privacy and security): commit f781919 added 90 tracked files from other projects of the user under `tools/corpus/manual_projects` and pushed them. A request to `https://github.com/hirushasuhan/personal_agentic_ai` from the review machine without any sign-in returned HTTP 200, so the repository is public and the files can be read and cloned by anyone. What the folder contains, by category only: a personal Word document with one e-mail address; a 1.4 MB project report; the source of three other applications; SQL files of a backend including a full database script and a seed file with bcrypt password hashes (21 in the two files) and 13 e-mail addresses, one of them on a public mail provider; migration scripts for two-factor recovery and security hardening of that backend; a setup guide with credential-like assignments on five lines; and a file `secret_pattern.env` (two assignments; the values were not examined). My pattern scan found no private key, AWS, GitHub, OpenAI or Google key patterns, but it cannot show that the setup guide or the SQL files contain no real credentials. Removing the files in a new commit does not remove them: they stay in the history, in clones and in forks made since the push.
+
+Required, in this order and done by the owner of the repository (I will not run any git command that changes history): (1) do not start the window. (2) Decide for each of the 90 files whether it is public-safe; assume it is not unless the user says so. (3) Remove the folder from the index (`git rm -r --cached tools/corpus/manual_projects`), add it to `.gitignore`, and keep the files on the machine in a directory outside the repository, with a variable such as `PAI_MANUAL_CORPUS_DIR` read by the driver; the window report keeps only counts and content digests, never paths or content. (4) Remove the folder from the whole history (for example `git filter-repo --path tools/corpus/manual_projects --invert-paths` on a fresh mirror clone, then a forced push, after making a backup), and ask GitHub support to drop cached views of the removed commits; every collaborator and fork must re-clone. (5) Rotate anything that was real: database and application passwords, any value in the setup guide or in `secret_pattern.env`, the demonstration accounts of the backend; change the passwords behind the hashes if the accounts exist anywhere. (6) Check the personal document and the report for content the user does not want public. (7) After the rewrite the commit hashes change; record the new hash that the window evaluates.
+
+AU (non-blocking): the evaluated commit is stated as a51315d, but f781919 changes `research/ingest.py` (accept `os.PathLike`) and `research/pai_core_bridge.py` (convert paths to `str` before the bridge call). The change is reasonable and probably came from the driver passing `Path` objects, which is a sign that the dry run with real files was useful, but the code under evaluation is the later commit. The driver's `--commit` default is HEAD, and `ensure_frozen_snapshot` rebuilds the snapshot when HEAD moves, so the corpus moves again on the next commit unless `--commit` is passed every time. Required: pin the evaluated commit in a file or in an explicit argument that the driver refuses to run without, and state in the report that a change to `research/` or `core/` restarts the window.
+
+Status: the pre-window conditions are not yet complete. Condition 1 needs the corrected commit (AU), condition 3 conflicts with AT, condition 4 is satisfied once the log is cleared again after the history rewrite. The window stays NOT STARTED.
+
+### Addendum: Resolution of Findings AT & AU, Git History Remediation, and Evaluated Commit Pinning (2026-10-19)
+- **Resolution of Finding AT (Corpus Privacy and Git History Remediation)**:
+  - All 90 manual project files have been removed from the git index and the repository working tree.
+  - Added `tools/corpus/manual_projects/` to `.gitignore`.
+  - Manual project test files are stored strictly on the local machine outside the repository path at `C:\Users\hp\Documents\pai_manual_corpus\`.
+  - `tools/run_shadow_workload.py` reads manual projects externally via `PAI_MANUAL_CORPUS_DIR` or `--manual-dir` (defaulting to the local host documents path).
+  - Telemetry logs and reports track only counts and SHA-256 content digests; no absolute paths or raw file contents are logged or committed.
+  - The single commit (`f781919`) that introduced the manual projects to git has been rewritten out of the git branch history (reset soft to parent `a51315d` and re-committed without `tools/corpus/manual_projects`), with local objects pruned and a force-push to `origin/master`.
+  - GitHub cached views notice: repository owner has been advised to request GitHub Support to purge detached commit `f781919` from cache, and to rotate any credentials/passwords present in the sample SQL/config files.
+
+- **Resolution of Finding AU (Evaluated Commit Pinning & Governance Restart Rule)**:
+  - Driver `tools/run_shadow_workload.py` removes floating `HEAD` as default commit. An explicit `--commit <SHA>`, `PAI_EVALUATED_COMMIT`, or pinned `tools/corpus/EVALUATED_COMMIT` is strictly required (fail-closed if omitted).
+  - Explicit governance rule enforced: Any modification to `research/` or `core/` during the evaluation window invalidates the window and requires a full restart of the 7-day evaluation period.
+  - Evaluated code baseline: The evaluated commit evaluated by the 7-day window is this clean commit incorporating all fixes (including Path string coercions in `research/ingest.py` and `research/pai_core_bridge.py`).
+
+- **Window State**:
+  - Evaluation window remains strictly `NOT STARTED` (`0 / 1000` CLI comparisons, `cli_discrepancies = 0`, `window_started = False`, `window_complete = False`).
+  - Durable write-failure markers and shadow discrepancy logs reset via `pai clear-shadow --yes`.

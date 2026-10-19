@@ -47,3 +47,9 @@ release.key
 # User config & machine calibration profiles (ADR-010)
 .pai/
 machine_profile.json
+
+# Frozen corpus snapshot directory (Finding AS)
+tools/corpus/frozen_snapshot/
+
+# Manual external projects corpus (Finding AT - kept locally/externally, never tracked in git)
+tools/corpus/manual_projects/

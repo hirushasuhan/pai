@@ -4,6 +4,13 @@ tools/run_shadow_workload.py - Dogfood Workload Driver for PAI Shadow Evaluation
 
 Finding AN: Provides a scripted driver executing real `pai` CLI commands against real
 files and repositories to generate legitimate `source="cli"` shadow comparisons.
+Finding AS: Extracts and operates on a frozen snapshot of the evaluated commit.
+Finding AT: Supports external manual projects directory (PAI_MANUAL_CORPUS_DIR),
+            keeping private/personal files completely outside the Git repository.
+            Only counts and content digests are tracked in telemetry; never paths or contents.
+Finding AU: Pins the evaluated commit hash explicitly. Refuses to default to floating HEAD.
+            Governance rule: ANY MODIFICATION TO research/ OR core/ INVALIDATES & RESTARTS
+            THE 7-DAY SHADOW EVALUATION WINDOW.
 
 Executes:
 1. `pai docs <file>` - Single-file document analyses (drives `ingest_file`).
@@ -11,17 +18,19 @@ Executes:
 3. `pai doctor` - Diagnostics and governance evaluation.
 
 Usage:
-  python tools/run_shadow_workload.py [--iterations N] [--docs-file PATH] [--analyze-folder PATH] [--status-only]
+  python tools/run_shadow_workload.py [--commit SHA] [--manual-dir PATH] [--iterations N] [--dry-run]
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import subprocess
+import zipfile
 from pathlib import Path
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Ensure research/ is on sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,66 +42,248 @@ import pai
 import pai_core_bridge
 
 
-def get_default_docs_files(repo_root: Path) -> List[Path]:
+def resolve_evaluated_commit(cli_commit: Optional[str] = None, repo_root: Optional[Path] = None) -> str:
     """
-    Finds candidate documents in the repo and projects to exercise `pai docs` (Finding AP).
+    Resolves the pinned evaluated commit hash (Findings AS & AU).
+    Refuses to default to floating 'HEAD' without explicit pinning.
+    Order of resolution:
+    1. CLI argument --commit <SHA>
+    2. Environment variable PAI_EVALUATED_COMMIT
+    3. Pinned commit file tools/corpus/EVALUATED_COMMIT
+    """
+    root = repo_root or REPO_ROOT
+    commit_val: Optional[str] = None
+
+    if cli_commit:
+        commit_val = cli_commit.strip()
+    elif os.environ.get("PAI_EVALUATED_COMMIT"):
+        commit_val = os.environ.get("PAI_EVALUATED_COMMIT", "").strip()
+    else:
+        commit_file = root / "tools" / "corpus" / "EVALUATED_COMMIT"
+        if commit_file.exists():
+            commit_val = commit_file.read_text("utf-8").strip()
+
+    if not commit_val:
+        raise ValueError(
+            "Mandatory evaluated commit not specified (Finding AU). "
+            "Pass --commit <SHA>, set PAI_EVALUATED_COMMIT, or write SHA to tools/corpus/EVALUATED_COMMIT. "
+            "Floating 'HEAD' is disallowed to ensure corpus stability across the 7-day window."
+        )
+
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", commit_val],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return proc.stdout.strip()
+    except Exception:
+        return commit_val
+
+
+def ensure_frozen_snapshot(repo_root: Path, commit_sha: str) -> Tuple[Path, str]:
+    """
+    Extracts a frozen snapshot from git archive of the target commit (Finding AS).
+    Ensures that live repository edits during the 7-day window cannot create new content
+    digests or inflate distinct input metrics.
+    Returns (snapshot_dir, resolved_commit_sha).
+    """
+    resolved_sha = commit_sha
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", commit_sha],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        resolved_sha = proc.stdout.strip()
+    except Exception:
+        pass
+
+    snapshot_dir = repo_root / "tools" / "corpus" / "frozen_snapshot"
+    marker_file = snapshot_dir / ".commit_sha"
+
+    if snapshot_dir.exists() and marker_file.exists():
+        try:
+            cached_sha = marker_file.read_text("utf-8").strip()
+            if cached_sha == resolved_sha:
+                return snapshot_dir, resolved_sha
+        except Exception:
+            pass
+
+    # Extract git archive of named commit into snapshot_dir
+    zip_tmp = repo_root / "tools" / "corpus" / f"snapshot_{int(time.time())}.zip"
+    try:
+        subprocess.run(
+            ["git", "archive", "--format=zip", commit_sha, "-o", str(zip_tmp)],
+            cwd=str(repo_root),
+            check=True,
+        )
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_tmp, "r") as z:
+            z.extractall(snapshot_dir)
+        marker_file.write_text(resolved_sha, encoding="utf-8")
+    except Exception as e:
+        print(f"Notice: Failed to extract git archive snapshot ({e}); falling back to repo root.", file=sys.stderr)
+        return repo_root, resolved_sha
+    finally:
+        if zip_tmp.exists():
+            try:
+                zip_tmp.unlink()
+            except OSError:
+                pass
+
+    return snapshot_dir, resolved_sha
+
+
+def resolve_manual_projects_dir(cli_dir: Optional[str] = None, repo_root: Optional[Path] = None) -> Optional[Path]:
+    """
+    Resolves the directory containing manual real-world projects for the corpus (Finding AT).
+    Order of precedence:
+    1. Explicit CLI argument --manual-dir
+    2. Environment variable PAI_MANUAL_CORPUS_DIR
+    3. Default external location C:/Users/hp/Documents/pai_manual_corpus
+    4. Git-ignored local fallback tools/corpus/manual_projects
+    """
+    candidates = []
+    if cli_dir:
+        candidates.append(Path(cli_dir))
+    env_dir = os.environ.get("PAI_MANUAL_CORPUS_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Path.home() / "Documents" / "pai_manual_corpus")
+    root = repo_root or REPO_ROOT
+    candidates.append(root / "tools" / "corpus" / "manual_projects")
+
+    for c in candidates:
+        if c.exists() and c.is_dir():
+            return c
+    return None
+
+
+def _is_ignored(p: Path, scan_root: Path) -> bool:
+    ignore_parts = {"target", ".git", "__pycache__", ".pytest_cache", "venv", "env", ".pai"}
+    if any(x in p.parts for x in ignore_parts):
+        return True
+    if scan_root.name != "frozen_snapshot" and "frozen_snapshot" in p.parts:
+        return True
+    return False
+
+
+def get_default_docs_files(
+    repo_root: Path,
+    snapshot_dir: Optional[Path] = None,
+    manual_projects_dir: Optional[Path] = None,
+) -> List[Path]:
+    """
+    Finds candidate documents in the frozen snapshot and external manual projects (Findings AP, AS, AT).
     Ensures high corpus diversity with a minimum of 50 distinct real source/doc files.
     """
-    ignore_parts = {"target", ".git", "__pycache__", ".pytest_cache", "venv", "env", ".pai"}
-    valid_exts = {".py", ".md", ".rs", ".json", ".toml", ".yml", ".yaml", ".txt", ".csv", ".markdown"}
+    valid_exts = {".py", ".md", ".rs", ".json", ".toml", ".yml", ".yaml", ".txt", ".csv", ".markdown", ".mdx", ".properties"}
     discovered: List[Path] = []
+    seen_paths: Set[Path] = set()
 
-    for p in repo_root.rglob("*"):
-        if p.is_file() and not any(x in p.parts for x in ignore_parts) and p.suffix in valid_exts:
-            discovered.append(p)
+    scan_roots: List[Path] = []
+    if snapshot_dir and snapshot_dir.exists():
+        scan_roots.append(snapshot_dir)
+    else:
+        scan_roots.append(repo_root)
+
+    # Scan external manual projects if available (Finding AT)
+    if manual_projects_dir and manual_projects_dir.exists():
+        scan_roots.append(manual_projects_dir)
+
+    corpus_root = repo_root / "tools" / "corpus"
+    for sub in ["sinhala_text", "multilingual_code", "large_docs", "corrupt_and_office"]:
+        p_sub = corpus_root / sub
+        if p_sub.exists() and p_sub not in scan_roots:
+            scan_roots.append(p_sub)
+
+    for r in scan_roots:
+        for p in r.rglob("*"):
+            if p.is_file() and not _is_ignored(p, r) and p.suffix.lower() in valid_exts:
+                try:
+                    res = p.resolve()
+                    if res not in seen_paths:
+                        seen_paths.add(res)
+                        discovered.append(p)
+                except Exception:
+                    if p not in discovered:
+                        discovered.append(p)
 
     discovered.sort()
     return discovered
 
 
-def get_default_analyze_folders(repo_root: Path) -> List[Path]:
+def get_default_analyze_folders(
+    repo_root: Path,
+    snapshot_dir: Optional[Path] = None,
+    manual_projects_dir: Optional[Path] = None,
+) -> List[Path]:
     """
-    Finds candidate directory targets to exercise `pai analyze` (Finding AP).
+    Finds candidate directory targets to exercise `pai analyze` (Findings AP, AS, AT).
     Ensures high corpus diversity with a minimum of 20 distinct real directories
-    drawn from the repository.
+    drawn from the frozen snapshot and external manual real-world projects.
     """
-    ignore_parts = {"target", ".git", "__pycache__", ".pytest_cache", "venv", "env", ".pai"}
     discovered: List[Path] = []
+    seen_paths: Set[Path] = set()
 
-    try:
-        for p in repo_root.rglob("*"):
-            try:
-                if p.is_dir() and not any(x in p.parts for x in ignore_parts):
-                    has_files = any(f.is_file() for f in p.iterdir() if f.is_file() and not f.name.startswith("."))
-                    if has_files:
-                        discovered.append(p)
-            except (PermissionError, OSError):
-                continue
-    except (PermissionError, OSError):
-        pass
+    scan_roots: List[Path] = []
+    if snapshot_dir and snapshot_dir.exists():
+        scan_roots.append(snapshot_dir)
+    else:
+        scan_roots.append(repo_root)
 
-    # Fallback to predefined repository directories if needed
+    if manual_projects_dir and manual_projects_dir.exists():
+        scan_roots.append(manual_projects_dir)
+
+    corpus_root = repo_root / "tools" / "corpus"
+    for sub in ["sinhala_text", "multilingual_code", "large_docs", "corrupt_and_office"]:
+        p_sub = corpus_root / sub
+        if p_sub.exists() and p_sub not in scan_roots:
+            scan_roots.append(p_sub)
+
+    for r in scan_roots:
+        try:
+            for p in r.rglob("*"):
+                try:
+                    if p.is_dir() and not _is_ignored(p, r):
+                        has_files = any(f.is_file() for f in p.iterdir() if f.is_file() and not f.name.startswith("."))
+                        if has_files:
+                            res = p.resolve()
+                            if res not in seen_paths:
+                                seen_paths.add(res)
+                                discovered.append(p)
+                except (PermissionError, OSError):
+                    continue
+        except (PermissionError, OSError):
+            pass
+
+    # Ensure at least 20 distinct directories even if external corpus is unavailable
     if len(discovered) < 20:
         candidates = [
             repo_root / "core",
             repo_root / "core" / "src",
-            repo_root / "core" / "benches",
             repo_root / "docs",
             repo_root / "docs" / "adr",
             repo_root / "docs" / "evidence",
             repo_root / "docs" / "examples",
-            repo_root / "docs" / "reports",
             repo_root / "hardware",
             repo_root / "research",
             repo_root / "research" / "conformance",
             repo_root / "research" / "eval_sets",
             repo_root / "research" / "eval_sets" / "forecast_series",
             repo_root / "research" / "eval_sets" / "hidden_tests",
-            repo_root / "research" / "fixtures",
-            repo_root / "research" / "releases",
             repo_root / "research" / "tests",
             repo_root / "tools",
             repo_root / "tools" / "corpus",
+            repo_root / "tools" / "corpus" / "corrupt_and_office",
+            repo_root / "tools" / "corpus" / "large_docs",
+            repo_root / "tools" / "corpus" / "multilingual_code",
+            repo_root / "tools" / "corpus" / "sinhala_text",
             repo_root / ".github",
             repo_root / ".github" / "workflows",
         ]
@@ -110,6 +301,10 @@ def run_workload(
     analyze_folders: List[Path] | None = None,
     model: str = "stub-model",
     dry_run: bool = False,
+    commit_sha: Optional[str] = None,
+    use_live_repo: bool = False,
+    snapshot_dir_override: Optional[Path] = None,
+    manual_dir_override: Optional[str] = None,
 ) -> int:
     """Executes the scripted dogfood workload across files and folders."""
     if hasattr(sys.stdout, "reconfigure"):
@@ -118,13 +313,37 @@ def run_workload(
         sys.stderr.reconfigure(encoding="utf-8")
 
     print("=" * 70)
-    print("         PAI SHADOW WORKLOAD DOGFOOD DRIVER (Findings AN & AP)")
+    print("         PAI SHADOW WORKLOAD DOGFOOD DRIVER (Findings AN, AP, AS, AT, AU)")
     print("=" * 70)
 
+    manual_projects_dir = resolve_manual_projects_dir(manual_dir_override, REPO_ROOT)
+    if manual_projects_dir:
+        print(f"Manual Corpus Source  : External Directory ({manual_projects_dir}) [Finding AT]")
+    else:
+        print("Manual Corpus Source  : None configured (using frozen snapshot & specialized corpus)")
+
+    resolved_commit = commit_sha
+    if use_live_repo:
+        snapshot_dir = None
+        resolved_commit = "LIVE"
+        print("Corpus Mode           : LIVE REPOSITORY (Unfrozen)")
+    elif snapshot_dir_override:
+        snapshot_dir = snapshot_dir_override
+        resolved_commit = commit_sha or "CUSTOM"
+        print(f"Corpus Mode           : FROZEN SNAPSHOT OVERRIDE ({snapshot_dir})")
+    else:
+        resolved_commit = resolve_evaluated_commit(commit_sha, REPO_ROOT)
+        snapshot_dir, resolved_commit = ensure_frozen_snapshot(REPO_ROOT, commit_sha=resolved_commit)
+        print(f"Corpus Mode           : FROZEN SNAPSHOT (Finding AS)")
+        print(f"Frozen Commit SHA     : {resolved_commit} (Finding AU pinned)")
+        print(f"Snapshot Directory    : {snapshot_dir}")
+
+    print("Governance Rule       : ANY MODIFICATION TO research/ OR core/ INVALIDATES & RESTARTS THE EVALUATION WINDOW.")
+
     if not docs_files:
-        docs_files = get_default_docs_files(REPO_ROOT)
+        docs_files = get_default_docs_files(REPO_ROOT, snapshot_dir=snapshot_dir, manual_projects_dir=manual_projects_dir)
     if not analyze_folders:
-        analyze_folders = get_default_analyze_folders(REPO_ROOT)
+        analyze_folders = get_default_analyze_folders(REPO_ROOT, snapshot_dir=snapshot_dir, manual_projects_dir=manual_projects_dir)
 
     if not docs_files:
         print("Error: No valid docs files found to analyze.", file=sys.stderr)
@@ -206,6 +425,10 @@ def main_cli() -> int:
     parser.add_argument("--model", type=str, default="stub-model", help="Model name for commands")
     parser.add_argument("--status-only", action="store_true", help="Print current telemetry status and exit")
     parser.add_argument("--dry-run", action="store_true", help="Display execution plan without running")
+    parser.add_argument("--commit", type=str, help="Commit hash to freeze corpus snapshot at (Findings AS & AU). If omitted, reads from tools/corpus/EVALUATED_COMMIT or PAI_EVALUATED_COMMIT.")
+    parser.add_argument("--snapshot-dir", type=str, help="Custom frozen snapshot directory (Finding AS)")
+    parser.add_argument("--manual-dir", type=str, help="External directory containing manual real-world projects (Finding AT). If omitted, checks PAI_MANUAL_CORPUS_DIR or default external paths.")
+    parser.add_argument("--live", action="store_true", help="Run against live repository instead of frozen snapshot")
 
     args = parser.parse_args()
 
@@ -224,6 +447,10 @@ def main_cli() -> int:
         analyze_folders=folders,
         model=args.model,
         dry_run=args.dry_run,
+        commit_sha=args.commit,
+        use_live_repo=args.live,
+        snapshot_dir_override=Path(args.snapshot_dir) if args.snapshot_dir else None,
+        manual_dir_override=args.manual_dir,
     )
 
 

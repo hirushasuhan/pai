@@ -782,7 +782,9 @@ def format_untrusted_context(
     ).text
 
 
-def _is_invalid_filename(name: str) -> bool:
+def _is_invalid_filename(name: Union[str, os.PathLike]) -> bool:
+    if not isinstance(name, str):
+        name = str(name)
     if "\ufffd" in name:
         return True
     try:
@@ -823,12 +825,12 @@ def is_reserved_device_name(name: str) -> bool:
     return stem in RESERVED_DEVICE_NAMES
 
 
-def has_ads_colon(path: str) -> bool:
+def has_ads_colon(path: Union[str, os.PathLike]) -> bool:
     """
     Returns True if path contains a colon ':' indicating an NTFS Alternate Data Stream,
     excluding an initial single-letter Windows drive prefix (e.g. 'C:').
     """
-    p = path
+    p = str(path)
     if p.startswith(("\\\\?\\", "//?/")):
         p = p[4:]
     if len(p) >= 2 and p[0].isascii() and p[0].isalpha() and p[1] == ":":
@@ -872,6 +874,9 @@ def ingest_file(
         raise ValueError("max_line_length must be between 1 and 1000000")
     if not (1 <= max_file_size <= 100_000_000):
         raise ValueError("max_file_size must be between 1 and 100000000")
+    file_path = str(file_path)
+    if root_path is not None:
+        root_path = str(root_path)
     basename = os.path.basename(file_path)
 
     # 0. Fast-path filename validity check (reject lone surrogates, unencodable UTF-8, or NTFS ADS colons)
@@ -1151,6 +1156,7 @@ def ingest_folder(
     if not (1 <= max_total_rejections <= 50_000):
         raise ValueError("max_total_rejections must be between 1 and 50000")
 
+    folder_path = str(folder_path)
     canonical_root = os.path.realpath(os.path.abspath(folder_path))
     limits = {
         "max_file_size_bytes": max_file_size,
