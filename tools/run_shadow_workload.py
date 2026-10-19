@@ -110,6 +110,36 @@ def verify_shadow_evaluation_gate(repo_root: Path, evaluated_commit: Optional[st
     11. Rust core binary is missing or cannot be located (Finding AW)
     12. Rust core binary bridge handshake fails (Finding AW)
     """
+    # Finding AZ: Environment isolation checks (must execute first)
+    if "PAI_TELEMETRY_SOURCE" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_TELEMETRY_SOURCE is set in os.environ ('{os.environ['PAI_TELEMETRY_SOURCE']}'). "
+            "This environment variable overrides CLI telemetry tagging and causes comparisons to bypass source='cli'. "
+            "Unset PAI_TELEMETRY_SOURCE before running the driver."
+        )
+
+    if "PAI_SHADOW_LOG" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_SHADOW_LOG is set in os.environ ('{os.environ['PAI_SHADOW_LOG']}'). "
+            "Overriding the shadow log path is prohibited during evaluation window runs. "
+            "Unset PAI_SHADOW_LOG so that telemetry writes to the canonical dogfood log."
+        )
+
+    if "PAI_DIR" in os.environ:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: PAI_DIR is set in os.environ ('{os.environ['PAI_DIR']}'). "
+            "Overriding PAI_DIR is prohibited during evaluation window runs. "
+            "Unset PAI_DIR so that telemetry lands in ~/.pai/shadow_discrepancies.jsonl."
+        )
+
+    canonical_log = (Path.home() / ".pai" / "shadow_discrepancies.jsonl").resolve()
+    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
+    if effective_log != canonical_log:
+        raise RuntimeError(
+            f"Finding AZ Gate Failed: Effective shadow log path '{effective_log}' does not match "
+            f"the canonical dogfood telemetry path '{canonical_log}'. Ensure ~/.pai is writable and environment is clean."
+        )
+
     target_commit = evaluated_commit or resolve_evaluated_commit(repo_root=repo_root)
 
     # Finding BA: Assert working tree and index have zero uncommitted changes in research/ or core/
@@ -194,36 +224,6 @@ def verify_shadow_evaluation_gate(repo_root: Path, evaluated_commit: Optional[st
         if isinstance(e, RuntimeError):
             raise
         raise RuntimeError(f"Finding BA Gate Failed: Could not verify HEAD tree IDs against pinned commit: {e}")
-
-    # Finding AZ: Environment isolation checks
-    if "PAI_TELEMETRY_SOURCE" in os.environ:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: PAI_TELEMETRY_SOURCE is set in os.environ ('{os.environ['PAI_TELEMETRY_SOURCE']}'). "
-            "This environment variable overrides CLI telemetry tagging and causes comparisons to bypass source='cli'. "
-            "Unset PAI_TELEMETRY_SOURCE before running the driver."
-        )
-
-    if "PAI_SHADOW_LOG" in os.environ:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: PAI_SHADOW_LOG is set in os.environ ('{os.environ['PAI_SHADOW_LOG']}'). "
-            "Overriding the shadow log path is prohibited during evaluation window runs. "
-            "Unset PAI_SHADOW_LOG so that telemetry writes to the canonical dogfood log."
-        )
-
-    if "PAI_DIR" in os.environ:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: PAI_DIR is set in os.environ ('{os.environ['PAI_DIR']}'). "
-            "Overriding PAI_DIR is prohibited during evaluation window runs. "
-            "Unset PAI_DIR so that telemetry lands in ~/.pai/shadow_discrepancies.jsonl."
-        )
-
-    canonical_log = (Path.home() / ".pai" / "shadow_discrepancies.jsonl").resolve()
-    effective_log = pai_core_bridge._get_discrepancy_log_path().resolve()
-    if effective_log != canonical_log:
-        raise RuntimeError(
-            f"Finding AZ Gate Failed: Effective shadow log path '{effective_log}' does not match "
-            f"the canonical dogfood telemetry path '{canonical_log}'. Ensure ~/.pai is writable and environment is clean."
-        )
 
     # Finding AW: Host Rust core execution checks
     use_rust = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
