@@ -738,7 +738,7 @@ def run_workload(
             if rc_ana != 0:
                 print(f"Warning: pai analyze failed with code {rc_ana}", file=sys.stderr)
 
-            # Finding AZ Gate: Verify that iteration 1 generated new CLI comparisons
+            # Finding AZ & BC Gate: Verify that iteration 1 generated new CLI comparisons and non-null content_digest
             if it == 1:
                 cur_summary = pai_core_bridge.get_shadow_telemetry_summary()
                 cur_diff = cur_summary.get("cli_comparisons", 0) - summary_before.get("cli_comparisons", 0)
@@ -749,6 +749,19 @@ def run_workload(
                         "Commands must generate source='cli' comparisons with Rust core active. "
                         "Verify that PAI_USE_RUST_CORE=1, PAI_SHADOW_COMPARE=1, and telemetry source is untampered."
                     )
+
+                # Finding BC Gate (Condition 1): Assert newest comparison record has a valid non-null content_digest
+                log_path = pai_core_bridge._get_discrepancy_log_path()
+                if log_path.exists():
+                    lines = [ln.strip() for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                    if lines:
+                        last_record = json.loads(lines[-1])
+                        last_digest = last_record.get("content_digest")
+                        if not last_digest or not isinstance(last_digest, str):
+                            raise RuntimeError(
+                                f"Finding BC Gate Failed: Iteration 1 completed but newest shadow log record has null content_digest: {last_record}. "
+                                "Driver bridge shim must ensure content_digest is computed to populate distinct-input evidence."
+                            )
     finally:
         os.environ.pop("PAI_TELEMETRY_DRIVER", None)
         pai_core_bridge.set_telemetry_driver(False)

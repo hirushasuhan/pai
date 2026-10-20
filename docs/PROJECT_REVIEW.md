@@ -3110,3 +3110,16 @@ AV is the only open item and it is the user's decision: at the time of this chec
   - Research tree ID: `6e0fb90123f282caa68ea51d54ee3816a96fb4fd`.
   - Core tree ID: `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`.
   - Binary SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`.
+
+### Reviewer Addendum (commit 0fb33ec): Finding BC, telemetry digest defect in the evaluated code
+
+**Verified by reading the pinned code (research/ and core/ are identical to 9ac1bc5b056f53fb88c1206fec896df9ffc85c1f):**
+- `research/pai_core_bridge.py` has no module-level `import hashlib` (only function-local imports in other functions). The `content_digest` computations for `verify_verdict_frame`, `ingest_file` and `ingest_folder` therefore raise NameError, which a bare `except Exception: pass` hides, so the digest is always `None` in a normal (non-driver) process.
+- The `ingest_folder` digest also reads `rel_path`, `content_sha256` and `content` on `IngestedItem`, which only has `path`, `text` and `sha256`. This would also be swallowed.
+- `tools/run_shadow_workload.py` (about lines 709-714) patches both at runtime in the driver process only. Digests in the log are therefore produced by the driver shim and not by the shipped code path.
+
+**Impact:** telemetry only. The Rust-versus-Python comparison and the discrepancy logic do not use these values, so parity evidence is unaffected. The distinct-input evidence (`ingest_file` and `ingest_folder`) exists only for driver runs after the shim was added (10 inputs at the time of this review; earlier comparisons carry no digest). Manual CLI runs record no digests.
+
+**Decision recorded:** the window continues (no restart), on these conditions: (1) the final report states that distinct-input evidence comes from the driver with this shim; (2) the driver asserts after the first iteration that the newest record has a non-null `content_digest`; (3) after the window, a research/ fix (top-level import, correct attribute names, and a subprocess test showing a non-null digest from a plain `pai docs` run) is made as a separate telemetry-only commit, shown by diff to touch nothing else, with CI re-run; Release N is then named as evaluated commit plus that fix.
+
+**Process note (AV):** the owner decision (private repository, GitHub Support purge request, rotate credentials) is recorded. The Support outcome and the credential rotation are not yet confirmed in the record, so that part stays "decision recorded, completion unconfirmed" until the owner states otherwise.
