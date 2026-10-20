@@ -1,0 +1,21 @@
+Linux & Win32 Kernel Subsystem Parameters Reference Manual
+================================================================
+
+1. MEMORY MANAGEMENT SUBSYSTEM
+vm.swappiness = 10
+vm.dirty_ratio = 20
+vm.dirty_background_ratio = 10
+vm.overcommit_memory = 1
+vm.max_map_count = 262144
+
+2. IPC & JOB OBJECT RESOURCE BOUNDS
+kernel.shmmax = 18446744073709551615
+kernel.shmall = 18446744073709551615
+kernel.msgmax = 65536
+fs.file-max = 2097152
+
+3. WIN32 APPMONITOR AND APPCONTAINER BOUNDS
+LowBoxType = RestrictedProcess
+JobObjectExtendedLimitInformation.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
+ProcessMemoryLimit = 4294967296 (4 GB)
+ActiveProcessLimit = 64

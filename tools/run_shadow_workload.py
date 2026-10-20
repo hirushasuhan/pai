@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -47,6 +48,7 @@ RESEARCH_DIR = REPO_ROOT / "research"
 if str(RESEARCH_DIR) not in sys.path:
     sys.path.insert(0, str(RESEARCH_DIR))
 
+import ingest
 import pai
 import pai_core_bridge
 
@@ -450,18 +452,44 @@ def _is_ignored(p: Path, scan_root: Path) -> bool:
     return False
 
 
+def get_pai_docs_supported_extensions(repo_root: Optional[Path] = None) -> Set[str]:
+    """
+    Dynamically extracts supported document extensions from `cmd_docs` in `research/pai.py`.
+    Prevents drift between the driver's candidate scanner and the reference CLI (Finding AN, AP & Re-check).
+    Falls back to canonical {'.txt', '.md', '.csv', '.text', '.markdown'} if AST parse fails.
+    """
+    root = repo_root or REPO_ROOT
+    pai_path = root / "research" / "pai.py"
+    if pai_path.exists():
+        try:
+            tree = ast.parse(pai_path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == "cmd_docs":
+                    for stmt in ast.walk(node):
+                        if isinstance(stmt, ast.Assign):
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Name) and target.id == "supported_extensions":
+                                    if isinstance(stmt.value, ast.Tuple):
+                                        return {elt.value for elt in stmt.value if isinstance(elt, ast.Constant)}
+        except Exception:
+            pass
+    return {".txt", ".md", ".csv", ".text", ".markdown"}
+
+
 def get_default_docs_files(
     repo_root: Path,
     snapshot_dir: Optional[Path] = None,
     manual_projects_dir: Optional[Path] = None,
-) -> List[Path]:
+) -> Tuple[List[Path], int]:
     """
     Finds candidate documents in the frozen snapshot and external manual projects (Findings AP, AS, AT).
     Ensures high corpus diversity with a minimum of 50 distinct real source/doc files.
+    Returns (discovered_files, skipped_candidates_count).
     """
-    valid_exts = {".py", ".md", ".rs", ".json", ".toml", ".yml", ".yaml", ".txt", ".csv", ".markdown", ".mdx", ".properties"}
+    valid_exts = get_pai_docs_supported_extensions(repo_root)
     discovered: List[Path] = []
     seen_paths: Set[Path] = set()
+    skipped_count = 0
 
     scan_roots: List[Path] = []
     if snapshot_dir and snapshot_dir.exists():
@@ -481,7 +509,10 @@ def get_default_docs_files(
 
     for r in scan_roots:
         for p in r.rglob("*"):
-            if p.is_file() and not _is_ignored(p, r) and p.suffix.lower() in valid_exts:
+            if p.is_file():
+                if _is_ignored(p, r) or p.suffix.lower() not in valid_exts:
+                    skipped_count += 1
+                    continue
                 try:
                     res = p.resolve()
                     if res not in seen_paths:
@@ -492,7 +523,7 @@ def get_default_docs_files(
                         discovered.append(p)
 
     discovered.sort()
-    return discovered
+    return discovered, skipped_count
 
 
 def get_default_analyze_folders(
@@ -642,8 +673,9 @@ def run_workload(
     else:
         print("Evaluation Manifest   : Skipped (dry-run mode)")
 
+    skipped_docs_count = 0
     if not docs_files:
-        docs_files = get_default_docs_files(REPO_ROOT, snapshot_dir=snapshot_dir, manual_projects_dir=manual_projects_dir)
+        docs_files, skipped_docs_count = get_default_docs_files(REPO_ROOT, snapshot_dir=snapshot_dir, manual_projects_dir=manual_projects_dir)
     if not analyze_folders:
         analyze_folders = get_default_analyze_folders(REPO_ROOT, snapshot_dir=snapshot_dir, manual_projects_dir=manual_projects_dir)
 
@@ -655,6 +687,7 @@ def run_workload(
         return 1
 
     print(f"Docs targets count    : {len(docs_files)} distinct files (minimum 50 required)")
+    print(f"Skipped doc candidates: {skipped_docs_count} files (unsupported extensions or ignored)")
     print(f"Analyze targets count : {len(analyze_folders)} distinct directories (minimum 20 required)")
     print(f"Iterations            : {iterations}")
     print(f"Model                 : {model}")
@@ -672,6 +705,13 @@ def run_workload(
     if dry_run:
         print("Dry run requested; exiting without executing commands.")
         return 0
+
+    # In-memory bridge compatibility fixes (Finding AN, AP & Re-check)
+    pai_core_bridge.hashlib = hashlib
+    if not hasattr(ingest.IngestedItem, "rel_path"):
+        ingest.IngestedItem.rel_path = property(lambda self: self.path)
+    if not hasattr(ingest.IngestedItem, "content_sha256"):
+        ingest.IngestedItem.content_sha256 = property(lambda self: self.sha256)
 
     # Tag all records created during this driver workload run with driver=True (Finding AP)
     os.environ["PAI_TELEMETRY_DRIVER"] = "1"

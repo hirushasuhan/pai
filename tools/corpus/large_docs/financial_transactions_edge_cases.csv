@@ -1,0 +1,9 @@
+transaction_id,timestamp,sender_account,receiver_account,amount_usd,notes,risk_flag
+TX_1001,2026-10-15T08:30:00Z,ACC-9921,ACC-1102,1500.50,"Standard invoice settlement",false
+TX_1002,2026-10-15T08:31:12Z,ACC-4412,ACC-8831,99999.00,"Special dividend distribution, wire transfer",true
+TX_1003,2026-10-15T08:32:45Z,ACC-3310,ACC-2204,12.75,"Coffee & snacks: ""morning batch""",false
+TX_1004,2026-10-15T08:35:00Z,ACC-5521,ACC-9912,500000.00,"Multiline memo:
+Payment for project infrastructure
+Includes cloud cluster compute",true
+TX_1005,2026-10-15T08:40:19Z,ACC-1200,ACC-3401,0.01,"Micro-deposit verification",false
+TX_1006,2026-10-15T08:42:00Z,ACC-7744,ACC-6622,4250.25,"Colombo offshore branch remittance, LKR converted",false
