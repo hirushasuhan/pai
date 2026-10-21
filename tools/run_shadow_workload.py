@@ -603,6 +603,40 @@ def get_default_analyze_folders(
     return discovered
 
 
+def _get_cursor_path() -> Path:
+    """Returns canonical persistent cursor path in ~/.pai/workload_cursor.json (Finding BD)."""
+    return Path.home() / ".pai" / "workload_cursor.json"
+
+
+def load_workload_cursor() -> Dict[str, int]:
+    """Loads persistent pool offsets across driver invocations (Finding BD)."""
+    p = _get_cursor_path()
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {
+                    "docs_offset": int(data.get("docs_offset", 0)),
+                    "folder_offset": int(data.get("folder_offset", 0)),
+                }
+        except Exception:
+            pass
+    return {"docs_offset": 0, "folder_offset": 0}
+
+
+def save_workload_cursor(docs_offset: int, folder_offset: int) -> None:
+    """Saves persistent pool offsets to prevent repeating same targets in small batches (Finding BD)."""
+    p = _get_cursor_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps({"docs_offset": docs_offset, "folder_offset": folder_offset}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def run_workload(
     iterations: int = 10,
     docs_files: List[Path] | None = None,
@@ -613,6 +647,7 @@ def run_workload(
     use_live_repo: bool = False,
     snapshot_dir_override: Optional[Path] = None,
     manual_dir_override: Optional[str] = None,
+    start_offset: Optional[int] = None,
 ) -> int:
     """Executes the scripted dogfood workload across files and folders."""
     if hasattr(sys.stdout, "reconfigure"):
@@ -717,10 +752,12 @@ def run_workload(
     os.environ["PAI_TELEMETRY_DRIVER"] = "1"
     pai_core_bridge.set_telemetry_driver(True)
 
-    try:
-        docs_idx = 0
-        folder_idx = 0
+    cursor = load_workload_cursor()
+    docs_idx = start_offset if start_offset is not None else cursor.get("docs_offset", 0)
+    folder_idx = start_offset if start_offset is not None else cursor.get("folder_offset", 0)
+    print(f"Target Pool Starting  : docs_offset={docs_idx} (mod {len(docs_files)}), folder_offset={folder_idx} (mod {len(analyze_folders)}) [Finding BD]")
 
+    try:
         for it in range(1, iterations + 1):
             target_doc = docs_files[docs_idx % len(docs_files)]
             docs_idx += 1
@@ -765,6 +802,7 @@ def run_workload(
     finally:
         os.environ.pop("PAI_TELEMETRY_DRIVER", None)
         pai_core_bridge.set_telemetry_driver(False)
+        save_workload_cursor(docs_idx, folder_idx)
 
     print()
     print("=" * 70)
@@ -796,6 +834,7 @@ def main_cli() -> int:
     parser.add_argument("--snapshot-dir", type=str, help="Custom frozen snapshot directory (Finding AS)")
     parser.add_argument("--manual-dir", type=str, help="External directory containing manual real-world projects (Finding AT). If omitted, checks PAI_MANUAL_CORPUS_DIR or default external paths.")
     parser.add_argument("--live", action="store_true", help="Run against live repository instead of frozen snapshot")
+    parser.add_argument("--start-offset", type=int, default=None, help="Explicit starting index offset into candidate target pools (Finding BD)")
 
     args = parser.parse_args()
 
@@ -818,6 +857,7 @@ def main_cli() -> int:
         use_live_repo=args.live,
         snapshot_dir_override=Path(args.snapshot_dir) if args.snapshot_dir else None,
         manual_dir_override=args.manual_dir,
+        start_offset=args.start_offset,
     )
 
 
