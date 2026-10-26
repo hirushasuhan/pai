@@ -618,6 +618,116 @@ class TestBridgeDifferential(unittest.TestCase):
             self.assertEqual(record.get("content_digest"), expected_digest, "content_digest must match file SHA-256")
             self.assertEqual(record.get("source"), "cli", "telemetry source must be 'cli'")
 
+    def test_standalone_subprocess_analyze_content_digest_deterministic(self):
+        """Verifies that standalone pai analyze records non-null and deterministic ingest_folder content_digest (Finding BC)."""
+        import hashlib
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "project_folder"
+            folder.mkdir()
+            (folder / "file_a.txt").write_text("Hello from module A\n", encoding="utf-8")
+            (folder / "file_b.md").write_text("# Module B Docs\n", encoding="utf-8")
+
+            shadow_log_1 = Path(td) / "log_1.jsonl"
+            shadow_log_2 = Path(td) / "log_2.jsonl"
+
+            env_base = os.environ.copy()
+            env_base["PAI_USE_RUST_CORE"] = "1"
+            env_base["PAI_SHADOW_COMPARE"] = "1"
+            env_base.pop("PAI_TELEMETRY_DRIVER", None)
+            env_base.pop("PAI_TELEMETRY_SOURCE", None)
+
+            # Run 1
+            env_1 = env_base.copy()
+            env_1["PAI_SHADOW_LOG"] = str(shadow_log_1)
+            cmd = [sys.executable, "pai.py", "analyze", str(folder), "--json"]
+            subprocess.run(cmd, cwd=str(repo_root), capture_output=True, text=True, env=env_1)
+
+            # Run 2
+            env_2 = env_base.copy()
+            env_2["PAI_SHADOW_LOG"] = str(shadow_log_2)
+            subprocess.run(cmd, cwd=str(repo_root), capture_output=True, text=True, env=env_2)
+
+            self.assertTrue(shadow_log_1.exists(), "Expected shadow log 1 to be created")
+            self.assertTrue(shadow_log_2.exists(), "Expected shadow log 2 to be created")
+
+            records_1 = [json.loads(ln) for ln in shadow_log_1.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            records_2 = [json.loads(ln) for ln in shadow_log_2.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+            folder_recs_1 = [r for r in records_1 if r.get("op") == "ingest_folder"]
+            folder_recs_2 = [r for r in records_2 if r.get("op") == "ingest_folder"]
+
+            self.assertTrue(len(folder_recs_1) >= 1, "Expected ingest_folder record in run 1")
+            self.assertTrue(len(folder_recs_2) >= 1, "Expected ingest_folder record in run 2")
+
+            d1 = folder_recs_1[0].get("content_digest")
+            d2 = folder_recs_2[0].get("content_digest")
+
+            self.assertIsNotNone(d1, "ingest_folder content_digest must not be null")
+            self.assertEqual(len(d1), 64, "content_digest must be 64-hex SHA-256")
+            self.assertEqual(d1, d2, "ingest_folder content_digest must be deterministic across runs")
+            self.assertEqual(folder_recs_1[0].get("source"), "cli", "telemetry source must be 'cli'")
+
+    def test_direct_verify_verdict_frame_content_digest_not_null(self):
+        """Verifies that direct verify_verdict_frame call records non-null content_digest matching input frame (Finding BC)."""
+        import hashlib
+        from pathlib import Path
+        from verify_loop import format_authenticated_verdict_frame
+
+        with tempfile.TemporaryDirectory() as td:
+            shadow_log = Path(td) / "verify_shadow.jsonl"
+            old_log = os.environ.get("PAI_SHADOW_LOG")
+            os.environ["PAI_SHADOW_LOG"] = str(shadow_log)
+
+            pai_core_bridge.PAI_USE_RUST_CORE = True
+            try:
+                nonce = "test_nonce_digest_123"
+                key = "test_key_digest_456"
+                test_hash = "c" * 64
+                payload = {
+                    "session_nonce": nonce,
+                    "status": "PASS",
+                    "passed": 1,
+                    "failed": 0,
+                    "errors": 0,
+                    "discovered": 1,
+                    "executed": 1,
+                    "failures": [],
+                    "executed_test_ids": ["test_sample"],
+                    "test_hash": test_hash,
+                }
+                stdout = format_authenticated_verdict_frame(payload, key)
+                expected_digest = hashlib.sha256(stdout.encode("utf-8")).hexdigest()
+
+                res = verify_verdict_frame(
+                    stdout,
+                    nonce,
+                    key,
+                    expected_test_ids=("test_sample",),
+                    expected_test_hash=test_hash,
+                    exit_code=0,
+                    res_status="ok",
+                )
+                self.assertTrue(res["passed"])
+
+                self.assertTrue(shadow_log.exists(), "Expected shadow log for verify_verdict_frame")
+                records = [json.loads(ln) for ln in shadow_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                verify_records = [r for r in records if r.get("op") == "verify_verdict_frame"]
+                self.assertTrue(len(verify_records) >= 1, "Expected verify_verdict_frame comparison record")
+
+                rec = verify_records[0]
+                self.assertIsNotNone(rec.get("content_digest"), "verify_verdict_frame content_digest must not be null")
+                self.assertEqual(rec.get("content_digest"), expected_digest, "content_digest must match stdout frame SHA-256")
+            finally:
+                pai_core_bridge.PAI_USE_RUST_CORE = False
+                if old_log is not None:
+                    os.environ["PAI_SHADOW_LOG"] = old_log
+                else:
+                    os.environ.pop("PAI_SHADOW_LOG", None)
+
 
 if __name__ == "__main__":
     unittest.main()

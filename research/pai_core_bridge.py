@@ -1120,8 +1120,8 @@ def verify_verdict_frame(
     content_digest: Optional[str] = None
     try:
         content_digest = hashlib.sha256(comb_out.encode("utf-8")).hexdigest()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to compute verify_verdict_frame content_digest: %s", exc)
     record_shadow_comparison("verify_verdict_frame", content_digest=content_digest)
 
     bridge_kwargs: Dict[str, Any] = {
@@ -1406,8 +1406,8 @@ def ingest_file(
         try:
             with open(file_path, "rb") as f_in:
                 content_digest = hashlib.sha256(f_in.read()).hexdigest()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to compute ingest_file content_digest for %s: %s", file_path, exc)
         record_shadow_comparison("ingest_file", content_digest=content_digest)
         py_item, py_rej = py_ingest_file(
             file_path=file_path,
@@ -1530,8 +1530,8 @@ def ingest_folder(
                 elif it.text:
                     h.update(it.text.encode("utf-8"))
             content_digest = h.hexdigest()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to compute ingest_folder content_digest for %s: %s", folder_path, exc)
         record_shadow_comparison("ingest_folder", content_digest=content_digest)
         py_report = py_ingest_folder(
             folder_path=folder_path,
