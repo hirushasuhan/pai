@@ -13,6 +13,7 @@ and runs in shadow mode comparing with Python reference to refuse on differentia
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import logging
 import os
@@ -1522,12 +1523,12 @@ def ingest_folder(
         content_digest: Optional[str] = None
         try:
             h = hashlib.sha256()
-            for it in sorted(rust_items, key=lambda x: x.rel_path):
-                h.update(it.rel_path.encode("utf-8"))
-                if it.content_sha256:
-                    h.update(it.content_sha256.encode("utf-8"))
-                elif it.content:
-                    h.update(it.content.encode("utf-8"))
+            for it in sorted(rust_items, key=lambda x: x.path):
+                h.update(it.path.encode("utf-8"))
+                if it.sha256:
+                    h.update(it.sha256.encode("utf-8"))
+                elif it.text:
+                    h.update(it.text.encode("utf-8"))
             content_digest = h.hexdigest()
         except Exception:
             pass

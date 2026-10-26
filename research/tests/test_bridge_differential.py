@@ -12,6 +12,7 @@ import http.server
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -570,6 +571,52 @@ class TestBridgeDifferential(unittest.TestCase):
         finally:
             pai_core_bridge.PAI_USE_RUST_CORE = False
             pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_standalone_subprocess_docs_content_digest_not_null(self):
+        """Verifies that standalone pai docs in a driver-less subprocess records non-null content_digest (Finding BC)."""
+        import hashlib
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+
+        with tempfile.TemporaryDirectory() as td:
+            doc_file = Path(td) / "test_doc.md"
+            doc_content = b"# Test Document\nTesting standalone telemetry content digest.\n"
+            doc_file.write_bytes(doc_content)
+            expected_digest = hashlib.sha256(doc_content).hexdigest()
+
+            shadow_log = Path(td) / "test_shadow_log.jsonl"
+
+            env = os.environ.copy()
+            env["PAI_USE_RUST_CORE"] = "1"
+            env["PAI_SHADOW_COMPARE"] = "1"
+            env["PAI_SHADOW_LOG"] = str(shadow_log)
+            env.pop("PAI_TELEMETRY_DRIVER", None)
+            env.pop("PAI_TELEMETRY_SOURCE", None)
+
+            # Invoke pai docs via clean subprocess without any driver shim
+            cmd = [sys.executable, "pai.py", "docs", str(doc_file), "--json"]
+            subprocess.run(
+                cmd,
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            self.assertTrue(shadow_log.exists(), "Expected shadow log to be created by standalone pai docs")
+            records = [
+                json.loads(line)
+                for line in shadow_log.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            ingest_records = [r for r in records if r.get("op") == "ingest_file"]
+            self.assertTrue(len(ingest_records) >= 1, "Expected at least one ingest_file comparison record")
+
+            record = ingest_records[0]
+            self.assertIsNotNone(record.get("content_digest"), "content_digest must not be null in standalone pai docs")
+            self.assertEqual(record.get("content_digest"), expected_digest, "content_digest must match file SHA-256")
+            self.assertEqual(record.get("source"), "cli", "telemetry source must be 'cli'")
 
 
 if __name__ == "__main__":
