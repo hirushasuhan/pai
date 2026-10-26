@@ -204,6 +204,61 @@ Speed rules: one report per milestone, reviewer checks the whole milestone at on
 
 ---
 
+## 🔭 Release 1.5.0 (planned, not committed): automation and creative generation
+
+_Added 2026-10-23 at the owner's request. This section is a plan only. Nothing here starts until the 1.0.0 exit gate is closed. For this plan "1.0.0" is taken to mean: the Python core freeze, the Rust core as default (Release N) and removal of the Python fallback (Release N+1) are finished, and the owner has accepted the evidence. The owner may adjust that definition._
+
+**Entry gate:** 1.0.0 closed; shadow-evaluation final report accepted; Finding BC telemetry fix merged; Finding AV completion confirmed by the owner.
+
+**Guiding rule:** 1.5.0 adds optional capabilities around the core. It does not change the core's stateless design, its policies or its Constitution. Everything below is off by default and installable separately.
+
+### A. Automation (n8n-style workflows) — integrate, do not rebuild
+- PAI does not become a workflow engine. A visual editor, triggers, retries and a node library are a large product on their own and would pull the project away from its goal.
+- PAI instead offers a stable machine interface that any orchestrator can call:
+  - A1: freeze a versioned JSON output schema (`--json`) and documented exit codes for `code`, `analyze`, `docs`, `forecast`, `route`, `models` and `doctor`.
+  - A2: optional `pai serve`: loopback-only (127.0.0.1) HTTP wrapper over the same commands, bearer token required, request size and rate caps, full audit log, no cloud-key access.
+  - A3 (optional, small): `pai run recipe.json` for a fixed sequence of existing commands, with no loops or conditions. Anything more complex is left to an external orchestrator.
+- n8n (self-hosted), Windows Task Scheduler or similar tools may call PAI through the command line or the loopback API. They are separate programs installed by the user. PAI does not bundle or redistribute them. The n8n licence is "fair-code" (Sustainable Use License, not an OSI open-source licence), so its terms must be re-read at adoption time.
+- Safety rules: text that arrives through a workflow is untrusted data and never instructions (Constitution rule 2). A workflow cannot enable capabilities that the capability broker denies. Credentials stay inside the orchestrator and PAI never reads them. Scheduling state lives in the orchestrator, so PAI stays stateless.
+
+### B. Image generation (optional local backend)
+- `pai image` is an optional capability that talks to a local image backend through a loopback adapter, the same pattern used for local LLMs. The backend and the image model are chosen by the user. The core contains no model weights.
+- Model supply chain (extends R12): each image model needs a model card with licence, SHA-256, VRAM and RAM measurements, and an explicit allow-list entry. Licences differ widely (permissive, community licences with revenue limits, non-commercial). Whether a licence permits the planned use, including commercial use, is checked per model at selection time and recorded. Do not assume a model labelled "open" permits commercial use.
+- Resource policy: image models need much more GPU memory than the small language models. The router and telemetry tiers must refuse or degrade (smaller size, CPU fallback with a slow-path warning) instead of exhausting memory.
+- Reproducibility: every output has a sidecar JSON with model hash, seed, sampler, parameters and prompt, so a result can be regenerated and audited.
+- Output is written only to a user-chosen folder, with the same path-escape and size caps as `ingest`. Prompts taken from untrusted documents cannot trigger generation on their own.
+
+### C. NFT-style collection generation (assets and metadata only)
+- C1, deterministic layered composition: seeded combination of trait layers (PNG) with rarity weights, duplicate detection by content digest, a rarity report, and a manifest. This needs no image model.
+- C2, model-assisted traits: the image backend from section B produces trait layers or base styles, which C1 then composes.
+- C3, metadata export: one JSON file per item in the common marketplace layout (`name`, `description`, `image`, `attributes` as `trait_type`/`value`), plus a collection manifest with hashes.
+- **Hard boundary:** PAI produces files only. It never holds wallet keys or seed phrases, never signs or sends transactions, never mints, and never uploads to marketplaces or storage networks. Those steps are done by the user in their own tools, with a human confirming each irreversible action.
+- Legal and policy notes (not legal advice): copyright protection for purely AI-generated images varies by jurisdiction and may be limited; marketplaces have their own rules about AI-generated work; generating copies of existing collections, artists' styles claimed as their own, or branded characters is out of scope. The user is responsible for rights and for marketplace compliance, and the documentation must say so plainly.
+
+### Milestones and acceptance (each also needs the normal Definition of Done)
+| Milestone | Deliverable | Acceptance (summary) |
+|---|---|---|
+| 1.5-A1 | Frozen `--json` schemas and exit codes | Schema tests, golden vectors, backward-compatibility check |
+| 1.5-A2 | `pai serve` loopback API | Binds loopback only, token required, hostile-input tests (oversize, malformed, path escape), audit log, threat-register entry |
+| 1.5-A3 | Optional `pai run recipe.json` | Fixed sequence only, each step goes through the same policies as the CLI |
+| 1.5-B1 | Image backend adapter, model cards, `pai image` | Licence and hash recorded, VRAM refusal tests, sidecar reproducibility test, no network except the loopback backend |
+| 1.5-C1/C3 | Layer composer and metadata export | Same seed gives identical output, duplicates detected, manifest hashes verified, no key or wallet code present |
+| 1.5-C2 | Model-assisted traits | Works only with allow-listed, licence-checked models; end-to-end sample collection with evidence |
+
+**Order:** A1, A2, then B1, C1, C3, then C2 and A3. A is small and gives the owner the "automate my work" ability early. B and C depend on the machine available for testing (GPU), so their schedule is set after the first image model is measured.
+
+**Out of scope for 1.5.0:** minting, wallet or marketplace integration, auto-posting, and hosted image APIs. A hosted image provider could be considered later under the same user-held-key pattern as ADR-010.
+
+**New risks to register at 1.5.0 entry:** R13 workflow input treated as instructions; R14 image model licence or provenance misuse; R15 resource exhaustion from image generation; R16 users relying on generated assets without checking rights.
+
+---
+
+## 🔮 Future track (not scheduled): inference runtime and accelerators
+
+Proposed in [ADR-012](adr/ADR-012-inference-runtime-strategy.md), 2026-10-23. Today the model is served by Ollama behind the `Reasoner` interface, on CPU and the NVIDIA GPU; the laptop's NPU is not used and not yet detected. The future plan: an NPU probe (VS4), then backend adapters (llama.cpp first), then a PAI-owned `pai runtime` manager, and an NPU backend only if measurements show a benefit. No custom inference kernels are planned. Nothing starts before 1.0.0 is closed.
+
+---
+
 ## ⚠️ Roadmap Risks (status after the second review pass)
 
 | ID | Risk | Status | Where handled |

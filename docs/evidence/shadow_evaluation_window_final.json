@@ -1,0 +1,450 @@
+{
+  "all_passed": false,
+  "os": {
+    "platform": "win32",
+    "system": "Windows",
+    "release": "11",
+    "architecture": "AMD64",
+    "python_version": "3.14.0"
+  },
+  "telemetry": {
+    "schema_version": 1,
+    "timestamp": 1793047900.9854481,
+    "source": "win32-kernel32",
+    "platform": "win32",
+    "cpu_cores": 12,
+    "cpu_load_pct": 30.6,
+    "total_ram_gb": 15.23,
+    "avail_ram_gb": 0.97,
+    "avail_ram_mb": 991.0,
+    "memory_load_pct": 93,
+    "battery": {
+      "percent": 100,
+      "on_ac": true
+    },
+    "budget": {
+      "compute_tier": "COMPRESSED",
+      "max_context_bytes": 2097152,
+      "allow_speculation": false,
+      "thread_pool_limit": 1,
+      "throttle_warning": "CRITICAL RESOURCE LOAD: emergency compression mode. Immediate RAM zeroization enforced.",
+      "reasons": [
+        "critical-memory"
+      ],
+      "avail_ram_mb": 991.0
+    }
+  },
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU, 6141 MiB",
+  "ollama": {
+    "reachable": false,
+    "endpoint": "http://127.0.0.1:11434",
+    "version": null,
+    "models": [],
+    "resident_models": []
+  },
+  "machine_profile": {
+    "present": false,
+    "path": null
+  },
+  "ingest_limits": {
+    "max_file_size_bytes": 1048576,
+    "max_total_bytes": 10485760,
+    "max_file_count": 500,
+    "max_depth": 10,
+    "max_line_length": 4096,
+    "max_rejections_per_reason": 20,
+    "max_total_rejections": 500,
+    "secret_deny_patterns": [
+      ".env",
+      ".env.*",
+      "*.pem",
+      "id_rsa*",
+      "id_dsa*",
+      "id_ecdsa*",
+      "id_ed25519*",
+      "*.key",
+      "*.pfx",
+      "*.pkcs12",
+      "*.p12",
+      "*.jks",
+      "*.kdbx",
+      "credentials.json",
+      "service_account*.json",
+      "service-account*.json",
+      "service-account.json",
+      ".kube/config",
+      "docker/config.json",
+      ".docker/config.json",
+      ".npmrc",
+      ".netrc",
+      ".git-credentials",
+      ".pypirc",
+      ".htpasswd",
+      "*.tfstate",
+      "*.tfstate.*",
+      "terraform.tfstate*",
+      "credentials",
+      "config.json",
+      "secrets.yaml",
+      "secrets.yml",
+      "secrets.json",
+      "token.txt",
+      "*.enc"
+    ],
+    "sensitive_dirs": [
+      ".aws",
+      ".ssh",
+      ".gnupg",
+      ".docker",
+      "docker",
+      ".kube"
+    ],
+    "junk_dir_patterns": [
+      ".git",
+      "node_modules",
+      "__pycache__",
+      ".venv",
+      "venv",
+      "dist",
+      "build",
+      ".tox",
+      ".idea",
+      ".vscode",
+      "target",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".ruff_cache",
+      ".coverage",
+      "htmlcov"
+    ]
+  },
+  "selected_models_by_task": {
+    "code": {
+      "selected_model": null,
+      "admitted": false,
+      "reason_codes": [
+        "COMPRESSED_FALLBACK",
+        "INSUFFICIENT_HEADROOM",
+        "UNCALIBRATED"
+      ]
+    },
+    "analyze": {
+      "selected_model": null,
+      "admitted": false,
+      "reason_codes": [
+        "UNMEASURED_CLASS",
+        "COMPRESSED_FALLBACK",
+        "INSUFFICIENT_HEADROOM",
+        "UNCALIBRATED"
+      ]
+    },
+    "docs": {
+      "selected_model": null,
+      "admitted": false,
+      "reason_codes": [
+        "UNMEASURED_CLASS",
+        "COMPRESSED_FALLBACK",
+        "INSUFFICIENT_HEADROOM",
+        "UNCALIBRATED"
+      ]
+    },
+    "forecast": {
+      "selected_model": null,
+      "admitted": false,
+      "reason_codes": [
+        "UNMEASURED_CLASS",
+        "COMPRESSED_FALLBACK",
+        "INSUFFICIENT_HEADROOM",
+        "UNCALIBRATED"
+      ]
+    },
+    "chat": {
+      "selected_model": null,
+      "admitted": false,
+      "reason_codes": [
+        "COMPRESSED_FALLBACK",
+        "INSUFFICIENT_HEADROOM",
+        "UNCALIBRATED"
+      ]
+    }
+  },
+  "candidates": [
+    {
+      "name": "llama3.2:1b",
+      "display_name": "Llama 3.2 1B",
+      "required_ram_mb": 1613.0,
+      "calibration_status": "Not calibrated -- run pai calibrate",
+      "license_id": "Llama-3.2-Community",
+      "license_status": "verified",
+      "singlish_score": 0.8,
+      "singlish_threshold": 1.2,
+      "eligible": false,
+      "status_message": "INSUFFICIENT_RAM (need 1613.0 MB [uncalibrated 1.5x], avail 991.0 MB)"
+    },
+    {
+      "name": "llama3.2:3b",
+      "display_name": "Llama 3.2 3B",
+      "required_ram_mb": 1622.0,
+      "calibration_status": "Not calibrated -- run pai calibrate",
+      "license_id": "Llama-3.2-Community",
+      "license_status": "verified",
+      "singlish_score": 1.52,
+      "singlish_threshold": 1.2,
+      "eligible": false,
+      "status_message": "INSUFFICIENT_RAM (need 1622.0 MB [uncalibrated 1.5x], avail 991.0 MB)"
+    },
+    {
+      "name": "qwen2.5-coder:1.5b",
+      "display_name": "Qwen 2.5 Coder 1.5B",
+      "required_ram_mb": 1397.6,
+      "calibration_status": "Not calibrated -- run pai calibrate",
+      "license_id": "Apache-2.0",
+      "license_status": "verified",
+      "singlish_score": 0.88,
+      "singlish_threshold": 1.2,
+      "eligible": false,
+      "status_message": "INSUFFICIENT_RAM (need 1397.6 MB [uncalibrated 1.5x], avail 991.0 MB)"
+    },
+    {
+      "name": "qwen2.5-coder:7b",
+      "display_name": "Qwen 2.5 Coder 7B",
+      "required_ram_mb": 2470.9,
+      "calibration_status": "Not calibrated -- run pai calibrate",
+      "license_id": "Apache-2.0",
+      "license_status": "verified",
+      "singlish_score": 1.0,
+      "singlish_threshold": 1.2,
+      "eligible": false,
+      "status_message": "INSUFFICIENT_RAM (need 2470.9 MB [uncalibrated 1.5x], avail 991.0 MB)"
+    },
+    {
+      "name": "qwen3.5:4b",
+      "display_name": "Qwen 3.5 4B",
+      "required_ram_mb": 2069.9,
+      "calibration_status": "Not calibrated -- run pai calibrate",
+      "license_id": "unverified",
+      "license_status": "unverified",
+      "singlish_score": 1.76,
+      "singlish_threshold": 1.2,
+      "eligible": false,
+      "status_message": "INSUFFICIENT_RAM (need 2069.9 MB [uncalibrated 1.5x], avail 991.0 MB)"
+    },
+    {
+      "name": "gemma4:e2b",
+      "display_name": "Gemma 4 e2b",
+      "required_ram_mb": 4914.2,
+      "calibration_status": "Not calibrated -- run pai calibrate",
+      "license_id": "unverified",
+      "license_status": "unverified",
+      "singlish_score": 1.76,
+      "singlish_threshold": 1.2,
+      "eligible": false,
+      "status_message": "INSUFFICIENT_RAM (need 4914.2 MB [uncalibrated 1.5x], avail 991.0 MB)"
+    }
+  ],
+  "sandbox": {
+    "supported": true,
+    "verified": true,
+    "message": "Win32 AppContainer + Job Object boundary verified (all canaries contained, positive control passed, parent checks verified)"
+  },
+  "smoke_tests": [
+    {
+      "command": "code",
+      "passed": true,
+      "exit_code": 0,
+      "detail": "Frozen test suite & sandbox stub probe verified"
+    },
+    {
+      "command": "analyze",
+      "passed": true,
+      "exit_code": 0,
+      "detail": "Ingested 1 file(s) with nonce envelope"
+    },
+    {
+      "command": "docs",
+      "passed": true,
+      "exit_code": 0,
+      "detail": "Analyzed .md document safely"
+    },
+    {
+      "command": "forecast",
+      "passed": true,
+      "exit_code": 0,
+      "detail": "Method: Holt Linear Trend (alpha=0.10, beta=0.05) (3 steps)"
+    }
+  ],
+  "checks": [
+    {
+      "check": "os_telemetry",
+      "passed": true,
+      "detail": "Windows (12 cores, 991.0 MB avail RAM)"
+    },
+    {
+      "check": "sandbox_boundary",
+      "passed": true,
+      "detail": "Win32 AppContainer + Job Object boundary verified (all canaries contained, positive control passed, parent checks verified)"
+    },
+    {
+      "check": "ram_admission",
+      "passed": false,
+      "detail": "0/6 candidate models fit available RAM"
+    },
+    {
+      "check": "ingest_limits",
+      "passed": true,
+      "detail": "max_file=1048576B, max_run=10485760B, secrets_deny=35 patterns"
+    },
+    {
+      "check": "core_bridge_shadow",
+      "passed": true,
+      "detail": "not active (flag off)"
+    },
+    {
+      "check": "smoke_code",
+      "passed": true,
+      "detail": "Frozen test suite & sandbox stub probe verified"
+    },
+    {
+      "check": "smoke_analyze",
+      "passed": true,
+      "detail": "Ingested 1 file(s) with nonce envelope"
+    },
+    {
+      "check": "smoke_docs",
+      "passed": true,
+      "detail": "Analyzed .md document safely"
+    },
+    {
+      "check": "smoke_forecast",
+      "passed": true,
+      "detail": "Method: Holt Linear Trend (alpha=0.10, beta=0.05) (3 steps)"
+    }
+  ],
+  "shadow_discrepancies": [],
+  "shadow_telemetry": {
+    "total_comparisons": 1013,
+    "total_discrepancies": 0,
+    "corrupt_lines": 0,
+    "log_write_failures": 0,
+    "write_failure_marker_path": null,
+    "write_failure_first_entry": null,
+    "cli_comparisons": 1010,
+    "cli_discrepancies": 0,
+    "driver_comparisons": 969,
+    "manual_comparisons": 41,
+    "distinct_content_digests_count": 96,
+    "distinct_inputs_by_op": {
+      "ingest_file": 57,
+      "ingest_folder": 39
+    },
+    "first_comparison_timestamp": 1792434723.3742003,
+    "first_comparison_iso": "2026-10-19T18:32:03Z",
+    "last_comparison_timestamp": 1793047615.2523923,
+    "last_comparison_iso": "2026-10-26T20:46:55Z",
+    "first_cli_comparison_timestamp": 1792434723.3742003,
+    "first_cli_comparison_iso": "2026-10-19T18:32:03Z",
+    "last_cli_comparison_timestamp": 1793047615.2523923,
+    "last_cli_comparison_iso": "2026-10-26T20:46:55Z",
+    "cli_span_seconds": 612891.8781919479,
+    "required_total_cli_comparisons": 1000,
+    "required_cli_quotas": {
+      "ingest_file": 250,
+      "ingest_folder": 100,
+      "verify_verdict_frame": 25
+    },
+    "required_distinct_inputs": {
+      "ingest_file": 50,
+      "ingest_folder": 20
+    },
+    "required_window_seconds": 604800.0,
+    "volume_quotas_met": true,
+    "distinct_inputs_met": true,
+    "quotas_met": true,
+    "span_met": true,
+    "window_started": true,
+    "window_active": true,
+    "window_complete": true,
+    "binary_hashes": [
+      "6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe"
+    ],
+    "binary_rebuild_detected": false,
+    "operations": {
+      "ingest_file": {
+        "comparisons": 485,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792434723.3742003,
+        "first_comparison_iso": "2026-10-19T18:32:03Z",
+        "last_comparison_timestamp": 1793047612.4330766,
+        "last_comparison_iso": "2026-10-26T20:46:52Z"
+      },
+      "ingest_folder": {
+        "comparisons": 487,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792434726.2841537,
+        "first_comparison_iso": "2026-10-19T18:32:06Z",
+        "last_comparison_timestamp": 1793047615.2523923,
+        "last_comparison_iso": "2026-10-26T20:46:55Z"
+      },
+      "extract_example_assertions": {
+        "comparisons": 3,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792592692.139915,
+        "first_comparison_iso": "2026-10-21T14:24:52Z",
+        "last_comparison_timestamp": 1792592795.427688,
+        "last_comparison_iso": "2026-10-21T14:26:35Z"
+      },
+      "verify_verdict_frame": {
+        "comparisons": 38,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792592692.5320125,
+        "first_comparison_iso": "2026-10-21T14:24:52Z",
+        "last_comparison_timestamp": 1792592799.8426719,
+        "last_comparison_iso": "2026-10-21T14:26:39Z"
+      }
+    },
+    "cli_operations": {
+      "ingest_file": {
+        "comparisons": 483,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792434723.3742003,
+        "first_comparison_iso": "2026-10-19T18:32:03Z",
+        "last_comparison_timestamp": 1793047612.4330766,
+        "last_comparison_iso": "2026-10-26T20:46:52Z"
+      },
+      "ingest_folder": {
+        "comparisons": 486,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792434726.2841537,
+        "first_comparison_iso": "2026-10-19T18:32:06Z",
+        "last_comparison_timestamp": 1793047615.2523923,
+        "last_comparison_iso": "2026-10-26T20:46:55Z"
+      },
+      "extract_example_assertions": {
+        "comparisons": 3,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792592692.139915,
+        "first_comparison_iso": "2026-10-21T14:24:52Z",
+        "last_comparison_timestamp": 1792592795.427688,
+        "last_comparison_iso": "2026-10-21T14:26:35Z"
+      },
+      "verify_verdict_frame": {
+        "comparisons": 38,
+        "discrepancies": 0,
+        "first_comparison_timestamp": 1792592692.5320125,
+        "first_comparison_iso": "2026-10-21T14:24:52Z",
+        "last_comparison_timestamp": 1792592799.8426719,
+        "last_comparison_iso": "2026-10-21T14:26:39Z"
+      }
+    },
+    "sources": {
+      "cli": {
+        "comparisons": 1010,
+        "discrepancies": 0
+      },
+      "unknown": {
+        "comparisons": 3,
+        "discrepancies": 0
+      }
+    }
+  }
+}
