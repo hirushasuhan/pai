@@ -39,6 +39,9 @@ DEFAULT_TAG = "v1.0.0-rc1"
 DEFAULT_PRODUCT = "pai-core"
 DEFAULT_VERSION = "1.0.0"
 
+SUPPORTED_PLATFORMS = ("win-x64", "linux-x64")
+DEFAULT_PLATFORM = "win-x64" if sys.platform == "win32" else "linux-x64"
+
 # Evaluated tree invariants established in Release N (v1.0.0-rc1, commit 8ce81cb)
 EXPECTED_CORE_TREE = "14c60746ca9a41d91aafd88cc0c7d98719cfe3a9"
 EXPECTED_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
@@ -58,6 +61,14 @@ class TagNotFoundError(PayloadBuildError):
 
 class TreeMismatchError(PayloadBuildError):
     """The git tree hash does not match expected evaluated tree hash."""
+
+
+class InvalidPlatformError(PayloadBuildError):
+    """The requested target platform is not supported."""
+
+
+class BinaryFormatMismatchError(PayloadBuildError):
+    """The binary format (PE vs ELF) does not match the target platform."""
 
 
 class BinaryHashMismatchError(PayloadBuildError):
@@ -140,12 +151,48 @@ def verify_tag_and_trees(
     return commit_sha, core_tree_sha, res_tree_sha
 
 
+def verify_binary_format(binary_path: str | Path, platform: str) -> None:
+    """
+    Verifies that the binary executable matches the target platform format:
+      - win-x64 requires Windows PE format (magic bytes b'MZ')
+      - linux-x64 requires Linux ELF format (magic bytes b'\x7fELF')
+    Fails closed with BinaryFormatMismatchError if the format does not match.
+    """
+    if platform not in SUPPORTED_PLATFORMS:
+        raise InvalidPlatformError(f"Unsupported platform '{platform}'. Supported: {SUPPORTED_PLATFORMS}")
+
+    p = Path(binary_path).resolve()
+    with open(p, "rb") as f:
+        magic = f.read(4)
+
+    if platform == "win-x64":
+        if magic.startswith(b"\x7fELF"):
+            raise BinaryFormatMismatchError(
+                f"Binary format mismatch for '{p}': target platform is '{platform}', but binary has Linux ELF header"
+            )
+        if not magic.startswith(b"MZ"):
+            raise BinaryFormatMismatchError(
+                f"Binary format mismatch for '{p}': target platform is '{platform}', expected Windows PE header (magic 'MZ')"
+            )
+    elif platform == "linux-x64":
+        if magic.startswith(b"MZ"):
+            raise BinaryFormatMismatchError(
+                f"Binary format mismatch for '{p}': target platform is '{platform}', but binary has Windows PE header"
+            )
+        if not magic.startswith(b"\x7fELF"):
+            raise BinaryFormatMismatchError(
+                f"Binary format mismatch for '{p}': target platform is '{platform}', expected Linux ELF header (magic '\\x7fELF')"
+            )
+
+
 def verify_binary(
     binary_path: str | Path,
     expected_sha256: Optional[str] = EXPECTED_BINARY_SHA256,
+    platform: Optional[str] = None,
 ) -> str:
     """
-    Verifies that the core binary exists and matches the expected pinned SHA-256.
+    Verifies that the core binary exists, matches the expected pinned SHA-256,
+    and conforms to the target platform binary format (PE for Windows, ELF for Linux).
 
     Returns:
         The computed SHA-256 digest string.
@@ -153,6 +200,9 @@ def verify_binary(
     bin_p = Path(binary_path).resolve()
     if not bin_p.is_file():
         raise FileNotFoundError(f"Core binary not found at '{bin_p}'")
+
+    if platform:
+        verify_binary_format(bin_p, platform)
 
     actual_sha = sha256_file(bin_p)
     if expected_sha256 and actual_sha.lower() != expected_sha256.lower():
@@ -331,6 +381,7 @@ def write_manifest(
     core_tree_sha: str,
     research_tree_sha: str,
     files_map: Dict[str, Dict[str, Any]],
+    platform: str = "win-x64",
 ) -> Tuple[Path, bytes, Dict[str, Any]]:
     """
     Serializes and atomically writes manifest.json.
@@ -344,6 +395,7 @@ def write_manifest(
     doc: Dict[str, Any] = {
         "format": 1,
         "product": product,
+        "platform": platform,
         "version": version,
         "constitution_sha256": constitution_sha256,
         "tag": tag,
@@ -386,16 +438,20 @@ def build_payload(
     expected_research_tree: Optional[str] = EXPECTED_RESEARCH_TREE,
     constitution_path: Optional[str | Path] = None,
     product: str = DEFAULT_PRODUCT,
+    platform: str = DEFAULT_PLATFORM,
     version: Optional[str] = None,
     clean: bool = False,
     embed_python_dir: Optional[str | Path] = None,
     launcher_path: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
-    End-to-end payload assembly pipeline for Milestone P1.
+    End-to-end payload assembly pipeline for Milestones P1 and P1b.
 
     Returns summary dictionary with manifest data and verification metadata.
     """
+    if platform not in SUPPORTED_PLATFORMS:
+        raise InvalidPlatformError(f"Unsupported platform '{platform}'. Supported: {SUPPORTED_PLATFORMS}")
+
     repo = Path(repo_root).resolve()
     out = Path(out_dir).resolve()
 
@@ -409,8 +465,9 @@ def build_payload(
 
     # Step 2: Resolve and verify core binary
     if binary_path is None:
-        binary_path = repo / "core" / "target" / "release" / ("pai-core.exe" if sys.platform == "win32" else "pai-core")
-    actual_bin_sha = verify_binary(binary_path, expected_sha256=expected_binary_sha256)
+        bin_name = "pai-core.exe" if platform == "win-x64" else "pai-core"
+        binary_path = repo / "core" / "target" / "release" / bin_name
+    actual_bin_sha = verify_binary(binary_path, expected_sha256=expected_binary_sha256, platform=platform)
 
     # Prepare output directory
     if clean and out.exists():
@@ -485,6 +542,7 @@ def build_payload(
     manifest_p, manifest_bytes, doc = write_manifest(
         dest_dir=out,
         product=product,
+        platform=platform,
         version=version,
         constitution_sha256=const_sha,
         tag=tag,
@@ -498,6 +556,7 @@ def build_payload(
     return {
         "status": "success",
         "tag": tag,
+        "platform": platform,
         "git_commit": commit_sha,
         "trees": {
             "core": core_tree_sha,
@@ -519,6 +578,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--tag", default=DEFAULT_TAG, help=f"Git tag to extract (default: {DEFAULT_TAG})")
     parser.add_argument("--out", required=True, help="Destination directory for built payload")
+    parser.add_argument(
+        "--platform",
+        default=DEFAULT_PLATFORM,
+        choices=SUPPORTED_PLATFORMS,
+        help=f"Target platform ({', '.join(SUPPORTED_PLATFORMS)}, default: {DEFAULT_PLATFORM})",
+    )
     parser.add_argument("--binary", default=None, help="Path to pai-core binary (default: core/target/release/...)")
     parser.add_argument("--expected-binary-sha256", default=EXPECTED_BINARY_SHA256, help="Expected binary SHA-256")
     parser.add_argument("--expected-core-tree", default=EXPECTED_CORE_TREE, help="Expected core/ tree SHA-1")
@@ -545,10 +610,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             expected_research_tree=args.expected_research_tree,
             constitution_path=args.constitution,
             product=args.product,
+            platform=args.platform,
             version=args.version,
             clean=args.clean,
         )
         print(f"Payload successfully built at: {res['out_dir']}")
+        print(f"Platform: {res['platform']}")
         print(f"Tag: {res['tag']} (commit: {res['git_commit'][:8]})")
         print(f"Core Tree: {res['trees']['core'][:8]} (MATCH)")
         print(f"Research Tree: {res['trees']['research'][:8]} (MATCH)")

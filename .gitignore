@@ -44,6 +44,9 @@ bin/
 *.pem
 release.key
 
+# Packaging and distribution artifacts
+dist/
+
 # User config & machine calibration profiles (ADR-010)
 .pai/
 machine_profile.json

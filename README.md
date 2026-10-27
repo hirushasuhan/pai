@@ -2,24 +2,29 @@
 
 > **A Stateless, Hardware-Aware, Recursive Self-Improving Personal Intelligence Engine**
 
-**Status (2026-10-07):** Phase 1 (Python research prototype) is complete and its exit gate is closed (Windows Sandbox smoke test 7/7, real local models measured, Windows CI, offline signing key). Phase 2 slice VS2 — the Rust policy core (`core/`) — passes 200 tier and 87 URL golden vectors against the Python reference. Next: VS3 (native Win32 telemetry) and the local assistant `pai` (planned, not yet implemented). See [Roadmap](docs/ROADMAP.md) · [Local Assistant Spec](docs/LOCAL_ASSISTANT_SPEC.md) · [Project Review](docs/PROJECT_REVIEW.md) · [Threat Model](docs/THREAT_MODEL.md) · [Decisions (ADRs)](docs/adr/README.md).
+**Status (2026-10-27):** 
+- **Release N (`v1.0.0-rc1`, commit `8ce81cb`):** Memory-safe Rust policy core (`core/`, `pai-core`) is **default-on** for runtime operations, with authoritative Python fallback and strict kill switch (`PAI_RUST_FALLBACK_PYTHON=1`).
+- **N+1 Evaluation Window:** Active 14-day operational shadow telemetry evaluation window is running with zero discrepancies across comparisons.
+- **Packaging & Distribution (Release 1.1.0 & 1.2.0 Preview):** One-file installer (`PAI-Setup-<version>-x64.exe`), PowerShell one-liner bootstrap (`install.ps1`), hardware-aware model setup, download progress UI, and Linux preview (`install.sh`) are specified in [PACKAGING_SPEC.md](docs/PACKAGING_SPEC.md) and [ADR-013](docs/adr/ADR-013-installer-and-distribution.md). Milestones P1 and P1b are complete.
+
+See [Roadmap](docs/ROADMAP.md) · [Packaging Spec](docs/PACKAGING_SPEC.md) · [Release Notes](docs/RELEASE_NOTES_N.md) · [Project Review](docs/PROJECT_REVIEW.md) · [Threat Model](docs/THREAT_MODEL.md) · [Decisions (ADRs)](docs/adr/README.md).
 
 ---
 
 ## 🌟 Executive Summary
 
-**Personal Agentic AI** is a novel, high-efficiency personal intelligence system built from first principles. Unlike conventional Large Language Models (LLMs) that store hundreds of gigabytes of memorized factual knowledge in static weights, Personal Agentic AI is designed around a **Stateless Reasoning Core**. It treats intelligence as an executable logic machine rather than an encyclopedia, acquiring knowledge dynamically via low-level network pipelines and executing autonomously with hardware self-awareness.
+**Personal Agentic AI** is a high-efficiency personal intelligence system built from first principles. Unlike conventional Large Language Models (LLMs) that store hundreds of gigabytes of memorized factual knowledge in static weights, Personal Agentic AI is designed around a **Stateless Reasoning Core**. It treats intelligence as an executable logic machine rather than an encyclopedia, acquiring knowledge dynamically via low-level network pipelines and executing autonomously with hardware self-awareness.
 
 The system is developed across a synergistic three-tier language architecture:
-1. **Rust (`core/`)**: High-performance, memory-safe stateless reasoning engine and hot-swappable algorithm core.
+1. **Rust (`core/`)**: High-performance, memory-safe stateless reasoning engine, security policy enforcement, and hot-swappable algorithm core.
 2. **C / C++ (`hardware/`)**: Low-level hardware telemetry daemon (CPU, GPU, NPU, RAM) and zero-overhead raw socket networking.
-3. **Python (`research/`)**: Dynamic research prototyping, agentic tool workflows, data verification pipelines, and algorithmic testbeds.
+3. **Python (`research/`)**: Dynamic research prototyping, agentic workflows, data verification pipelines, and algorithmic testbeds.
 
 ---
 
 ## 🏛️ The Three Architectural Pillars
 
-```
+```text
 +-------------------------------------------------------------------------+
 |                       Personal Agentic AI System                        |
 +-------------------------------------------------------------------------+
@@ -45,7 +50,48 @@ The system is developed across a synergistic three-tier language architecture:
 3. **Direct Network Ingestion**: Instead of using heavy headless browsers (Chromium/Puppeteer), the agent speaks directly to internet protocols over raw sockets, parsing raw HTML/JSON directly into working memory in milliseconds.
 4. **Safe Recursive Self-Improvement (RSI)**: The AI is engineered with coding as its primary skill. It iteratively improves its own performance through isolated sandboxes, adversarial auditing and scoped verification before a *signed* hot-swap of its executable engine.
 
-> **Security stance:** the project aims for *defense in depth*, not an absolute-security promise. Every guarantee is tied to a named test or a named residual risk in [THREAT_MODEL.md](docs/THREAT_MODEL.md).
+> **Security stance:** The project aims for *defense in depth*, not an absolute-security promise. Every guarantee is tied to a named test or a named residual risk in [THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
+---
+
+## 🚀 Quickstart: Developer CLI (`pai`)
+
+If you are developing or running from a git checkout on Windows:
+
+```powershell
+# 1. One-click setup: registers repository 'bin' in your User PATH (PowerShell/cmd.exe)
+.\install.bat
+
+# 2. In any new terminal, run 'pai' commands directly:
+pai doctor --skip-smoke                  # System diagnosis, Rust bridge handshake & telemetry status
+pai analyze <folder>                     # Read-only structural, secret, and policy analysis of a codebase
+pai chat "Explain Rust ownership"        # Local assistant chat routed through Ollama
+pai docs <file.md|txt|csv>               # Local document exploration and factual question answering
+pai code "Write a binary search in py"   # Sandboxed code synthesis with automated test verification gate
+pai forecast --series <data.csv>         # Local time-series analysis and forecasting
+```
+
+Alternatively, invoke `pai.cmd` from the repository root:
+```powershell
+.\pai.cmd doctor --skip-smoke
+```
+
+---
+
+## 📦 Packaging & Distribution Roadmap
+
+The packaging subsystem ([ADR-013](docs/adr/ADR-013-installer-and-distribution.md), [PACKAGING_SPEC.md](docs/PACKAGING_SPEC.md)) delivers PAI as an easily installable, self-contained application:
+
+- **Release 1.1.0 (Windows):**
+  - **Primary:** `PAI-Setup-<version>-x64.exe` (per-user Inno Setup installer, no admin rights required).
+  - **Agreement:** Mandatory acceptable-use terms page prior to installation.
+  - **Prerequisites:** Automatic local Ollama server detection and guided setup.
+  - **Hardware-Aware Model Selection:** Selects curated open-weights models matching host RAM, VRAM, and disk space with verified licenses.
+  - **Progress UI:** Real-time download progress bar with layer aggregation, transfer speed, and ETA.
+  - **PowerShell One-Liner:** Version-pinned bootstrap (`irm https://<host>/pai/v1.1.0/install.ps1 | iex`) with baked-in payload hash verification.
+- **Release 1.2.0 (Linux Preview):**
+  - Cross-platform payload support (`linux-x64`), `install.sh` POSIX script without sudo, standalone pinned CPython runtime.
+- **Reproducible Payload Builder:** `packaging/build_payload.py` extracts release assets from git tags, checks `core/` and `research/` tree integrity, enforces PE/ELF binary formats, and generates canonical ADR-005 manifests.
 
 ---
 
@@ -56,114 +102,44 @@ personal_agentic_ai/
 │
 ├── README.md
 ├── CHANGELOG.md                  # What changed and why
-├── docs/
-│   ├── ARCHITECTURE.md           # Architecture, IPC + telemetry schema v1, prototype-vs-production table
-│   ├── ROADMAP.md                # Phases 1-5, exit criteria, decision gates, risks
-│   ├── RSI_SAFETY_SPEC.md        # Recursive self-improvement safety tiers + known weaknesses
-│   ├── PROTOTYPE_SPEC.md         # Python prototype specification (matches the code)
-│   ├── THREAT_MODEL.md           # Assets, trust boundaries, threat register T1-T20
-│   ├── PROJECT_REVIEW.md         # Review findings, strategic risks, remediation status
-│   ├── CONSTITUTION.md           # Safety Constitution v0.1 (hash pinned in the updater's trust root)
-│   ├── ALGORITHM.md              # Evidence-atom reasoning engine specification (experimental, ADR-007)
-│   ├── NET_POLICY.md             # Outbound URL/IP policy shared by Python and Rust
-│   ├── LOCAL_ASSISTANT_SPEC.md   # Planned local assistant `pai` (ADR-008)
-│   ├── evidence/                 # Recorded gate evidence (sandbox smoke test)
-│   └── adr/                      # Architecture Decision Records 001-009
+├── pai.cmd                       # Root developer CLI launcher
+├── install.bat                   # One-click developer PATH registration
 │
-├── core/                         # Rust core: tier policy + URL policy (VS2 done), conformance runner; telemetry/engine next (VS3)
+├── packaging/                    # Release packaging and distribution (Milestones P1-P5)
+│   └── build_payload.py          # Reproducible payload builder (PE/ELF checks, git archive)
+│
+├── docs/
+│   ├── ARCHITECTURE.md           # Architecture, IPC + telemetry schema v1
+│   ├── ROADMAP.md                # Phases 1-5, release train, exit criteria
+│   ├── PACKAGING_SPEC.md         # Packaging, installer, and model setup specification
+│   ├── RELEASE_NOTES_N.md        # Release N (v1.0.0-rc1) evaluated binary notes
+│   ├── THREAT_MODEL.md           # Assets, trust boundaries, threat register T1-T20
+│   ├── PROJECT_REVIEW.md         # Review findings, strategic risks, reviewer approvals
+│   ├── CONSTITUTION.md           # Safety Constitution v0.1 (pinned in trust root)
+│   └── adr/                      # Architecture Decision Records 001-013
+│
+├── core/                         # Rust core (pai-core binary, default-on policy bridge)
+│   ├── Cargo.toml
+│   └── src/                      # Memory-safe tier, URL, secret, and release policies
+│
 ├── hardware/                     # C / C++ Daemon (Phase 2)
 │
-└── research/                     # Python Prototype & Verification Lab (Phase 1)
-    ├── main.py                   # CLI: interactive menu + scriptable flags
-    ├── agent_core.py             # Perceive -> Ingest -> Reason -> Purge loop
-    ├── reasoner.py               # Reasoner interface + stub (the future "brain" seam)
-    ├── hardware_telemetry.py     # RAM / CPU / battery -> adaptive budget (tier policy)
-    ├── network_pipeline.py       # Direct HTTP(S) ingestion (Wikipedia / DuckDuckGo)
-    ├── net_guard.py              # Outbound URL policy (SSRF / file:// protection)
-    ├── raw_http.py               # Experimental raw socket+TLS client (Phase 2 model)
-    ├── data_verifier.py          # Sanitiser, quality scoring, injection screening
-    ├── secure_buffer.py          # Wipe-and-verify working memory
-    ├── memory_probe.py           # Process RSS probe
-    ├── ast_guard.py              # RSI Tier-1 static code gate (prototype)
-    ├── capabilities.py           # Deny-by-default tool broker, taint tracking, audit chain (ADR-006)
-    ├── outbound_policy.py        # Domain allow-list, offline mode, visible outbound log (ADR-002)
-    ├── local_knowledge.py        # Answer from local files, no network (ADR-002)
-    ├── sandbox_policy.py         # Windows Sandbox isolation checklist as code (ADR-003)
-    ├── ed25519_ref.py            # RFC 8032 verify (stdlib) for release signatures
-    ├── updater.py                # Signed-release updater, anti-rollback, pinned Constitution (ADR-005)
-    ├── sign_release.py           # Offline signing tool (needs `cryptography`)
-    ├── conformance.py            # Golden vectors for the Rust/C++ ports (ADR-004)
-    ├── conformance/              # tier_policy_vectors.json, url_policy_vectors.json
-    ├── benchmark.py              # Purge benchmark that can fail
-    ├── requirements.txt          # Standard library only (psutil/cryptography optional)
-    ├── model_profiles.json       # Measured RAM profiles for local models (ADR-008)
-    └── tests/                    # 170 unit tests (stdlib unittest)
+├── research/                     # Python reference implementation & testbeds
+│   ├── pai.py                    # Unified CLI command router (doctor, analyze, chat, etc.)
+│   ├── pai_core_bridge.py        # IPC bridge to Rust pai-core with graceful fallback
+│   ├── updater.py                # Signed-release updater (ADR-005, Ed25519)
+│   ├── trust.json                # Public trust root keys and Constitution hash
+│   └── tests/                    # Comprehensive unit and integration test suite
+│
+└── tools/                        # Verification tools, workload drivers, and corpus checkers
+    ├── check_n_plus_1.py         # N+1 14-day evaluation window progress checker
+    └── test_build_payload.py     # P1/P1b hostile-input test suite and updater verification
 ```
 
 ---
 
-## 🚀 Quickstart: Running the Research Prototype
+## 📜 License & Developer Credit
 
-Requires Python 3.8+ (no packages needed).
-
-```powershell
-cd research
-
-# Interactive menu
-python main.py
-
-# Scriptable
-python main.py --telemetry                 # hardware snapshot (add --json for the IPC message)
-python main.py --ask "Explain Rust ownership"
-python main.py --ask "Summarize" --topic "ශ්‍රී ලංකාව" --lang si   # Sinhala Wikipedia (auto-triggers are English; --topic is explicit)
-python main.py --ask "Explain Rust ownership" --model-url http://127.0.0.1:11434/v1 --model llama3.2   # real LOCAL model (loopback only)
-python main.py --ask "Explain Rust ownership" --offline --knowledge-dir ~/notes    # no network at all: answer from your own files
-python main.py --ask "Explain Rust ownership" --show-outbound                      # print exactly what left this machine
-python main.py --benchmark                 # offline purge benchmark (add --online for real network)
-python main.py --check-code patch.py       # Tier-1 AST guard on a Python file
-
-# Tests
-python -m unittest discover -s tests -v
-```
-
-The prototype demonstrates:
-* Real-time hardware telemetry (Windows `kernel32`, Linux `/proc`) driving an adaptive compute budget — no invented numbers when a source is unavailable.
-* Direct HTTP(S) ingestion with an outbound policy (no `file://`, no private/metadata IPs) and an experimental raw-socket transport.
-* Sanitisation, Unicode-aware quality scoring and prompt-injection screening.
-* The stateless cycle: **Perceive → Ingest → Reason → Purge**, where the purge is *verified* (buffers read back as all-zero) and runs even when a step fails.
-* Privacy controls: domain allow-list, visible outbound log, offline mode, local-first knowledge.
-* Blast-radius limits for prompt injection: a capability broker with taint tracking; signed-release updater; Windows Sandbox policy-as-code.
-
-> Without `--model-url` the Reasoner is a **stub** that formats verified context but performs no inference. Point `--model-url` at a model server running on your own machine (llama.cpp, Ollama, LM Studio…) for real answers — loopback addresses only.
-
----
-
-### Rust core (VS2)
-
-Requires a Rust toolchain (`rustup`; a C linker such as MSVC build tools or MinGW is needed on Windows).
-
-```powershell
-cd core
-cargo test                                   # unit tests
-cargo run -- --conformance ../research/conformance   # golden vectors (tier + URL)
-```
-
-CI also runs `cargo fmt --check`, `cargo clippy -D warnings`, a vector drift check and a 10,000-case differential fuzz against the Python reference. The Rust core currently contains policies only — no model, no telemetry readers, no network client yet.
-
-### Models and what is planned
-
-The Rust core and the Python prototype do **not** include a language model. Real answers need a locally served open-weights model (Ollama, llama.cpp, …) reached through `--model-url`. The plan (ADR-008) is a local assistant `pai` with a verify loop for code, read-only folder/document analysis and backtested forecasts; a gated track may later fine-tune the owner's own adapter. None of that exists yet — see the [Roadmap](docs/ROADMAP.md) and the [spec](docs/LOCAL_ASSISTANT_SPEC.md).
-
----
-
-## 📚 In-Depth Documentation
-
-* [System Architecture & Memory Model](docs/ARCHITECTURE.md)
-* [Engineering Roadmap (Phases 1-5)](docs/ROADMAP.md)
-* [Recursive Self-Improvement (RSI) Safety Specification](docs/RSI_SAFETY_SPEC.md)
-* [Python Research Prototype Specification](docs/PROTOTYPE_SPEC.md)
-* [Threat Model](docs/THREAT_MODEL.md)
-* [Local Assistant Specification](docs/LOCAL_ASSISTANT_SPEC.md)
-* [Outbound Network Policy](docs/NET_POLICY.md)
-* [Reasoning Algorithm (experimental)](docs/ALGORITHM.md)
-* [Project Review & Open Decisions](docs/PROJECT_REVIEW.md)
+- **Author / Developer:** Developed by **Hirusha Suhan** ([@hirushasuhan](https://github.com/hirushasuhan)).
+- **License:** Open Source. Source code is licensed under the repository's open source terms. Distributed binaries, installers, and models are subject to acceptable-use terms and individual model licenses.
+- **Acceptable Use Notice:** PAI must not be used to break the law, harm or deceive others, attack or gain unauthorised access to systems, or distribute malware. Users remain responsible for their execution outputs.

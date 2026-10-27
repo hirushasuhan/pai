@@ -33,12 +33,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from packaging.build_payload import (
+    DEFAULT_PLATFORM,
     DEFAULT_TAG,
     EXPECTED_BINARY_SHA256,
     EXPECTED_CORE_TREE,
     EXPECTED_RESEARCH_TREE,
+    SUPPORTED_PLATFORMS,
+    BinaryFormatMismatchError,
     BinaryHashMismatchError,
     ExtractedIntegrityError,
+    InvalidPlatformError,
     PayloadBuildError,
     SymlinkRejectedError,
     TagNotFoundError,
@@ -49,9 +53,15 @@ from packaging.build_payload import (
     scan_and_validate_payload,
     sha256_file,
     verify_binary,
+    verify_binary_format,
     verify_extracted_integrity,
     verify_tag_and_trees,
 )
+
+# Import research modules read-only for ADR-005 updater compatibility verification
+sys.path.insert(0, str(REPO_ROOT / "research"))
+import ed25519_ref
+import updater
 
 
 class TestBuildPayloadP1(unittest.TestCase):
@@ -171,11 +181,10 @@ class TestBuildPayloadP1(unittest.TestCase):
         actual_sha = verify_binary(self.binary_path, expected_sha256=EXPECTED_BINARY_SHA256)
         self.assertEqual(actual_sha.lower(), EXPECTED_BINARY_SHA256.lower())
 
-        # Hostile input: create copy with 1 byte modified
+        # Hostile input: create copy with 1 byte modified (past the MZ magic header)
         tampered_bin = Path(self.tmp_dir) / "pai-core-tampered.exe"
         bin_data = bytearray(self.binary_path.read_bytes())
-        # Flip least significant bit of first byte
-        bin_data[0] ^= 0x01
+        bin_data[64] ^= 0x01
         tampered_bin.write_bytes(bytes(bin_data))
 
         with self.assertRaises(BinaryHashMismatchError):
@@ -268,6 +277,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         manifest = res["manifest"]
         self.assertEqual(manifest["format"], 1)
         self.assertEqual(manifest["product"], "pai-core")
+        self.assertEqual(manifest["platform"], "win-x64")
         self.assertEqual(manifest["version"], "1.0.0")
         self.assertTrue(len(manifest["constitution_sha256"]) == 64)
         self.assertEqual(manifest["trees"]["core"], EXPECTED_CORE_TREE)
@@ -317,6 +327,125 @@ class TestBuildPayloadP1(unittest.TestCase):
         proc_fail = subprocess.run(cmd_fail, capture_output=True, text=True)
         self.assertNotEqual(proc_fail.returncode, 0, "CLI must fail closed on tree mismatch")
         self.assertIn("Core tree ID mismatch", proc_fail.stderr)
+
+    def test_12_updater_py_compatibility_and_rejection(self) -> None:
+        """
+        Automated proof that updater.py accepts the payload manifest without modification,
+        and rejects tampered files, tampered manifest fields, and unlisted files.
+        """
+        out = Path(self.tmp_dir) / "updater_compat_test"
+        res = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            platform="win-x64",
+        )
+        manifest_p = Path(res["manifest_path"])
+        self.assertTrue(manifest_p.is_file())
+        raw_manifest_bytes = manifest_p.read_bytes()
+
+        # Generate ephemeral Ed25519 signing key
+        priv = bytes.fromhex("a5" * 32)
+        pub = ed25519_ref.secret_to_public(priv)
+
+        # Set up isolated trust root and install root
+        trust_root = Path(self.tmp_dir) / "trust_root"
+        trust_root.mkdir(parents=True, exist_ok=True)
+        install_root = Path(self.tmp_dir) / "install_root"
+        install_root.mkdir(parents=True, exist_ok=True)
+
+        const_sha = res["manifest"]["constitution_sha256"]
+        trust_doc = {
+            "keys": [{"id": "test-key-1", "public_hex": pub.hex(), "revoked": False}],
+            "constitution_sha256": const_sha,
+        }
+        (trust_root / "trust.json").write_text(json.dumps(trust_doc, indent=2), encoding="utf-8")
+
+        # Sign manifest bytes
+        sig = ed25519_ref.sign(priv, raw_manifest_bytes)
+        (out / updater.SIGNATURE).write_bytes(sig)
+
+        u = updater.Updater(str(trust_root), str(install_root))
+
+        # Positive control: updater._verify_release_py accepts the manifest and payload without modification
+        verified = u._verify_release_py(str(out), check_rollback=False)
+        self.assertEqual(verified.version, "1.0.0")
+        self.assertEqual(verified.key_id, "test-key-1")
+        self.assertEqual(verified.manifest.get("platform"), "win-x64")
+        self.assertEqual(verified.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": EXPECTED_RESEARCH_TREE})
+
+        # Negative control 1: Tampered file in payload -> UpdateRejected (SHA-256 mismatch)
+        target_f = out / "bin" / "pai-core.exe"
+        orig_bytes = target_f.read_bytes()
+        tampered_bytes = bytearray(orig_bytes)
+        tampered_bytes[-1] ^= 0x01
+        target_f.write_bytes(bytes(tampered_bytes))
+        with self.assertRaises(updater.UpdateRejected):
+            u._verify_release_py(str(out), check_rollback=False)
+        target_f.write_bytes(orig_bytes)  # restore
+
+        # Negative control 2: Tampered field in manifest -> UpdateRejected (signature invalid)
+        tampered_doc = dict(res["manifest"])
+        tampered_doc["version"] = "2.0.0"
+        manifest_p.write_bytes(json.dumps(tampered_doc, indent=2).encode("utf-8"))
+        with self.assertRaises(updater.UpdateRejected):
+            u._verify_release_py(str(out), check_rollback=False)
+        manifest_p.write_bytes(raw_manifest_bytes)  # restore
+
+        # Negative control 3: Unlisted file in payload -> UpdateRejected (unlisted file in release)
+        unlisted = out / "unlisted_backdoor.txt"
+        unlisted.write_text("evil", encoding="utf-8")
+        with self.assertRaises(updater.UpdateRejected):
+            u._verify_release_py(str(out), check_rollback=False)
+        unlisted.unlink()
+
+    def test_13_platform_validation_and_rejection(self) -> None:
+        """Control: supported platforms succeed. Hostile: unsupported platform fails closed."""
+        self.assertIn("win-x64", SUPPORTED_PLATFORMS)
+        self.assertIn("linux-x64", SUPPORTED_PLATFORMS)
+
+        out = Path(self.tmp_dir) / "invalid_plat"
+        with self.assertRaises(InvalidPlatformError):
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=out,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                platform="darwin-arm64",
+            )
+
+    def test_14_binary_format_pe_elf_validation_and_rejection(self) -> None:
+        """
+        Verification of PE (MZ) vs ELF (\x7fELF) binary magic header enforcement.
+        Rejection tests in both directions, plus negative controls.
+        """
+        pe_bin = Path(self.tmp_dir) / "mock_pe.exe"
+        pe_bin.write_bytes(b"MZ\x90\x00" + b"\x00" * 100)
+
+        elf_bin = Path(self.tmp_dir) / "mock_elf"
+        elf_bin.write_bytes(b"\x7fELF" + b"\x00" * 100)
+
+        corrupt_bin = Path(self.tmp_dir) / "corrupt_bin"
+        corrupt_bin.write_bytes(b"TEXTNOTBIN" + b"\x00" * 50)
+
+        # Negative controls: PE matches win-x64, ELF matches linux-x64
+        verify_binary_format(pe_bin, platform="win-x64")
+        verify_binary_format(elf_bin, platform="linux-x64")
+
+        # Hostile rejection 1: PE binary supplied for linux-x64 target
+        with self.assertRaises(BinaryFormatMismatchError):
+            verify_binary_format(pe_bin, platform="linux-x64")
+
+        # Hostile rejection 2: ELF binary supplied for win-x64 target
+        with self.assertRaises(BinaryFormatMismatchError):
+            verify_binary_format(elf_bin, platform="win-x64")
+
+        # Hostile rejection 3: Non-binary / corrupt magic header rejected on both platforms
+        with self.assertRaises(BinaryFormatMismatchError):
+            verify_binary_format(corrupt_bin, platform="win-x64")
+        with self.assertRaises(BinaryFormatMismatchError):
+            verify_binary_format(corrupt_bin, platform="linux-x64")
 
 
 if __name__ == "__main__":
