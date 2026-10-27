@@ -232,7 +232,7 @@ class TestInstallerP5(unittest.TestCase):
         ]
         res = subprocess.run(cmd_hostile, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         self.assertNotEqual(res.returncode, 0, "Unsafe RegSubKey must fail closed")
-        self.assertIn("Rejected non-test RegSubKey", res.stderr)
+        self.assertIn("Rejected non-test PAI_REG_SUBKEY", res.stderr)
 
     def test_03_inno_setup_compiler_discovery_and_build(self) -> None:
         """
@@ -247,7 +247,7 @@ class TestInstallerP5(unittest.TestCase):
             repo_root=self.repo_root,
             out_dir=out_dist,
             tag=DEFAULT_TAG,
-            version="1.0.0",
+            version="1.1.0-rc1",
             platform="win-x64",
             clean=True,
         )
@@ -281,7 +281,7 @@ class TestInstallerP5(unittest.TestCase):
             repo_root=self.repo_root,
             out_dir=out_dist,
             tag=DEFAULT_TAG,
-            version="1.0.0",
+            version="1.1.0-rc1",
             platform="win-x64",
         )
         installer_exe = Path(build_res["installer_path"])
@@ -304,14 +304,16 @@ class TestInstallerP5(unittest.TestCase):
         self.assertTrue((install_target / "AGREEMENT.txt").is_file(), "AGREEMENT.txt missing")
         self.assertTrue((install_target / "unins000.exe").is_file(), "unins000.exe missing")
 
-        # 2. Verify Agreement Acceptance Record (Specification §3)
+        # 2. Verify Agreement Acceptance Record (Specification §3, Finding DE)
         acc_file = install_target / "agreement_acceptance.json"
         self.assertTrue(acc_file.is_file(), "agreement_acceptance.json not created")
         acc_data = json.loads(acc_file.read_text(encoding="utf-8"))
-        self.assertEqual(acc_data["installed_version"], "1.0.0")
+        self.assertEqual(acc_data["installed_version"], "1.1.0-rc1")
         self.assertEqual(acc_data["agreement_text_sha256"], build_res["agreement_sha256"])
         self.assertTrue(acc_data["accepted"])
         self.assertIn("accepted_utc", acc_data)
+        import re
+        self.assertRegex(acc_data["accepted_utc"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
         # 3. Verify User PATH entry added
         expected_bin = str(install_target / "bin")
@@ -336,7 +338,7 @@ class TestInstallerP5(unittest.TestCase):
             repo_root=self.repo_root,
             out_dir=out_dist,
             tag=DEFAULT_TAG,
-            version="1.0.0",
+            version="1.1.0-rc1",
             platform="win-x64",
         )
         installer_exe = Path(build_res["installer_path"])
@@ -377,7 +379,7 @@ class TestInstallerP5(unittest.TestCase):
             repo_root=self.repo_root,
             out_dir=out_dist,
             tag=DEFAULT_TAG,
-            version="1.0.0",
+            version="1.1.0-rc1",
             platform="win-x64",
         )
         installer_exe = Path(build_res["installer_path"])
@@ -443,6 +445,112 @@ class TestInstallerP5(unittest.TestCase):
         bogus_iscc = Path(self.tmp_dir) / "nonexistent" / "ISCC.exe"
         with self.assertRaises(CompilerNotFoundError):
             find_iscc_compiler(bogus_iscc)
+
+    def test_10_version_enforcement_and_tag_check(self) -> None:
+        """
+        Validates Finding DB:
+        - Rejects empty version strings fail-closed.
+        - Rejects final version strings (e.g. 1.0.0, 1.1.0) if no matching git tag exists.
+        - Accepts preview format 1.1.0-rcN without requiring an existing tag.
+        """
+        out_dist = Path(self.tmp_dir) / "dist_ver"
+
+        # 1. Empty version rejected
+        with self.assertRaises(InstallerBuildError) as cm_empty:
+            build_inno_installer(
+                repo_root=self.repo_root,
+                out_dir=out_dist,
+                version="",
+            )
+        self.assertIn("must be specified and non-empty", str(cm_empty.exception).lower())
+
+        # 2. Final version 1.0.0 without git tag rejected
+        with self.assertRaises(InstallerBuildError) as cm_final:
+            build_inno_installer(
+                repo_root=self.repo_root,
+                out_dir=out_dist,
+                version="1.0.0",
+            )
+        self.assertIn("requires an existing git tag", str(cm_final.exception).lower())
+
+        # 3. Final version 1.1.0 without git tag rejected
+        with self.assertRaises(InstallerBuildError) as cm_final2:
+            build_inno_installer(
+                repo_root=self.repo_root,
+                out_dir=out_dist,
+                version="1.1.0",
+            )
+        self.assertIn("requires an existing git tag", str(cm_final2.exception).lower())
+
+    def test_11_payload_manifest_missing_update_path_fails_closed(self) -> None:
+        """
+        Validates Finding DD:
+        Pre-staged payload missing 'tools/update_path.ps1' from manifest.json fails closed.
+        """
+        mock_payload = Path(self.tmp_dir) / "mock_payload"
+        mock_payload.mkdir(parents=True, exist_ok=True)
+        manifest_data = {
+            "version": "1.1.0-rc1",
+            "files": {
+                "bin/pai.exe": {"size": 100, "sha256": "abc"},
+            },
+        }
+        (mock_payload / "manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+
+        out_dist = Path(self.tmp_dir) / "dist_dd"
+        with self.assertRaises(InstallerBuildError) as cm:
+            build_inno_installer(
+                repo_root=self.repo_root,
+                out_dir=out_dist,
+                version="1.1.0-rc1",
+                payload_dir=mock_payload,
+            )
+        self.assertIn("missing 'tools/update_path.ps1'", str(cm.exception).lower())
+
+    def test_12_silent_postinstall_failure_exits_nonzero(self) -> None:
+        """
+        Validates Finding DC:
+        In silent mode, post-install failure (e.g. update_path.ps1 failing due to rejected
+        non-test registry subkey) must terminate the installer with a non-zero exit code.
+        """
+        out_dist = Path(self.tmp_dir) / "dist"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        install_target = Path(self.tmp_dir) / "PAI_Fail_Target"
+
+        # Pass an illegal subkey that update_path.ps1 explicitly rejects fail-closed
+        illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertNotEqual(proc.returncode, 0, "Silent installer must exit non-zero when post-install PATH update fails")
+        self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
+
+    def test_13_portable_install_and_uninstall_calls_update_path(self) -> None:
+        """
+        Validates Finding DD:
+        packaging/install.bat and packaging/uninstall.bat delegate PATH operations
+        to tools/update_path.ps1 rather than duplicating registry logic.
+        """
+        sub = self._create_isolated_reg_subkey("Test_PAI_Portable_Batch", "%USERPROFILE%\\bin")
+        bin_dir = str(Path(self.tmp_dir) / "portable_app" / "bin")
+
+        install_bat = self.packaging_dir / "install.bat"
+        uninstall_bat = self.packaging_dir / "uninstall.bat"
+
+        install_text = install_bat.read_text(encoding="utf-8")
+        uninstall_text = uninstall_bat.read_text(encoding="utf-8")
+
+        # Verify neither file contains inline PowerShell registry logic
+        self.assertNotIn("OpenSubKey($subKey, $true)", install_text)
+        self.assertNotIn("OpenSubKey($subKey, $true)", uninstall_text)
+        self.assertIn("update_path.ps1", install_text)
+        self.assertIn("update_path.ps1", uninstall_text)
 
 
 if __name__ == "__main__":

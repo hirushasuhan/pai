@@ -54,7 +54,7 @@ PINNED_PYTHON_ZIP_SHA256 = "8d4d3590c10449d78aa4375f534e6d5f3027d67fdc362dd1a882
 PINNED_PYTHON_ZIP_URL = "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip"
 PINNED_PYTHON_ZIP_CHECKED_ON = "2026-10-27"
 
-_VERSION_RE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
+_VERSION_RE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\Z")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 

@@ -20,6 +20,8 @@ The N+1 window started on 2026-10-27 for tag `v1.0.0-rc1` (commit `8ce81cb`). It
 - Features that naturally belong in `research/pai.py` (a `pai setup` wizard, a progress flag, catalog download) are first built as a standalone tool, `packaging/pai_setup.py`. After the window, a separate reviewed commit may move them into `research/`.
 - Installer tests must not write to the owner's real `~/.pai` log or to the repository. Use Windows Sandbox (with a dedicated configuration that allows networking, used only for installer tests) or a clean virtual machine, never the development profile.
 - The shipped payload is built from a tag, byte for byte. The window has no effect on building an installer from `v1.0.0-rc1` for testing. The public 1.0.0 installer is built after the N+1 review.
+- **Note on reproducibility (Finding DH):** Only the payload directory and archive (`dist/payload`) are bit-for-bit reproducible across builds. The Inno Setup compiled installer (`PAI-Setup-*.exe`) embeds internal compilation timestamps into PE headers and table structures; distinct ISCC invocations therefore produce distinct file hashes despite identical input payloads.
+- **Window note (2026-10-27, Finding DH):** `tools/check_n_plus_1.py` was adjusted during the evaluation window to allow the health check report to continue when `pai doctor` exits non-zero due to low free host RAM, provided its JSON output contains `shadow_telemetry`. The script is located in `tools/` (outside evaluated `core/` and `research/` trees), does not loosen evaluation criteria, and continues to strictly enforce tree identities and the pinned binary SHA-256.
 
 Dev-checkout helpers that already exist in the repository root (`pai.cmd`, `install.bat`) are for people who run from a git checkout with their own Python. They are not the end-user installer: they need a system `python` on PATH and do not pin the core binary. They stay as the "developer install".
 
@@ -102,6 +104,11 @@ Use Ollama's pull API (`POST /api/pull`, streamed). The stream sends newline-del
 - The installer does not bundle model weights (size, and each model's licence must be accepted by the user).
 - Release builds keep `PAI_SHADOW_COMPARE` on and the log stays local in the user profile. The agreement must say plainly what is stored and that nothing is sent.
 - New code gets hostile-input tests, a threat-register entry and claims-lint, as for every milestone.
+
+### 8.1 Honest limits and operational boundaries (added 2026-10-27)
+
+- **PowerShell ExecutionPolicy Bypass (Finding DF):** When invoking `tools/update_path.ps1` from the Inno Setup installer (`pai.iss`) or portable helper scripts (`install.bat`, `uninstall.bat`), `-ExecutionPolicy Bypass` is specified. This flag is process-scoped strictly to the execution of that specific helper script; it does not change machine-wide or user-wide PowerShell execution policies. This is standard for local installer helper scripts, but security scanners may flag the switch; it is restricted solely to this PATH-management invocation.
+- **Test-Only Switches in Production Artifacts (Finding DG):** The Inno Setup installer accepts an optional `/REG_SUBKEY=` command-line parameter, and the PATH scripts inspect the `PAI_REG_SUBKEY` environment variable. These exist exclusively to allow automated test harnesses (such as `tools/test_installer_p5.py`) to redirect PATH modifications to isolated temporary registry test keys without mutating the real user `HKCU\Environment` key. The scripts enforce fail-closed validation: any subkey name that is not `Environment` and does not begin with `Test_` or `PAI_TEST_` is immediately rejected with an error. These switches are strictly test-isolation hooks and are not end-user features.
 
 ## 9. Test matrix (acceptance)
 

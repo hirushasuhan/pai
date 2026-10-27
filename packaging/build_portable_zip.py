@@ -256,12 +256,16 @@ def build_portable_zip(
         if platform == "win-x64":
             inst_bat = packaging_dir / "install.bat"
             uninst_bat = packaging_dir / "uninstall.bat"
+            update_ps = packaging_dir / "update_path.ps1"
             if not inst_bat.is_file():
                 raise PortableZipError(f"install.bat not found at {inst_bat}")
             if not uninst_bat.is_file():
                 raise PortableZipError(f"uninstall.bat not found at {uninst_bat}")
+            if not update_ps.is_file():
+                raise PortableZipError(f"update_path.ps1 not found at {update_ps}")
             extra_files["install.bat"] = inst_bat
             extra_files["uninstall.bat"] = uninst_bat
+            extra_files["tools/update_path.ps1"] = update_ps
 
         # 3. Assemble payload and generate manifest.json
         payload_meta = build_payload(

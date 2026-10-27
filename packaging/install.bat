@@ -121,38 +121,20 @@ exit /b 1
 
 :after_copy
 
-:: 3. Configure User PATH using registry API to preserve REG_EXPAND_SZ and unexpanded variables (Findings BO, BQ)
+:: 3. Configure User PATH using update_path.ps1 (Findings BO, BQ, DD)
 set "PAI_BIN_DIR=%BIN_DIR%"
 if "%PAI_REG_SUBKEY%"=="" set "PAI_REG_SUBKEY=Environment"
 echo Configuring User PATH for %BIN_DIR%...
 
-powershell -NoProfile -Command ^
-    "$targetDir = $env:PAI_BIN_DIR;" ^
-    "$rawSub = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY.Trim() } else { 'Environment' };" ^
-    "if (-not $rawSub -or $rawSub -ieq 'Environment') { $subKey = 'Environment' } " ^
-    "elseif ($rawSub.StartsWith('Test_', [System.StringComparison]::OrdinalIgnoreCase) -or $rawSub.StartsWith('PAI_TEST_', [System.StringComparison]::OrdinalIgnoreCase)) { $subKey = $rawSub } " ^
-    "else { Write-Error ('Rejected non-test PAI_REG_SUBKEY: ' + $rawSub + '. Custom subkeys must start with Test_ or PAI_TEST_ prefix.'); exit 1 };" ^
-    "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $true);" ^
-    "if (-not $key) { Write-Error ('Cannot open HKCU:\' + $subKey); exit 1 }" ^
-    "$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" ^
-    "$kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
-    "if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
-    "$parts = if ($raw) { @($raw -split ';' | Where-Object { $_ }) } else { @() };" ^
-    "$matched = $parts | Where-Object {" ^
-    "    $_.TrimEnd('\') -ieq $targetDir.TrimEnd('\') -or " ^
-    "    [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $targetDir.TrimEnd('\')" ^
-    "};" ^
-    "if (-not $matched) {" ^
-    "    $newVal = ((@($parts) + $targetDir) -join ';');" ^
-    "    $key.SetValue('Path', $newVal, $kind);" ^
-    "    Write-Host ('[SUCCESS] Added ' + $targetDir + ' to User PATH.') -ForegroundColor Green;" ^
-    "} else {" ^
-    "    Write-Host ('[INFO] ' + $targetDir + ' is already in User PATH.') -ForegroundColor Cyan;" ^
-    "};" ^
-    "$key.Close();" ^
-    "Add-Type -Namespace Win32 -Name Native -MemberDefinition '[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);' -ErrorAction SilentlyContinue;" ^
-    "[Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref][UIntPtr]::Zero) | Out-Null"
+set "UPDATE_PATH_SCRIPT=%TARGET_DIR%\tools\update_path.ps1"
+if not exist "%UPDATE_PATH_SCRIPT%" set "UPDATE_PATH_SCRIPT=%SOURCE_DIR%\tools\update_path.ps1"
+if not exist "%UPDATE_PATH_SCRIPT%" set "UPDATE_PATH_SCRIPT=%SOURCE_DIR%\packaging\update_path.ps1"
+if not exist "%UPDATE_PATH_SCRIPT%" (
+    echo [ERROR] PATH update helper script tools\update_path.ps1 was not found!
+    goto path_failed
+)
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "%UPDATE_PATH_SCRIPT%" -Action Add -TargetDir "%BIN_DIR%" -RegSubKey "%PAI_REG_SUBKEY%"
 if errorlevel 1 goto path_failed
 
 :: 4. Run setup wizard if present (Milestone P3+)

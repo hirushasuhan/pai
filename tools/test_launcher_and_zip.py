@@ -161,6 +161,7 @@ class TestLauncherAndZipP2(unittest.TestCase):
             extra_files={
                 "install.bat": self.repo_root / "packaging" / "install.bat",
                 "uninstall.bat": self.repo_root / "packaging" / "uninstall.bat",
+                "tools/update_path.ps1": self.repo_root / "packaging" / "update_path.ps1",
             },
         )
         return self.out_dir
@@ -721,6 +722,7 @@ class TestLauncherAndZipP2(unittest.TestCase):
             extra_files={
                 "install.bat": self.repo_root / "packaging" / "install.bat",
                 "uninstall.bat": self.repo_root / "packaging" / "uninstall.bat",
+                "tools/update_path.ps1": self.repo_root / "packaging" / "update_path.ps1",
             },
         )
 

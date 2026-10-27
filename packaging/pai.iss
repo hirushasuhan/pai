@@ -3,7 +3,7 @@
 ; Specification: docs/PACKAGING_SPEC.md (§2, §3, §4, §5, §6, §7, Appendix A, Appendix D)
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #error "AppVersion must be defined when compiling pai.iss (e.g. via /DAppVersion=1.1.0-rc1)"
 #endif
 
 #ifndef OutputDir
@@ -60,6 +60,29 @@ Type: files; Name: "{app}\agreement_acceptance.json"
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+type
+  TSystemTime = record
+    wYear: Word;
+    wMonth: Word;
+    wDayOfWeek: Word;
+    wDay: Word;
+    wHour: Word;
+    wMinute: Word;
+    wSecond: Word;
+    wMilliseconds: Word;
+  end;
+
+procedure ExitProcess(uExitCode: UINT); external 'ExitProcess@kernel32.dll stdcall';
+procedure GetSystemTime(var lpSystemTime: TSystemTime); external 'GetSystemTime@kernel32.dll stdcall';
+
+function GetUtcIsoTimestamp(): string;
+var
+  st: TSystemTime;
+begin
+  GetSystemTime(st);
+  Result := Format('%.4d-%.2d-%.2dT%.2d:%.2d:%.2dZ', [st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond]);
+end;
+
 function ExecPowerShell(Args: string; var ResultCode: Integer): Boolean;
 var
   PSExe: string;
@@ -105,14 +128,25 @@ begin
     AppDir := ExpandConstant('{app}');
     BinDir := AppDir + '\bin';
 
-    // 1. Record Agreement Acceptance locally (Specification §3)
+    // 1. Record Agreement Acceptance locally (Specification §3, Finding DE)
     AcceptanceJson := '{' + #13#10 +
       '  "installed_version": "' + '{#AppVersion}' + '",' + #13#10 +
       '  "agreement_text_sha256": "' + '{#AgreementSha256}' + '",' + #13#10 +
-      '  "accepted_utc": "' + GetDateTimeString('yyyy/mm/dd hh:nn:ss', '-', ':') + '",' + #13#10 +
+      '  "accepted_utc": "' + GetUtcIsoTimestamp() + '",' + #13#10 +
       '  "accepted": true' + #13#10 +
       '}';
-    SaveStringToFile(AppDir + '\agreement_acceptance.json', AcceptanceJson, False);
+
+    // Abort installation if agreement record cannot be written (Finding DC)
+    if not SaveStringToFile(AppDir + '\agreement_acceptance.json', AcceptanceJson, False) then
+    begin
+      Log('CRITICAL: Failed to write agreement_acceptance.json to ' + AppDir);
+      if not WizardSilent() then
+      begin
+        MsgBox('Fatal Error: Failed to write agreement acceptance record to ' + AppDir + '\agreement_acceptance.json.' + #13#10 +
+               'Installation has been aborted.', mbCriticalError, MB_OK);
+      end;
+      ExitProcess(2);
+    end;
 
     // Also record into ~/.pai/agreement_acceptance.json if ~/.pai directory exists
     PaiDir := GetEnv('USERPROFILE') + '\.pai';
@@ -121,7 +155,7 @@ begin
       SaveStringToFile(PaiDir + '\agreement_acceptance.json', AcceptanceJson, False);
     end;
 
-    // 2. Add bin directory to User PATH using Appendix D PowerShell script
+    // 2. Add bin directory to User PATH using Appendix D PowerShell script (Findings DC, DD)
     if (BinDir <> '') and (BinDir <> '\bin') and (BinDir <> '\\bin') then
     begin
       ScriptPath := AppDir + '\tools\update_path.ps1';
@@ -136,14 +170,43 @@ begin
       else
         ExtraArgs := '';
 
-      if FileExists(ScriptPath) then
+      if not FileExists(ScriptPath) then
       begin
-        ExecPowerShell('-File "' + ScriptPath + '" -Action Add -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode);
+        Log('CRITICAL: tools\update_path.ps1 not found in application directory: ' + ScriptPath);
+        if not WizardSilent() then
+        begin
+          MsgBox('Personal Agentic AI (PAI) was installed, but the PATH update helper script is missing.' + #13#10#13#10 +
+                 'Please manually add the following directory to your User PATH:' + #13#10 +
+                 BinDir + #13#10#13#10 +
+                 'You can do this by searching "Environment Variables" in Windows Settings.', mbError, MB_OK);
+        end
+        else
+        begin
+          ExitProcess(3);
+        end;
       end
       else
       begin
-        // Fallback inline PowerShell Appendix D execution
-        ExecPowerShell('-Command "$dir = ''' + BinDir + '''; $rawSub = ''' + SubKey + '''; if (-not $rawSub) { $rawSub = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY.Trim() } else { ''Environment'' } }; $subKey = if ($rawSub -and ($rawSub -ieq ''Environment'' -or $rawSub.StartsWith(''Test_'') -or $rawSub.StartsWith(''PAI_TEST_''))) { $rawSub } else { ''Environment'' }; $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $true); if ($key) { $raw = $key.GetValue(''Path'', '''', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $kind = try { $key.GetValueKind(''Path'') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString }; if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString }; $parts = if ($raw) { @($raw -split '';'' | Where-Object { $_ }) } else { @() }; $have = $parts | Where-Object { $_.TrimEnd(''\'') -ieq $dir.TrimEnd(''\'') -or [Environment]::ExpandEnvironmentVariables($_).TrimEnd(''\'') -ieq $dir.TrimEnd(''\'') }; if (-not $have) { $key.SetValue(''Path'', ((@($parts) + $dir) -join '';''), $kind) }; $key.Close(); Add-Type -Namespace Win32 -Name Native -MemberDefinition ''[DllImport(\"\"user32.dll\"\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'' -ErrorAction SilentlyContinue; [Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, ''Environment'', 2, 5000, [ref][UIntPtr]::Zero) | Out-Null }"', ResultCode);
+        ResultCode := -1;
+        if (not ExecPowerShell('-File "' + ScriptPath + '" -Action Add -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode)) or (ResultCode <> 0) then
+        begin
+          Log('ERROR: Failed to update User PATH via update_path.ps1 (ResultCode: ' + IntToStr(ResultCode) + ').');
+          if not WizardSilent() then
+          begin
+            MsgBox('Personal Agentic AI (PAI) was installed, but updating the User PATH environment variable failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
+                   'Please manually add the following directory to your User PATH:' + #13#10 +
+                   BinDir + #13#10#13#10 +
+                   'You can do this by searching "Environment Variables" in Windows Settings.', mbError, MB_OK);
+          end
+          else
+          begin
+            ExitProcess(3);
+          end;
+        end
+        else
+        begin
+          Log('SUCCESS: User PATH updated successfully with ' + BinDir);
+        end;
       end;
     end;
   end;
@@ -165,7 +228,7 @@ begin
     AppDir := ExpandConstant('{app}');
     BinDir := AppDir + '\bin';
 
-    // 1. Remove bin directory from User PATH (Appendix D)
+    // 1. Remove bin directory from User PATH (Appendix D, Finding DD)
     if (BinDir <> '') and (BinDir <> '\bin') and (BinDir <> '\\bin') then
     begin
       ScriptPath := AppDir + '\tools\update_path.ps1';
@@ -182,12 +245,15 @@ begin
 
       if FileExists(ScriptPath) then
       begin
-        ExecPowerShell('-File "' + ScriptPath + '" -Action Remove -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode);
+        ResultCode := -1;
+        if (not ExecPowerShell('-File "' + ScriptPath + '" -Action Remove -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode)) or (ResultCode <> 0) then
+        begin
+          Log('WARNING: Failed to remove bin from User PATH during uninstall (ResultCode: ' + IntToStr(ResultCode) + ').');
+        end;
       end
       else
       begin
-        // Fallback inline PowerShell Appendix D execution
-        ExecPowerShell('-Command "$dir = ''' + BinDir + '''; $rawSub = ''' + SubKey + '''; if (-not $rawSub) { $rawSub = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY.Trim() } else { ''Environment'' } }; $subKey = if ($rawSub -and ($rawSub -ieq ''Environment'' -or $rawSub.StartsWith(''Test_'') -or $rawSub.StartsWith(''PAI_TEST_''))) { $rawSub } else { ''Environment'' }; $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $true); if ($key) { $raw = $key.GetValue(''Path'', '''', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $kind = try { $key.GetValueKind(''Path'') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString }; if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString }; $parts = if ($raw) { @($raw -split '';'' | Where-Object { $_ }) } else { @() }; $newParts = @($parts | Where-Object { $_.TrimEnd(''\'') -ine $dir.TrimEnd(''\'') -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd(''\'') -ine $dir.TrimEnd(''\'') }); $key.SetValue(''Path'', ($newParts -join '';''), $kind); $key.Close(); Add-Type -Namespace Win32 -Name Native -MemberDefinition ''[DllImport(\"\"user32.dll\"\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'' -ErrorAction SilentlyContinue; [Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, ''Environment'', 2, 5000, [ref][UIntPtr]::Zero) | Out-Null }"', ResultCode);
+        Log('WARNING: tools\update_path.ps1 not found during uninstall: ' + ScriptPath);
       end;
     end;
 

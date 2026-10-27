@@ -141,8 +141,8 @@ def verify_installer_pe(installer_path: Path) -> Dict[str, Any]:
 def build_inno_installer(
     repo_root: Path,
     out_dir: str | Path,
+    version: str,
     tag: str = DEFAULT_TAG,
-    version: str = "1.0.0",
     platform: str = "win-x64",
     iscc_path: Optional[str | Path] = None,
     payload_dir: Optional[str | Path] = None,
@@ -156,6 +156,31 @@ def build_inno_installer(
     repo_root = Path(repo_root).resolve()
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if not version or not str(version).strip():
+        raise InstallerBuildError("Release version string must be specified and non-empty (e.g. '1.1.0-rc1').")
+    version = str(version).strip()
+
+    # Finding DB: Enforce that final versions (no -rcN) require an existing git tag
+    is_rc = bool(re.search(r"-rc\d*$", version, re.IGNORECASE))
+    if not is_rc:
+        tag_candidates = [f"v{version}", version]
+        tag_found = False
+        for tc in tag_candidates:
+            proc = subprocess.run(
+                ["git", "rev-parse", "--verify", f"refs/tags/{tc}"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0:
+                tag_found = True
+                break
+        if not tag_found:
+            raise InstallerBuildError(
+                f"Final release version '{version}' requires an existing git tag (e.g. 'v{version}'), "
+                f"but no matching tag exists in the repository. Preview builds must be formatted '1.1.0-rcN'."
+            )
 
     if platform != "win-x64":
         raise InstallerBuildError(f"Inno Setup only supports 'win-x64', requested: {platform}")
@@ -217,12 +242,25 @@ def build_inno_installer(
             clean=True,
         )
 
-    # Ensure update_path.ps1 is copied into payload tools/ directory
-    tools_dir = resolved_payload / "tools"
-    tools_dir.mkdir(parents=True, exist_ok=True)
-    update_path_src = repo_root / "packaging" / "update_path.ps1"
-    if update_path_src.is_file():
-        shutil.copy2(update_path_src, tools_dir / "update_path.ps1")
+    # Verify tools/update_path.ps1 is recorded in payload manifest (Finding DD)
+    manifest_file = resolved_payload / "manifest.json"
+    if not manifest_file.is_file():
+        raise InstallerBuildError(f"Payload manifest missing at: {manifest_file}")
+    try:
+        with open(manifest_file, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+    except Exception as e:
+        raise InstallerBuildError(f"Failed to read payload manifest at {manifest_file}: {e}")
+
+    manifest_files = manifest_data.get("files", {})
+    if "tools/update_path.ps1" not in manifest_files:
+        raise InstallerBuildError(
+            "Payload manifest is missing 'tools/update_path.ps1'. "
+            "Build defect: PATH helper script must be in payload."
+        )
+    disk_script = resolved_payload / "tools" / "update_path.ps1"
+    if not disk_script.is_file():
+        raise InstallerBuildError(f"Payload is missing disk file: {disk_script}")
 
     iss_file = repo_root / "packaging" / "pai.iss"
     if not iss_file.is_file():
@@ -283,7 +321,11 @@ def build_inno_installer(
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PAI Inno Setup Installer Builder (Milestone P5).")
     parser.add_argument("--tag", default=DEFAULT_TAG, help=f"Git tag to build from (default: {DEFAULT_TAG})")
-    parser.add_argument("--version", default="1.0.0", help="Release version string (default: 1.0.0)")
+    parser.add_argument(
+        "--version",
+        required=True,
+        help="Release version string (e.g. 1.1.0-rc1; required). Final releases without -rcN require a matching git tag.",
+    )
     parser.add_argument("--platform", default=DEFAULT_PLATFORM, choices=["win-x64"], help="Target platform (win-x64)")
     parser.add_argument("--out-dir", default="dist", help="Output directory for built installer (default: dist)")
     parser.add_argument("--iscc", default=None, help="Explicit path to ISCC.exe compiler")

@@ -29,7 +29,7 @@ if (-not $rawSub -or $rawSub -ieq "Environment") {
 } elseif ($rawSub.StartsWith("Test_", [System.StringComparison]::OrdinalIgnoreCase) -or $rawSub.StartsWith("PAI_TEST_", [System.StringComparison]::OrdinalIgnoreCase)) {
     $subKey = $rawSub
 } else {
-    Write-Error ("Rejected non-test RegSubKey: " + $rawSub + ". Custom subkeys must start with Test_ or PAI_TEST_ prefix.")
+    Write-Error ("Rejected non-test PAI_REG_SUBKEY: " + $rawSub + ". Custom subkeys must start with Test_ or PAI_TEST_ prefix.")
     exit 1
 }
 
