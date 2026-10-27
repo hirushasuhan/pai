@@ -347,12 +347,21 @@ class Updater:
                     "verify_release",
                     f"Release verification outcome mismatch: py_res={py_res is not None} vs rust_res={rust_res is not None} (py_err={py_err}, rust_err={rust_err})",
                 )
+                # Release N discrepancy policy: deny-wins! If either implementation denied verification, fail closed
+                if py_err is not None:
+                    raise py_err
+                if rust_err is not None:
+                    if isinstance(rust_err, (UpdateRejected, pai_core_bridge.CoreBridgeUnavailableError)):
+                        raise rust_err
+                    raise UpdateRejected(str(rust_err)) from rust_err
             elif py_res is not None and rust_res is not None:
                 if py_res.version != rust_res.get("version") or py_res.key_id != rust_res.get("key_id") or py_res.files != rust_res.get("files"):
                     pai_core_bridge.record_shadow_discrepancy(
                         "verify_release",
                         f"Release metadata mismatch: py=({py_res.version}, {py_res.key_id}, {len(py_res.files)}) vs rust=({rust_res.get('version')}, {rust_res.get('key_id')}, {len(rust_res.get('files', []))})",
                     )
+                    # Release N discrepancy policy: return authoritative Python reference on metadata mismatch
+                    return py_res
 
         if rust_err is not None:
             if isinstance(rust_err, (UpdateRejected, pai_core_bridge.CoreBridgeUnavailableError)):

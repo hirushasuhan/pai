@@ -315,8 +315,26 @@ def record_shadow_comparison(op: str, **extra: Any) -> None:
         logger.warning("Failed to persist shadow comparison to file: %s", e)
 
 
+_DISCREPANCY_WARNING_EMITTED = False
+
+
+def reset_discrepancy_warning() -> None:
+    """Resets the single-warning gate for session/tests."""
+    global _DISCREPANCY_WARNING_EMITTED
+    _DISCREPANCY_WARNING_EMITTED = False
+
+
 def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
     """Records a shadow discrepancy for visibility in run reports and pai doctor."""
+    global _DISCREPANCY_WARNING_EMITTED
+    if not _DISCREPANCY_WARNING_EMITTED:
+        _DISCREPANCY_WARNING_EMITTED = True
+        sys.stderr.write(
+            f"WARNING: Shadow evaluation discrepancy detected in op '{op}'. "
+            "Falling back to authoritative Python reference for safety.\n"
+        )
+        sys.stderr.flush()
+
     src = extra.pop("source", None) or get_telemetry_source()
     if "binary_hash" not in extra:
         bin_h = get_core_binary_hash()
@@ -737,6 +755,7 @@ def clear_shadow_log() -> Optional[Path]:
 
 def reset_shadow_discrepancies() -> None:
     """Resets both in-memory and persistent shadow discrepancies log safely via archiving."""
+    reset_discrepancy_warning()
     archive_shadow_log()
 
 
@@ -977,6 +996,7 @@ def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[
                     "scan_secret_content",
                     f"Python={py_res!r} vs Rust={res!r}",
                 )
+                return py_res
         except Exception as exc:
             record_shadow_discrepancy(
                 "scan_secret_content",
@@ -1105,24 +1125,16 @@ def verify_verdict_frame(
     - Defensively validates the return dictionary shape
     - Logs and refuses (returns fail-closed INTEGRITY_VIOLATION) on any difference
     """
-    py_res = py_verify_verdict_frame(
-        comb_out=comb_out,
-        parent_nonce=parent_nonce,
-        parent_hmac_key=parent_hmac_key,
-        expected_test_ids=expected_test_ids,
-        exit_code=exit_code,
-        res_status=res_status,
-        expected_test_hash=expected_test_hash,
-    )
     if not is_rust_core_enabled():
-        return py_res
-
-    content_digest: Optional[str] = None
-    try:
-        content_digest = hashlib.sha256(comb_out.encode("utf-8")).hexdigest()
-    except Exception as exc:
-        logger.warning("Failed to compute verify_verdict_frame content_digest: %s", exc)
-    record_shadow_comparison("verify_verdict_frame", content_digest=content_digest)
+        return py_verify_verdict_frame(
+            comb_out=comb_out,
+            parent_nonce=parent_nonce,
+            parent_hmac_key=parent_hmac_key,
+            expected_test_ids=expected_test_ids,
+            exit_code=exit_code,
+            res_status=res_status,
+            expected_test_hash=expected_test_hash,
+        )
 
     bridge_kwargs: Dict[str, Any] = {
         "comb_out": comb_out,
@@ -1134,6 +1146,27 @@ def verify_verdict_frame(
     }
     if expected_test_hash is not None:
         bridge_kwargs["expected_test_hash"] = expected_test_hash
+
+    if not is_shadow_compare_enabled():
+        raw_bridge_res = call_core_bridge("verify_verdict_frame", **bridge_kwargs)
+        return _validate_verdict_result_shape(raw_bridge_res)
+
+    py_res = py_verify_verdict_frame(
+        comb_out=comb_out,
+        parent_nonce=parent_nonce,
+        parent_hmac_key=parent_hmac_key,
+        expected_test_ids=expected_test_ids,
+        exit_code=exit_code,
+        res_status=res_status,
+        expected_test_hash=expected_test_hash,
+    )
+
+    content_digest: Optional[str] = None
+    try:
+        content_digest = hashlib.sha256(comb_out.encode("utf-8")).hexdigest()
+    except Exception as exc:
+        logger.warning("Failed to compute verify_verdict_frame content_digest: %s", exc)
+    record_shadow_comparison("verify_verdict_frame", content_digest=content_digest)
 
     try:
         raw_bridge_res = call_core_bridge("verify_verdict_frame", **bridge_kwargs)
@@ -1163,6 +1196,7 @@ def verify_verdict_frame(
             py_res=py_res,
             rust_res=bridge_res,
         )
+        # Release N discrepancy policy: deny-wins on verification mismatch
         return {
             "passed": False,
             "status": "INTEGRITY_VIOLATION",
@@ -1180,21 +1214,43 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
     """
     Extracts canonical assertions from example docstring section.
     When PAI_USE_RUST_CORE is active:
-    - Runs in shadow mode where Python reference remains authoritative (returned).
+    - Runs in shadow mode comparing Rust bridge output against Python reference.
     - If pai-core binary is unavailable or fails handshake, raises CoreBridgeUnavailableError.
     - Re-parses every single returned statement from Rust with ast.parse.
     - Defensively validates that every statement is an assert or assignment.
-    - If Rust differs from Python or bridge call throws, records the discrepancy in a counter and returns Python assertions.
+    - If Rust differs from Python or bridge call throws, records the discrepancy and falls back to Python reference.
     """
-    py_stmts = py_extract_example_assertions(prompt, entry_point=entry_point)
     if not is_rust_core_enabled():
-        return py_stmts
-
-    record_shadow_comparison("extract_example_assertions")
+        return py_extract_example_assertions(prompt, entry_point=entry_point)
 
     kwargs: Dict[str, Any] = {"prompt": prompt}
     if entry_point is not None:
         kwargs["entry_point"] = entry_point
+
+    if not is_shadow_compare_enabled():
+        raw_stmts = call_core_bridge("extract_example_assertions", **kwargs)
+        if not isinstance(raw_stmts, list):
+            return []
+        verified_stmts: List[str] = []
+        for s in raw_stmts:
+            if not isinstance(s, str):
+                continue
+            try:
+                tree = ast.parse(s)
+                if len(tree.body) != 1:
+                    continue
+                stmt = tree.body[0]
+                if not isinstance(stmt, (ast.Assert, ast.Assign)):
+                    continue
+                verified_stmts.append(s)
+            except SyntaxError:
+                continue
+        if not any(s.startswith("assert ") for s in verified_stmts):
+            return []
+        return verified_stmts
+
+    py_stmts = py_extract_example_assertions(prompt, entry_point=entry_point)
+    record_shadow_comparison("extract_example_assertions")
 
     try:
         raw_stmts = call_core_bridge("extract_example_assertions", **kwargs)
@@ -1215,7 +1271,7 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
         )
         return py_stmts
 
-    verified_stmts: List[str] = []
+    verified_stmts = []
     for s in raw_stmts:
         if not isinstance(s, str):
             continue
@@ -1242,9 +1298,10 @@ def extract_example_assertions(prompt: str, entry_point: Optional[str] = None) -
             py_stmts=py_stmts,
             rust_stmts=rust_final,
         )
+        # Release N discrepancy policy: return authoritative Python reference on mismatch
+        return py_stmts
 
-    # In shadow mode, Python reference is authoritative!
-    return py_stmts
+    return rust_final
 
 
 # ============================================================================
@@ -1304,6 +1361,8 @@ def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
                 py_res=py_ver,
                 rust_res=rust_ver,
             )
+            # Release N discrepancy policy: deny-wins on verification mismatch
+            return False
 
     return rust_ver
 
@@ -1425,6 +1484,8 @@ def ingest_file(
                 py_rej=py_rej.to_dict() if py_rej else None,
                 rust_rej=rust_rej.to_dict() if rust_rej else None,
             )
+            # Release N discrepancy policy: return authoritative Python reference on mismatch
+            return py_item, py_rej
 
     return rust_item, rust_rej
 
@@ -1555,6 +1616,8 @@ def ingest_folder(
                 py_report=py_dict,
                 rust_report=rust_dict,
             )
+            # Release N discrepancy policy: return authoritative Python reference on mismatch
+            return py_report
 
     return rust_report
 

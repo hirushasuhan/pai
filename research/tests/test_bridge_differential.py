@@ -728,6 +728,155 @@ class TestBridgeDifferential(unittest.TestCase):
                 else:
                     os.environ.pop("PAI_SHADOW_LOG", None)
 
+    def test_discrepancy_policy_ingest_file_returns_python_and_logs(self):
+        """Verifies that on shadow discrepancy in ingest_file, Python reference result is returned and discrepancy is logged."""
+        from unittest import mock
+        from ingest import IngestionRejection
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = True
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt") as tf:
+                tf.write("Benign file content\n")
+                tf_path = tf.name
+
+            try:
+                # Monkeypatch py_ingest_file to return a secret rejection (mismatch against Rust's accepted item)
+                mock_rej = IngestionRejection(path=tf_path, reason_code="SECRET_FILE", message="Mock secret rejection")
+                with mock.patch("pai_core_bridge.py_ingest_file", return_value=(None, mock_rej)):
+                    item, rej = pai_core_bridge.ingest_file(tf_path)
+
+                # Python reference result must be returned on discrepancy!
+                self.assertIsNone(item, "Expected Python rejection on mismatch (item=None)")
+                self.assertIsNotNone(rej, "Expected Python rejection on mismatch")
+                self.assertEqual(rej.reason_code, "SECRET_FILE")
+
+                # Discrepancy must be recorded
+                self.assertGreaterEqual(pai_core_bridge.get_shadow_discrepancy_count(), 1)
+                discs = pai_core_bridge.get_shadow_discrepancies()
+                self.assertTrue(any(d.get("op") == "ingest_file" for d in discs))
+            finally:
+                if os.path.exists(tf_path):
+                    os.remove(tf_path)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_discrepancy_policy_ingest_folder_returns_python_and_logs(self):
+        """Verifies that on shadow discrepancy in ingest_folder, Python reference report is returned."""
+        from pathlib import Path
+        from unittest import mock
+        from ingest import IngestionReport
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = True
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "sample.txt"
+                p.write_text("sample", encoding="utf-8")
+
+                mock_report = IngestionReport(
+                    root=td,
+                    items=[],
+                    rejections=[],
+                    total_bytes=12345,
+                    total_files=999,  # Injected mismatch
+                    limits={},
+                    rejection_counts={},
+                    rejections_capped=False,
+                )
+                with mock.patch("pai_core_bridge.py_ingest_folder", return_value=mock_report):
+                    rep = pai_core_bridge.ingest_folder(td)
+
+                # Authoritative Python reference report returned
+                self.assertEqual(rep.total_files, 999)
+                self.assertGreaterEqual(pai_core_bridge.get_shadow_discrepancy_count(), 1)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_discrepancy_policy_deny_wins_ops(self):
+        """Verifies that for accept/deny ops (verify_ed25519, verify_verdict_frame), deny wins on mismatch."""
+        from unittest import mock
+        from verify_loop import format_authenticated_verdict_frame
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = True
+        try:
+            # 1. verify_ed25519: Python denies (returns False), Rust accepts (returns True) -> deny wins (False)
+            with mock.patch("ed25519_ref.verify", return_value=False), \
+                 mock.patch("pai_core_bridge.call_core_bridge", return_value=True):
+                res = pai_core_bridge.verify_ed25519(b"\x00" * 32, b"msg", b"\x00" * 64)
+                self.assertFalse(res, "deny-wins: verify_ed25519 must return False when Python denies")
+                self.assertGreaterEqual(pai_core_bridge.get_shadow_discrepancy_count(), 1)
+
+            # 2. verify_verdict_frame: Rust accepts (passed=True), Python denies (passed=False) -> deny wins
+            fake_stdout = format_authenticated_verdict_frame({"status": "PASS", "passed": 1, "failed": 0, "errors": 0, "discovered": 1, "executed": 1, "failures": [], "executed_test_ids": ["t"], "test_hash": "a" * 64}, "k")
+            mock_rust_res = {"passed": True, "status": "PASS", "error_type": None, "discovered": 1, "executed": 1, "failed": 0, "errors": 0}
+            mock_py_res = {"passed": False, "status": "INTEGRITY_VIOLATION", "error_type": "TamperedSignature", "discovered": 0, "executed": 0, "failed": 0, "errors": 1}
+            with mock.patch("pai_core_bridge.py_verify_verdict_frame", return_value=mock_py_res), \
+                 mock.patch("pai_core_bridge.call_core_bridge", return_value=mock_rust_res):
+                res_vf = pai_core_bridge.verify_verdict_frame(fake_stdout, "n", "k", expected_test_ids=("t",), expected_test_hash="a" * 64)
+                self.assertFalse(res_vf["passed"], "deny-wins: verify_verdict_frame must fail-closed on mismatch")
+                self.assertEqual(res_vf["status"], "INTEGRITY_VIOLATION")
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_discrepancy_policy_stderr_warning_emitted_exactly_once(self):
+        """Verifies that discrepancy warning is emitted to stderr exactly once per session."""
+        import io
+        from unittest import mock
+
+        pai_core_bridge.reset_discrepancy_warning()
+        pai_core_bridge.reset_shadow_discrepancies()
+
+        captured_stderr = io.StringIO()
+        with mock.patch("sys.stderr", captured_stderr):
+            # Trigger 3 discrepancies
+            pai_core_bridge.record_shadow_discrepancy("op1", "detail 1")
+            pai_core_bridge.record_shadow_discrepancy("op2", "detail 2")
+            pai_core_bridge.record_shadow_discrepancy("op3", "detail 3")
+
+        output = captured_stderr.getvalue()
+        warning_count = output.count("WARNING: Shadow evaluation discrepancy detected")
+        self.assertEqual(warning_count, 1, f"Expected warning to be emitted exactly once, got {warning_count}")
+        self.assertIn("op 'op1'", output)
+
+    def test_discrepancy_policy_shadow_compare_off_returns_rust(self):
+        """Verifies that when PAI_SHADOW_COMPARE=0, no shadow comparison occurs and Rust result is returned."""
+        from unittest import mock
+        from ingest import IngestionRejection
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = False
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt") as tf:
+                tf.write("Benign content\n")
+                tf_path = tf.name
+
+            try:
+                # If py_ingest_file were called, it would reject
+                mock_rej = IngestionRejection(path=tf_path, reason_code="SECRET_FILE", message="Mock secret")
+                with mock.patch("pai_core_bridge.py_ingest_file", return_value=(None, mock_rej)):
+                    item, rej = pai_core_bridge.ingest_file(tf_path)
+
+                # Shadow compare is OFF -> Rust result returned (accepted item, no rejection)
+                self.assertIsNotNone(item, "Expected Rust result when PAI_SHADOW_COMPARE=0")
+                self.assertIsNone(rej, "Expected no rejection when PAI_SHADOW_COMPARE=0")
+                self.assertEqual(pai_core_bridge.get_shadow_discrepancy_count(), 0)
+            finally:
+                if os.path.exists(tf_path):
+                    os.remove(tf_path)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.PAI_SHADOW_COMPARE = True
+            pai_core_bridge.reset_shadow_discrepancies()
+
 
 if __name__ == "__main__":
     unittest.main()
