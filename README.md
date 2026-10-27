@@ -152,7 +152,7 @@ The packaging subsystem ([ADR-013](docs/adr/ADR-013-installer-and-distribution.m
 ## 📁 Repository Structure
 
 ```tree
-personal_agentic_ai/
+pai/
 │
 ├── README.md
 ├── CHANGELOG.md                  # What changed and why

@@ -16,7 +16,7 @@ This document specifies the standard, reproducible measurement protocol for loca
 
 ## 2. Standard Measurement Protocol (5-Run Median Cold Start)
 
-For every candidate model, 5 independent cold runs are executed using [`research/measure_cold_profile.py`](file:///C:/Users/hp/Documents/GitHub/personal_agentic_ai/research/measure_cold_profile.py):
+For every candidate model, 5 independent cold runs are executed using [`research/measure_cold_profile.py`](file:///C:/Users/hp/Documents/GitHub/pai/research/measure_cold_profile.py):
 
 1. **Eviction / Unload**:
    - Send HTTP POST to `/api/generate` with `{"model": "<name>", "keep_alive": 0}`.
@@ -47,7 +47,7 @@ For every candidate model, 5 independent cold runs are executed using [`research
 6. **Aggregation**:
    - Repeat steps 1–5 for $N = 5$ iterations.
    - Calculate the **median** $\Delta \text{RAM}$ (`statistics.median`).
-   - Store the empirical median in [`research/model_profiles.json`](file:///C:/Users/hp/Documents/GitHub/personal_agentic_ai/research/model_profiles.json) as `host_delta_mb`.
+   - Store the empirical median in [`research/model_profiles.json`](file:///C:/Users/hp/Documents/GitHub/pai/research/model_profiles.json) as `host_delta_mb`.
 
 ---
 
