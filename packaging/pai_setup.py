@@ -3,20 +3,31 @@ Personal Agentic AI (PAI) - Setup Wizard and Hardware Survey Engine.
 
 Part of Milestone P3 for the v1.1.0 Packaging and Installer subsystem.
 Specification: docs/PACKAGING_SPEC.md (§4, §5, Appendix B, Appendix C)
-ADR-012, ADR-013
+ADR-005, ADR-012, ADR-013
 
-Responsibilities:
-  1. Local hardware survey (RAM, VRAM, GPU, disk, CPU, NPU detection per ADR-012).
-  2. Cryptographic signed-catalog verification (detached Ed25519, monotonic version check).
-  3. Hardware fit rules (disk >= 1.25x + 2GB, GPU <= 85% VRAM for full offload, RAM headroom).
-  4. Ollama detection and official installer verification.
-  5. Machine-readable progress events (--progress-json) matching Appendix C.
+Hard Rules Enforced (Findings CB, CC, CD, CD2, CE, CG, CH):
+  1. Shipped code NEVER trusts test keys or contains private seeds (Finding CB).
+     Production keys are read ONLY from trust.json; fails closed if missing/empty/invalid.
+  2. Monotonic catalog version enforcement via persistent state (Finding CD).
+     Replay rollback rejected if catalog_version < highest seen version.
+  3. Catalog freshness: catalogs older than 90 days from issued_utc are rejected (Finding CD).
+  4. Strict catalog schema: non-empty models, positive sizes, regex IDs and digests,
+     kind="catalog" required, demo catalogs rejected in production (Finding CD2).
+  5. Fit rules: GPU offloading and 512 MB context allowance are explicitly labeled
+     as estimates; preselection chooses ONLY "full" tier until measured (Finding CE).
+  6. RAM rule uses available RAM at survey time with 2048 MB system reserve (Finding CE).
+  7. CPU and multi-GPU surveys use real CIM properties and pick discrete GPU (Finding CE).
+  8. Ollama installer publisher check: verified Authenticode Subject and Thumbprint
+     with fail-closed validation on non-Windows; verified in-place before running (Finding CC).
+  9. Progress stream: emits only implemented P3 events (Finding CG).
+  10. Loopback connections bypass proxy; non-loopback OLLAMA_HOST rejected (Finding CH).
 """
 
 from __future__ import annotations
 
 import argparse
 import ctypes
+import datetime
 import hashlib
 import json
 import logging
@@ -26,10 +37,11 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("pai_setup")
 
@@ -41,7 +53,7 @@ if str(RESEARCH_DIR) not in sys.path:
 try:
     import ed25519_ref
 except ImportError:
-    ed25519_ref = None  # Handled gracefully if executed without research/ on path
+    ed25519_ref = None  # Handled fail-closed during verification if missing
 
 
 # -----------------------------------------------------------------------------
@@ -52,7 +64,7 @@ class SetupError(Exception):
 
 
 class CatalogSecurityError(SetupError):
-    """Raised when catalog signature, integrity, or monotonic version check fails."""
+    """Raised when catalog signature, integrity, freshness, or monotonic version check fails."""
 
 
 class FitRuleViolationError(SetupError):
@@ -64,7 +76,7 @@ class OllamaVerificationError(SetupError):
 
 
 # -----------------------------------------------------------------------------
-# Hardware Survey (§4, §5)
+# Hardware Survey (§4, §5, ADR-012, Finding CE)
 # -----------------------------------------------------------------------------
 @dataclass
 class HardwareProfile:
@@ -83,6 +95,7 @@ class HardwareProfile:
     npu_name: Optional[str]
     npu_note: str = "detected, not used in this version (ADR-012)"
     windows_version: Optional[str] = None
+    all_gpus: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def survey_ram_windows() -> Tuple[float, float]:
@@ -110,14 +123,19 @@ def survey_ram_windows() -> Tuple[float, float]:
 
 
 def survey_disk_free(target_path: Optional[str | Path] = None) -> Tuple[int, int, str]:
-    """Queries free and total disk bytes on the drive hosting the model store."""
+    """
+    Queries free and total disk bytes on the drive hosting the model store.
+    Prioritizes OLLAMA_MODELS env var before defaulting to ~/.ollama/models.
+    """
     if not target_path:
-        # Default Ollama models directory: %USERPROFILE%\.ollama\models
-        user_prof = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-        target_path = Path(user_prof) / ".ollama" / "models"
+        env_models = os.environ.get("OLLAMA_MODELS")
+        if env_models:
+            target_path = Path(env_models)
+        else:
+            user_prof = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+            target_path = Path(user_prof) / ".ollama" / "models"
 
     p = Path(target_path).resolve()
-    # Find existing ancestor directory to probe disk usage
     probe_dir = p
     while not probe_dir.exists() and probe_dir.parent != probe_dir:
         probe_dir = probe_dir.parent
@@ -129,57 +147,6 @@ def survey_disk_free(target_path: Optional[str | Path] = None) -> Tuple[int, int
     except Exception as e:
         logger.warning("Failed to inspect disk usage: %s", e)
         return 50 * 1024 * 1024 * 1024, 250 * 1024 * 1024 * 1024, "C:"
-
-
-def survey_gpu_windows() -> Tuple[Optional[str], float, Optional[str]]:
-    """
-    Surveys GPU using Get-CimInstance Win32_VideoController or DXGI.
-    Returns (gpu_name, dedicated_vram_mb, driver_version).
-    """
-    if sys.platform != "win32":
-        return None, 0.0, None
-
-    cmd = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion | ConvertTo-Json -Compress",
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if proc.returncode == 0 and proc.stdout.strip():
-            raw = json.loads(proc.stdout)
-            controllers = raw if isinstance(raw, list) else [raw]
-
-            # Prefer dedicated discrete GPU (NVIDIA > AMD > Intel)
-            best_gpu = None
-            max_vram = 0.0
-            best_driver = None
-
-            for ctrl in controllers:
-                name = ctrl.get("Name", "")
-                driver = ctrl.get("DriverVersion", "")
-                vram_bytes = ctrl.get("AdapterRAM", 0) or 0
-                vram_mb = vram_bytes / (1024 * 1024)
-
-                # Win32_VideoController caps 32-bit AdapterRAM at 4GB; if NVIDIA/AMD, probe nvidia-smi if available
-                if "nvidia" in name.lower():
-                    # Attempt nvidia-smi probe for true 64-bit VRAM
-                    nv_mb = probe_nvidia_smi_vram()
-                    if nv_mb > 0:
-                        vram_mb = nv_mb
-                    return name, round(vram_mb, 1), driver
-
-                if vram_mb > max_vram:
-                    max_vram = vram_mb
-                    best_gpu = name
-                    best_driver = driver
-
-            return best_gpu, round(max_vram, 1), best_driver
-    except Exception as e:
-        logger.debug("PowerShell GPU survey failed: %s", e)
-
-    return None, 0.0, None
 
 
 def probe_nvidia_smi_vram() -> float:
@@ -196,6 +163,103 @@ def probe_nvidia_smi_vram() -> float:
     except Exception:
         pass
     return 0.0
+
+
+def survey_gpu_windows() -> Tuple[Optional[str], float, Optional[str], List[Dict[str, Any]]]:
+    """
+    Surveys GPU using Get-CimInstance Win32_VideoController.
+    Handles multi-GPU setups, selecting discrete GPU with highest dedicated VRAM.
+    Returns (gpu_name, dedicated_vram_mb, driver_version, all_gpus).
+    """
+    if sys.platform != "win32":
+        return None, 0.0, None, []
+
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion | ConvertTo-Json -Compress",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0 and proc.stdout.strip():
+            raw = json.loads(proc.stdout)
+            controllers = raw if isinstance(raw, list) else [raw]
+
+            all_gpus: List[Dict[str, Any]] = []
+            best_gpu = None
+            max_vram = 0.0
+            best_driver = None
+
+            for ctrl in controllers:
+                name = ctrl.get("Name", "")
+                driver = ctrl.get("DriverVersion", "")
+                vram_bytes = ctrl.get("AdapterRAM", 0) or 0
+                vram_mb = vram_bytes / (1024 * 1024)
+
+                # Check nvidia-smi if NVIDIA to bypass 4GB Win32_VideoController cap
+                if "nvidia" in name.lower():
+                    nv_mb = probe_nvidia_smi_vram()
+                    if nv_mb > 0:
+                        vram_mb = nv_mb
+
+                gpu_entry = {
+                    "name": name,
+                    "vram_mb": round(vram_mb, 1),
+                    "driver_version": driver,
+                }
+                all_gpus.append(gpu_entry)
+
+                # Priority: NVIDIA / AMD discrete over integrated Intel / Microsoft basic
+                is_discrete = any(d in name.lower() for d in ("nvidia", "geforce", "radeon", "amd"))
+                current_is_discrete = best_gpu and any(d in best_gpu.lower() for d in ("nvidia", "geforce", "radeon", "amd"))
+
+                if is_discrete and not current_is_discrete:
+                    max_vram = vram_mb
+                    best_gpu = name
+                    best_driver = driver
+                elif is_discrete == current_is_discrete and vram_mb > max_vram:
+                    max_vram = vram_mb
+                    best_gpu = name
+                    best_driver = driver
+                elif best_gpu is None:
+                    max_vram = vram_mb
+                    best_gpu = name
+                    best_driver = driver
+
+            return best_gpu, round(max_vram, 1), best_driver, all_gpus
+    except Exception as e:
+        logger.debug("PowerShell GPU survey failed: %s", e)
+
+    return None, 0.0, None, []
+
+
+def survey_cpu_windows() -> Tuple[int, int, str]:
+    """Queries real physical cores and logical processors from Win32_Processor."""
+    if sys.platform != "win32":
+        cores = os.cpu_count() or 4
+        return max(1, cores // 2), cores, "x86_64"
+
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | ConvertTo-Json -Compress",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0 and proc.stdout.strip():
+            raw = json.loads(proc.stdout)
+            proc_info = raw[0] if isinstance(raw, list) else raw
+            name = proc_info.get("Name", os.environ.get("PROCESSOR_IDENTIFIER", "CPU"))
+            cores = int(proc_info.get("NumberOfCores", 1))
+            logical = int(proc_info.get("NumberOfLogicalProcessors", os.cpu_count() or 1))
+            return max(1, cores), max(1, logical), name
+    except Exception as e:
+        logger.debug("CPU survey query failed: %s", e)
+
+    cores = os.cpu_count() or 4
+    return max(1, cores // 2), cores, os.environ.get("PROCESSOR_IDENTIFIER", "x86_64")
 
 
 def survey_npu_windows() -> Tuple[bool, Optional[str]]:
@@ -225,21 +289,31 @@ def survey_npu_windows() -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def collect_hardware_survey(model_drive_path: Optional[str | Path] = None) -> HardwareProfile:
-    """Performs full local hardware survey."""
-    if sys.platform == "win32":
-        total_ram, avail_ram = survey_ram_windows()
-        gpu_name, vram_mb, driver_ver = survey_gpu_windows()
-        npu_detected, npu_name = survey_npu_windows()
-        win_ver = f"{sys.getwindowsversion().major}.{sys.getwindowsversion().minor}.{sys.getwindowsversion().build}"
-    else:
+def collect_hardware_survey(
+    model_drive_path: Optional[str | Path] = None,
+    allow_mock: bool = False,
+) -> HardwareProfile:
+    """
+    Performs full local hardware survey.
+    On non-Windows platforms, raises NotImplementedError unless allow_mock is True.
+    """
+    if sys.platform != "win32":
+        if not allow_mock:
+            raise NotImplementedError("Hardware survey is only supported on Windows in v1.1.0 (ADR-012)")
         total_ram, avail_ram = 16384.0, 8192.0
-        gpu_name, vram_mb, driver_ver = None, 0.0, None
+        gpu_name, vram_mb, driver_ver, all_gpus = None, 0.0, None, []
+        cpu_cores, cpu_logical, cpu_name = 4, 8, "Mock-CPU"
         npu_detected, npu_name = False, None
         win_ver = None
+    else:
+        total_ram, avail_ram = survey_ram_windows()
+        gpu_name, vram_mb, driver_ver, all_gpus = survey_gpu_windows()
+        cpu_cores, cpu_logical, cpu_name = survey_cpu_windows()
+        npu_detected, npu_name = survey_npu_windows()
+        wv = sys.getwindowsversion()
+        win_ver = f"{wv.major}.{wv.minor}.{wv.build}"
 
     free_disk, total_disk, drive = survey_disk_free(model_drive_path)
-    cores = os.cpu_count() or 4
 
     return HardwareProfile(
         total_ram_mb=total_ram,
@@ -250,82 +324,236 @@ def collect_hardware_survey(model_drive_path: Optional[str | Path] = None) -> Ha
         gpu_name=gpu_name,
         dedicated_vram_mb=vram_mb,
         gpu_driver_version=driver_ver,
-        cpu_cores=cores // 2 if cores > 1 else 1,
-        cpu_logical=cores,
-        cpu_name=os.environ.get("PROCESSOR_IDENTIFIER", "x86_64"),
+        cpu_cores=cpu_cores,
+        cpu_logical=cpu_logical,
+        cpu_name=cpu_name,
         npu_detected=npu_detected,
         npu_name=npu_name,
         windows_version=win_ver,
+        all_gpus=all_gpus,
     )
 
 
 # -----------------------------------------------------------------------------
-# Signed Catalog Verification (§5, Appendix B)
+# Signed Catalog Verification (§5, Appendix B, Findings CB, CD, CD2)
 # -----------------------------------------------------------------------------
-# Test seed and key for signing demo catalogs in test suites
-TEST_CATALOG_SEED = bytes([i % 256 for i in range(32)])
-TEST_CATALOG_PUB_HEX = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
-
-DEFAULT_TRUST_KEYS = [
-    {
-        "id": "rel-1",
-        "public_hex": "2d37e829568f4802381effafa3deeeb0af7abc51665a372570422d7b4da3a278",
-        "revoked": False,
-    },
-    {
-        "id": "demo-test-key",
-        "public_hex": TEST_CATALOG_PUB_HEX,
-        "revoked": False,
-    },
-]
-
-
 def canonical_json_bytes(doc: Dict[str, Any]) -> bytes:
     """Produces deterministic canonical UTF-8 bytes for cryptographic signing."""
-    # Omit signature field during canonical representation
+    # Omit signature field during canonical serialization
     d = {k: v for k, v in doc.items() if k != "signature"}
     return json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
-    """Loads trusted verification keys from trust.json."""
-    if trust_path and Path(trust_path).is_file():
-        data = json.loads(Path(trust_path).read_text(encoding="utf-8"))
-        return data.get("keys", [])
-    res_trust = RESEARCH_DIR / "trust.json"
-    if res_trust.is_file():
-        data = json.loads(res_trust.read_text(encoding="utf-8"))
-        return data.get("keys", [])
-    return DEFAULT_TRUST_KEYS
+    """
+    Loads trusted verification keys strictly from trust.json.
+    Hard Rule (Finding CB): NEVER contains fallback test keys or seeds.
+    Fails closed if trust.json is missing, empty, or has no active keys.
+    """
+    resolved_path: Optional[Path] = None
+
+    if trust_path:
+        p = Path(trust_path)
+        if not p.is_file():
+            raise CatalogSecurityError(f"Specified trust root file does not exist: {p} (fail-closed)")
+        resolved_path = p
+    else:
+        search_paths: List[Path] = []
+        env_trust = os.environ.get("PAI_TRUST_PATH")
+        if env_trust:
+            search_paths.append(Path(env_trust))
+
+        env_install = os.environ.get("PAI_INSTALL_DIR")
+        if env_install:
+            search_paths.append(Path(env_install) / "trust.json")
+
+        # Standard locations
+        search_paths.extend([
+            REPO_ROOT / "trust.json",
+            RESEARCH_DIR / "trust.json",
+            Path(__file__).resolve().parent.parent / "trust.json",
+            Path(__file__).resolve().parent.parent / "research" / "trust.json",
+            Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "PAI" / "trust.json",
+            Path.home() / ".pai" / "trust.json",
+        ])
+
+        for p in search_paths:
+            if p.is_file():
+                resolved_path = p
+                break
+
+    if resolved_path is None:
+        raise CatalogSecurityError(
+            "Trust root 'trust.json' not found; cannot verify catalog (fail-closed, Finding CB)"
+        )
+
+    try:
+        data = json.loads(resolved_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise CatalogSecurityError(f"Failed to read trust root '{resolved_path}': {e}")
+
+    keys = data.get("keys")
+    if not isinstance(keys, list) or len(keys) == 0:
+        raise CatalogSecurityError(f"Trust root '{resolved_path}' contains no keys (fail-closed)")
+
+    active_keys = [k for k in keys if isinstance(k, dict) and not k.get("revoked", False)]
+    if not active_keys:
+        raise CatalogSecurityError(f"No active unrevoked keys in trust root '{resolved_path}' (fail-closed)")
+
+    return active_keys
+
+
+def get_catalog_state_path() -> Path:
+    """Returns path to the per-user catalog state file storing highest seen version."""
+    user_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "PAI"
+    return user_dir / "catalog_state.json"
+
+
+def get_highest_seen_catalog_version(state_path: Optional[Path | str] = None) -> int:
+    """Reads highest seen catalog version from persistent state file (Finding CD)."""
+    p = Path(state_path) if state_path else get_catalog_state_path()
+    if not p.is_file():
+        return 0
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return int(data.get("highest_catalog_version", 0))
+    except Exception:
+        return 0
+
+
+def record_catalog_version(version: int, state_path: Optional[Path | str] = None) -> None:
+    """Persists highest accepted catalog version to prevent replay rollbacks (Finding CD)."""
+    p = Path(state_path) if state_path else get_catalog_state_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        current_highest = get_highest_seen_catalog_version(p)
+        if version > current_highest:
+            state = {
+                "highest_catalog_version": version,
+                "updated_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            shutil.move(str(tmp), str(p))
+    except Exception as e:
+        logger.warning("Failed to persist catalog version state: %s", e)
 
 
 def verify_catalog_payload(
     catalog_data: Dict[str, Any],
     trust_keys: Optional[List[Dict[str, Any]]] = None,
-    min_version: int = 1,
+    min_version: Optional[int] = None,
+    state_path: Optional[Path | str] = None,
+    enforce_freshness: bool = True,
 ) -> Dict[str, Any]:
     """
-    Verifies a catalog dictionary:
-      1. Required fields: catalog_version, issued_utc, models, signature.
-      2. Monotonic version: catalog_version >= min_version.
-      3. Signature verification: detached Ed25519 checked against unrevoked trust keys.
+    Verifies a catalog dictionary against all security policies:
+      1. Required fields: kind, catalog_version, issued_utc, models, signature.
+      2. Kind check: kind == "catalog" (purpose separation).
+      3. Demo check: demo == True rejected in production (Finding CD2).
+      4. Monotonic version: catalog_version >= max(min_version, highest_seen).
+      5. Freshness check: issued_utc not older than 90 days.
+      6. Strict schema: valid model IDs, sizes > 0, manifest digests matching sha256 regex.
+      7. Detached Ed25519 signature checked against active unrevoked trust keys.
     """
-    for req in ("catalog_version", "issued_utc", "models", "signature"):
+    # 1. Required top-level fields
+    for req in ("kind", "catalog_version", "issued_utc", "models", "signature"):
         if req not in catalog_data:
             raise CatalogSecurityError(f"Catalog missing required field: {req!r}")
 
+    # 2. Kind check
+    if catalog_data.get("kind") != "catalog":
+        raise CatalogSecurityError(f"Invalid catalog kind {catalog_data.get('kind')!r}; must be 'catalog'")
+
+    # 3. Demo check (Finding CD2)
+    if catalog_data.get("demo") is True:
+        raise CatalogSecurityError("Demo catalogs are rejected in production (Finding CD2)")
+
+    # 4. Monotonic version check & Replay Rollback Defense (Finding CD)
     cat_ver = catalog_data["catalog_version"]
-    if not isinstance(cat_ver, int) or cat_ver < min_version:
+    if not isinstance(cat_ver, int) or cat_ver < 1:
+        raise CatalogSecurityError(f"Catalog version must be a positive integer, got: {cat_ver!r}")
+
+    highest_seen = get_highest_seen_catalog_version(state_path)
+    effective_min = max(min_version or 1, highest_seen)
+    if cat_ver < effective_min:
         raise CatalogSecurityError(
-            f"Catalog version rollback or below minimum ({cat_ver} < {min_version})"
+            f"Catalog version rollback or below minimum ({cat_ver} < {effective_min})"
         )
 
+    # 5. Catalog Freshness Check (90 days, Finding CD)
+    issued_raw = catalog_data["issued_utc"]
+    if not isinstance(issued_raw, str):
+        raise CatalogSecurityError("Catalog issued_utc must be an ISO-8601 string")
+
+    if enforce_freshness:
+        try:
+            # Parse ISO-8601 timestamp (support trailing 'Z' or offset)
+            clean_ts = issued_raw.replace("Z", "+00:00")
+            issued_dt = datetime.datetime.fromisoformat(clean_ts)
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            age_seconds = (now_dt - issued_dt).total_seconds()
+            max_age_seconds = 90 * 86400  # 90 days
+            if age_seconds > max_age_seconds:
+                days = age_seconds / 86400
+                raise CatalogSecurityError(
+                    f"Catalog is expired ({days:.1f} days old; maximum allowed freshness is 90 days)"
+                )
+            if age_seconds < -86400:  # Clock skew beyond 24h into future
+                raise CatalogSecurityError("Catalog issued_utc is in the future")
+        except ValueError as ve:
+            raise CatalogSecurityError(f"Malformed issued_utc timestamp: {ve}")
+
+    # 6. Strict Model Schema Validation (Finding CD2)
+    models = catalog_data["models"]
+    if not isinstance(models, list) or len(models) == 0:
+        raise CatalogSecurityError("Catalog 'models' list must be non-empty")
+
+    seen_ids = set()
+    id_pattern = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_.-]+$")
+    digest_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+    for idx, m in enumerate(models):
+        if not isinstance(m, dict):
+            raise CatalogSecurityError(f"Model entry #{idx} is not an object")
+
+        mid = m.get("id")
+        if not mid or not isinstance(mid, str) or not id_pattern.match(mid):
+            raise CatalogSecurityError(f"Model #{idx} invalid or missing id: {mid!r}")
+
+        if mid in seen_ids:
+            raise CatalogSecurityError(f"Duplicate model id in catalog: {mid!r}")
+        seen_ids.add(mid)
+
+        dl_bytes = m.get("download_bytes")
+        if not isinstance(dl_bytes, int) or dl_bytes <= 0:
+            raise CatalogSecurityError(f"Model {mid} download_bytes must be a positive int, got: {dl_bytes!r}")
+
+        disk_bytes = m.get("disk_bytes")
+        if not isinstance(disk_bytes, int) or disk_bytes <= 0:
+            raise CatalogSecurityError(f"Model {mid} disk_bytes must be a positive int, got: {disk_bytes!r}")
+
+        min_ram = m.get("min_ram_mb")
+        if not isinstance(min_ram, (int, float)) or min_ram <= 0:
+            raise CatalogSecurityError(f"Model {mid} min_ram_mb must be positive, got: {min_ram!r}")
+
+        digest = m.get("registry_manifest_digest")
+        if not digest or not isinstance(digest, str) or not digest_pattern.match(digest):
+            raise CatalogSecurityError(f"Model {mid} invalid registry_manifest_digest: {digest!r}")
+
+        lic = m.get("license")
+        if not isinstance(lic, dict):
+            raise CatalogSecurityError(f"Model {mid} missing license object")
+        if lic.get("license_status") not in ("verified", "unverified"):
+            raise CatalogSecurityError(f"Model {mid} license_status must be 'verified' or 'unverified'")
+
+    # 7. Signature verification
     sig_hex = catalog_data["signature"]
     if not sig_hex or not isinstance(sig_hex, str):
         raise CatalogSecurityError("Catalog signature is empty or non-string")
 
     canonical_bytes = canonical_json_bytes(catalog_data)
-    keys = trust_keys or DEFAULT_TRUST_KEYS
+    keys = trust_keys or load_trust_keys()
     active_keys = [k for k in keys if not k.get("revoked", False)]
 
     if not active_keys:
@@ -334,12 +562,12 @@ def verify_catalog_payload(
     if ed25519_ref is None:
         raise CatalogSecurityError("ed25519_ref module unavailable; cannot verify catalog signature")
 
-    verified = False
     try:
         sig_bytes = bytes.fromhex(sig_hex)
     except ValueError:
         raise CatalogSecurityError("Invalid hex signature in catalog")
 
+    verified = False
     for key_entry in active_keys:
         pub_hex = key_entry.get("public_hex", "")
         try:
@@ -353,11 +581,14 @@ def verify_catalog_payload(
     if not verified:
         raise CatalogSecurityError("Catalog Ed25519 signature verification failed against trust root")
 
+    # On successful verification, record highest seen version
+    record_catalog_version(cat_ver, state_path)
+
     return catalog_data
 
 
 # -----------------------------------------------------------------------------
-# Fit Rules & Recommendations (§5)
+# Fit Rules & Recommendations (§5, Finding CE)
 # -----------------------------------------------------------------------------
 @dataclass
 class ModelFitReport:
@@ -373,6 +604,8 @@ class ModelFitReport:
     fits_gpu: str  # "full", "partial", "cpu"
     fits_ram: bool
     is_preselected: bool
+    gpu_estimate_note: str = "GPU tier and 512 MB context allowance are estimates based on model size"
+    measured: bool = False
     rejection_reasons: List[str] = field(default_factory=list)
 
 
@@ -382,11 +615,14 @@ def evaluate_model_fit(
     current_selected_disk_bytes: int = 0,
 ) -> ModelFitReport:
     """
-    Evaluates fit rules for a single model candidate:
-      - Disk: free space >= (1.25 * total_selected_size) + 2 GB.
-      - GPU: <= 85% of dedicated VRAM is 'full'; 86-120% is 'partial'; otherwise 'cpu'.
-      - RAM: available/total RAM leaves headroom for system (2 GB reserve).
-      - Pre-selection: verified license and fits resources.
+    Evaluates fit rules for a single candidate model:
+      - Disk rule: free space >= (1.25 * total_selected_size) + 2 GB safety margin.
+      - GPU rule (estimate): weights + 512 MB context allowance <= 85% VRAM is 'full';
+        86-120% is 'partial'; otherwise 'cpu'. Labeled explicitly as estimate.
+      - RAM rule: evaluated against available RAM at survey time (survey.avail_ram_mb)
+        with 2048 MB system stability reserve.
+      - Pre-selection rule: Preselect ONLY "full" tier GPU fit (never "partial"),
+        verified license, and no resource rejections.
     """
     model_id = model.get("id", "")
     family = model.get("family", "")
@@ -397,7 +633,7 @@ def evaluate_model_fit(
     lic = model.get("license", {})
     lic_status = lic.get("license_status", "unverified")
 
-    rejections = []
+    rejections: List[str] = []
 
     # 1. Disk rule: free space must be >= 1.25 * (chosen + model) + 2 GB safety margin
     required_disk_bytes = int(1.25 * (current_selected_disk_bytes + disk_bytes)) + (2 * 1024 * 1024 * 1024)
@@ -409,8 +645,8 @@ def evaluate_model_fit(
             f"below rule requirement ({round(required_disk_bytes / (1024**3), 2)} GB; deficit {deficit_mb} MB)"
         )
 
-    # 2. GPU rule: weights + 512MB context allowance <= 85% VRAM
-    # Model memory footprint in VRAM
+    # 2. GPU rule (Estimates based on model size):
+    # Footprint = disk weights + 512 MB context allowance
     footprint_mb = (disk_bytes / (1024 * 1024)) + 512.0
     if survey.dedicated_vram_mb > 0:
         full_limit = 0.85 * survey.dedicated_vram_mb
@@ -424,18 +660,21 @@ def evaluate_model_fit(
     else:
         gpu_tier = "cpu"
 
-    # 3. RAM rule: If running on CPU or partial offload, ensure RAM headroom
+    # 3. RAM rule: Evaluated using available RAM at survey time with 2048 MB reserve (Finding CE)
     system_reserve_mb = 2048.0
-    usable_ram_mb = survey.total_ram_mb - system_reserve_mb
-    fits_ram = usable_ram_mb >= min_ram_mb
-    if not fits_ram and gpu_tier == "cpu":
+    usable_avail_ram_mb = survey.avail_ram_mb - system_reserve_mb
+    fits_ram = usable_avail_ram_mb >= min_ram_mb
+
+    if not fits_ram and gpu_tier != "full":
         rejections.append(
-            f"INSUFFICIENT_RAM: Usable system RAM ({usable_ram_mb:.1f} MB) below requirement ({min_ram_mb:.1f} MB)"
+            f"INSUFFICIENT_RAM: Available RAM ({survey.avail_ram_mb:.1f} MB) with 2048 MB reserve "
+            f"below model requirement ({min_ram_mb:.1f} MB)"
         )
 
-    # Pre-selection rules:
-    # Must fit disk, must have verified license, must not have fatal resource rejections
-    preselect = fits_disk and (lic_status == "verified") and len(rejections) == 0
+    # 4. Pre-selection rule:
+    # Must fit disk, must fit RAM, must be 'full' GPU offload (never 'partial' until measured),
+    # must have verified license, and 0 rejection reasons.
+    preselect = fits_disk and fits_ram and (gpu_tier == "full") and (lic_status == "verified") and (len(rejections) == 0)
 
     return ModelFitReport(
         model_id=model_id,
@@ -465,7 +704,6 @@ def plan_model_selection(
     models = catalog.get("models", [])
     reports: List[ModelFitReport] = []
 
-    # First pass: evaluate raw individual fit
     cum_disk = 0
     primary_selected = False
     fallback_selected = False
@@ -488,19 +726,47 @@ def plan_model_selection(
 
 
 # -----------------------------------------------------------------------------
-# Ollama Detection and Official Installer Download (§4)
+# Ollama Detection and Official Installer Download (§4, Findings CC, CH)
 # -----------------------------------------------------------------------------
 OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
 OLLAMA_OFFICIAL_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
-OLLAMA_EXPECTED_PUBLISHER = "Ollama Inc."
+
+# Verified Publisher Certificate Attributes (Finding CC):
+OLLAMA_EXPECTED_SUBJECT = (
+    "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, "
+    "OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA"
+)
+OLLAMA_EXPECTED_THUMBPRINT = "716CD3BC8C02361431A18F56F98C72DE88066103"
 
 
-def probe_ollama_daemon(endpoint: str = OLLAMA_DEFAULT_URL, timeout: float = 2.0) -> Dict[str, Any]:
-    """Probes whether Ollama server is running locally and returns status/version."""
+def probe_ollama_daemon(
+    endpoint: Optional[str] = None,
+    timeout: float = 2.0,
+) -> Dict[str, Any]:
+    """
+    Probes whether Ollama daemon is running locally and returns status/version.
+    Enforces loopback-only probe and direct connection bypassing HTTP proxy (Finding CH).
+    """
+    if endpoint is None:
+        env_host = os.environ.get("OLLAMA_HOST")
+        if env_host:
+            # Validate loopback to prevent SSRF
+            parsed = urllib.parse.urlparse(env_host if "://" in env_host else f"http://{env_host}")
+            host = parsed.hostname or ""
+            if host in ("127.0.0.1", "localhost", "::1"):
+                endpoint = f"http://{host}:{parsed.port or 11434}"
+            else:
+                logger.warning("Non-loopback OLLAMA_HOST %r ignored for security; falling back to 127.0.0.1", env_host)
+                endpoint = OLLAMA_DEFAULT_URL
+        else:
+            endpoint = OLLAMA_DEFAULT_URL
+
     url = f"{endpoint.rstrip('/')}/api/version"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "PAI-Setup/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # Bypass any proxy for loopback communication
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=timeout) as resp:
             if resp.status == 200:
                 body = json.loads(resp.read().decode("utf-8"))
                 return {
@@ -510,45 +776,99 @@ def probe_ollama_daemon(endpoint: str = OLLAMA_DEFAULT_URL, timeout: float = 2.0
                 }
     except Exception:
         pass
+
     return {"running": False, "version": None, "endpoint": endpoint}
 
 
-def verify_authenticode_publisher(installer_path: Path | str, expected_publisher: str = OLLAMA_EXPECTED_PUBLISHER) -> bool:
+def verify_authenticode_publisher(
+    installer_path: Path | str,
+    expected_subject: str = OLLAMA_EXPECTED_SUBJECT,
+    expected_thumbprint: str = OLLAMA_EXPECTED_THUMBPRINT,
+) -> bool:
     """
-    Verifies that a Windows binary carries a valid Authenticode signature from the expected publisher.
+    Verifies that a Windows binary carries a valid Authenticode signature
+    matching the official Ollama Inc. Subject and Thumbprint (Finding CC).
+    Fails closed on non-Windows platforms.
     """
     if sys.platform != "win32":
-        return True  # Mocked / non-Windows test environment
+        raise OllamaVerificationError("Authenticode publisher verification is only supported on Windows (fail-closed)")
 
     p = Path(installer_path).resolve()
     if not p.is_file():
         raise FileNotFoundError(f"File not found for publisher verification: {p}")
 
-    cmd = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        f"(Get-AuthenticodeSignature -LiteralPath '{p}').SignerCertificate.Subject",
-    ]
+    # Pass paths and parameters via environment variables to prevent quote escaping bugs
+    env = os.environ.copy()
+    env["PAI_INSTALLER_TARGET"] = str(p)
+    env["PAI_EXPECTED_SUBJECT"] = expected_subject
+    env["PAI_EXPECTED_THUMBPRINT"] = expected_thumbprint
+
+    ps_code = (
+        "$sig = Get-AuthenticodeSignature -LiteralPath $env:PAI_INSTALLER_TARGET; "
+        "if ($sig.Status -ne 'Valid') { "
+        "  Write-Error ('Invalid signature status: ' + $sig.Status); exit 1 "
+        "}; "
+        "$cert = $sig.SignerCertificate; "
+        "if ($cert.Thumbprint.ToUpperInvariant() -ne $env:PAI_EXPECTED_THUMBPRINT.ToUpperInvariant()) { "
+        "  Write-Error ('Thumbprint mismatch: ' + $cert.Thumbprint); exit 2 "
+        "}; "
+        "if ($cert.Subject -ne $env:PAI_EXPECTED_SUBJECT) { "
+        "  Write-Error ('Subject mismatch: ' + $cert.Subject); exit 3 "
+        "}; "
+        "exit 0"
+    )
+
+    cmd = ["powershell", "-NoProfile", "-Command", ps_code]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
         if proc.returncode == 0:
-            subj = proc.stdout.strip()
-            if expected_publisher.lower() in subj.lower():
-                return True
-            logger.warning("Authenticode publisher mismatch. Got: %r, Expected: %r", subj, expected_publisher)
-            return False
+            return True
+        err_msg = proc.stderr.strip() or proc.stdout.strip()
+        logger.error("Authenticode verification failed: %s (code %d)", err_msg, proc.returncode)
+        raise OllamaVerificationError(f"Authenticode verification failed: {err_msg}")
     except Exception as e:
-        logger.error("Failed to check Authenticode signature: %s", e)
-        return False
-    return False
+        if isinstance(e, OllamaVerificationError):
+            raise
+        raise OllamaVerificationError(f"Failed to execute Authenticode verification: {e}")
+
+
+def download_ollama_installer(
+    dest_dir: Optional[Path | str] = None,
+    timeout: float = 60.0,
+) -> Path:
+    """
+    Downloads official Ollama installer into a private user-only destination folder
+    and verifies Authenticode publisher in-place before returning (Finding CC).
+    """
+    if dest_dir:
+        target_dir = Path(dest_dir).resolve()
+    else:
+        target_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "PAI" / "downloads"
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / "OllamaSetup.exe"
+
+    logger.info("Downloading official Ollama installer from %s", OLLAMA_OFFICIAL_INSTALLER_URL)
+    req = urllib.request.Request(
+        OLLAMA_OFFICIAL_INSTALLER_URL,
+        headers={"User-Agent": "PAI-Setup/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(target_path, "wb") as out_f:
+        shutil.copyfileobj(resp, out_f)
+
+    # Verify signature in-place before execution
+    verify_authenticode_publisher(target_path)
+    return target_path
 
 
 # -----------------------------------------------------------------------------
-# CLI and Progress Stream Engine (Appendix C)
+# CLI and Progress Stream Engine (Appendix C, Finding CG)
 # -----------------------------------------------------------------------------
 class ProgressEmitter:
     """Emits newline-delimited JSON events to stdout conforming to Appendix C."""
+
+    # P3 defined progress event types
+    P3_EVENTS = {"survey", "ollama_status", "fit", "error"}
 
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
@@ -558,82 +878,6 @@ class ProgressEmitter:
             return
         payload = {"event": event_type, **kwargs}
         print(json.dumps(payload, ensure_ascii=False), flush=True)
-
-
-def create_demo_catalog(version: int = 1) -> Dict[str, Any]:
-    """Generates an illustrative canonical catalog with valid Ed25519 signature for tests."""
-    doc = {
-        "catalog_version": version,
-        "issued_utc": "2026-10-27T00:00:00Z",
-        "models": [
-            {
-                "id": "qwen2.5-coder:1.5b",
-                "display_name": "Qwen 2.5 Coder 1.5B",
-                "family": "qwen2.5-coder",
-                "parameters_b": 1.5,
-                "quantization": "Q4_K_M",
-                "download_bytes": 986500000,
-                "disk_bytes": 1050000000,
-                "min_ram_mb": 2048,
-                "min_vram_mb": 1500,
-                "tasks": ["code", "chat"],
-                "license": {
-                    "name": "Apache-2.0",
-                    "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B",
-                    "license_status": "verified",
-                    "read_on": "2026-10-27",
-                },
-                "registry_manifest_digest": "sha256:d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a",
-            },
-            {
-                "id": "llama3.2:1b",
-                "display_name": "Llama 3.2 1B",
-                "family": "llama3.2",
-                "parameters_b": 1.23,
-                "quantization": "Q4_K_M",
-                "download_bytes": 1320000000,
-                "disk_bytes": 1400000000,
-                "min_ram_mb": 2048,
-                "min_vram_mb": 1800,
-                "tasks": ["chat", "documents"],
-                "license": {
-                    "name": "Llama-3.2-Community",
-                    "url": "https://llama.meta.com/llama3_2/license",
-                    "license_status": "verified",
-                    "read_on": "2026-10-27",
-                },
-                "registry_manifest_digest": "sha256:1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
-            },
-            {
-                "id": "unverified-experimental:7b",
-                "display_name": "Experimental 7B",
-                "family": "experimental",
-                "parameters_b": 7.0,
-                "quantization": "Q4_K_M",
-                "download_bytes": 4500000000,
-                "disk_bytes": 4800000000,
-                "min_ram_mb": 8192,
-                "min_vram_mb": 6000,
-                "tasks": ["code"],
-                "license": {
-                    "name": "unknown",
-                    "url": "https://example.com/unverified",
-                    "license_status": "unverified",
-                    "read_on": "2026-10-27",
-                },
-                "registry_manifest_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-            },
-        ],
-    }
-
-    # Sign with test catalog private seed matching demo-test-key
-    if ed25519_ref:
-        can_bytes = canonical_json_bytes(doc)
-        sig_bytes = ed25519_ref.sign(TEST_CATALOG_SEED, can_bytes)
-        doc["signature"] = sig_bytes.hex()
-    else:
-        doc["signature"] = "00" * 64
-    return doc
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -649,8 +893,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     emitter = ProgressEmitter(enabled=args.progress_json)
 
     # 1. Hardware Survey
-    survey = collect_hardware_survey(args.model_drive)
-    emitter.emit("survey", hardware=asdict(survey))
+    try:
+        survey = collect_hardware_survey(args.model_drive)
+        emitter.emit("survey", hardware=asdict(survey))
+    except Exception as e:
+        emitter.emit("error", code="SURVEY_FAILED", message=str(e))
+        print(f"ERROR: Hardware survey failed: {e}", file=sys.stderr)
+        return 1
 
     if args.survey_only:
         print(json.dumps(asdict(survey), indent=2))
@@ -661,20 +910,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     emitter.emit("ollama_status", **ollama_status)
 
     # 3. Catalog loading and verification
-    if args.catalog:
-        cat_path = Path(args.catalog).resolve()
-        if not cat_path.is_file():
-            emitter.emit("error", code="CATALOG_NOT_FOUND", message=f"Catalog not found at {cat_path}")
-            return 1
-        cat_data = json.loads(cat_path.read_text(encoding="utf-8"))
-    else:
-        cat_data = create_demo_catalog(version=1)
+    if not args.catalog:
+        emitter.emit("error", code="CATALOG_REQUIRED", message="No catalog path specified. Pass --catalog <path>.")
+        print("ERROR: Catalog required. Pass --catalog <path_to_catalog.json>", file=sys.stderr)
+        return 1
+
+    cat_path = Path(args.catalog).resolve()
+    if not cat_path.is_file():
+        emitter.emit("error", code="CATALOG_NOT_FOUND", message=f"Catalog not found at {cat_path}")
+        print(f"ERROR: Catalog not found at {cat_path}", file=sys.stderr)
+        return 1
 
     try:
+        cat_data = json.loads(cat_path.read_text(encoding="utf-8"))
         verified_cat = verify_catalog_payload(cat_data, min_version=args.min_catalog_version)
     except CatalogSecurityError as e:
         emitter.emit("error", code="CATALOG_SECURITY_ERROR", message=str(e))
         print(f"ERROR: Catalog verification failed: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        emitter.emit("error", code="CATALOG_LOAD_ERROR", message=str(e))
+        print(f"ERROR: Failed to load catalog: {e}", file=sys.stderr)
         return 1
 
     # 4. Plan model recommendations

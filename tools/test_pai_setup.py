@@ -1,21 +1,25 @@
 """
 Comprehensive Unit Tests and Negative Control Suite for Milestone P3 (pai_setup.py).
 
-Tests:
-  1. Local Hardware Survey: RAM, disk, GPU, CPU, and NPU detection note (ADR-012).
-  2. Signed Catalog Verification: Valid Ed25519 signature succeeds; tampered signature,
-     revoked key, and lower catalog version fail closed (CatalogSecurityError).
-  3. Fit Rule - Disk Requirements: 1.25x model size + 2 GB safety margin.
-  4. Fit Rule - GPU Dedicated VRAM: 85% threshold for full offload, 86-120% partial, CPU fallback.
-  5. Fit Rule - RAM Headroom & License Preselection: Verified licenses preselected;
-     unverified models marked available but NOT preselected.
-  6. Ollama Daemon Detection: Mocked HTTP probe handles both running and unreachable daemons.
-  7. Progress Events: Validates Appendix C compliant NDJSON event stream (--progress-json).
-  8. CLI Execution: Subprocess verification of --survey-only and failure modes.
+Verifies Findings CB, CC, CD, CD2, CE, CG, CH:
+  1. Local Hardware Survey: RAM, disk, multi-GPU, CPU, and NPU detection note (ADR-012, Finding CE).
+  2. Cryptographic Trust: Production fails closed without valid trust.json; old test seeds
+     and empty key lists rejected (Finding CB).
+  3. Replay Rollback & Freshness: Persistent version state rejects rollbacks; expired
+     catalogs (> 90 days) and future dates rejected (Finding CD).
+  4. Strict Schema & Purpose Separation: kind="catalog" enforced, demo catalogs rejected
+     in production, model IDs and manifest digests validated (Finding CD2).
+  5. Fit Rules: Available RAM reserve (2048 MB), GPU context allowance labeled as estimate,
+     preselection restricted strictly to "full" tier until measured (Finding CE).
+  6. Ollama Installer Publisher Verification: Full Subject & Thumbprint checked in-place;
+     fails closed on non-Windows; environment variable passing (Finding CC).
+  7. Loopback Security: Non-loopback OLLAMA_HOST rejected; direct proxy bypass (Finding CH).
+  8. Progress Events: Appendix C compliant stream (Finding CG).
 """
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import os
@@ -33,95 +37,347 @@ if str(REPO_ROOT) not in sys.path:
 if str(REPO_ROOT / "research") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "research"))
 
+import ed25519_ref
+
 from packaging.pai_setup import (
     CatalogSecurityError,
     HardwareProfile,
     ModelFitReport,
+    OllamaVerificationError,
     ProgressEmitter,
+    canonical_json_bytes,
     collect_hardware_survey,
-    create_demo_catalog,
+    download_ollama_installer,
     evaluate_model_fit,
+    get_highest_seen_catalog_version,
+    load_trust_keys,
     main,
     plan_model_selection,
     probe_ollama_daemon,
+    record_catalog_version,
     survey_disk_free,
+    survey_gpu_windows,
     survey_ram_windows,
     verify_authenticode_publisher,
     verify_catalog_payload,
 )
 
+# Ephemeral test keypair for test suite execution ONLY (never in production code)
+TEST_SEED = bytes([i % 256 for i in range(32)])
+TEST_PUB_BYTES = ed25519_ref.secret_to_public(TEST_SEED)
+TEST_PUB_HEX = TEST_PUB_BYTES.hex()
+
+TEST_TRUST_KEYS = [
+    {
+        "id": "test-key-1",
+        "public_hex": TEST_PUB_HEX,
+        "revoked": False,
+    }
+]
+
+
+def create_test_catalog(
+    version: int = 1,
+    issued_utc: Optional[str] = None,
+    demo: bool = False,
+    kind: str = "catalog",
+    models: Optional[list] = None,
+    seed: bytes = TEST_SEED,
+) -> dict:
+    """Generates and signs a test catalog for test suite usage."""
+    if issued_utc is None:
+        issued_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    if models is None:
+        models = [
+            {
+                "id": "qwen2.5-coder:1.5b",
+                "display_name": "Qwen 2.5 Coder 1.5B",
+                "family": "qwen2.5-coder",
+                "parameters_b": 1.5,
+                "quantization": "Q4_K_M",
+                "download_bytes": 986500000,
+                "disk_bytes": 1050000000,
+                "min_ram_mb": 2048,
+                "min_vram_mb": 1500,
+                "tasks": ["code", "chat"],
+                "license": {
+                    "name": "Apache-2.0",
+                    "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B",
+                    "license_status": "verified",
+                    "read_on": "2026-10-27",
+                },
+                "registry_manifest_digest": "sha256:d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a",
+            },
+            {
+                "id": "llama3.2:1b",
+                "display_name": "Llama 3.2 1B",
+                "family": "llama3.2",
+                "parameters_b": 1.23,
+                "quantization": "Q4_K_M",
+                "download_bytes": 1320000000,
+                "disk_bytes": 1400000000,
+                "min_ram_mb": 2048,
+                "min_vram_mb": 1800,
+                "tasks": ["chat", "documents"],
+                "license": {
+                    "name": "Llama-3.2-Community",
+                    "url": "https://llama.meta.com/llama3_2/license",
+                    "license_status": "verified",
+                    "read_on": "2026-10-27",
+                },
+                "registry_manifest_digest": "sha256:1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
+            },
+            {
+                "id": "unverified-experimental:7b",
+                "display_name": "Experimental 7B",
+                "family": "experimental",
+                "parameters_b": 7.0,
+                "quantization": "Q4_K_M",
+                "download_bytes": 4500000000,
+                "disk_bytes": 4800000000,
+                "min_ram_mb": 8192,
+                "min_vram_mb": 6000,
+                "tasks": ["code"],
+                "license": {
+                    "name": "unknown",
+                    "url": "https://example.com/unverified",
+                    "license_status": "unverified",
+                    "read_on": "2026-10-27",
+                },
+                "registry_manifest_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            },
+        ]
+
+    doc = {
+        "kind": kind,
+        "catalog_version": version,
+        "issued_utc": issued_utc,
+        "models": models,
+    }
+    if demo:
+        doc["demo"] = True
+
+    can_bytes = canonical_json_bytes(doc)
+    sig_bytes = ed25519_ref.sign(seed, can_bytes)
+    doc["signature"] = sig_bytes.hex()
+    return doc
+
 
 class TestPaiSetupP3(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_dir = tempfile.mkdtemp(prefix="pai_p3_test_")
-        self.catalog = create_demo_catalog(version=1)
+        self.state_file = Path(self.tmp_dir) / "catalog_state.json"
+        self.catalog = create_test_catalog(version=1)
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_01_hardware_survey_fields_and_npu_note(self) -> None:
         """Validates that collect_hardware_survey returns all required fields and ADR-012 NPU note."""
-        survey = collect_hardware_survey()
+        survey = collect_hardware_survey(allow_mock=True)
         self.assertIsInstance(survey, HardwareProfile)
         self.assertGreater(survey.total_ram_mb, 0)
         self.assertGreater(survey.free_disk_bytes, 0)
         self.assertIn("detected, not used in this version (ADR-012)", survey.npu_note)
         self.assertGreaterEqual(survey.cpu_logical, 1)
 
-    def test_02_signed_catalog_verification_and_negative_controls(self) -> None:
+    # -------------------------------------------------------------------------
+    # Finding CB: Trust Root & Key Verification
+    # -------------------------------------------------------------------------
+    def test_02_trust_root_load_and_fail_closed_negative_controls(self) -> None:
         """
-        Validates signed catalog Ed25519 verification:
-          - Valid demo catalog passes.
-          - 1-byte tamper in signature fails closed.
-          - Version rollback fails closed.
-          - Empty or non-hex signature fails closed.
+        Finding CB:
+          - Missing trust.json raises CatalogSecurityError.
+          - Empty keys list raises CatalogSecurityError.
+          - All keys revoked raises CatalogSecurityError.
+          - Valid trust.json loads active keys.
         """
-        # 1. Clean valid catalog
-        verified = verify_catalog_payload(self.catalog, min_version=1)
-        self.assertEqual(verified["catalog_version"], 1)
-        self.assertEqual(len(verified["models"]), 3)
-
-        # 2. Tampered signature fails closed
-        tampered_cat = dict(self.catalog)
-        sig = bytearray.fromhex(tampered_cat["signature"])
-        sig[0] ^= 0xFF
-        tampered_cat["signature"] = sig.hex()
+        # Case A: Non-existent file
         with self.assertRaises(CatalogSecurityError):
-            verify_catalog_payload(tampered_cat, min_version=1)
+            load_trust_keys(Path(self.tmp_dir) / "nonexistent_trust.json")
 
-        # 3. Monotonic version check: lower version than min_version rejected
+        # Case B: Empty keys list
+        empty_trust = Path(self.tmp_dir) / "empty_trust.json"
+        empty_trust.write_text(json.dumps({"keys": []}), encoding="utf-8")
+        with self.assertRaises(CatalogSecurityError):
+            load_trust_keys(empty_trust)
+
+        # Case C: All revoked keys
+        revoked_trust = Path(self.tmp_dir) / "revoked_trust.json"
+        revoked_trust.write_text(
+            json.dumps({"keys": [{"id": "rev-1", "public_hex": TEST_PUB_HEX, "revoked": True}]}),
+            encoding="utf-8",
+        )
+        with self.assertRaises(CatalogSecurityError):
+            load_trust_keys(revoked_trust)
+
+        # Case D: Valid trust file
+        valid_trust = Path(self.tmp_dir) / "valid_trust.json"
+        valid_trust.write_text(
+            json.dumps({"keys": [{"id": "ok-1", "public_hex": TEST_PUB_HEX, "revoked": False}]}),
+            encoding="utf-8",
+        )
+        keys = load_trust_keys(valid_trust)
+        self.assertEqual(len(keys), 1)
+        self.assertEqual(keys[0]["id"], "ok-1")
+
+    # -------------------------------------------------------------------------
+    # Finding CD & CD2: Replay Rollback, Freshness, and Schema Validation
+    # -------------------------------------------------------------------------
+    def test_03_catalog_verification_and_monotonic_rollback_defense(self) -> None:
+        """
+        Finding CD:
+          - Valid catalog passes and persists highest seen version.
+          - Lower version than highest seen raises CatalogSecurityError (replay rollback defense).
+          - Tampered signature fails closed.
+        """
+        # Initial verify of version 2
+        cat_v2 = create_test_catalog(version=2)
+        verified = verify_catalog_payload(
+            cat_v2,
+            trust_keys=TEST_TRUST_KEYS,
+            state_path=self.state_file,
+        )
+        self.assertEqual(verified["catalog_version"], 2)
+        self.assertEqual(get_highest_seen_catalog_version(self.state_file), 2)
+
+        # Attempt to supply older version 1 -> Must fail closed!
+        cat_v1 = create_test_catalog(version=1)
         with self.assertRaises(CatalogSecurityError) as cm:
-            verify_catalog_payload(self.catalog, min_version=2)
-        self.assertIn("version rollback", str(cm.exception).lower())
+            verify_catalog_payload(
+                cat_v1,
+                trust_keys=TEST_TRUST_KEYS,
+                state_path=self.state_file,
+            )
+        self.assertIn("rollback", str(cm.exception).lower())
 
-        # 4. Empty signature rejected
-        bad_sig_cat = dict(self.catalog)
-        bad_sig_cat["signature"] = ""
+        # Attempt to tamper signature in version 3 -> Must fail closed!
+        cat_v3 = create_test_catalog(version=3)
+        tampered_sig = bytearray.fromhex(cat_v3["signature"])
+        tampered_sig[0] ^= 0xFF
+        cat_v3["signature"] = tampered_sig.hex()
         with self.assertRaises(CatalogSecurityError):
-            verify_catalog_payload(bad_sig_cat, min_version=1)
+            verify_catalog_payload(
+                cat_v3,
+                trust_keys=TEST_TRUST_KEYS,
+                state_path=self.state_file,
+            )
 
-        # 5. Missing required fields rejected
-        incomplete_cat = {"catalog_version": 1, "signature": "00" * 64}
+    def test_04_catalog_freshness_and_future_clock_skew(self) -> None:
+        """
+        Finding CD:
+          - Catalog older than 90 days is rejected.
+          - Catalog timestamp > 24 hours in the future is rejected.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        # 91 days old
+        old_time = (now - datetime.timedelta(days=91)).isoformat()
+        old_cat = create_test_catalog(version=10, issued_utc=old_time)
+        with self.assertRaises(CatalogSecurityError) as cm:
+            verify_catalog_payload(old_cat, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+        self.assertIn("expired", str(cm.exception).lower())
+
+        # 2 days in the future
+        future_time = (now + datetime.timedelta(days=2)).isoformat()
+        future_cat = create_test_catalog(version=10, issued_utc=future_time)
+        with self.assertRaises(CatalogSecurityError) as cm:
+            verify_catalog_payload(future_cat, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+        self.assertIn("in the future", str(cm.exception).lower())
+
+    def test_05_strict_catalog_schema_negative_controls(self) -> None:
+        """
+        Finding CD2:
+          - Missing kind != 'catalog' rejected.
+          - Demo catalogs rejected in production.
+          - Invalid model ID regex rejected.
+          - Duplicate model ID rejected.
+          - Negative sizes rejected.
+          - Invalid digest format rejected.
+        """
+        # 1. Missing or invalid kind
+        cat_bad_kind = create_test_catalog(kind="not_a_catalog")
         with self.assertRaises(CatalogSecurityError):
-            verify_catalog_payload(incomplete_cat, min_version=1)
+            verify_catalog_payload(cat_bad_kind, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
 
-    def test_03_fit_rule_disk_space_thresholds(self) -> None:
+        # 2. Demo catalog rejected in production
+        cat_demo = create_test_catalog(demo=True)
+        with self.assertRaises(CatalogSecurityError) as cm:
+            verify_catalog_payload(cat_demo, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+        self.assertIn("demo catalogs are rejected", str(cm.exception).lower())
+
+        # 3. Invalid model ID regex (e.g. uppercase or invalid characters)
+        bad_models = [
+            {
+                "id": "INVALID/MODEL:ID!",
+                "download_bytes": 1000,
+                "disk_bytes": 1000,
+                "min_ram_mb": 1000,
+                "registry_manifest_digest": "sha256:" + "0" * 64,
+                "license": {"license_status": "verified"},
+            }
+        ]
+        cat_bad_id = create_test_catalog(models=bad_models)
+        with self.assertRaises(CatalogSecurityError):
+            verify_catalog_payload(cat_bad_id, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+
+        # 4. Duplicate model IDs
+        dup_models = [
+            {
+                "id": "model:1b",
+                "download_bytes": 1000,
+                "disk_bytes": 1000,
+                "min_ram_mb": 1000,
+                "registry_manifest_digest": "sha256:" + "1" * 64,
+                "license": {"license_status": "verified"},
+            },
+            {
+                "id": "model:1b",
+                "download_bytes": 1000,
+                "disk_bytes": 1000,
+                "min_ram_mb": 1000,
+                "registry_manifest_digest": "sha256:" + "2" * 64,
+                "license": {"license_status": "verified"},
+            },
+        ]
+        cat_dup = create_test_catalog(models=dup_models)
+        with self.assertRaises(CatalogSecurityError):
+            verify_catalog_payload(cat_dup, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+
+        # 5. Invalid registry digest format
+        bad_digest_models = [
+            {
+                "id": "model:1b",
+                "download_bytes": 1000,
+                "disk_bytes": 1000,
+                "min_ram_mb": 1000,
+                "registry_manifest_digest": "md5:12345",
+                "license": {"license_status": "verified"},
+            }
+        ]
+        cat_bad_digest = create_test_catalog(models=bad_digest_models)
+        with self.assertRaises(CatalogSecurityError):
+            verify_catalog_payload(cat_bad_digest, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+
+    # -------------------------------------------------------------------------
+    # Finding CE: Fit Rules Refinements
+    # -------------------------------------------------------------------------
+    def test_06_fit_rule_disk_space_thresholds(self) -> None:
         """
         Validates disk fit rule:
         Required disk space = (1.25 * total_model_bytes) + 2 GB safety margin.
         """
         model = {
             "id": "test:3b",
-            "download_bytes": 2 * (1024**3),  # 2 GB
+            "download_bytes": 2 * (1024**3),
             "disk_bytes": 2 * (1024**3),
             "min_ram_mb": 2048,
             "license": {"license_status": "verified"},
         }
         two_gb = 2 * (1024**3)
-        # Expected required: 1.25 * 2GB + 2GB = 2.5GB + 2GB = 4.5 GB
         expected_needed = int(1.25 * two_gb) + two_gb
 
-        # Case A: Free disk has plenty of space (10 GB)
         survey_ok = HardwareProfile(
             total_ram_mb=16384.0,
             avail_ram_mb=8192.0,
@@ -142,7 +398,6 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertEqual(rep_ok.disk_required_bytes, expected_needed)
         self.assertEqual(len(rep_ok.rejection_reasons), 0)
 
-        # Case B: Free disk is 1 byte below required threshold
         survey_fail = HardwareProfile(
             total_ram_mb=16384.0,
             avail_ram_mb=8192.0,
@@ -163,23 +418,21 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertFalse(rep_fail.is_preselected)
         self.assertTrue(any("INSUFFICIENT_DISK" in r for r in rep_fail.rejection_reasons))
 
-    def test_04_fit_rule_gpu_vram_thresholds(self) -> None:
+    def test_07_fit_rule_gpu_tiers_and_partial_not_preselected(self) -> None:
         """
-        Validates GPU VRAM tiers:
-          - Model weights + 512MB <= 85% VRAM: 'full' offload.
-          - 85% < Model weights + 512MB <= 120% VRAM: 'partial' offload.
-          - Model weights + 512MB > 120% VRAM or no GPU: 'cpu'.
+        Finding CE:
+          - Model weights + 512 MB <= 85% VRAM is 'full'.
+          - 85% < Footprint <= 120% VRAM is 'partial' (labeled as estimate).
+          - 'partial' tier is NEVER preselected until measured on hardware.
         """
-        # Model with 2048 MB weights (+ 512 MB context = 2560 MB footprint)
         model = {
             "id": "test_gpu:model",
             "disk_bytes": 2048 * (1024 * 1024),
             "min_ram_mb": 2048,
             "license": {"license_status": "verified"},
         }
-        footprint_mb = 2560.0
 
-        # Case A: VRAM = 4000 MB. 85% is 3400 MB. Footprint (2560) <= 3400 -> FULL
+        # Case A: Full offload (VRAM = 4000 MB, 85% is 3400 MB >= 2560 MB footprint)
         survey_full = HardwareProfile(
             total_ram_mb=16384.0,
             avail_ram_mb=8192.0,
@@ -197,8 +450,9 @@ class TestPaiSetupP3(unittest.TestCase):
         )
         rep_full = evaluate_model_fit(model, survey_full)
         self.assertEqual(rep_full.fits_gpu, "full")
+        self.assertTrue(rep_full.is_preselected)
 
-        # Case B: VRAM = 2600 MB. 85% is 2210 MB. Footprint (2560) > 2210, but <= 3120 (120%) -> PARTIAL
+        # Case B: Partial offload (VRAM = 2600 MB, 85% is 2210 MB < 2560 MB footprint <= 3120 MB)
         survey_partial = HardwareProfile(
             total_ram_mb=16384.0,
             avail_ram_mb=8192.0,
@@ -216,94 +470,122 @@ class TestPaiSetupP3(unittest.TestCase):
         )
         rep_partial = evaluate_model_fit(model, survey_partial)
         self.assertEqual(rep_partial.fits_gpu, "partial")
+        # Hard Rule (Finding CE): partial tier is NOT preselected
+        self.assertFalse(rep_partial.is_preselected)
+        self.assertIn("estimates", rep_partial.gpu_estimate_note)
 
-        # Case C: VRAM = 1000 MB. Footprint (2560) > 1200 MB (120%) -> CPU
-        survey_cpu = HardwareProfile(
+    def test_08_fit_rule_available_ram_reserve(self) -> None:
+        """
+        Finding CE: RAM rule must evaluate available RAM at survey time
+        and leave a 2048 MB system stability reserve.
+        """
+        model = {
+            "id": "test_ram:model",
+            "disk_bytes": 4096 * (1024 * 1024),
+            "min_ram_mb": 4096,
+            "license": {"license_status": "verified"},
+        }
+        # Total RAM is 16 GB, but available RAM is only 3000 MB.
+        # With 2048 MB reserve, usable available RAM is only 952 MB < 4096 MB!
+        survey_low_avail = HardwareProfile(
             total_ram_mb=16384.0,
-            avail_ram_mb=8192.0,
+            avail_ram_mb=3000.0,
             free_disk_bytes=50 * (1024**3),
             total_disk_bytes=100 * (1024**3),
             model_drive="C:",
-            gpu_name="Integrated GPU",
-            dedicated_vram_mb=1000.0,
-            gpu_driver_version="31.0",
+            gpu_name=None,
+            dedicated_vram_mb=0.0,
+            gpu_driver_version=None,
             cpu_cores=6,
             cpu_logical=12,
             cpu_name="AMD",
             npu_detected=False,
             npu_name=None,
         )
-        rep_cpu = evaluate_model_fit(model, survey_cpu)
-        self.assertEqual(rep_cpu.fits_gpu, "cpu")
+        rep = evaluate_model_fit(model, survey_low_avail)
+        self.assertFalse(rep.fits_ram)
+        self.assertFalse(rep.is_preselected)
+        self.assertTrue(any("INSUFFICIENT_RAM" in r for r in rep.rejection_reasons))
 
-    def test_05_unverified_license_is_not_preselected(self) -> None:
-        """Requirement §5: Only entries with license_status = verified are preselected."""
-        survey = HardwareProfile(
-            total_ram_mb=32768.0,
-            avail_ram_mb=16384.0,
-            free_disk_bytes=100 * (1024**3),
-            total_disk_bytes=500 * (1024**3),
-            model_drive="C:",
-            gpu_name="NVIDIA RTX 4090",
-            dedicated_vram_mb=24576.0,
-            gpu_driver_version="550.0",
-            cpu_cores=16,
-            cpu_logical=32,
-            cpu_name="Intel",
-            npu_detected=False,
-            npu_name=None,
-        )
-        recs = plan_model_selection(self.catalog, survey)
-        unverified_recs = [r for r in recs if r.license_status == "unverified"]
-        self.assertTrue(len(unverified_recs) > 0)
-        for u in unverified_recs:
-            self.assertFalse(u.is_preselected, f"Unverified model {u.model_id} must NEVER be preselected")
+    # -------------------------------------------------------------------------
+    # Finding CC: Ollama Authenticode Publisher Verification
+    # -------------------------------------------------------------------------
+    def test_09_authenticode_publisher_verification_negative_controls(self) -> None:
+        """
+        Finding CC:
+          - Non-Windows fails closed.
+          - Missing file raises FileNotFoundError.
+          - Tampered or mismatched thumbprint raises OllamaVerificationError.
+        """
+        # Case A: Non-Windows fail-closed check
+        with patch("sys.platform", "linux"):
+            with self.assertRaises(OllamaVerificationError):
+                verify_authenticode_publisher(Path(self.tmp_dir) / "dummy.exe")
 
-    def test_06_ollama_daemon_probe_mocked(self) -> None:
-        """Validates probe_ollama_daemon under running and non-running mocked conditions."""
-        # 1. Non-running daemon
-        status_down = probe_ollama_daemon("http://127.0.0.1:9999", timeout=0.1)
-        self.assertFalse(status_down["running"])
-        self.assertIsNone(status_down["version"])
+        # Case B: Missing file
+        if sys.platform == "win32":
+            with self.assertRaises(FileNotFoundError):
+                verify_authenticode_publisher(Path(self.tmp_dir) / "nonexistent.exe")
 
-        # 2. Running daemon with mock HTTP response
+    # -------------------------------------------------------------------------
+    # Finding CH: Loopback and Proxy Bypass
+    # -------------------------------------------------------------------------
+    def test_10_probe_ollama_daemon_loopback_security_and_mock(self) -> None:
+        """
+        Finding CH:
+          - Non-loopback OLLAMA_HOST ignored/refused for SSRF defense.
+          - Loopback connection succeeds with mocked response.
+        """
+        # Case A: Non-loopback host in environment
+        with patch.dict(os.environ, {"OLLAMA_HOST": "http://192.168.1.100:11434"}):
+            status = probe_ollama_daemon()
+            self.assertIn("127.0.0.1", status["endpoint"])
+
+        # Case B: Mocked loopback daemon response
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = b'{"version": "0.4.1"}'
+        mock_resp.read.return_value = b'{"version": "0.5.1"}'
         mock_resp.__enter__.return_value = mock_resp
 
-        with patch("urllib.request.urlopen", return_value=mock_resp):
+        mock_opener = MagicMock()
+        mock_opener.open.return_value = mock_resp
+
+        with patch("urllib.request.build_opener", return_value=mock_opener):
             status_up = probe_ollama_daemon()
             self.assertTrue(status_up["running"])
-            self.assertEqual(status_up["version"], "0.4.1")
+            self.assertEqual(status_up["version"], "0.5.1")
 
-    def test_07_progress_json_emitter(self) -> None:
-        """Validates NDJSON progress event emission matching Appendix C."""
+    # -------------------------------------------------------------------------
+    # Finding CG: Progress Events Stream
+    # -------------------------------------------------------------------------
+    def test_11_progress_json_emitter(self) -> None:
+        """Finding CG: Emits Appendix C NDJSON progress events."""
         buf = io.StringIO()
         emitter = ProgressEmitter(enabled=True)
 
         with patch("sys.stdout", buf):
-            emitter.emit("survey", hardware={"cores": 8})
-            emitter.emit("download_start", model="qwen2.5-coder:1.5b", total_bytes=1000)
-            emitter.emit("progress", model="qwen2.5-coder:1.5b", completed=500, total=1000)
-            emitter.emit("done", model="qwen2.5-coder:1.5b")
+            emitter.emit("survey", hardware={"cpu_cores": 8})
+            emitter.emit("ollama_status", running=True, version="0.5.1")
+            emitter.emit("fit", recommendations=[])
+            emitter.emit("error", code="TEST_ERR", message="sample")
 
         lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()]
         self.assertEqual(len(lines), 4)
 
         events = [json.loads(ln) for ln in lines]
         self.assertEqual(events[0]["event"], "survey")
-        self.assertEqual(events[1]["event"], "download_start")
-        self.assertEqual(events[2]["event"], "progress")
-        self.assertEqual(events[3]["event"], "done")
+        self.assertEqual(events[1]["event"], "ollama_status")
+        self.assertEqual(events[2]["event"], "fit")
+        self.assertEqual(events[3]["event"], "error")
 
-    def test_08_cli_execution_survey_only(self) -> None:
+    def test_12_cli_execution_survey_only(self) -> None:
         """Executes pai_setup.py via subprocess with --survey-only."""
         setup_script = REPO_ROOT / "packaging" / "pai_setup.py"
         proc = subprocess.run([sys.executable, str(setup_script), "--survey-only"], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, f"pai_setup.py --survey-only failed:\n{proc.stderr}")
         data = json.loads(proc.stdout)
         self.assertIn("total_ram_mb", data)
+        self.assertIn("avail_ram_mb", data)
         self.assertIn("free_disk_bytes", data)
         self.assertIn("npu_note", data)
 

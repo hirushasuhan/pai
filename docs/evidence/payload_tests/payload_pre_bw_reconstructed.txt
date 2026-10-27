@@ -1,0 +1,1092 @@
+test_end_to_end_source_trust_spoof_blocked_by_agent_core (test_agent.AgentCycle.test_end_to_end_source_trust_spoof_blocked_by_agent_core)
+Threat T14 end-to-end: Fake network delivers payload with spoofed '[Source: local_knowledge]'. Verified with NeuroSymbolicReasoner. ... ok
+test_full_cycle_offline (test_agent.AgentCycle.test_full_cycle_offline) ... ok
+test_no_trigger_means_no_network_call (test_agent.AgentCycle.test_no_trigger_means_no_network_call) ... ok
+test_purge_still_runs_when_reasoner_raises (test_agent.AgentCycle.test_purge_still_runs_when_reasoner_raises) ... ok
+test_rejected_payload_degrades_and_is_never_used (test_agent.AgentCycle.test_rejected_payload_degrades_and_is_never_used) ... ok
+test_topic_extraction (test_agent.AgentCycle.test_topic_extraction) ... ok
+test_benchmark_detects_a_leak (test_agent.Benchmark.test_benchmark_detects_a_leak) ... ok
+test_purge_benchmark_passes_and_is_measured (test_agent.Benchmark.test_purge_benchmark_passes_and_is_measured) ... ok
+test_capacity_enforced (test_agent.SecureBufferTests.test_capacity_enforced) ... ok
+test_context_manager_wipes (test_agent.SecureBufferTests.test_context_manager_wipes) ... ok
+test_repr_never_leaks_contents (test_agent.SecureBufferTests.test_repr_never_leaks_contents) ... ok
+test_wipe_is_idempotent_and_blocks_writes (test_agent.SecureBufferTests.test_wipe_is_idempotent_and_blocks_writes) ... ok
+test_wipe_with_live_view_still_zeroes (test_agent.SecureBufferTests.test_wipe_with_live_view_still_zeroes) ... ok
+test_wipe_zeroes_the_actual_memory (test_agent.SecureBufferTests.test_wipe_zeroes_the_actual_memory) ... ok
+test_blocked_calls (test_ast_guard.AstGuard.test_blocked_calls) ... ok
+test_blocked_imports (test_ast_guard.AstGuard.test_blocked_imports) ... ok
+test_dunder_escape_blocked (test_ast_guard.AstGuard.test_dunder_escape_blocked) ... ok
+test_init_and_name_allowed (test_ast_guard.AstGuard.test_init_and_name_allowed) ... ok
+test_oversize_source_rejected (test_ast_guard.AstGuard.test_oversize_source_rejected) ... ok
+test_safe_code_passes (test_ast_guard.AstGuard.test_safe_code_passes) ... ok
+test_syntax_error_rejected (test_ast_guard.AstGuard.test_syntax_error_rejected) ... ok
+test_unbounded_loop_is_a_warning_not_a_violation (test_ast_guard.AstGuard.test_unbounded_loop_is_a_warning_not_a_violation) ... ok
+test_bridge_canonical_example_extraction_differential (test_bridge_differential.TestBridgeDifferential.test_bridge_canonical_example_extraction_differential) ... ok
+test_bridge_codec_differential (test_bridge_differential.TestBridgeDifferential.test_bridge_codec_differential) ... ok
+test_bridge_ingest_primitives_parity (test_bridge_differential.TestBridgeDifferential.test_bridge_ingest_primitives_parity) ... ok
+test_default_on_graceful_fallback_when_binary_missing (test_bridge_differential.TestBridgeDifferential.test_default_on_graceful_fallback_when_binary_missing)
+Verifies that in default mode without explicit env var, missing binary gracefully falls back to Python. ... ok
+test_default_on_when_binary_present (test_bridge_differential.TestBridgeDifferential.test_default_on_when_binary_present)
+Verifies that in default mode (no env var), binary present means default-on. ... ok
+test_default_wrappers_flag_off (test_bridge_differential.TestBridgeDifferential.test_default_wrappers_flag_off)
+Tests that all wrappers work without error on default path (PAI_USE_RUST_CORE=False). ... ok
+test_direct_verify_verdict_frame_content_digest_not_null (test_bridge_differential.TestBridgeDifferential.test_direct_verify_verdict_frame_content_digest_not_null)
+Verifies that direct verify_verdict_frame call records non-null content_digest matching input frame (Finding BC). ... ok
+test_discrepancy_policy_deny_wins_ops (test_bridge_differential.TestBridgeDifferential.test_discrepancy_policy_deny_wins_ops)
+Verifies that for accept/deny ops (verify_ed25519, verify_verdict_frame), deny wins on mismatch. ... ok
+test_discrepancy_policy_ingest_file_returns_python_and_logs (test_bridge_differential.TestBridgeDifferential.test_discrepancy_policy_ingest_file_returns_python_and_logs)
+Verifies that on shadow discrepancy in ingest_file, Python reference result is returned and discrepancy is logged. ... ok
+test_discrepancy_policy_ingest_folder_returns_python_and_logs (test_bridge_differential.TestBridgeDifferential.test_discrepancy_policy_ingest_folder_returns_python_and_logs)
+Verifies that on shadow discrepancy in ingest_folder, Python reference report is returned. ... ok
+test_discrepancy_policy_shadow_compare_off_returns_rust (test_bridge_differential.TestBridgeDifferential.test_discrepancy_policy_shadow_compare_off_returns_rust)
+Verifies that when PAI_SHADOW_COMPARE=0, no shadow comparison occurs and Rust result is returned. ... ok
+test_discrepancy_policy_stderr_warning_emitted_exactly_once (test_bridge_differential.TestBridgeDifferential.test_discrepancy_policy_stderr_warning_emitted_exactly_once)
+Verifies that discrepancy warning is emitted to stderr exactly once per session. ... ok
+test_extract_example_assertions_discrepancy_returns_python (test_bridge_differential.TestBridgeDifferential.test_extract_example_assertions_discrepancy_returns_python)
+Verifies Recommended: extract_example_assertions returns Python reference on mismatch. ... ok
+test_fail_closed_on_typos_and_unknown_fields (test_bridge_differential.TestBridgeDifferential.test_fail_closed_on_typos_and_unknown_fields)
+Verifies Rust bridge fail-closed strictness on typos, unknown fields, and invalid types. ... ok
+test_find_core_binary_disallows_path_by_default_and_allows_with_opt_in (test_bridge_differential.TestBridgeDifferential.test_find_core_binary_disallows_path_by_default_and_allows_with_opt_in)
+Verifies Finding BE: PATH resolution is blocked by default and allowed only with PAI_CORE_ALLOW_PATH=1. ... ok
+test_find_core_binary_pinned_sha256_verification (test_bridge_differential.TestBridgeDifferential.test_find_core_binary_pinned_sha256_verification)
+Verifies Finding BE: PAI_CORE_SHA256 pinned hash check matches or raises CoreBridgeUnavailableError. ... ok
+test_handshake_conformance_vectors_hash (test_bridge_differential.TestBridgeDifferential.test_handshake_conformance_vectors_hash)
+Verifies that the compiled binary's conformance_vectors_hash matches the repository. ... ok
+test_ingest_file_mismatch_rejection_wins (test_bridge_differential.TestBridgeDifferential.test_ingest_file_mismatch_rejection_wins)
+Verifies Recommended: when one side rejects a file and the other accepts, rejection wins. ... ok
+test_kill_switch_forces_pure_python (test_bridge_differential.TestBridgeDifferential.test_kill_switch_forces_pure_python)
+Verifies that PAI_RUST_FALLBACK_PYTHON=1 forces pure Python mode regardless of binary. ... ok
+test_missing_binary_refusal_fail_closed (test_bridge_differential.TestBridgeDifferential.test_missing_binary_refusal_fail_closed)
+Verifies that when PAI_USE_RUST_CORE=1 and binary is missing, both paths refuse fail-closed. ... ok
+test_negative_binary_lookup_cached_per_process (test_bridge_differential.TestBridgeDifferential.test_negative_binary_lookup_cached_per_process)
+Verifies Finding BE: negative lookup failures are cached in _CORE_BIN_NOT_FOUND. ... ok
+test_product_path_with_rust_core_flag_against_stub_server (test_bridge_differential.TestBridgeDifferential.test_product_path_with_rust_core_flag_against_stub_server)
+Runs `pai code` with `PAI_USE_RUST_CORE=1` against local loopback HTTP stub server. ... ok
+test_scan_secret_content_mismatch_stricter_detection_wins (test_bridge_differential.TestBridgeDifferential.test_scan_secret_content_mismatch_stricter_detection_wins)
+Verifies Recommended: when one implementation detects a secret, that detection wins. ... ok
+test_shadow_mode_bridge_exception_handling (test_bridge_differential.TestBridgeDifferential.test_shadow_mode_bridge_exception_handling)
+Verifies that bridge exceptions in shadow mode record discrepancies and preserve Python assertions. ... ok
+test_shadow_mode_extractor_discrepancy_authoritative (test_bridge_differential.TestBridgeDifferential.test_shadow_mode_extractor_discrepancy_authoritative)
+Verifies that in shadow mode, Python reference remains authoritative and discrepancy is recorded. ... ok
+test_standalone_subprocess_analyze_content_digest_deterministic (test_bridge_differential.TestBridgeDifferential.test_standalone_subprocess_analyze_content_digest_deterministic)
+Verifies that standalone pai analyze records non-null and deterministic ingest_folder content_digest (Finding BC). ... ok
+test_standalone_subprocess_docs_content_digest_not_null (test_bridge_differential.TestBridgeDifferential.test_standalone_subprocess_docs_content_digest_not_null)
+Verifies that standalone pai docs in a driver-less subprocess records non-null content_digest (Finding BC). ... ok
+test_verify_release_metadata_mismatch_fails_closed (test_bridge_differential.TestBridgeDifferential.test_verify_release_metadata_mismatch_fails_closed)
+Verifies Finding BF: verify_release raises UpdateRejected when metadata mismatches. ... ok
+test_verify_verdict_frame_matching_and_mismatching_test_hash (test_bridge_differential.TestBridgeDifferential.test_verify_verdict_frame_matching_and_mismatching_test_hash)
+Exercises verify_verdict_frame with matching and mismatching expected_test_hash on both paths. ... ok
+test_wrappers_flag_on (test_bridge_differential.TestBridgeDifferential.test_wrappers_flag_on)
+Tests that all wrappers work without error when PAI_USE_RUST_CORE=True. ... ok
+test_chain_valid_and_tamper_evident (test_capabilities.Audit.test_chain_valid_and_tamper_evident) ... ok
+test_deleting_an_entry_is_detected (test_capabilities.Audit.test_deleting_an_entry_is_detected) ... ok
+test_denials_are_logged_too (test_capabilities.Audit.test_denials_are_logged_too) ... ok
+test_agent_ingestion_marks_context_tainted_and_hijack_is_stopped (test_capabilities.EndToEndInjection.test_agent_ingestion_marks_context_tainted_and_hijack_is_stopped) ... ok
+test_task_without_external_data_is_not_tainted (test_capabilities.EndToEndInjection.test_task_without_external_data_is_not_tainted) ... ok
+test_clean_context_write_needs_no_confirmation (test_capabilities.Policy.test_clean_context_write_needs_no_confirmation) ... ok
+test_confirmed_args_are_exactly_the_executed_args (test_capabilities.Policy.test_confirmed_args_are_exactly_the_executed_args) ... ok
+test_deny_by_default_and_unknown_tool (test_capabilities.Policy.test_deny_by_default_and_unknown_tool) ... ok
+test_destructive_and_outbound_always_need_a_human (test_capabilities.Policy.test_destructive_and_outbound_always_need_a_human) ... ok
+test_failing_confirmation_callback_fails_closed (test_capabilities.Policy.test_failing_confirmation_callback_fails_closed) ... ok
+test_human_no_blocks_and_is_audited (test_capabilities.Policy.test_human_no_blocks_and_is_audited) ... ok
+test_read_allowed_even_when_tainted (test_capabilities.Policy.test_read_allowed_even_when_tainted) ... ok
+test_tainted_write_denied_without_confirmation_channel (test_capabilities.Policy.test_tainted_write_denied_without_confirmation_channel) ... ok
+test_tainted_write_runs_only_after_human_yes (test_capabilities.Policy.test_tainted_write_runs_only_after_human_yes) ... ok
+test_expiry_and_call_budget (test_capabilities.Scoping.test_expiry_and_call_budget) ... ok
+test_grants_cannot_be_added_later (test_capabilities.Scoping.test_grants_cannot_be_added_later) ... ok
+test_missing_or_nonstring_path_denied (test_capabilities.Scoping.test_missing_or_nonstring_path_denied) ... ok
+test_path_tool_without_roots_is_denied (test_capabilities.Scoping.test_path_tool_without_roots_is_denied) ... ok
+test_path_traversal_and_outside_paths_denied (test_capabilities.Scoping.test_path_traversal_and_outside_paths_denied) ... ok
+test_symlink_escape_denied (test_capabilities.Scoping.test_symlink_escape_denied) ... skipped 'symlinks need privileges on Windows'
+test_lint_actually_detects_claims (test_claims.ClaimsLint.test_lint_actually_detects_claims) ... ok
+test_no_unfalsifiable_security_claims (test_claims.ClaimsLint.test_no_unfalsifiable_security_claims) ... ok
+test_canonical_os_matching_ignores_kernel_versions (test_config.TestConfigSecurity.test_canonical_os_matching_ignores_kernel_versions)
+Canonical OS matching normalizes kernel and build strings across updates. ... ok
+test_clean_save_load_roundtrips (test_config.TestConfigSecurity.test_clean_save_load_roundtrips)
+Valid configurations save and reload without schema degradation. ... ok
+test_expired_machine_profile_rejected (test_config.TestConfigSecurity.test_expired_machine_profile_rejected)
+Rejects machine profiles older than 30 days or past expires_at. ... ok
+test_foreign_machine_id_and_os_rejected (test_config.TestConfigSecurity.test_foreign_machine_id_and_os_rejected)
+Rejects machine profile calibrated on a different machine or OS. ... ok
+test_machine_profile_comment_key_allowed (test_config.TestConfigSecurity.test_machine_profile_comment_key_allowed)
+Allows _comment key in machine_profile.json for documentation/illustrative profiles. ... ok
+test_machine_profile_delta_exceeding_total_ram_rejected (test_config.TestConfigSecurity.test_machine_profile_delta_exceeding_total_ram_rejected)
+Model delta cannot exceed total machine RAM. ... ok
+test_missing_timestamp_rejected (test_config.TestConfigSecurity.test_missing_timestamp_rejected)
+Rejects machine profiles missing both calibrated_on and expires_at. ... ok
+test_privacy_mode_allow_cloud_rejected_until_m1d (test_config.TestConfigSecurity.test_privacy_mode_allow_cloud_rejected_until_m1d)
+privacy_mode: allow-cloud is strictly rejected until M1d. ... ok
+test_spend_caps_and_enabled_providers_validation (test_config.TestConfigSecurity.test_spend_caps_and_enabled_providers_validation)
+Validates types and ranges for spend_caps and enabled_providers. ... ok
+test_t22_rejects_credentials_in_config (test_config.TestConfigSecurity.test_t22_rejects_credentials_in_config)
+Threat T22: Rejects any configuration containing secret or credential fields. ... ok
+test_t22_secret_patterns_in_values_rejected (test_config.TestConfigSecurity.test_t22_secret_patterns_in_values_rejected)
+Threat T22: Rejects forbidden secret patterns inside configuration values. ... ok
+test_t26_rejects_unknown_keys_in_machine_profile (test_config.TestConfigSecurity.test_t26_rejects_unknown_keys_in_machine_profile)
+Threat T26: Machine profile fails closed on unknown keys. ... ok
+test_t26_rejects_unknown_keys_in_user_config (test_config.TestConfigSecurity.test_t26_rejects_unknown_keys_in_user_config)
+Threat T26: User configuration fails closed on unknown keys. ... ok
+test_t26_tampered_machine_profile_ram_discrepancy (test_config.TestConfigSecurity.test_t26_tampered_machine_profile_ram_discrepancy)
+Threat T26: Flags machine profile claiming impossible RAM compared to live hardware. ... ok
+test_checked_in_files_are_in_sync_with_generators (test_conformance.Vectors.test_checked_in_files_are_in_sync_with_generators)
+If this fails the policy changed: run `python conformance.py` AND review the vector diff. ... ok
+test_ingest_vectors_match_the_code (test_conformance.Vectors.test_ingest_vectors_match_the_code) ... ok
+test_multicast_and_unspecified_addresses_are_rejected (test_conformance.Vectors.test_multicast_and_unspecified_addresses_are_rejected) ... ok
+test_tier_vectors_match_the_code (test_conformance.Vectors.test_tier_vectors_match_the_code) ... ok
+test_url_vectors_match_the_code (test_conformance.Vectors.test_url_vectors_match_the_code) ... ok
+test_verify_loop_vectors_match_the_code (test_conformance.Vectors.test_verify_loop_vectors_match_the_code) ... ok
+test_ctypes_imports_restricted_to_allowlist (test_ctypes_allowlist.TestCtypesAllowlist.test_ctypes_imports_restricted_to_allowlist)
+Ensures only specifically reviewed and approved modules import ctypes. ... ok
+test_allow_unverified_flag_cli_and_harness_separation (test_eval_harness.TestEvalHarness.test_allow_unverified_flag_cli_and_harness_separation)
+Verifies all 6 conditions of --allow-unverified: ... ok
+test_diagnostic_fields_captured_in_eval_record (test_eval_harness.TestEvalHarness.test_diagnostic_fields_captured_in_eval_record)
+EvalRecord serialization includes all new diagnostic fields. ... ok
+test_eval_harness_end_to_end_with_repeats (test_eval_harness.TestEvalHarness.test_eval_harness_end_to_end_with_repeats)
+Runs mock evaluation across 2 repeats and verifies explicit temperature, seed, and digest. ... ERROR
+test_false_accept_detected (test_eval_harness.TestEvalHarness.test_false_accept_detected)
+False-accept detection: ... ok
+test_gate_off_baseline_evaluation (test_eval_harness.TestEvalHarness.test_gate_off_baseline_evaluation)
+Gate-off baseline evaluates direct solution generation against hidden tests in sandbox. ... ok
+test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks (test_eval_harness.TestEvalHarness.test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks)
+Invariant: Hidden reference tests must never appear in any prompt sent to the model. ... ERROR
+test_infra_failure_diagnostics_and_partitioning (test_eval_harness.TestEvalHarness.test_infra_failure_diagnostics_and_partitioning)
+Verifies infra failures (timeouts/HTTP 500) are partitioned and reported separately. ... ok
+test_mixed_jsonl_grouped_by_arm_and_model (test_eval_harness.TestEvalHarness.test_mixed_jsonl_grouped_by_arm_and_model)
+Mixed JSONL records are grouped per (arm, model) preventing cross-arm flip contamination. ... ok
+test_model_server_crash_handled_gracefully (test_eval_harness.TestEvalHarness.test_model_server_crash_handled_gracefully)
+Model server returning 500 does not crash the harness; marks task as failed. ... ok
+test_negative_control_hash_mismatch_refuses_execution (test_eval_harness.TestEvalHarness.test_negative_control_hash_mismatch_refuses_execution)
+Negative control: Mutating one byte of an eval set causes immediate refusal. ... ok
+test_negative_control_sandbox_infinite_loop_timeout (test_eval_harness.TestEvalHarness.test_negative_control_sandbox_infinite_loop_timeout)
+Negative control 2: solution.py contains while True: pass in main block. ... ok
+test_negative_control_sandbox_memory_bomb (test_eval_harness.TestEvalHarness.test_negative_control_sandbox_memory_bomb)
+Negative control 3: solution.py contains memory bomb. ... ok
+test_negative_control_sandbox_sys_exit_in_solution (test_eval_harness.TestEvalHarness.test_negative_control_sandbox_sys_exit_in_solution)
+Negative control 1: solution.py contains sys.exit(7) in main block. ... ok
+test_per_task_flips_detected (test_eval_harness.TestEvalHarness.test_per_task_flips_detected)
+Flips across repeats are accurately identified and reported. ... ok
+test_query_model_digest_tags_first_then_show_fallback (test_eval_harness.TestEvalHarness.test_query_model_digest_tags_first_then_show_fallback)
+Verifies query_model_digest queries /api/tags first (matching model_name), ... ok
+test_run_hidden_tests_two_process_hmac_and_tamper_resistance (test_eval_harness.TestEvalHarness.test_run_hidden_tests_two_process_hmac_and_tamper_resistance)
+Verifies run_hidden_tests executes candidate code in an isolated worker process: ... ok
+test_sandboxed_hidden_test_execution_clean (test_eval_harness.TestEvalHarness.test_sandboxed_hidden_test_execution_clean)
+Sandboxed hidden test runner successfully executes and passes valid solution. ... ok
+test_verify_eval_set_hashes_clean (test_eval_harness.TestEvalHarness.test_verify_eval_set_hashes_clean)
+Standard check: All registered frozen eval sets match their recorded hashes. ... ERROR
+test_daily_five_day_gap_warning (test_forecast_engine.TestForecastEngine.test_daily_five_day_gap_warning) ... ok
+test_duplicate_timestamp_refusal (test_forecast_engine.TestForecastEngine.test_duplicate_timestamp_refusal) ... ok
+test_empty_cell_refusal (test_forecast_engine.TestForecastEngine.test_empty_cell_refusal) ... ok
+test_horizon_bounds_validation (test_forecast_engine.TestForecastEngine.test_horizon_bounds_validation) ... ok
+test_insufficient_data_refusal (test_forecast_engine.TestForecastEngine.test_insufficient_data_refusal) ... ok
+test_invalid_calendar_date_refusal (test_forecast_engine.TestForecastEngine.test_invalid_calendar_date_refusal) ... ok
+test_malformed_data_refusal (test_forecast_engine.TestForecastEngine.test_malformed_data_refusal) ... ok
+test_noisy_gap_series (test_forecast_engine.TestForecastEngine.test_noisy_gap_series) ... ok
+test_non_date_label_ordering_preserved (test_forecast_engine.TestForecastEngine.test_non_date_label_ordering_preserved) ... ok
+test_nonexistent_file (test_forecast_engine.TestForecastEngine.test_nonexistent_file) ... ok
+test_rolling_origin_validation_and_residual_floor (test_forecast_engine.TestForecastEngine.test_rolling_origin_validation_and_residual_floor) ... ok
+test_seasonal_series (test_forecast_engine.TestForecastEngine.test_seasonal_series) ... ok
+test_trend_series (test_forecast_engine.TestForecastEngine.test_trend_series) ... ok
+test_assemble_untrusted_context_question_overlap_ranking (test_ingest.TestSafeIngestModule.test_assemble_untrusted_context_question_overlap_ranking)
+Phase 1.1 (3a): When a user question is provided to assemble_untrusted_context, ... ok
+test_bounded_rejections_and_summary_emission (test_ingest.TestSafeIngestModule.test_bounded_rejections_and_summary_emission)
+Adversarial probe: Unbounded rejections must be capped with summary emission. ... ok
+test_file_size_truncation (test_ingest.TestSafeIngestModule.test_file_size_truncation) ... ok
+test_folder_recursion_depth_limit (test_ingest.TestSafeIngestModule.test_folder_recursion_depth_limit) ... ok
+test_format_untrusted_context_uniform_nonce_and_budget_capping (test_ingest.TestSafeIngestModule.test_format_untrusted_context_uniform_nonce_and_budget_capping) ... ok
+test_include_junk_flag_allows_pruned_dirs (test_ingest.TestSafeIngestModule.test_include_junk_flag_allows_pruned_dirs)
+When include_junk=True, directories like build/ or target/ are scanned rather than pruned. ... ok
+test_inspectable_limits_dict (test_ingest.TestSafeIngestModule.test_inspectable_limits_dict) ... ok
+test_invalid_filename_surrogate_rendering (test_ingest.TestSafeIngestModule.test_invalid_filename_surrogate_rendering)
+Verifies lone surrogates render as � in rejections rather than '?'. ... ok
+test_invalid_utf8_handled_with_replacement (test_ingest.TestSafeIngestModule.test_invalid_utf8_handled_with_replacement) ... ok
+test_long_line_capping (test_ingest.TestSafeIngestModule.test_long_line_capping) ... ok
+test_negative_control_binary_content_rejected (test_ingest.TestSafeIngestModule.test_negative_control_binary_content_rejected) ... ok
+test_negative_control_envelope_header_and_nonce_injection_defanged (test_ingest.TestSafeIngestModule.test_negative_control_envelope_header_and_nonce_injection_defanged)
+Adversarial probe: Hostile file name containing newline and end-marker. ... ok
+test_negative_control_extended_secrets_denied (test_ingest.TestSafeIngestModule.test_negative_control_extended_secrets_denied)
+Adversarial probe: Extended secrets list (.npmrc, .netrc, .git-credentials, ... ok
+test_negative_control_junk_dirs_pruned_without_starving_src (test_ingest.TestSafeIngestModule.test_negative_control_junk_dirs_pruned_without_starving_src)
+Adversarial probe: Repositories with .git, node_modules, and src. ... ok
+test_negative_control_path_outside_root_rejected (test_ingest.TestSafeIngestModule.test_negative_control_path_outside_root_rejected) ... ok
+test_negative_control_secret_files_denied_without_reading (test_ingest.TestSafeIngestModule.test_negative_control_secret_files_denied_without_reading) ... ok
+test_negative_control_symlink_escape_rejected_with_relative_path (test_ingest.TestSafeIngestModule.test_negative_control_symlink_escape_rejected_with_relative_path) ... skipped 'Symlink creation requires administrative privilege on Windows'
+test_negative_control_symlinked_directory_outside_root_rejected_with_relative_path (test_ingest.TestSafeIngestModule.test_negative_control_symlinked_directory_outside_root_rejected_with_relative_path)
+Adversarial probe: Symlinked directory pointing outside root must produce relative rejection. ... skipped 'Symlink creation requires administrative privilege on Windows'
+test_normal_file_ingests_successfully (test_ingest.TestSafeIngestModule.test_normal_file_ingests_successfully) ... ok
+test_ntfs_alternate_data_streams_rejected (test_ingest.TestSafeIngestModule.test_ntfs_alternate_data_streams_rejected)
+Verifies NTFS alternate data streams (: in path after drive) are rejected as INVALID_FILENAME. ... ok
+test_parameter_bounds_validation (test_ingest.TestSafeIngestModule.test_parameter_bounds_validation)
+Verifies ingest_file and ingest_folder reject parameters outside valid bounds. ... ok
+test_scan_secret_content_ascii_only_casefold (test_ingest.TestSafeIngestModule.test_scan_secret_content_ascii_only_casefold) ... ok
+test_secret_content_scanning_and_deny_patterns (test_ingest.TestSafeIngestModule.test_secret_content_scanning_and_deny_patterns)
+Verifies: ... ok
+test_symlink_inside_root_accepted (test_ingest.TestSafeIngestModule.test_symlink_inside_root_accepted) ... skipped 'Symlink creation requires administrative privilege on Windows'
+test_text_normalization_control_chars_and_newlines (test_ingest.TestSafeIngestModule.test_text_normalization_control_chars_and_newlines) ... ok
+test_windows_directory_junction_containment (test_ingest.TestSafeIngestModule.test_windows_directory_junction_containment)
+Verifies Windows directory junctions (mklink /J) are treated as symlinks/reparse points. ... ok
+test_windows_reserved_device_names_rejected (test_ingest.TestSafeIngestModule.test_windows_reserved_device_names_rejected)
+Verifies 22 Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) are rejected as SPECIAL_FILE. ... ok
+test_wrap_untrusted_envelope_structure_with_nonce (test_ingest.TestSafeIngestModule.test_wrap_untrusted_envelope_structure_with_nonce) ... ok
+test_zero_execution_invariant_malicious_code_not_evaluated (test_ingest.TestSafeIngestModule.test_zero_execution_invariant_malicious_code_not_evaluated) ... ok
+test_bridge_failure_raises_fail_closed (test_ingest_differential.TestIngestDifferential.test_bridge_failure_raises_fail_closed)
+Slice 6 Fail-Closed Test: ... ok
+test_bridge_protocol_error_distinction (test_ingest_differential.TestIngestDifferential.test_bridge_protocol_error_distinction)
+Finding W: Verifies that BridgeProtocolError is distinct and raised on bridge ... ok
+test_cmd_analyze_and_cmd_docs_shadow_counters_incremented (test_ingest_differential.TestIngestDifferential.test_cmd_analyze_and_cmd_docs_shadow_counters_incremented)
+Verifies pai analyze and pai docs with PAI_USE_RUST_CORE=1 increment shadow comparison counters. ... ok
+test_differential_alternate_data_streams (test_ingest_differential.TestIngestDifferential.test_differential_alternate_data_streams)
+Verifies Python and Rust return identical INVALID_FILENAME rejections for NTFS ADS colons. ... ok
+test_differential_dangling_symlinks (test_ingest_differential.TestIngestDifferential.test_differential_dangling_symlinks)
+Verifies dangling symlinks (internal STAT_ERROR and escaping SYMLINK_ESCAPE) match 100%. ... skipped 'Symlinks require privilege on Windows'
+test_differential_invalid_filename_surrogate_rendering (test_ingest_differential.TestIngestDifferential.test_differential_invalid_filename_surrogate_rendering)
+Verifies lone surrogates render as � in rejections matching Rust to_string_lossy. ... ok
+test_differential_parameter_bounds (test_ingest_differential.TestIngestDifferential.test_differential_parameter_bounds)
+Verifies Python and Rust return identical errors for out-of-bound parameters and accept boundary values. ... ok
+test_differential_tight_caps (test_ingest_differential.TestIngestDifferential.test_differential_tight_caps)
+Verifies tight rejection caps match 100% between Python and Rust. ... ok
+test_differential_windows_directory_junctions (test_ingest_differential.TestIngestDifferential.test_differential_windows_directory_junctions)
+Verifies Python and Rust return identical rejections for Windows directory junctions. ... ok
+test_differential_windows_reserved_device_names (test_ingest_differential.TestIngestDifferential.test_differential_windows_reserved_device_names)
+Verifies Python and Rust return identical SPECIAL_FILE rejections for Windows reserved device names. ... ok
+test_lone_surrogate_filename_handled_without_bridge_crash (test_ingest_differential.TestIngestDifferential.test_lone_surrogate_filename_handled_without_bridge_crash)
+Finding W: Verifies that a filename containing a lone surrogate (unpaired surrogate) ... ok
+test_multi_seed_folder_differential (test_ingest_differential.TestIngestDifferential.test_multi_seed_folder_differential)
+Runs 8 distinct seeds (101, 202, 303, 404, 505, 606, 707, 808) through ... ok
+test_pai_doctor_fallback_and_disabled_wording (test_ingest_differential.TestIngestDifferential.test_pai_doctor_fallback_and_disabled_wording)
+Verifies pai doctor report wording: ... ok
+test_python_fallback_flag_ingest (test_ingest_differential.TestIngestDifferential.test_python_fallback_flag_ingest)
+Slice 6 Fallback Test: ... ok
+test_real_binary_rust_authoritative_ingest_file_and_folder (test_ingest_differential.TestIngestDifferential.test_real_binary_rust_authoritative_ingest_file_and_folder)
+Slice 6 Real-Binary Test: ... ok
+test_relative_path_with_directory_component_without_root_parity (test_ingest_differential.TestIngestDifferential.test_relative_path_with_directory_component_without_root_parity)
+Finding V: Verifies that relative paths containing directory components without root_path ... ok
+test_scan_secret_content_with_replacement_char_calls_bridge (test_ingest_differential.TestIngestDifferential.test_scan_secret_content_with_replacement_char_calls_bridge)
+Finding X: Verifies that scan_secret_content with decoded text containing ... ok
+test_shadow_mode_telemetry_and_pass_through (test_ingest_differential.TestIngestDifferential.test_shadow_mode_telemetry_and_pass_through)
+Verifies shadow mode executes both paths and records comparisons without discrepancies. ... ok
+test_single_file_differential_edge_cases (test_ingest_differential.TestIngestDifferential.test_single_file_differential_edge_cases)
+Explicit edge case table for ingest_file: ... ok
+test_code_extraction (test_m1_code.TestMilestoneM1.test_code_extraction)
+Tests markdown code extraction logic against varied model outputs. ... ok
+test_malformed_model_output (test_m1_code.TestMilestoneM1.test_malformed_model_output)
+Tests execution containment of malformed / broken model code. ... ok
+test_prompt_fencing (test_m1_code.TestMilestoneM1.test_prompt_fencing)
+Ensures adversarial context cannot break out of fence boundaries. ... ok
+test_ram_fit_hysteresis_bypass (test_m1_code.TestMilestoneM1.test_ram_fit_hysteresis_bypass)
+Ensures warm models bypass the pre-load RAM check via hysteresis. ... ok
+test_ram_fit_refusal (test_m1_code.TestMilestoneM1.test_ram_fit_refusal)
+Ensures pre-load model RAM fit check refuses when available RAM is insufficient. ... ok
+test_task_dataset_integrity (test_m1_code.TestMilestoneM1.test_task_dataset_integrity)
+Ensures all 20 tasks in the frozen dataset are valid and well-formed. ... ok
+test_holdout_mutant_benchmark_integrity (test_mutant_benchmark.TestMutantBenchmark.test_holdout_mutant_benchmark_integrity) ... ok
+test_mutant_benchmark_integrity (test_mutant_benchmark.TestMutantBenchmark.test_mutant_benchmark_integrity) ... ok
+test_connection_refused_is_a_clean_error (test_network.Transports.test_connection_refused_is_a_clean_error) ... ok
+test_raw_cap_is_enforced_on_chunked_and_length (test_network.Transports.test_raw_cap_is_enforced_on_chunked_and_length) ... ok
+test_raw_chunked_decoding (test_network.Transports.test_raw_chunked_decoding) ... ok
+test_raw_socket_transport (test_network.Transports.test_raw_socket_transport) ... ok
+test_urllib_transport (test_network.Transports.test_urllib_transport) ... ok
+test_bad_language_code_rejected (test_network.UrlPolicy.test_bad_language_code_rejected) ... ok
+test_pipeline_surfaces_policy_error_instead_of_fake_content (test_network.UrlPolicy.test_pipeline_surfaces_policy_error_instead_of_fake_content) ... ok
+test_private_allowed_only_when_explicit (test_network.UrlPolicy.test_private_allowed_only_when_explicit) ... ok
+test_redirect_into_private_space_is_blocked (test_network.UrlPolicy.test_redirect_into_private_space_is_blocked) ... ok
+test_rejected_urls (test_network.UrlPolicy.test_rejected_urls) ... ok
+test_analyze_e2e_clean_repository (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_analyze_e2e_clean_repository)
+Standard flow: Analyzes repository, detects entry points and dependencies, returns 0. ... ok
+test_context_coverage_and_omission_reporting (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_context_coverage_and_omission_reporting)
+Verifies that: ... ok
+test_negative_control_empty_folder_returns_1 (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_negative_control_empty_folder_returns_1) ... ok
+test_negative_control_non_existent_folder_returns_1 (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_negative_control_non_existent_folder_returns_1) ... ok
+test_oversize_folder_truncation_reported (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_oversize_folder_truncation_reported)
+Acceptance test: Oversize folder has truncation reported with counts. ... ok
+test_planted_prompt_injection_is_contained_and_not_followed (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_planted_prompt_injection_is_contained_and_not_followed)
+Adversarial probe: ... ok
+test_planted_symlinks_and_secret_files_skipped_and_reported (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_planted_symlinks_and_secret_files_skipped_and_reported)
+Adversarial probe: ... ok
+test_router_refusal_returns_exit_code_5 (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_router_refusal_returns_exit_code_5)
+When ModelRouter refuses to route 'analyze' (e.g. RAM insufficient), command exits 5. ... ok
+test_targeted_question_reflected_in_prompt (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_targeted_question_reflected_in_prompt)
+Verifies that --question is forwarded into model directives. ... ok
+test_terminal_output_sanitization_removes_ansi_and_control_chars (test_pai_analyze_e2e.TestPaiAnalyzeE2E.test_terminal_output_sanitization_removes_ansi_and_control_chars)
+Adversarial probe: ... ok
+test_all_subcommands_without_model_against_local_stub_server_unmocked_router (test_pai_cli.TestPaiCLI.test_all_subcommands_without_model_against_local_stub_server_unmocked_router)
+Phase 1.1 (1): End-to-end integration test running every CLI subcommand ... ok
+test_cli_max_files_zero_clean_one_line_error_exit_2 (test_pai_cli.TestPaiCLI.test_cli_max_files_zero_clean_one_line_error_exit_2)
+Verifies `pai analyze <folder> --max-files 0` catches ValueError and prints clean 1-line error with exit 2. ... ok
+test_cli_missing_binary_clean_one_line_error_analyze_and_docs_exit_2 (test_pai_cli.TestPaiCLI.test_cli_missing_binary_clean_one_line_error_analyze_and_docs_exit_2)
+Verifies pai analyze and pai docs catch CoreBridgeUnavailableError with clean 1-line message and exit 2. ... ok
+test_cli_missing_binary_doctor_reports_failed_core_bridge_and_continues (test_pai_cli.TestPaiCLI.test_cli_missing_binary_doctor_reports_failed_core_bridge_and_continues)
+Verifies pai doctor turns missing binary into a failed core_bridge check and continues remaining checks. ... ok
+test_cli_pai_debug_re_raises_value_error (test_pai_cli.TestPaiCLI.test_cli_pai_debug_re_raises_value_error)
+Verifies PAI_DEBUG=1 causes cmd_analyze to re-raise ValueError rather than swallowing it into exit 2. ... ok
+test_cli_unrelated_value_error_in_subcommand_not_swallowed_by_main (test_pai_cli.TestPaiCLI.test_cli_unrelated_value_error_in_subcommand_not_swallowed_by_main)
+Verifies an unexpected ValueError in another subcommand is not caught/masked by main(). ... ok
+test_deferred_commands_notice (test_pai_cli.TestPaiCLI.test_deferred_commands_notice)
+Direct execution command (generate) prints deferred notice. ... ok
+test_pai_cli_bridge_protocol_error_distinct_message (test_pai_cli.TestPaiCLI.test_pai_cli_bridge_protocol_error_distinct_message)
+Finding W: Verifies that BridgeProtocolError produces a distinct error message ... ok
+test_pai_cli_clear_shadow_requires_yes (test_pai_cli.TestPaiCLI.test_pai_cli_clear_shadow_requires_yes)
+Finding AD: `pai clear-shadow` and `pai doctor --clear-shadow` fail closed without --yes. ... ok
+test_pai_code_with_user_tests_meaningful (test_pai_cli.TestPaiCLI.test_pai_code_with_user_tests_meaningful)
+pai code --tests with meaningful test file freezes tests and passes stub probe. ... ok
+test_pai_code_with_vacuous_tests_rejected (test_pai_cli.TestPaiCLI.test_pai_code_with_vacuous_tests_rejected)
+pai code --tests with vacuous test file fails closed via stub probe. ... ok
+test_pai_docs_lone_surrogate_filename_rust_mode_rejects_with_exit_1 (test_pai_cli.TestPaiCLI.test_pai_docs_lone_surrogate_filename_rust_mode_rejects_with_exit_1)
+Finding W: Verifies that pai docs on a lone surrogate filename in Rust mode ... ok
+test_pai_doctor_json_shadow_telemetry_granular_operations (test_pai_cli.TestPaiCLI.test_pai_doctor_json_shadow_telemetry_granular_operations)
+Finding AB: Verifies that pai doctor --json reports granular shadow telemetry: ... ok
+test_pai_doctor_returns_nonzero_on_failed_check (test_pai_cli.TestPaiCLI.test_pai_doctor_returns_nonzero_on_failed_check)
+Negative control: `pai doctor` returns exit code 1 if any check (e.g. smoke test) fails. ... ok
+test_pai_doctor_smoke_telemetry_tagged_as_doctor_not_cli (test_pai_cli.TestPaiCLI.test_pai_doctor_smoke_telemetry_tagged_as_doctor_not_cli)
+Finding BH: pai doctor smoke tests must be tagged with source='doctor' ... ok
+test_pai_doctor_text_and_json (test_pai_cli.TestPaiCLI.test_pai_doctor_text_and_json)
+Verifies `pai doctor` output in standard and JSON mode, including smoke tests. ... ok
+test_pai_models_list (test_pai_cli.TestPaiCLI.test_pai_models_list)
+Verifies `pai models list` output in standard and JSON mode. ... ok
+test_pai_route_and_explain (test_pai_cli.TestPaiCLI.test_pai_route_and_explain)
+Verifies `pai route` commands. ... ok
+test_pai_route_invalid_command_fails_closed (test_pai_cli.TestPaiCLI.test_pai_route_invalid_command_fails_closed)
+Invalid commands to `pai route` return non-zero exit code. ... ok
+test_probe_gpu_returns_string (test_pai_cli.TestPaiCLI.test_probe_gpu_returns_string)
+GPU probe returns non-empty descriptive string. ... ok
+test_probe_ollama_server_rejects_non_loopback (test_pai_cli.TestPaiCLI.test_probe_ollama_server_rejects_non_loopback)
+SSRF Defense: probe_ollama_server strictly rejects non-loopback URLs. ... ok
+test_subcommands_pass_live_budget_to_router_when_model_omitted (test_pai_cli.TestPaiCLI.test_subcommands_pass_live_budget_to_router_when_model_omitted)
+Regression test (Dogfooding Finding): ... ok
+test_verify_forecast_explanation_numbers_and_label (test_pai_cli.TestPaiCLI.test_verify_forecast_explanation_numbers_and_label)
+Phase 1.1 (3b): Verifies that `verify_forecast_explanation_numbers` catches ... ok
+test_ast_guard_rejection_exit_1 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_ast_guard_rejection_exit_1)
+Validates that solutions violating AST static guard are rejected (exit 1). ... ok
+test_collision_exit_4 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_collision_exit_4)
+Scenario 4: Collision without --overwrite returns exit 4; with --overwrite passes (exit 0). ... ok
+test_exhausted_repairs_exit_2 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_exhausted_repairs_exit_2)
+Scenario 3: Model fails across all repair iterations (exit 2, not staged). ... ok
+test_generator_error_exit_2 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_generator_error_exit_2)
+Scenario 7: Generator error during repair records GENERATOR_ERROR and returns exit 2. ... ok
+test_missing_out_dir_exit_1 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_missing_out_dir_exit_1)
+Validates that 'pai code' without --out exits 1. ... ok
+test_no_work_specified_exit_1 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_no_work_specified_exit_1)
+Validates that 'pai code' without task or tests exits 1 (never exits 0). ... ok
+test_pass_after_one_repair (test_pai_code_e2e.TestPaiCodeEndToEnd.test_pass_after_one_repair)
+Scenario 2: Initial solution buggy; repaired on iteration 1 (exit 0). ... ok
+test_probe_refusal_exit_5 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_probe_refusal_exit_5)
+Scenario 5: Sandbox capability probe failure or router refusal returns exit 5. ... ok
+test_vacuous_tests_exit_1 (test_pai_code_e2e.TestPaiCodeEndToEnd.test_vacuous_tests_exit_1)
+Scenario 6: Vacuous test suite generated by model rejected by stub probe (exit 1). ... ok
+test_zero_shot_pass (test_pai_code_e2e.TestPaiCodeEndToEnd.test_zero_shot_pass)
+Scenario 1: Model generates test and correct solution zero-shot (exit 0). ... ok
+test_csv_formula_injection_defense_and_export_escaping (test_pai_docs_e2e.TestPaiDocsE2E.test_csv_formula_injection_defense_and_export_escaping)
+Adversarial probe: ... ok
+test_docs_e2e_clean_markdown (test_pai_docs_e2e.TestPaiDocsE2E.test_docs_e2e_clean_markdown)
+Analyzes a markdown document with nonce envelope framing and returns 0. ... ok
+test_export_collision_and_source_protection_returns_4 (test_pai_docs_e2e.TestPaiDocsE2E.test_export_collision_and_source_protection_returns_4)
+Export collision defense: ... ok
+test_large_csv_sampling_reported (test_pai_docs_e2e.TestPaiDocsE2E.test_large_csv_sampling_reported)
+Large CSV with 200 rows sampled to 25 rows: ... ok
+test_negative_control_empty_file_returns_1 (test_pai_docs_e2e.TestPaiDocsE2E.test_negative_control_empty_file_returns_1) ... ok
+test_negative_control_non_existent_file_returns_1 (test_pai_docs_e2e.TestPaiDocsE2E.test_negative_control_non_existent_file_returns_1) ... ok
+test_negative_control_secret_file_denied_returns_1 (test_pai_docs_e2e.TestPaiDocsE2E.test_negative_control_secret_file_denied_returns_1) ... ok
+test_oversize_document_truncation_reporting (test_pai_docs_e2e.TestPaiDocsE2E.test_oversize_document_truncation_reporting)
+Document exceeding character budget has truncation reported with real file size on disk. ... ok
+test_pdf_input_returns_exit_code_3 (test_pai_docs_e2e.TestPaiDocsE2E.test_pdf_input_returns_exit_code_3)
+PDF document input returns clear exit code 3 (unsupported input type). ... ok
+test_planted_prompt_injection_contained_and_not_followed (test_pai_docs_e2e.TestPaiDocsE2E.test_planted_prompt_injection_contained_and_not_followed)
+Hostile instructions inside document body are contained inside envelope. ... ok
+test_router_refusal_returns_exit_code_5 (test_pai_docs_e2e.TestPaiDocsE2E.test_router_refusal_returns_exit_code_5) ... ok
+test_targeted_question_reflected_in_prompt (test_pai_docs_e2e.TestPaiDocsE2E.test_targeted_question_reflected_in_prompt) ... ok
+test_terminal_output_sanitization_removes_ansi_and_control_chars (test_pai_docs_e2e.TestPaiDocsE2E.test_terminal_output_sanitization_removes_ansi_and_control_chars) ... ok
+test_unsupported_extension_returns_exit_code_3 (test_pai_docs_e2e.TestPaiDocsE2E.test_unsupported_extension_returns_exit_code_3)
+Unsupported binary extension returns exit code 3. ... ok
+test_forecast_horizon_zero_refusal (test_pai_forecast_e2e.TestPaiForecastE2E.test_forecast_horizon_zero_refusal) ... ok
+test_forecast_malformed_refusal (test_pai_forecast_e2e.TestPaiForecastE2E.test_forecast_malformed_refusal) ... ok
+test_forecast_missing_file_refusal (test_pai_forecast_e2e.TestPaiForecastE2E.test_forecast_missing_file_refusal) ... ok
+test_forecast_seasonal_json (test_pai_forecast_e2e.TestPaiForecastE2E.test_forecast_seasonal_json) ... ok
+test_forecast_too_short_refusal (test_pai_forecast_e2e.TestPaiForecastE2E.test_forecast_too_short_refusal) ... ok
+test_forecast_trend_ascii (test_pai_forecast_e2e.TestPaiForecastE2E.test_forecast_trend_ascii) ... ok
+test_route_forecast (test_pai_forecast_e2e.TestPaiForecastE2E.test_route_forecast) ... ok
+test_best_matching_file_is_used (test_privacy.Local.test_best_matching_file_is_used) ... ok
+test_composite_falls_back_to_network_source_and_reports_reasons (test_privacy.Local.test_composite_falls_back_to_network_source_and_reports_reasons) ... ok
+test_injection_in_local_file_is_still_rejected (test_privacy.Local.test_injection_in_local_file_is_still_rejected) ... ok
+test_missing_directory (test_privacy.Local.test_missing_directory) ... ok
+test_no_match (test_privacy.Local.test_no_match) ... ok
+test_offline_agent_answers_from_local_files_with_zero_network (test_privacy.Local.test_offline_agent_answers_from_local_files_with_zero_network) ... ok
+test_symlinks_cannot_escape_the_root (test_privacy.Local.test_symlinks_cannot_escape_the_root) ... skipped 'symlink creation needs privileges on Windows'
+test_default_allow_list (test_privacy.Policy.test_default_allow_list) ... ok
+test_extra_domain_can_be_allowed (test_privacy.Policy.test_extra_domain_can_be_allowed) ... ok
+test_log_is_bounded (test_privacy.Policy.test_log_is_bounded) ... ok
+test_log_shows_exact_request_and_is_clearable (test_privacy.Policy.test_log_shows_exact_request_and_is_clearable) ... ok
+test_offline_blocks_everything_and_pipeline_reports_it (test_privacy.Policy.test_offline_blocks_everything_and_pipeline_reports_it) ... ok
+test_fence_markers_inside_context_are_neutralised (test_reasoner.Fencing.test_fence_markers_inside_context_are_neutralised) ... ok
+test_template_reasoner_uses_fence (test_reasoner.Fencing.test_template_reasoner_uses_fence) ... ok
+test_agent_degrades_to_error_status_and_still_purges (test_reasoner.LocalModel.test_agent_degrades_to_error_status_and_still_purges) ... ok
+test_failures_become_reasoner_errors (test_reasoner.LocalModel.test_failures_become_reasoner_errors) ... ok
+test_model_ram_fit_hysteresis_warm_bypass (test_reasoner.LocalModel.test_model_ram_fit_hysteresis_warm_bypass) ... ok
+test_non_loopback_url_refused (test_reasoner.LocalModel.test_non_loopback_url_refused) ... ok
+test_request_shape_has_no_tools_and_fenced_context (test_reasoner.LocalModel.test_request_shape_has_no_tools_and_fenced_context) ... ok
+test_response_is_capped (test_reasoner.LocalModel.test_response_is_capped) ... ok
+test_telemetry_model_ram_fit_check (test_reasoner.LocalModel.test_telemetry_model_ram_fit_check) ... ok
+test_token_cap_follows_tier (test_reasoner.LocalModel.test_token_cap_follows_tier) ... ok
+test_unreachable_server (test_reasoner.LocalModel.test_unreachable_server) ... ok
+test_cloud_candidate_data_model_only_m1d (test_router.TestModelRouter.test_cloud_candidate_data_model_only_m1d)
+M1d Readiness: Cloud candidates data model declares kind and data_leaves_machine. ... ok
+test_equal_ram_budgets_adoption_comparison (test_router.TestModelRouter.test_equal_ram_budgets_adoption_comparison)
+Adoption Test: Demonstrates that the router automatically selects the ... ok
+test_explain_route_formatting (test_router.TestModelRouter.test_explain_route_formatting)
+Verifies --explain-route human-readable output completeness. ... ok
+test_get_live_resident_model_exact_matching (test_router.TestModelRouter.test_get_live_resident_model_exact_matching)
+Validates exact name matching prevents prefix spoofing (e.g. tag pollution). ... ok
+test_get_live_resident_model_loopback_enforcement (test_router.TestModelRouter.test_get_live_resident_model_loopback_enforcement)
+Enforces loopback-only base_url for model server probe (SSRF prevention). ... ok
+test_get_live_resident_model_multiple_loaded (test_router.TestModelRouter.test_get_live_resident_model_multiple_loaded)
+Validates that when multiple models are resident, priority resolution selects highest capability. ... ok
+test_golden_vectors_conformance (test_router.TestModelRouter.test_golden_vectors_conformance)
+Verifies that the router satisfies 100% of frozen golden decision vectors (20 items). ... ok
+test_machine_profile_calibration_priority (test_router.TestModelRouter.test_machine_profile_calibration_priority)
+ADR-010: Router prioritizes empirical machine profile calibration over card priors. ... ok
+test_machine_profile_uncalibrated_conservative_multiplier (test_router.TestModelRouter.test_machine_profile_uncalibrated_conservative_multiplier)
+ADR-010: Uncalibrated models apply 1.5x multiplier + 512MB headroom. ... ok
+test_probe_1_fresh_machine_no_profile_uncalibrated_rule (test_router.TestModelRouter.test_probe_1_fresh_machine_no_profile_uncalibrated_rule)
+Reviewer Probe 1: On fresh PC without profile, available RAM 1850 MB, ... ok
+test_probe_2_plausibility_floor_rejects_tiny_delta (test_router.TestModelRouter.test_probe_2_plausibility_floor_rejects_tiny_delta)
+Reviewer Probe 2: A profile claiming host_delta_mb = 1.0 MB for 7B (< 50% card delta) ... ok
+test_probe_3_foreign_machine_id_fallback_to_uncalibrated (test_router.TestModelRouter.test_probe_3_foreign_machine_id_fallback_to_uncalibrated)
+Reviewer Probe 3: Profile from another machine (foreign machine_id) ... ok
+test_probe_4_automatic_live_telemetry_discovery (test_router.TestModelRouter.test_probe_4_automatic_live_telemetry_discovery)
+Reviewer Probe 4: ModelRouter automatically queries live telemetry ... ok
+test_resident_model_allowlist_validation_and_live_ps (test_router.TestModelRouter.test_resident_model_allowlist_validation_and_live_ps)
+Validates that resident_model is checked against candidate allow-list and queries /api/ps. ... ok
+test_t21_hostile_context_cannot_hijack_task_class (test_router.TestModelRouter.test_t21_hostile_context_cannot_hijack_task_class)
+Threat T21: Adversarial context cannot alter task class or force privileged execution. ... ok
+test_unknown_command_raises_value_error (test_router.TestModelRouter.test_unknown_command_raises_value_error)
+Unknown or malicious commands must fail closed immediately with ValueError. ... ok
+test_user_config_allow_list_and_preference (test_router.TestModelRouter.test_user_config_allow_list_and_preference)
+User configuration allow_models filter and preferred_models priority. ... ok
+test_class_circular_buffer (test_safe_code_runner.TestSafeCodeRunner.test_class_circular_buffer) ... ok
+test_environment_scrubbed (test_safe_code_runner.TestSafeCodeRunner.test_environment_scrubbed) ... ok
+test_infinite_loop_timeout_and_process_kill (test_safe_code_runner.TestSafeCodeRunner.test_infinite_loop_timeout_and_process_kill) ... ok
+test_network_blocked (test_safe_code_runner.TestSafeCodeRunner.test_network_blocked) ... ok
+test_syntax_error (test_safe_code_runner.TestSafeCodeRunner.test_syntax_error) ... ok
+test_valid_execution (test_safe_code_runner.TestSafeCodeRunner.test_valid_execution) ... ok
+test_evidence_file_exists_and_parses (test_sandbox_evidence.TestSandboxEvidenceSchema.test_evidence_file_exists_and_parses)
+Verifies that m2a_sandbox_results.json exists and contains valid JSON. ... FAIL
+test_evidence_json_schema_and_platform_fields (test_sandbox_evidence.TestSandboxEvidenceSchema.test_evidence_json_schema_and_platform_fields)
+Verifies that all recorded platforms in the evidence JSON follow the runner schema. ... ERROR
+test_platform_metadata_function_contract (test_sandbox_evidence.TestSandboxEvidenceSchema.test_platform_metadata_function_contract)
+Verifies get_platform_metadata() extracts required fields for the running host. ... ok
+test_raw_log_exists_and_contains_header (test_sandbox_evidence.TestSandboxEvidenceSchema.test_raw_log_exists_and_contains_header)
+Verifies that m2a_sandbox_raw.log exists and contains a valid harness banner. ... FAIL
+test_a11_crash_containment (test_sandbox_linux.TestLinuxSandboxContainment.test_a11_crash_containment)
+A11: Process crash/segfault is trapped cleanly; parent runner does not crash. ... skipped 'Linux sandbox tests run only on Linux'
+test_a1_infinite_loop_timeout (test_sandbox_linux.TestLinuxSandboxContainment.test_a1_infinite_loop_timeout)
+A1: Infinite loop is terminated cleanly at wall-clock deadline. ... skipped 'Linux sandbox tests run only on Linux'
+test_a2_memory_bomb (test_sandbox_linux.TestLinuxSandboxContainment.test_a2_memory_bomb)
+A2: Memory bomb (allocating 1 GB in a 512 MB sandbox) triggers MemoryError or killed. ... skipped 'Linux sandbox tests run only on Linux'
+test_a3_a7_process_proliferation (test_sandbox_linux.TestLinuxSandboxContainment.test_a3_a7_process_proliferation)
+A3 / A7: Process proliferation / fork bomb is bounded by RLIMIT_NPROC. ... skipped 'Linux sandbox tests run only on Linux'
+test_a4_canary_deletion (test_sandbox_linux.TestLinuxSandboxContainment.test_a4_canary_deletion)
+A4: Attempting to delete a canary file in read-only bound directory fails with PermissionError or EROFS. ... skipped 'Linux sandbox tests run only on Linux'
+test_a5_filesystem_read_escape (test_sandbox_linux.TestLinuxSandboxContainment.test_a5_filesystem_read_escape)
+A5: Attempting to read files in user home fails (masked by tmpfs /home). ... skipped 'Linux sandbox tests run only on Linux'
+test_a6_network_egress (test_sandbox_linux.TestLinuxSandboxContainment.test_a6_network_egress)
+A6: Attempting socket connections fails in unshared network namespace. ... skipped 'Linux sandbox tests run only on Linux'
+test_a8_ctypes_containment (test_sandbox_linux.TestLinuxSandboxContainment.test_a8_ctypes_containment)
+A8: Native code loading / ctypes escape attempt is trapped; parent intact. ... skipped 'Linux sandbox tests run only on Linux'
+test_a8_network_isolation_mutation_check (test_sandbox_linux.TestLinuxSandboxContainment.test_a8_network_isolation_mutation_check)
+Mutation check for Vector A8 (Finding F): ... skipped 'Linux sandbox tests run only on Linux'
+test_a9_stdout_flood (test_sandbox_linux.TestLinuxSandboxContainment.test_a9_stdout_flood)
+A9: Stdout stream flood is safely capped at 64 KB without deadlock. ... skipped 'Linux sandbox tests run only on Linux'
+test_behavioural_capability_probe (test_sandbox_linux.TestLinuxSandboxContainment.test_behavioural_capability_probe)
+Verifies that the live behavioural canary probe passes on this Linux system. ... skipped 'Linux sandbox tests run only on Linux'
+test_erofs_containment_regression (test_sandbox_linux.TestLinuxSandboxContainment.test_erofs_containment_regression)
+Requirement 2: Verify writing and deleting on read-only mount raises EROFS and is treated as CONTAINED. ... skipped 'Linux sandbox tests run only on Linux'
+test_extra_env_secret_passed_via_stdin_not_in_bwrap_argv (test_sandbox_linux.TestLinuxSandboxContainment.test_extra_env_secret_passed_via_stdin_not_in_bwrap_argv)
+DoD Section 4: Secrets passed via extra_env must be visible inside the sandbox ... skipped 'Linux sandbox tests run only on Linux'
+test_is_bwrap_functional_on_linux (test_sandbox_linux.TestLinuxSandboxContainment.test_is_bwrap_functional_on_linux)
+Requirement 1: Verify is_bwrap_functional() returns True on Linux host when bwrap is installed. ... skipped 'Linux sandbox tests run only on Linux'
+test_probe_handles_erofs_simulation (test_sandbox_linux.TestLinuxSandboxContainment.test_probe_handles_erofs_simulation)
+Requirement 2: Ensure capability probe exception handler recognizes EROFS/EACCES/EPERM as CONTAINED and rejects others. ... skipped 'Linux sandbox tests run only on Linux'
+test_valid_hello_world_execution (test_sandbox_linux.TestLinuxSandboxContainment.test_valid_hello_world_execution)
+Valid computation runs and produces correct output file in scratch. ... skipped 'Linux sandbox tests run only on Linux'
+test_extra_files_rejected (test_sandbox_policy.Results.test_extra_files_rejected) ... ok
+test_oversize_and_garbage (test_sandbox_policy.Results.test_oversize_and_garbage) ... ok
+test_stdout_tail_truncated (test_sandbox_policy.Results.test_stdout_tail_truncated) ... ok
+test_symlinked_results_rejected (test_sandbox_policy.Results.test_symlinked_results_rejected) ... skipped 'symlinks need privileges on Windows'
+test_utf8_bom_from_windows_powershell_is_accepted (test_sandbox_policy.Results.test_utf8_bom_from_windows_powershell_is_accepted) ... ok
+test_valid (test_sandbox_policy.Results.test_valid) ... ok
+test_wrong_schema_types_and_extra_keys (test_sandbox_policy.Results.test_wrong_schema_types_and_extra_keys) ... ok
+test_command_is_escaped (test_sandbox_policy.Wsb.test_command_is_escaped) ... ok
+test_drive_and_profile_roots_forbidden (test_sandbox_policy.Wsb.test_drive_and_profile_roots_forbidden) ... ok
+test_duplicate_override_rejected (test_sandbox_policy.Wsb.test_duplicate_override_rejected) ... ok
+test_each_isolation_setting_is_mandatory (test_sandbox_policy.Wsb.test_each_isolation_setting_is_mandatory) ... ok
+test_generated_config_passes_its_own_validator (test_sandbox_policy.Wsb.test_generated_config_passes_its_own_validator) ... ok
+test_input_must_be_read_only (test_sandbox_policy.Wsb.test_input_must_be_read_only) ... ok
+test_memory_ceiling_enforced_at_generation (test_sandbox_policy.Wsb.test_memory_ceiling_enforced_at_generation) ... ok
+test_missing_networking_element_rejected (test_sandbox_policy.Wsb.test_missing_networking_element_rejected) ... ok
+test_networking_enabled_rejected (test_sandbox_policy.Wsb.test_networking_enabled_rejected) ... ok
+test_unknown_elements_fail_closed (test_sandbox_policy.Wsb.test_unknown_elements_fail_closed) ... ok
+test_xml_tricks_and_garbage (test_sandbox_policy.Wsb.test_xml_tricks_and_garbage) ... ok
+test_pai_dir_default_fail_closed_when_inaccessible (test_sandbox_win32.TestPaiDirResolution.test_pai_dir_default_fail_closed_when_inaccessible) ... ok
+test_pai_dir_override_unwritable_fail_closed (test_sandbox_win32.TestPaiDirResolution.test_pai_dir_override_unwritable_fail_closed) ... ok
+test_pai_dir_override_valid (test_sandbox_win32.TestPaiDirResolution.test_pai_dir_override_valid) ... ok
+test_a11_crash_containment (test_sandbox_win32.TestWin32SandboxContainment.test_a11_crash_containment)
+A11: Process crash/segfault is trapped cleanly; parent runner does not crash. ... ok
+test_a1_infinite_loop_timeout (test_sandbox_win32.TestWin32SandboxContainment.test_a1_infinite_loop_timeout)
+A1: Infinite loop is terminated cleanly at wall-clock deadline. ... FAIL
+test_a2_memory_bomb (test_sandbox_win32.TestWin32SandboxContainment.test_a2_memory_bomb)
+A2: Memory bomb (allocating 1 GB in a 256 MB sandbox) triggers MemoryError. ... FAIL
+test_a3_a7_process_proliferation (test_sandbox_win32.TestWin32SandboxContainment.test_a3_a7_process_proliferation)
+A3 / A7: Child process cannot spawn subprocesses (Job Object limit = 1). ... FAIL
+test_a4_canary_deletion (test_sandbox_win32.TestWin32SandboxContainment.test_a4_canary_deletion)
+A4: Attempting to delete a canary file outside scratch fails with PermissionError. ... FAIL
+test_a5_filesystem_read_escape (test_sandbox_win32.TestWin32SandboxContainment.test_a5_filesystem_read_escape)
+A5: Attempting to read files outside scratch fails with PermissionError. ... FAIL
+test_a6_network_egress (test_sandbox_win32.TestWin32SandboxContainment.test_a6_network_egress)
+A6: Attempting socket connections fails with PermissionError (WinError 10013). ... FAIL
+test_a8_ctypes_containment (test_sandbox_win32.TestWin32SandboxContainment.test_a8_ctypes_containment)
+A8: Native code loading / ctypes escape attempt is trapped; parent intact. ... FAIL
+test_a9_stdout_flood (test_sandbox_win32.TestWin32SandboxContainment.test_a9_stdout_flood)
+A9: Stdout stream flood is safely capped at 64 KB without deadlock. ... FAIL
+test_behavioural_capability_probe (test_sandbox_win32.TestWin32SandboxContainment.test_behavioural_capability_probe)
+Verifies that the live behavioural canary probe passes on this system. ... FAIL
+test_valid_hello_world_execution (test_sandbox_win32.TestWin32SandboxContainment.test_valid_hello_world_execution)
+Valid computation runs and produces correct output file in scratch. ... FAIL
+test_binary_hash_tracking_and_rebuild_invalidation (test_shadow_isolation_guard.TestShadowIsolationGuard.test_binary_hash_tracking_and_rebuild_invalidation)
+Finding AX: Verifies that comparison records track binary_hash, ... ok
+test_clear_shadow_archives_log_when_confirmed (test_shadow_isolation_guard.TestShadowIsolationGuard.test_clear_shadow_archives_log_when_confirmed)
+Finding AD: Confirmed clearing archives the existing file with a timestamp ... ok
+test_clear_shadow_requires_yes_flag (test_shadow_isolation_guard.TestShadowIsolationGuard.test_clear_shadow_requires_yes_flag)
+Finding AD: `pai clear-shadow` and `pai doctor --clear-shadow` must fail closed ... ok
+test_content_digest_and_driver_tagging (test_shadow_isolation_guard.TestShadowIsolationGuard.test_content_digest_and_driver_tagging)
+Finding AP/AQ: Verifies that: ... ok
+test_corrupt_lines_detected_and_invalidate_window (test_shadow_isolation_guard.TestShadowIsolationGuard.test_corrupt_lines_detected_and_invalidate_window)
+Finding AF: Non-JSON / corrupt lines in the shadow log must be reported in ... ok
+test_default_log_immutability_during_parity_runner (test_shadow_isolation_guard.TestShadowIsolationGuard.test_default_log_immutability_during_parity_runner)
+Finding AI/AM: Executes real tools/windows_parity_run.py in a separate subprocess ... FAIL
+test_default_log_immutability_during_test_suites (test_shadow_isolation_guard.TestShadowIsolationGuard.test_default_log_immutability_during_test_suites)
+Finding AI/AM: Executes real differential test module in a separate subprocess ... ok
+test_default_telemetry_source_is_unknown_and_safe (test_shadow_isolation_guard.TestShadowIsolationGuard.test_default_telemetry_source_is_unknown_and_safe)
+Finding AH: Verifies that in a plain Python process without _bootstrap and ... ok
+test_distinct_input_minimums_enforced_in_gate (test_shadow_isolation_guard.TestShadowIsolationGuard.test_distinct_input_minimums_enforced_in_gate)
+Finding AQ: Verifies that distinct-input minimums (ingest_file: 50, ingest_folder: 20) ... ok
+test_doctor_reports_write_failure_marker_and_first_entry (test_shadow_isolation_guard.TestShadowIsolationGuard.test_doctor_reports_write_failure_marker_and_first_entry)
+Finding AO: Verifies that when a write failure occurs, `pai doctor` and `pai doctor --json` ... ok
+test_durable_write_failure_marker_across_processes (test_shadow_isolation_guard.TestShadowIsolationGuard.test_durable_write_failure_marker_across_processes)
+Findings AL & AO: Verifies durable write failure persistence across processes with log-scoped markers. ... ok
+test_evaluation_manifest_lifecycle (test_shadow_isolation_guard.TestShadowIsolationGuard.test_evaluation_manifest_lifecycle)
+Finding AX: Verifies that evaluation_manifest.json is created, verified, ... ERROR
+test_foreign_log_write_failure_marker_survives_clear_shadow (test_shadow_isolation_guard.TestShadowIsolationGuard.test_foreign_log_write_failure_marker_survives_clear_shadow)
+Finding AO: Verifies that marker files are strictly scoped to the active log's hash, ... ok
+test_log_write_failure_invalidates_window (test_shadow_isolation_guard.TestShadowIsolationGuard.test_log_write_failure_invalidates_window)
+Finding AK/AL: Verifies that if writing a discrepancy to the log file fails ... ok
+test_shadow_evaluation_gate_environment_isolation (test_shadow_isolation_guard.TestShadowIsolationGuard.test_shadow_evaluation_gate_environment_isolation)
+Finding AZ: Verifies that verify_shadow_evaluation_gate strictly fails closed ... ERROR
+test_shadow_isolation_mutation_check (test_shadow_isolation_guard.TestShadowIsolationGuard.test_shadow_isolation_mutation_check)
+Finding AI: Mutation check verifying that when test isolation is disabled ... FAIL
+test_source_separation_quota_accounting (test_shadow_isolation_guard.TestShadowIsolationGuard.test_source_separation_quota_accounting)
+Finding AE: Verifies that only records with source='cli' count toward cli_comparisons, ... ok
+test_window_complete_conditions (test_shadow_isolation_guard.TestShadowIsolationGuard.test_window_complete_conditions)
+Finding AK/AN/AQ: Verifies that window_complete is strictly computed based on: ... ok
+test_window_not_started_without_cli_comparisons (test_shadow_isolation_guard.TestShadowIsolationGuard.test_window_not_started_without_cli_comparisons)
+Finding AE: If only synthetic (doctor, runner, test, unknown) comparisons exist, ... ok
+test_check_singlish_promotion_gate_enforces_no_regression_and_threshold (test_singlish_quality_gate.TestSinglishQualityGate.test_check_singlish_promotion_gate_enforces_no_regression_and_threshold)
+Promotion gate rejects unverified licence, failed class quality check, None, below-threshold, or regression. ... ok
+test_detect_singlish_or_sinhala_negative_on_english_eval_sets (test_singlish_quality_gate.TestSinglishQualityGate.test_detect_singlish_or_sinhala_negative_on_english_eval_sets)
+All English prompts in coding_tasks.json, coding_tasks_holdout.json, and analyze_docs_questions.json must return False. ... ok
+test_detect_singlish_or_sinhala_positive_across_all_eval_sets (test_singlish_quality_gate.TestSinglishQualityGate.test_detect_singlish_or_sinhala_positive_across_all_eval_sets)
+All prompts in singlish_quality_gate.json, coding_tasks_singlish.json, and coding_tasks_holdout_singlish.json must be detected. ... ok
+test_pai_chat_and_forecast_question_bilingual_e2e_with_mock_server (test_singlish_quality_gate.TestSinglishQualityGate.test_pai_chat_and_forecast_question_bilingual_e2e_with_mock_server)
+End-to-end test for `pai chat` and `pai forecast --question` with Singlish prompt. ... ok
+test_router_singlish_threshold_preference_and_below_threshold_warning (test_singlish_quality_gate.TestSinglishQualityGate.test_router_singlish_threshold_preference_and_below_threshold_warning)
+Router uses requested task_class Singlish score, requires passing quality check ... ok
+test_threat_t21_singlish_in_untrusted_context_never_triggers_singlish_routing (test_singlish_quality_gate.TestSinglishQualityGate.test_threat_t21_singlish_in_untrusted_context_never_triggers_singlish_routing)
+Threat T21 negative control: Singlish inside untrusted context must never trigger Singlish routing. ... ok
+test_synthesized_explanation_grounds_premises (test_symbolic_reasoner.CodeSynthesizerTests.test_synthesized_explanation_grounds_premises) ... ok
+test_synthesized_python_passes_ast_guard (test_symbolic_reasoner.CodeSynthesizerTests.test_synthesized_python_passes_ast_guard) ... ok
+test_synthesized_rust_code (test_symbolic_reasoner.CodeSynthesizerTests.test_synthesized_rust_code) ... ok
+test_direct_negation_conflict_resolved_by_trust (test_symbolic_reasoner.ConflictDetectorTests.test_direct_negation_conflict_resolved_by_trust) ... ok
+test_functional_collision_with_equal_trust_flags_unresolved (test_symbolic_reasoner.ConflictDetectorTests.test_functional_collision_with_equal_trust_flags_unresolved) ... ok
+test_negation_extraction_and_unresolved_conflict (test_symbolic_reasoner.ConflictDetectorTests.test_negation_extraction_and_unresolved_conflict) ... ok
+test_per_source_trust_wiring (test_symbolic_reasoner.ConflictDetectorTests.test_per_source_trust_wiring) ... ok
+test_source_trust_spoofing_blocked (test_symbolic_reasoner.ConflictDetectorTests.test_source_trust_spoofing_blocked)
+Threat T14: Untrusted web text containing '[Source: local_knowledge]' cannot spoof high trust. ... ok
+test_cycle_detection_fails_closed (test_symbolic_reasoner.ExecutionGraphTests.test_cycle_detection_fails_closed) ... ok
+test_depth_cap_halts_execution_early (test_symbolic_reasoner.ExecutionGraphTests.test_depth_cap_halts_execution_early) ... ok
+test_topological_execution (test_symbolic_reasoner.ExecutionGraphTests.test_topological_execution) ... ok
+test_invariant_i1_strict_grounding (test_symbolic_reasoner.FormalInvariantsTests.test_invariant_i1_strict_grounding)
+I1: Uncited claims or empty context are explicitly marked UNGROUNDED. ... ok
+test_invariant_i2_deterministic_termination (test_symbolic_reasoner.FormalInvariantsTests.test_invariant_i2_deterministic_termination)
+I2: Execution graph halts deterministically within budget depth cap. ... ok
+test_invariant_i3_budget_containment (test_symbolic_reasoner.FormalInvariantsTests.test_invariant_i3_budget_containment)
+I3: Compressed tier enforces reduced node depth. ... ok
+test_invariant_i4_ephemeral_purge (test_symbolic_reasoner.FormalInvariantsTests.test_invariant_i4_ephemeral_purge)
+I4: Working node registers are zeroized/cleared post-execution. ... ok
+test_invariant_i5_auditability_trace (test_symbolic_reasoner.FormalInvariantsTests.test_invariant_i5_auditability_trace)
+I5: Reasoning output contains structured audit trace and timings. ... ok
+test_invariant_i6_ast_isolation (test_symbolic_reasoner.FormalInvariantsTests.test_invariant_i6_ast_isolation)
+I6: Synthesized code passes Tier-1 AST Guard without forbidden hooks. ... ok
+test_empty_atoms_marked_ungrounded (test_symbolic_reasoner.GroundingValidatorTests.test_empty_atoms_marked_ungrounded) ... ok
+test_invalid_citation_and_unresolved_hazard (test_symbolic_reasoner.GroundingValidatorTests.test_invalid_citation_and_unresolved_hazard) ... ok
+test_valid_grounding (test_symbolic_reasoner.GroundingValidatorTests.test_valid_grounding) ... ok
+test_agent_synthesizes_code_safely (test_symbolic_reasoner.NeuroSymbolicReasonerIntegrationTests.test_agent_synthesizes_code_safely) ... ok
+test_agent_with_neuro_symbolic_reasoner_and_purge (test_symbolic_reasoner.NeuroSymbolicReasonerIntegrationTests.test_agent_with_neuro_symbolic_reasoner_and_purge) ... ok
+test_atom_extraction (test_symbolic_reasoner.SymbolicCoreTests.test_atom_extraction) ... ok
+test_budget_aware_graph_depth (test_symbolic_reasoner.SymbolicCoreTests.test_budget_aware_graph_depth) ... ok
+test_intent_classification (test_symbolic_reasoner.SymbolicCoreTests.test_intent_classification) ... ok
+test_premise_extraction (test_symbolic_reasoner.SymbolicCoreTests.test_premise_extraction) ... ok
+test_snapshot_shape_and_ipc_json (test_telemetry.Snapshot.test_snapshot_shape_and_ipc_json) ... ok
+test_win32_struct_layouts_match_documented_sizes (test_telemetry.Snapshot.test_win32_struct_layouts_match_documented_sizes) ... ok
+test_balanced_by_ram_and_by_load (test_telemetry.TierPolicy.test_balanced_by_ram_and_by_load) ... ok
+test_battery_on_ac_is_ignored (test_telemetry.TierPolicy.test_battery_on_ac_is_ignored) ... ok
+test_boundaries (test_telemetry.TierPolicy.test_boundaries) ... ok
+test_compressed (test_telemetry.TierPolicy.test_compressed) ... ok
+test_high (test_telemetry.TierPolicy.test_high) ... ok
+test_low_battery_downgrades_and_disables_speculation (test_telemetry.TierPolicy.test_low_battery_downgrades_and_disables_speculation) ... ok
+test_saturated_cpu_halves_threads (test_telemetry.TierPolicy.test_saturated_cpu_halves_threads) ... ok
+test_unknown_memory_is_conservative_not_invented (test_telemetry.TierPolicy.test_unknown_memory_is_conservative_not_invented) ... ok
+test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at C:\\Users\\hp\\AppData\\Local\\Temp\\pai_pre_bw_hk6yuwg2\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
+test_telemetry_parity_live (test_telemetry_parity.TestTelemetryParity.test_telemetry_parity_live) ... skipped 'pai-core binary not built'
+test_constitution_drift_rejected (test_updater.Attacks.test_constitution_drift_rejected) ... ok
+test_garbage_signature (test_updater.Attacks.test_garbage_signature) ... ok
+test_installed_release_tampering_blocks_rollback (test_updater.Attacks.test_installed_release_tampering_blocks_rollback) ... ok
+test_malleated_signature_rejected (test_updater.Attacks.test_malleated_signature_rejected) ... ok
+test_missing_signature (test_updater.Attacks.test_missing_signature) ... ok
+test_oversize_manifest (test_updater.Attacks.test_oversize_manifest) ... ok
+test_path_traversal_in_signed_manifest (test_updater.Attacks.test_path_traversal_in_signed_manifest) ... ok
+test_revoked_key (test_updater.Attacks.test_revoked_key) ... ok
+test_rollback_and_replay_blocked (test_updater.Attacks.test_rollback_and_replay_blocked) ... ok
+test_same_size_tamper_detected_by_hash (test_updater.Attacks.test_same_size_tamper_detected_by_hash) ... ok
+test_signed_by_unknown_key (test_updater.Attacks.test_signed_by_unknown_key) ... ok
+test_small_order_trust_keys_rejected (test_updater.Attacks.test_small_order_trust_keys_rejected) ... ok
+test_symlinked_payload_rejected (test_updater.Attacks.test_symlinked_payload_rejected) ... skipped 'symlinks need privileges on Windows'
+test_tampered_manifest_breaks_signature (test_updater.Attacks.test_tampered_manifest_breaks_signature) ... ok
+test_tampered_payload (test_updater.Attacks.test_tampered_payload) ... ok
+test_unlisted_file_rejected (test_updater.Attacks.test_unlisted_file_rejected) ... ok
+test_bad_lengths_return_false (test_updater.Crypto.test_bad_lengths_return_false) ... ok
+test_cross_check_with_cryptography_package (test_updater.Crypto.test_cross_check_with_cryptography_package) ... skipped 'cryptography not installed'
+test_rfc8032_vector_1 (test_updater.Crypto.test_rfc8032_vector_1) ... ok
+test_hex_text_signature_accepted (test_updater.Happy.test_hex_text_signature_accepted) ... ok
+test_upgrade_then_rollback (test_updater.Happy.test_upgrade_then_rollback) ... ok
+test_valid_release_installs (test_updater.Happy.test_valid_release_installs) ... ok
+test_read_only_directory_is_protected (test_updater.TrustRoot.test_read_only_directory_is_protected) ... skipped 'needs a non-root POSIX user'
+test_writable_directory_is_reported_unprotected (test_updater.TrustRoot.test_writable_directory_is_reported_unprotected) ... ok
+test_conformance_ed25519_vectors_parity (test_updater_differential.TestEd25519Differential.test_conformance_ed25519_vectors_parity)
+Validates all 173 vectors in ed25519_vectors.json against both Python ref and Rust bridge. ... ok
+test_differential_against_cryptography (test_updater_differential.TestEd25519Differential.test_differential_against_cryptography)
+Cross-checks known-answer vectors independently against OpenSSL via cryptography package. ... skipped 'cryptography package not installed'
+test_differential_mutation_fuzzing (test_updater_differential.TestEd25519Differential.test_differential_mutation_fuzzing)
+Runs 300 randomized mutations verifying 100% agreement between Python and Rust. ... ok
+test_invalid_lengths_rejected_both (test_updater_differential.TestEd25519Differential.test_invalid_lengths_rejected_both) ... ok
+test_malleated_signature_rejected_both (test_updater_differential.TestEd25519Differential.test_malleated_signature_rejected_both) ... ok
+test_rfc8032_test_vector_1 (test_updater_differential.TestEd25519Differential.test_rfc8032_test_vector_1) ... ok
+test_constitution_drift_rejected_both (test_updater_differential.TestUpdaterDifferential.test_constitution_drift_rejected_both) ... ok
+test_differential_small_order_trust_key_rejection (test_updater_differential.TestUpdaterDifferential.test_differential_small_order_trust_key_rejection)
+Small-order trust keys (identity, order 2, order 4) must be rejected on both sides. ... ok
+test_differential_trust_keys_eager_bad_hex_rejection (test_updater_differential.TestUpdaterDifferential.test_differential_trust_keys_eager_bad_hex_rejection)
+[valid_signer, bad_hex_key] must fail eagerly before verifying any release on both sides. ... ok
+test_directory_walk_dangling_symlink_rejected_both (test_updater_differential.TestUpdaterDifferential.test_directory_walk_dangling_symlink_rejected_both) ... skipped 'Symlinks not supported on this user/platform'
+test_directory_walk_unlisted_symlink_dir_rejected_both (test_updater_differential.TestUpdaterDifferential.test_directory_walk_unlisted_symlink_dir_rejected_both) ... skipped 'Symlinks not supported on this user/platform'
+test_hex_text_signature_accepted_both (test_updater_differential.TestUpdaterDifferential.test_hex_text_signature_accepted_both) ... ok
+test_manifest_format_boolean_rejected_both (test_updater_differential.TestUpdaterDifferential.test_manifest_format_boolean_rejected_both) ... ok
+test_manifest_format_float_rejected_both (test_updater_differential.TestUpdaterDifferential.test_manifest_format_float_rejected_both) ... ok
+test_manifest_size_float_rejected_both (test_updater_differential.TestUpdaterDifferential.test_manifest_size_float_rejected_both) ... ok
+test_path_traversal_rejected_both (test_updater_differential.TestUpdaterDifferential.test_path_traversal_rejected_both) ... ok
+test_python_fallback_flag_bypasses_rust (test_updater_differential.TestUpdaterDifferential.test_python_fallback_flag_bypasses_rust)
+Slice 6 Fallback Test: ... ok
+test_real_binary_rust_authoritative_verify_release_and_ed25519 (test_updater_differential.TestUpdaterDifferential.test_real_binary_rust_authoritative_verify_release_and_ed25519)
+Slice 6 Real-Binary Test: ... ok
+test_rollback_state_handling_with_rust_core (test_updater_differential.TestUpdaterDifferential.test_rollback_state_handling_with_rust_core)
+Slice 6: Verifies rollback state handling across Python and Rust bridge: ... ok
+test_same_size_tamper_rejected_both (test_updater_differential.TestUpdaterDifferential.test_same_size_tamper_rejected_both) ... ok
+test_shadow_mode_parity_and_discrepancy_tracking (test_updater_differential.TestUpdaterDifferential.test_shadow_mode_parity_and_discrepancy_tracking)
+Verifies updater behavior in shadow mode with PAI_USE_RUST_CORE=1. ... ok
+test_signature_control_char_rejected_both (test_updater_differential.TestUpdaterDifferential.test_signature_control_char_rejected_both) ... ok
+test_signature_exact_128_hex_trailing_newline_accepted_both (test_updater_differential.TestUpdaterDifferential.test_signature_exact_128_hex_trailing_newline_accepted_both) ... ok
+test_signature_internal_spaces_rejected_both (test_updater_differential.TestUpdaterDifferential.test_signature_internal_spaces_rejected_both) ... ok
+test_signature_nbsp_rejected_both (test_updater_differential.TestUpdaterDifferential.test_signature_nbsp_rejected_both) ... ok
+test_streaming_hash_large_payload_parity (test_updater_differential.TestUpdaterDifferential.test_streaming_hash_large_payload_parity) ... ok
+test_tampered_payload_rejected_both (test_updater_differential.TestUpdaterDifferential.test_tampered_payload_rejected_both) ... ok
+test_trust_file_invalid_key_hard_error_both (test_updater_differential.TestUpdaterDifferential.test_trust_file_invalid_key_hard_error_both) ... ok
+test_unlisted_file_rejected_both (test_updater_differential.TestUpdaterDifferential.test_unlisted_file_rejected_both) ... ok
+test_valid_release_differential (test_updater_differential.TestUpdaterDifferential.test_valid_release_differential) ... ok
+test_version_above_u32_rejected_both (test_updater_differential.TestUpdaterDifferential.test_version_above_u32_rejected_both) ... ok
+test_version_arabic_indic_digits_rejected_both (test_updater_differential.TestUpdaterDifferential.test_version_arabic_indic_digits_rejected_both) ... ok
+test_version_trailing_newline_rejected_both (test_updater_differential.TestUpdaterDifferential.test_version_trailing_newline_rejected_both) ... ok
+test_benign_text_has_no_flags (test_verifier.Injection.test_benign_text_has_no_flags) ... ok
+test_chat_template_tokens_flagged (test_verifier.Injection.test_chat_template_tokens_flagged) ... ok
+test_flag_policy_keeps_text_but_reports (test_verifier.Injection.test_flag_policy_keeps_text_but_reports) ... ok
+test_rejected_by_default (test_verifier.Injection.test_rejected_by_default) ... ok
+test_repetitive_spam_rejected (test_verifier.Quality.test_repetitive_spam_rejected) ... ok
+test_sinhala_prose_is_accepted (test_verifier.Quality.test_sinhala_prose_is_accepted) ... ok
+test_symbol_garbage_rejected (test_verifier.Quality.test_symbol_garbage_rejected) ... ok
+test_byte_truncation_never_splits_utf8 (test_verifier.Sanitising.test_byte_truncation_never_splits_utf8) ... ok
+test_empty_and_tiny (test_verifier.Sanitising.test_empty_and_tiny) ... ok
+test_entities_decoded (test_verifier.Sanitising.test_entities_decoded) ... ok
+test_strips_script_style_nav_but_keeps_prose (test_verifier.Sanitising.test_strips_script_style_nav_but_keeps_prose) ... ok
+test_unclosed_script_cannot_leak_payload (test_verifier.Sanitising.test_unclosed_script_cannot_leak_payload) ... ok
+test_decode_envelope_json_strict_policy_and_canonical_set_order (test_verify_loop.TestBoundedRepairLoopAndStaging.test_decode_envelope_json_strict_policy_and_canonical_set_order) ... ok
+test_extract_example_assertions_and_tuning_set_coverage (test_verify_loop.TestBoundedRepairLoopAndStaging.test_extract_example_assertions_and_tuning_set_coverage) ... ok
+test_extract_example_assertions_i64_and_depth_bounds (test_verify_loop.TestBoundedRepairLoopAndStaging.test_extract_example_assertions_i64_and_depth_bounds) ... ok
+test_extract_example_assertions_rejects_unsafe_calls_ellipsis_and_approx_floats (test_verify_loop.TestBoundedRepairLoopAndStaging.test_extract_example_assertions_rejects_unsafe_calls_ellipsis_and_approx_floats) ... ok
+test_prepare_test_suite_appends_non_droppable_canonical_examples (test_verify_loop.TestBoundedRepairLoopAndStaging.test_prepare_test_suite_appends_non_droppable_canonical_examples) ... ok
+test_run_repair_loop_exhausts_repairs (test_verify_loop.TestBoundedRepairLoopAndStaging.test_run_repair_loop_exhausts_repairs) ... ok
+test_run_repair_loop_passes_on_repair (test_verify_loop.TestBoundedRepairLoopAndStaging.test_run_repair_loop_passes_on_repair) ... ok
+test_run_repair_loop_passes_zero_shot (test_verify_loop.TestBoundedRepairLoopAndStaging.test_run_repair_loop_passes_zero_shot) ... ok
+test_run_repair_loop_records_generator_error (test_verify_loop.TestBoundedRepairLoopAndStaging.test_run_repair_loop_records_generator_error) ... ok
+test_run_repair_loop_rejects_empty_code_from_generator (test_verify_loop.TestBoundedRepairLoopAndStaging.test_run_repair_loop_rejects_empty_code_from_generator) ... ok
+test_run_repair_loop_rejects_test_mutation (test_verify_loop.TestBoundedRepairLoopAndStaging.test_run_repair_loop_rejects_test_mutation) ... ok
+test_safe_staging_exclusive_create_and_symlink_rejection (test_verify_loop.TestBoundedRepairLoopAndStaging.test_safe_staging_exclusive_create_and_symlink_rejection) ... ok
+test_sanitize_untrusted_diagnostics_envelope_and_stripping (test_verify_loop.TestBoundedRepairLoopAndStaging.test_sanitize_untrusted_diagnostics_envelope_and_stripping) ... ok
+test_stage_artifacts_rejects_directory_destination (test_verify_loop.TestBoundedRepairLoopAndStaging.test_stage_artifacts_rejects_directory_destination) ... ok
+test_stage_artifacts_rejects_symlink_destination_with_overwrite (test_verify_loop.TestBoundedRepairLoopAndStaging.test_stage_artifacts_rejects_symlink_destination_with_overwrite) ... ok
+test_stage_artifacts_rejects_symlink_destination_without_overwrite (test_verify_loop.TestBoundedRepairLoopAndStaging.test_stage_artifacts_rejects_symlink_destination_without_overwrite) ... ok
+test_stage_artifacts_rejects_symlink_out_dir (test_verify_loop.TestBoundedRepairLoopAndStaging.test_stage_artifacts_rejects_symlink_out_dir) ... ok
+test_stage_unverified_artifact_isolated_and_collision_safe (test_verify_loop.TestBoundedRepairLoopAndStaging.test_stage_unverified_artifact_isolated_and_collision_safe) ... ok
+test_top_level_test_function_invocation_normalized_and_passes_stub_probe (test_verify_loop.TestBoundedRepairLoopAndStaging.test_top_level_test_function_invocation_normalized_and_passes_stub_probe) ... ok
+test_verify_verdict_frame_hardened_rejections (test_verify_loop.TestBoundedRepairLoopAndStaging.test_verify_verdict_frame_hardened_rejections) ... ok
+test_empty_test_suite_rejected (test_verify_loop.TestFrozenTestSuite.test_empty_test_suite_rejected) ... ok
+test_freeze_calculates_hash_and_counts_assertions (test_verify_loop.TestFrozenTestSuite.test_freeze_calculates_hash_and_counts_assertions) ... ok
+test_integrity_raises_on_mutation (test_verify_loop.TestFrozenTestSuite.test_integrity_raises_on_mutation) ... ok
+test_syntax_error_rejected (test_verify_loop.TestFrozenTestSuite.test_syntax_error_rejected) ... ok
+test_meaningful_tests_pass_stub_probe (test_verify_loop.TestStubProbe.test_meaningful_tests_pass_stub_probe) ... ok
+test_nameerror_suite_rejected_as_invalid (test_verify_loop.TestStubProbe.test_nameerror_suite_rejected_as_invalid) ... ok
+test_pytest_style_suite_discovered_and_verified (test_verify_loop.TestStubProbe.test_pytest_style_suite_discovered_and_verified) ... ok
+test_timeout_suite_rejected_as_invalid (test_verify_loop.TestStubProbe.test_timeout_suite_rejected_as_invalid) ... ok
+test_unittest_style_tests_pass_stub_probe (test_verify_loop.TestStubProbe.test_unittest_style_tests_pass_stub_probe) ... ok
+test_vacuous_assertions_rejected_by_stub_probe (test_verify_loop.TestStubProbe.test_vacuous_assertions_rejected_by_stub_probe) ... ok
+test_weak_is_not_none_suite_rejected (test_verify_loop.TestStubProbe.test_weak_is_not_none_suite_rejected) ... ok
+test_zero_assertions_rejected_as_vacuous (test_verify_loop.TestStubProbe.test_zero_assertions_rejected_as_vacuous) ... ok
+test_correct_solution_passes (test_verify_loop.TestVerifyLoopExecution.test_correct_solution_passes) ... ok
+test_driver_replacement_or_deletion_rejected (test_verify_loop.TestVerifyLoopExecution.test_driver_replacement_or_deletion_rejected) ... ok
+test_empty_tests_discovery_fails (test_verify_loop.TestVerifyLoopExecution.test_empty_tests_discovery_fails) ... ok
+test_equality_hijack_int_subclass_module_level_assert_rejected (test_verify_loop.TestVerifyLoopExecution.test_equality_hijack_int_subclass_module_level_assert_rejected) ... ok
+test_equality_hijack_list_subclass_module_level_assert_rejected (test_verify_loop.TestVerifyLoopExecution.test_equality_hijack_list_subclass_module_level_assert_rejected) ... ok
+test_equality_hijack_plain_object_module_level_assert_rejected (test_verify_loop.TestVerifyLoopExecution.test_equality_hijack_plain_object_module_level_assert_rejected) ... ok
+test_equality_hijack_solution_rejected (test_verify_loop.TestVerifyLoopExecution.test_equality_hijack_solution_rejected) ... ok
+test_execute_solution_tests_no_current_test_code_parameter (test_verify_loop.TestVerifyLoopExecution.test_execute_solution_tests_no_current_test_code_parameter) ... ok
+test_forged_test_result_with_early_exit_rejected (test_verify_loop.TestVerifyLoopExecution.test_forged_test_result_with_early_exit_rejected) ... ok
+test_forged_verdict_frame_with_leaked_nonce_rejected_as_integrity_violation (test_verify_loop.TestVerifyLoopExecution.test_forged_verdict_frame_with_leaked_nonce_rejected_as_integrity_violation) ... ok
+test_forged_verdict_via_driver_inspection_rejected (test_verify_loop.TestVerifyLoopExecution.test_forged_verdict_via_driver_inspection_rejected) ... ok
+test_forged_verdict_via_driver_pid_fd_tampering_rejected (test_verify_loop.TestVerifyLoopExecution.test_forged_verdict_via_driver_pid_fd_tampering_rejected) ... ok
+test_forged_verdict_via_filesystem_globbing_rejected (test_verify_loop.TestVerifyLoopExecution.test_forged_verdict_via_filesystem_globbing_rejected) ... ok
+test_forged_verdict_via_proc_self_fd_rejected (test_verify_loop.TestVerifyLoopExecution.test_forged_verdict_via_proc_self_fd_rejected) ... ok
+test_incorrect_solution_fails (test_verify_loop.TestVerifyLoopExecution.test_incorrect_solution_fails) ... ok
+test_multiple_verdict_frames_rejected_as_integrity_violation (test_verify_loop.TestVerifyLoopExecution.test_multiple_verdict_frames_rejected_as_integrity_violation) ... ok
+test_parent_nonce_not_in_driver_cmdline (test_verify_loop.TestVerifyLoopExecution.test_parent_nonce_not_in_driver_cmdline) ... ok
+test_positive_control_correct_solution_passes_via_rpc_channel (test_verify_loop.TestVerifyLoopExecution.test_positive_control_correct_solution_passes_via_rpc_channel) ... ok
+test_tampered_scratch_file_raises_mutation_error (test_verify_loop.TestVerifyLoopExecution.test_tampered_scratch_file_raises_mutation_error) ... ok
+test_thread_or_atexit_verdict_tampering_rejected (test_verify_loop.TestVerifyLoopExecution.test_thread_or_atexit_verdict_tampering_rejected) ... ok
+test_user_supplied_weak_tests_require_allow_weak_tests_flag (test_verify_loop.TestVerifyLoopExecution.test_user_supplied_weak_tests_require_allow_weak_tests_flag) ... ok
+test_user_tests_priority (test_verify_loop.TestVerifyLoopExecution.test_user_tests_priority) ... ok
+test_worker_killed_before_driver_writes_verdict (test_verify_loop.TestVerifyLoopExecution.test_worker_killed_before_driver_writes_verdict) ... ok
+test_circular_reference_rejection (test_verify_loop_codec.TestValueCodecNegativeControls.test_circular_reference_rejection) ... ok
+test_collection_length_limit (test_verify_loop_codec.TestValueCodecNegativeControls.test_collection_length_limit) ... ok
+test_equality_hijack_rejection (test_verify_loop_codec.TestValueCodecNegativeControls.test_equality_hijack_rejection) ... ok
+test_int64_range_enforcement (test_verify_loop_codec.TestValueCodecNegativeControls.test_int64_range_enforcement) ... ok
+test_item_count_limit (test_verify_loop_codec.TestValueCodecNegativeControls.test_item_count_limit) ... ok
+test_malformed_decode_envelope (test_verify_loop_codec.TestValueCodecNegativeControls.test_malformed_decode_envelope) ... ok
+test_recursion_depth_limit (test_verify_loop_codec.TestValueCodecNegativeControls.test_recursion_depth_limit) ... ok
+test_rust_decoder_edge_case_policies (test_verify_loop_codec.TestValueCodecNegativeControls.test_rust_decoder_edge_case_policies) ... ok
+test_subclass_rejection (test_verify_loop_codec.TestValueCodecNegativeControls.test_subclass_rejection) ... ok
+test_tag_forgery_defense (test_verify_loop_codec.TestValueCodecNegativeControls.test_tag_forgery_defense)
+A candidate returning a dict resembling a tag envelope must NOT be decoded ... ok
+test_verdict_frame_test_suite_hash_mismatch (test_verify_loop_codec.TestValueCodecNegativeControls.test_verdict_frame_test_suite_hash_mismatch) ... ok
+test_collections_roundtrip (test_verify_loop_codec.TestValueCodecPositiveControls.test_collections_roundtrip) ... ok
+test_float_specials (test_verify_loop_codec.TestValueCodecPositiveControls.test_float_specials) ... ok
+test_nested_structures (test_verify_loop_codec.TestValueCodecPositiveControls.test_nested_structures) ... ok
+test_primitives_roundtrip (test_verify_loop_codec.TestValueCodecPositiveControls.test_primitives_roundtrip) ... ok
+
+======================================================================
+ERROR: test_eval_harness_end_to_end_with_repeats (test_eval_harness.TestEvalHarness.test_eval_harness_end_to_end_with_repeats)
+Runs mock evaluation across 2 repeats and verifies explicit temperature, seed, and digest.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 373, in test_eval_harness_end_to_end_with_repeats
+    records, metrics = eval_harness.run_eval_suite(
+                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        tasks_file=tasks_file,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        verbose=False,
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 1330, in run_eval_suite
+    verify_eval_set_hashes()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
+    raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
+
+======================================================================
+ERROR: test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks (test_eval_harness.TestEvalHarness.test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks)
+Invariant: Hidden reference tests must never appear in any prompt sent to the model.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 227, in test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks
+    eval_harness.run_eval_suite(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        tasks_file=sample_file,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        verbose=False,
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 1330, in run_eval_suite
+    verify_eval_set_hashes()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
+    raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
+
+======================================================================
+ERROR: test_verify_eval_set_hashes_clean (test_eval_harness.TestEvalHarness.test_verify_eval_set_hashes_clean)
+Standard check: All registered frozen eval sets match their recorded hashes.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 126, in test_verify_eval_set_hashes_clean
+    verified = eval_harness.verify_eval_set_hashes()
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
+    raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
+
+======================================================================
+ERROR: test_evidence_json_schema_and_platform_fields (test_sandbox_evidence.TestSandboxEvidenceSchema.test_evidence_json_schema_and_platform_fields)
+Verifies that all recorded platforms in the evidence JSON follow the runner schema.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 67, in test_evidence_json_schema_and_platform_fields
+    with open(self.evidence_path, "r", encoding="utf-8") as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\hp\\AppData\\Local\\Temp\\pai_pre_bw_hk6yuwg2\\docs\\evidence\\m2a_sandbox_results.json'
+
+======================================================================
+ERROR: test_evaluation_manifest_lifecycle (test_shadow_isolation_guard.TestShadowIsolationGuard.test_evaluation_manifest_lifecycle)
+Finding AX: Verifies that evaluation_manifest.json is created, verified,
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 851, in test_evaluation_manifest_lifecycle
+    import run_shadow_workload
+ModuleNotFoundError: No module named 'run_shadow_workload'
+
+======================================================================
+ERROR: test_shadow_evaluation_gate_environment_isolation (test_shadow_isolation_guard.TestShadowIsolationGuard.test_shadow_evaluation_gate_environment_isolation)
+Finding AZ: Verifies that verify_shadow_evaluation_gate strictly fails closed
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 893, in test_shadow_evaluation_gate_environment_isolation
+    import run_shadow_workload
+ModuleNotFoundError: No module named 'run_shadow_workload'
+
+======================================================================
+FAIL: test_evidence_file_exists_and_parses (test_sandbox_evidence.TestSandboxEvidenceSchema.test_evidence_file_exists_and_parses)
+Verifies that m2a_sandbox_results.json exists and contains valid JSON.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 35, in test_evidence_file_exists_and_parses
+    self.assertTrue(os.path.exists(self.evidence_path), f"Evidence JSON not found at: {self.evidence_path}")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : Evidence JSON not found at: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\m2a_sandbox_results.json
+
+======================================================================
+FAIL: test_raw_log_exists_and_contains_header (test_sandbox_evidence.TestSandboxEvidenceSchema.test_raw_log_exists_and_contains_header)
+Verifies that m2a_sandbox_raw.log exists and contains a valid harness banner.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 125, in test_raw_log_exists_and_contains_header
+    self.assertTrue(os.path.exists(self.raw_log_path), f"Raw log not found at: {self.raw_log_path}")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : Raw log not found at: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\m2a_sandbox_raw.log
+
+======================================================================
+FAIL: test_a1_infinite_loop_timeout (test_sandbox_win32.TestWin32SandboxContainment.test_a1_infinite_loop_timeout)
+A1: Infinite loop is terminated cleanly at wall-clock deadline.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 86, in test_a1_infinite_loop_timeout
+    self.assertEqual(res.status, "timeout")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'error' != 'timeout'
+- error
++ timeout
+
+
+======================================================================
+FAIL: test_a2_memory_bomb (test_sandbox_win32.TestWin32SandboxContainment.test_a2_memory_bomb)
+A2: Memory bomb (allocating 1 GB in a 256 MB sandbox) triggers MemoryError.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 102, in test_a2_memory_bomb
+    self.assertEqual(res.stdout.strip(), "CONTAINED_MEMORY_ERROR")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_MEMORY_ERROR'
++ CONTAINED_MEMORY_ERROR
+- Could not find platform independent libraries <prefix>
+- Fatal Python error: Failed to import encodings module
+- Python runtime state: core initialized
+- ModuleNotFoundError: No module named 'encodings'
+- 
+- Current thread 0x00006ffc (most recent call first):
+-   <no Python frame>
+
+
+======================================================================
+FAIL: test_a3_a7_process_proliferation (test_sandbox_win32.TestWin32SandboxContainment.test_a3_a7_process_proliferation)
+A3 / A7: Child process cannot spawn subprocesses (Job Object limit = 1).
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 117, in test_a3_a7_process_proliferation
+    self.assertEqual(res.stdout.strip(), "CONTAINED_SPAWN_FAILED")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_SPAWN_FAILED'
++ CONTAINED_SPAWN_FAILED
+- Could not find platform independent libraries <prefix>
+- Fatal Python error: Failed to import encodings module
+- Python runtime state: core initialized
+- ModuleNotFoundError: No module named 'encodings'
+- 
+- Current thread 0x000042d8 (most recent call first):
+-   <no Python frame>
+
+
+======================================================================
+FAIL: test_a4_canary_deletion (test_sandbox_win32.TestWin32SandboxContainment.test_a4_canary_deletion)
+A4: Attempting to delete a canary file outside scratch fails with PermissionError.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 138, in test_a4_canary_deletion
+    self.assertEqual(res.stdout.strip(), "CONTAINED_DELETE_BLOCKED")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_DELETE_BLOCKED'
++ CONTAINED_DELETE_BLOCKED
+- Could not find platform independent libraries <prefix>
+- Fatal Python error: Failed to import encodings module
+- Python runtime state: core initialized
+- ModuleNotFoundError: No module named 'encodings'
+- 
+- Current thread 0x00006680 (most recent call first):
+-   <no Python frame>
+
+
+======================================================================
+FAIL: test_a5_filesystem_read_escape (test_sandbox_win32.TestWin32SandboxContainment.test_a5_filesystem_read_escape)
+A5: Attempting to read files outside scratch fails with PermissionError.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 166, in test_a5_filesystem_read_escape
+    self.assertEqual(res.stdout.strip(), "CONTAINED_READ_BLOCKED")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_READ_BLOCKED'
++ CONTAINED_READ_BLOCKED
+- Could not find platform independent libraries <prefix>
+- Fatal Python error: Failed to import encodings module
+- Python runtime state: core initialized
+- ModuleNotFoundError: No module named 'encodings'
+- 
+- Current thread 0x0000629c (most recent call first):
+-   <no Python frame>
+
+
+======================================================================
+FAIL: test_a6_network_egress (test_sandbox_win32.TestWin32SandboxContainment.test_a6_network_egress)
+A6: Attempting socket connections fails with PermissionError (WinError 10013).
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 186, in test_a6_network_egress
+    self.assertEqual(res.stdout.strip(), "CONTAINED_NETWORK_BLOCKED")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_NETWORK_BLOCKED'
++ CONTAINED_NETWORK_BLOCKED
+- Could not find platform independent libraries <prefix>
+- Fatal Python error: Failed to import encodings module
+- Python runtime state: core initialized
+- ModuleNotFoundError: No module named 'encodings'
+- 
+- Current thread 0x00006440 (most recent call first):
+-   <no Python frame>
+
+
+======================================================================
+FAIL: test_a8_ctypes_containment (test_sandbox_win32.TestWin32SandboxContainment.test_a8_ctypes_containment)
+A8: Native code loading / ctypes escape attempt is trapped; parent intact.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 213, in test_a8_ctypes_containment
+    self.assertIn("CONTAINED", res.stdout)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'CONTAINED' not found in "Could not find platform independent libraries <prefix>\nFatal Python error: Failed to import encodings module\nPython runtime state: core initialized\nModuleNotFoundError: No module named 'encodings'\n\nCurrent thread 0x0000694c (most recent call first):\n  <no Python frame>\n"
+
+======================================================================
+FAIL: test_a9_stdout_flood (test_sandbox_win32.TestWin32SandboxContainment.test_a9_stdout_flood)
+A9: Stdout stream flood is safely capped at 64 KB without deadlock.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 196, in test_a9_stdout_flood
+    self.assertEqual(res.status, "ok")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: 'error' != 'ok'
+- error
++ ok
+
+
+======================================================================
+FAIL: test_behavioural_capability_probe (test_sandbox_win32.TestWin32SandboxContainment.test_behavioural_capability_probe)
+Verifies that the live behavioural canary probe passes on this system.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 66, in test_behavioural_capability_probe
+    self.assertTrue(ok, f"Behavioural probe failed: {msg}")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : Behavioural probe failed: Sandbox failed to execute probe script (exit code 1): 
+
+======================================================================
+FAIL: test_valid_hello_world_execution (test_sandbox_win32.TestWin32SandboxContainment.test_valid_hello_world_execution)
+Valid computation runs and produces correct output file in scratch.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 75, in test_valid_hello_world_execution
+    self.assertEqual(res.status, "ok")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: 'error' != 'ok'
+- error
++ ok
+
+
+======================================================================
+FAIL: test_default_log_immutability_during_parity_runner (test_shadow_isolation_guard.TestShadowIsolationGuard.test_default_log_immutability_during_parity_runner)
+Finding AI/AM: Executes real tools/windows_parity_run.py in a separate subprocess
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 203, in test_default_log_immutability_during_parity_runner
+    self.assertIn(proc.returncode, (0, 5), f"Parity runner failed with returncode {proc.returncode}:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 not found in (0, 5) : Parity runner failed with returncode 2:
+STDOUT:
+
+STDERR:
+C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\python\python.exe: can't open file 'C:\\Users\\hp\\AppData\\Local\\Temp\\pai_pre_bw_hk6yuwg2\\tools\\windows_parity_run.py': [Errno 2] No such file or directory
+
+
+======================================================================
+FAIL: test_shadow_isolation_mutation_check (test_shadow_isolation_guard.TestShadowIsolationGuard.test_shadow_isolation_mutation_check)
+Finding AI: Mutation check verifying that when test isolation is disabled
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 246, in test_shadow_isolation_mutation_check
+    self.assertEqual(proc.returncode, 0, f"Mutation subprocess failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Mutation subprocess failed:
+STDOUT:
+
+STDERR:
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import _bootstrap
+ModuleNotFoundError: No module named '_bootstrap'
+
+
+----------------------------------------------------------------------
+Ran 556 tests in 279.841s
+
+FAILED (failures=14, errors=6, skipped=31)
+
+Ran 556 tests in 280.675s: FAILED (failures=14, errors=6, skipped=31)

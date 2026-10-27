@@ -448,6 +448,7 @@ int wmain(int argc, wchar_t *argv[]) {
     SetEnvironmentVariableW(L"PYTHONPATH", NULL);
     SetEnvironmentVariableW(L"PYTHONHOME", NULL);
     SetEnvironmentVariableW(L"PYTHONSTARTUP", NULL);
+    SetEnvironmentVariableW(L"PYTHONDONTWRITEBYTECODE", L"1"); /* Prevent writing .pyc into __pycache__ (Finding CH) */
 
     wchar_t expected_sha256_w[SHA256_HEX_LEN + 1];
     for (int i = 0; i <= SHA256_HEX_LEN; i++) {
@@ -496,15 +497,15 @@ int wmain(int argc, wchar_t *argv[]) {
 
     if (use_system_opt_in) {
         if (*args_start) {
-            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -E -s \"%ls\" %ls", python_exe, script_path, args_start);
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -E -s -B \"%ls\" %ls", python_exe, script_path, args_start);
         } else {
-            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -E -s \"%ls\"", python_exe, script_path);
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -E -s -B \"%ls\"", python_exe, script_path);
         }
     } else {
         if (*args_start) {
-            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" \"%ls\" %ls", python_exe, script_path, args_start);
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -B \"%ls\" %ls", python_exe, script_path, args_start);
         } else {
-            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" \"%ls\"", python_exe, script_path);
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -B \"%ls\"", python_exe, script_path);
         }
     }
 

@@ -69,6 +69,7 @@ powershell -NoProfile -Command ^
     "foreach ($item in $stagedItems) {" ^
     "    $relPath = $item.FullName.Substring($stage.Length).TrimStart([IO.Path]::DirectorySeparatorChar);" ^
     "    if ($relPath -ieq 'manifest.json' -or $relPath -ieq 'manifest.sig') { continue }" ^
+    "    if ($relPath -match '__pycache__' -or $relPath.EndsWith('.pyc')) { continue }" ^
     "    if (-not $manifestSet.ContainsKey($relPath.ToLowerInvariant())) {" ^
     "        Write-Error ('Unlisted file in payload staging directory: ' + $relPath);" ^
     "        exit 1" ^
