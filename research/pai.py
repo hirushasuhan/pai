@@ -2978,7 +2978,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         pass
 
     is_cli_cmd = args.subcommand in ("code", "analyze", "docs", "forecast", "chat", "route", "models", "calibrate")
-    if is_cli_cmd:
+    should_tag_cli = is_cli_cmd and orig_source == "unknown"
+    if should_tag_cli:
         try:
             from pai_core_bridge import set_telemetry_source
             set_telemetry_source("cli")
@@ -3051,7 +3052,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(msg, file=sys.stderr)
         return 2
     finally:
-        if is_cli_cmd:
+        if should_tag_cli:
             try:
                 from pai_core_bridge import set_telemetry_source
                 set_telemetry_source(orig_source)

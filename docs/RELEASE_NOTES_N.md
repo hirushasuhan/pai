@@ -3,7 +3,7 @@
 **Release Name:** Release N (Rust Policy Core Default-On)  
 **Evaluated Binary Commit (core/):** `9ac1bc5b056f53fb88c1206fec896df9ffc85c1f`  
 **Core Tree Hash (core/):** `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9` (strictly identical to evaluated commit)  
-**Research Tree Hash (research/):** `62de28cd152be2d43654e86a8ae945c150b1e22f`  
+**Research Tree Hash (research/):** `506e520b33a0af8c3f0276114483ce26b9bd3787`  
 **Target Release Binary Hash (SHA-256):** `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`  
 **Shadow Evaluation Window Status:** Complete (`window_complete: true`, $\ge 604,800$ s span, 0 discrepancies across 1,010 CLI comparisons).
 
@@ -34,7 +34,7 @@ To ensure a clear audit trail and rigor, the code included in Release N is separ
    - **Finding BC Fix (`7153d8c`, `6bdb57b`):** Top-level `hashlib` import, `IngestedItem` digest attribute alignment, non-silent digest failure warning logging.
    - **Discrepancy Policy (`b3e3337`):** Authoritative fallback for value comparisons, deny-wins policy for accept/deny primitives.
    - **Default-On Flip & Graceful Fallback (`e3d0929`):** Flipped `PAI_USE_RUST_CORE` default to `1` with graceful fallback when unconfigured, plus kill switch.
-   - **Binary Trust & Fail-Closed Metadata (Findings BE, BF, BG):** Secured binary resolution against unauthenticated `PATH` binaries, enforced fail-closed (`UpdateRejected`) on release metadata differentials, strict secret scanning wins, rejection-wins file ingestion, and distinct input documentation corrections (`research/` tree `62de28cd152be2d43654e86a8ae945c150b1e22f`).
+   - **Binary Trust & Fail-Closed Metadata (Findings BE, BF, BG, BH):** Secured binary resolution against unauthenticated `PATH` binaries, enforced fail-closed (`UpdateRejected`) on release metadata differentials, strict secret scanning wins, rejection-wins file ingestion, distinct input documentation corrections, and smoke telemetry source isolation (`doctor` vs `cli`) (`research/` tree `506e520b33a0af8c3f0276114483ce26b9bd3787`).
    - *Provenance Note:* These post-window changes were **not** evaluated during the 7-day shadow window. Their correctness and safety are exercised by the comprehensive unit test suite, golden conformance vectors, differential fuzzing, and GitHub Actions CI.
 
 ---

@@ -795,6 +795,49 @@ class TestPaiCLI(unittest.TestCase):
         self.assertEqual(rc_doc, 1)
         self.assertIn("Pass --yes to confirm", f_err_doc.getvalue())
 
+    def test_pai_doctor_smoke_telemetry_tagged_as_doctor_not_cli(self):
+        """
+        Finding BH: pai doctor smoke tests must be tagged with source='doctor'
+        and never erroneously tagged with source='cli' (which would inflate organic counts).
+        """
+        import tempfile
+        import subprocess
+
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+            log_path = f.name
+
+        try:
+            env = os.environ.copy()
+            env["PAI_SHADOW_LOG"] = log_path
+            env["PAI_USE_RUST_CORE"] = "1"
+            env["PAI_SHADOW_COMPARE"] = "1"
+            env.pop("PAI_TELEMETRY_DRIVER", None)
+            env.pop("PAI_TELEMETRY_SOURCE", None)
+
+            pai_script = os.path.join(os.path.dirname(__file__), "..", "pai.py")
+            cmd = [sys.executable, pai_script, "doctor", "--json"]
+            proc = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(proc.returncode, 0, f"pai doctor failed: {proc.stderr}")
+
+            records = []
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as lf:
+                    for line in lf:
+                        if line.strip():
+                            records.append(json.loads(line))
+
+            self.assertGreater(len(records), 0, "Expected smoke test comparisons to be logged")
+            cli_records = [r for r in records if r.get("source") == "cli"]
+            self.assertEqual(len(cli_records), 0, f"Found {len(cli_records)} comparisons erroneously tagged as 'cli': {cli_records}")
+            doctor_records = [r for r in records if r.get("source") == "doctor"]
+            self.assertEqual(len(doctor_records), len(records), "All smoke test comparisons must have source='doctor'")
+        finally:
+            if os.path.exists(log_path):
+                try:
+                    os.remove(log_path)
+                except OSError:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()
