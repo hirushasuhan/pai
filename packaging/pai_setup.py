@@ -1173,10 +1173,41 @@ class ConsoleProgressBar:
                 print(f"[{self.model_id}] Download failed: {message}", flush=True)
 
 
+def normalize_digest(digest: Optional[str]) -> Optional[str]:
+    """
+    Finding CT: Normalizes a manifest digest for deterministic cryptographic comparison.
+    Strips leading 'sha256:', surrounding whitespace, and converts to lowercase hex.
+    Returns 64-character lowercase hex string if valid, else None.
+    """
+    if not digest or not isinstance(digest, str):
+        return None
+    d = digest.strip().lower()
+    if d.startswith("sha256:"):
+        d = d[7:].strip()
+    if len(d) == 64 and all(c in "0123456789abcdef" for c in d):
+        return d
+    return None
+
+
 def query_ollama_model_digest(endpoint: str, model_id: str, timeout: float = 5.0) -> Optional[str]:
     """
-    Finding CN: Queries Ollama daemon for the actual manifest digest of a model.
-    Checks /api/tags first (which returns manifest digests for pulled models).
+    Finding CN, CT: Queries Ollama daemon for the manifest digest of a model.
+    Authoritative endpoint: GET /api/tags
+    Real Ollama /api/tags response schema (https://docs.ollama.com/api/tags.md):
+      {
+        "models": [
+          {
+            "name": "qwen2.5:0.5b",
+            "model": "qwen2.5:0.5b",
+            "modified_at": "...",
+            "size": 397750176,
+            "digest": "67dae4a5d3f745e691ec5f7957d1fa183b06385d83637e100c4366e6c1e33d26",
+            "details": {...}
+          }
+        ]
+      }
+    Note: Ollama /api/tags returns bare 64-character hex strings without 'sha256:' prefix.
+    Note: /api/show does NOT provide a top-level manifest digest (only metadata/details).
     """
     clean_ep = endpoint.rstrip("/")
     url = f"{clean_ep}/api/tags"
@@ -1187,41 +1218,30 @@ def query_ollama_model_digest(endpoint: str, model_id: str, timeout: float = 5.0
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
                 models = data.get("models", [])
+                target_tags = {model_id}
+                if ":" not in model_id:
+                    target_tags.add(f"{model_id}:latest")
+                elif model_id.endswith(":latest"):
+                    target_tags.add(model_id[:-7])
+
                 for m in models:
                     name = m.get("name", "")
                     mod_name = m.get("model", "")
-                    if name == model_id or mod_name == model_id or name.startswith(f"{model_id}:"):
-                        digest = m.get("digest")
-                        if digest and isinstance(digest, str):
-                            return digest.strip().lower()
+                    if name in target_tags or mod_name in target_tags:
+                        raw_digest = m.get("digest")
+                        if raw_digest and isinstance(raw_digest, str):
+                            return raw_digest.strip()
     except Exception as e:
         logger.debug("Failed to query /api/tags for model digest: %s", e)
-
-    # Fallback: query /api/show
-    show_url = f"{clean_ep}/api/show"
-    try:
-        req = urllib.request.Request(
-            show_url,
-            data=json.dumps({"name": model_id}).encode("utf-8"),
-            headers={"Content-Type": "application/json", "User-Agent": "PAI-Setup/1.0"},
-            method="POST",
-        )
-        with opener.open(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read().decode("utf-8"))
-                digest = data.get("digest")
-                if digest and isinstance(digest, str):
-                    return digest.strip().lower()
-    except Exception as e:
-        logger.debug("Failed to query /api/show for model digest: %s", e)
 
     return None
 
 
 def delete_ollama_model(endpoint: str, model_id: str, timeout: float = 10.0) -> bool:
     """
-    Finding CN: Purges a model from Ollama daemon on manifest digest mismatch.
+    Finding CN, CX: Purges a model from Ollama daemon on manifest digest mismatch.
     Sends DELETE /api/delete with {"name": model_id}.
+    Note: If a model with this name existed prior to the pull, it will be deleted.
     """
     clean_ep = endpoint.rstrip("/")
     url = f"{clean_ep}/api/delete"
@@ -1256,6 +1276,7 @@ def pull_model_stream(
     endpoint: Optional[str] = None,
     total_bytes: Optional[int] = None,
     expected_manifest_digest: Optional[str] = None,
+    allow_unverified: bool = False,
     cancel_token: Optional[CancelToken] = None,
     emitter: Optional[ProgressEmitter] = None,
     show_console_bar: bool = True,
@@ -1265,15 +1286,18 @@ def pull_model_stream(
 ) -> Dict[str, Any]:
     """
     Executes streaming model download via Ollama pull API (POST /api/pull).
-    Features (§6, Milestones P4, Findings CO, CN, CR):
+    Features (§6, Milestones P4, Findings CO, CN, CR, CT, CU, CX):
       - Emits NDJSON progress events (Appendix C): download_start, progress, verifying, done, error.
       - Width-aware console progress bar with speed, ETA, and layer aggregation.
-      - Post-pull manifest digest verification against signed catalog (Finding CN).
-        On digest mismatch, the model is purged via DELETE /api/delete and DIGEST_MISMATCH raised.
+      - Post-pull manifest digest verification against signed catalog (Findings CN, CT, CU).
+        Normalized comparisons (stripping sha256: prefix and lowercase) prevent false mismatches (Finding CT).
+        Missing digest from daemon fails closed with DIGEST_UNAVAILABLE for catalog models unless allow_unverified is True (Finding CU).
+        On true digest mismatch, the model is purged via DELETE /api/delete with warning and DIGEST_MISMATCH raised (Findings CN, CX).
+      - Immediate failure on HTTP 4xx errors without retry; connection and 5xx retried with backoff (Finding CX).
       - Resilient error handling and exponential backoff retry on network failures or premature EOF (Finding CO).
       - Handles socket cut/incomplete exceptions (IncompleteRead, RemoteDisconnected, OSError).
-      - Thread-safe cancellation via CancelToken with responsive backoff wait checking.
-      - Error detection: DISK_FULL, REGISTRY_ERROR, DIGEST_MISMATCH, CANCELLED, PULL_FAILED.
+      - Thread-safe cancellation via CancelToken with responsive backoff wait checking (Finding CV).
+      - Error detection: DISK_FULL, REGISTRY_ERROR, DIGEST_MISMATCH, DIGEST_UNAVAILABLE, MODEL_NOT_FOUND, CLIENT_ERROR, CANCELLED, PULL_FAILED.
     """
     if endpoint is None:
         env_host = os.environ.get("OLLAMA_HOST")
@@ -1384,28 +1408,58 @@ def pull_model_stream(
 
             # Check if stream finished successfully
             if tracker.is_done:
-                # Finding CN: Post-pull manifest digest verification against signed catalog
+                # Finding CN, CT, CU: Post-pull manifest digest verification against signed catalog
                 if expected_manifest_digest:
-                    actual_digest = query_ollama_model_digest(endpoint, model_id)
-                    if actual_digest:
-                        exp_clean = expected_manifest_digest.strip().lower()
-                        if actual_digest != exp_clean:
-                            # Purge mismatched model immediately
-                            delete_ollama_model(endpoint, model_id)
-                            mismatch_msg = (
-                                f"Model manifest digest mismatch for '{model_id}': "
-                                f"got '{actual_digest}', expected '{exp_clean}'. Purged from daemon."
+                    raw_actual = query_ollama_model_digest(endpoint, model_id)
+                    actual_norm = normalize_digest(raw_actual)
+                    expected_norm = normalize_digest(expected_manifest_digest)
+
+                    if not actual_norm:
+                        # Finding CU: Fail-closed if daemon does not report a valid digest for a catalog model
+                        if allow_unverified:
+                            msg = (
+                                f"WARNING: Ollama daemon did not return a manifest digest for catalog model '{model_id}' "
+                                f"via /api/tags. Verification skipped because --allow-unverified-model was specified."
+                            )
+                            logger.warning(msg)
+                            if emitter:
+                                emitter.emit("warning", model=model_id, message=msg)
+                            print(f"\n{msg}", file=sys.stderr)
+                        else:
+                            err_msg = (
+                                f"Ollama daemon did not return a manifest digest for catalog model '{model_id}' via /api/tags. "
+                                f"Cannot verify against signed catalog digest ('{expected_manifest_digest}'). "
+                                f"Model retained on disk; pass --allow-unverified-model to skip verification (fail-closed, Finding CU)."
                             )
                             if emitter:
-                                emitter.emit("error", model=model_id, code="DIGEST_MISMATCH", message=mismatch_msg)
+                                emitter.emit("error", model=model_id, code="DIGEST_UNAVAILABLE", message=err_msg)
                             if bar:
-                                bar.finish(success=False, message="Digest mismatch")
-                            raise ModelPullError("DIGEST_MISMATCH", mismatch_msg)
-                    else:
-                        logger.info(
-                            "Ollama daemon does not report manifest digest for '%s'. Trust relies on registry TLS.",
-                            model_id,
+                                bar.finish(success=False, message="Digest unavailable")
+                            # Model is NOT deleted (left in place for user)
+                            raise ModelPullError("DIGEST_UNAVAILABLE", err_msg)
+                    elif expected_norm and actual_norm != expected_norm:
+                        # Finding CT, CX: Manifest digest mismatch -> purge model with prominent warning
+                        warn_purge = (
+                            f"WARNING: Manifest digest mismatch for '{model_id}' "
+                            f"(expected {expected_manifest_digest}, got {raw_actual}). "
+                            f"Deleting downloaded model '{model_id}' from Ollama daemon to prevent execution of unverified weights. "
+                            f"Note: If a model with this name existed prior to this pull, it will be removed."
                         )
+                        logger.warning(warn_purge)
+                        print(f"\n{warn_purge}", file=sys.stderr)
+                        delete_ollama_model(endpoint, model_id)
+
+                        mismatch_msg = (
+                            f"Model manifest digest mismatch for '{model_id}': "
+                            f"expected '{expected_manifest_digest}', got '{raw_actual}'. Purged from daemon."
+                        )
+                        if emitter:
+                            emitter.emit("error", model=model_id, code="DIGEST_MISMATCH", message=mismatch_msg)
+                        if bar:
+                            bar.finish(success=False, message="Digest mismatch")
+                        raise ModelPullError("DIGEST_MISMATCH", mismatch_msg)
+                    else:
+                        logger.info("Manifest digest verified successfully for '%s' (%s)", model_id, actual_norm)
 
                 if emitter:
                     emitter.emit("done", model=model_id)
@@ -1430,6 +1484,48 @@ def pull_model_stream(
             logger.warning(
                 "Pull stream for %s closed before completion; retrying with backoff (retries left: %d)",
                 model_id,
+                retries_left,
+            )
+            _sleep_with_cancel_check(backoff, cancel_token)
+            backoff *= 2.0
+
+        except urllib.error.HTTPError as err:
+            if cancel_token and cancel_token.is_cancelled():
+                raise DownloadCancelledError(f"Model download '{model_id}' was cancelled by user")
+            # Finding CX: 4xx client errors fail immediately without retrying!
+            if 400 <= err.code < 500:
+                body = ""
+                try:
+                    body = err.read().decode("utf-8", errors="replace").strip()
+                except Exception:
+                    pass
+                if err.code == 404:
+                    code = "MODEL_NOT_FOUND"
+                    msg = f"Model '{model_id}' was not found on remote registry (HTTP 404)"
+                else:
+                    code = "CLIENT_ERROR"
+                    msg = f"Ollama daemon returned HTTP {err.code}: {err.reason} ({body})" if body else f"Ollama daemon returned HTTP {err.code}: {err.reason}"
+                if emitter:
+                    emitter.emit("error", model=model_id, code=code, message=msg)
+                if bar:
+                    bar.finish(success=False, message=msg)
+                raise ModelPullError(code, msg) from err
+
+            # 5xx server errors: retry with backoff
+            retries_left -= 1
+            if retries_left < 0:
+                msg = f"Ollama daemon returned server error HTTP {err.code} after {max_retries} retries"
+                if emitter:
+                    emitter.emit("error", model=model_id, code="SERVER_ERROR", message=msg)
+                if bar:
+                    bar.finish(success=False, message=msg)
+                raise ModelPullError("SERVER_ERROR", msg) from err
+
+            logger.warning(
+                "Ollama daemon HTTP error %d pulling %s; retrying in %.2fs (retries left: %d)",
+                err.code,
+                model_id,
+                backoff,
                 retries_left,
             )
             _sleep_with_cancel_check(backoff, cancel_token)
@@ -1626,6 +1722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.pull_model,
                 total_bytes=expected_bytes,
                 expected_manifest_digest=expected_digest,
+                allow_unverified=args.allow_unverified_model,
                 emitter=emitter,
                 show_console_bar=True,
             )
@@ -1654,6 +1751,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     r.model_id,
                     total_bytes=r.download_bytes,
                     expected_manifest_digest=expected_digest,
+                    allow_unverified=args.allow_unverified_model,
                     emitter=emitter,
                     show_console_bar=True,
                 )

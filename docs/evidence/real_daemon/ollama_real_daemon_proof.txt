@@ -1,0 +1,66 @@
+================================================================================
+REAL OLLAMA DAEMON CRYPTOGRAPHIC DIGEST PROOF (Findings CT, CU, CW, CX)
+================================================================================
+Timestamp (UTC): 2026-10-27T15:47:35.555877+00:00
+Platform:        Windows-11-10.0.26300-SP0
+Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
+Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
+Git HEAD:        e0db096f1292d6ceee46bd54e0a28977b8bf5284
+Research Tree:   506e520b33a0af8c3f0276114483ce26b9bd3787
+Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
+================================================================================
+
+Target Ollama Endpoint: http://127.0.0.1:11434
+Target Model ID:        qwen2.5:0.5b
+
+--- STEP 1: Query Raw /api/tags Entry ---
+Raw /api/tags entry for model:
+{
+  "name": "qwen2.5:0.5b",
+  "model": "qwen2.5:0.5b",
+  "modified_at": "2026-10-27T21:16:40.6933717+05:30",
+  "size": 397821319,
+  "digest": "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67",
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "qwen2",
+    "families": [
+      "qwen2"
+    ],
+    "parameter_size": "494.03M",
+    "quantization_level": "Q4_K_M",
+    "context_length": 32768,
+    "embedding_length": 896
+  },
+  "capabilities": [
+    "completion",
+    "tools"
+  ]
+}
+Reported raw digest: 'a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67' (length=64)
+Confirmed: Digest is a bare 64-character hex string without 'sha256:' prefix (Finding CT).
+
+--- STEP 2: Ground Truth Origin of Manifest Digest ---
+Local OCI manifest file path: C:\Users\hp\.ollama\models\manifests\registry.ollama.ai\library\qwen2.5\0.5b
+Manifest file size:               857 bytes
+Computed SHA-256 of manifest:     a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+/api/tags reported digest:        a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+SHA-256 match:                    True
+Proved: The catalog 'registry_manifest_digest' corresponds exactly to the SHA-256
+hash of the registry manifest blob as published by the OCI registry.
+
+--- STEP 3: Real Model Verification Pass (Normalized Digest) ---
+Signed Catalog Digest Format: sha256:a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+pull_model_stream result: {"model": "qwen2.5:0.5b", "completed_bytes": 397821319, "status": "done"}
+Result: PASS - Model digest matched and verified successfully against real daemon.
+
+--- STEP 4: Forced Digest Mismatch Negative Control (Fail-Closed) ---
+Forced Expected Digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+Caught ModelPullError: code='DIGEST_MISMATCH', message='Model manifest digest mismatch for 'qwen2.5:0.5b': expected 'sha256:0000000000000000000000000000000000000000000000000000000000000000', got 'a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67'. Purged from daemon.'
+Result: PASS - Digest mismatch caught and raised DIGEST_MISMATCH fail-closed.
+
+--- STEP 5: Verify Model Purged from Live Daemon ---
+Models remaining in Ollama daemon: ['qwen2.5-coder:7b', 'gemma4:e2b', 'qwen3.5:4b', 'qwen2.5-coder:1.5b', 'llama3.2:3b', 'llama3.2:1b']
+Model 'qwen2.5:0.5b' purged from daemon: True
+Result: PASS - Model weights and manifest purged from Ollama.

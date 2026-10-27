@@ -20,14 +20,19 @@ Verifies Findings CB, CC, CD, CD2, CE, CG, CH:
 from __future__ import annotations
 
 import datetime
+import http.server
 import io
 import json
 import os
 import shutil
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -60,6 +65,7 @@ from packaging.pai_setup import (
     get_highest_seen_catalog_version,
     load_trust_keys,
     main,
+    normalize_digest,
     plan_model_selection,
     probe_ollama_daemon,
     pull_model_stream,
@@ -1005,55 +1011,62 @@ class TestPaiSetupP3(unittest.TestCase):
             self.assertEqual(res["status"], "done")
             self.assertEqual(res["completed_bytes"], 1000)
 
-        # Case B: Cancellation during retry backoff wait
+        # Case B (Finding CV): Cancellation during retry backoff wait in a separate thread
         cancel_tok = CancelToken()
-
-        def slow_resp():
-            cancel_tok.cancel()
-            m = MagicMock()
-            m.status = 200
-            m.__iter__.return_value = iter([b'{"status": "starting"}\n'])
-            m.__enter__.return_value = m
-            return m
+        premature_resp = MagicMock()
+        premature_resp.status = 200
+        premature_resp.__iter__.return_value = iter([b'{"status": "downloading"}\n'])
+        premature_resp.__enter__.return_value = premature_resp
 
         mock_opener_cancel = MagicMock()
-        mock_opener_cancel.open.side_effect = [slow_resp(), slow_resp()]
+        mock_opener_cancel.open.return_value = premature_resp
 
-        with patch("urllib.request.build_opener", return_value=mock_opener_cancel):
-            with self.assertRaises(DownloadCancelledError):
-                pull_model_stream(
-                    model_id="cancel-backoff:7b",
-                    cancel_token=cancel_tok,
-                    max_retries=3,
-                    initial_backoff_sec=0.05,
-                    show_console_bar=False,
-                )
+        # Cancel token triggers 0.1s after pull begins (which falls directly inside the 1.0s backoff sleep)
+        cancel_timer = threading.Timer(0.1, cancel_tok.cancel)
+        cancel_timer.start()
+        t0 = time.monotonic()
+        try:
+            with patch("urllib.request.build_opener", return_value=mock_opener_cancel):
+                with self.assertRaises(DownloadCancelledError):
+                    pull_model_stream(
+                        model_id="cancel-backoff:7b",
+                        cancel_token=cancel_tok,
+                        max_retries=3,
+                        initial_backoff_sec=1.0,
+                        show_console_bar=False,
+                    )
+            elapsed = time.monotonic() - t0
+            # Must exit promptly during backoff sleep (well under the 1.0s full duration)
+            self.assertLess(elapsed, 0.8, f"Cancel latency too high: {elapsed:.3f}s >= 0.8s")
+            self.assertGreater(elapsed, 0.05, f"Cancel was too fast, did not exercise backoff: {elapsed:.3f}s")
+        finally:
+            cancel_timer.cancel()
 
     # -------------------------------------------------------------------------
-    # Finding CN: Manifest Digest Verification & Purge
+    # Finding CN & CT: Manifest Digest Verification, Normalization & Purge
     # -------------------------------------------------------------------------
-    def test_21_finding_cn_manifest_digest_verification_and_purge_on_mismatch(self) -> None:
+    def test_21_finding_cn_and_ct_manifest_digest_verification_and_normalization(self) -> None:
         """
-        Finding CN:
-          - After pull, manifest digest is queried from Ollama tags API.
-          - On digest match: succeeds.
-          - On digest mismatch: model is purged via DELETE /api/delete and DIGEST_MISMATCH raised.
+        Findings CN & CT:
+          - After pull, manifest digest is queried from Ollama tags API (bare 64 hex).
+          - normalize_digest() handles bare hex vs 'sha256:' catalog format deterministically.
+          - On digest match (with or without 'sha256:' prefix): succeeds.
+          - On true digest mismatch: model is purged via DELETE /api/delete and DIGEST_MISMATCH raised.
         """
-        success_stream = [
-            b'{"status": "success"}\n',
-        ]
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__iter__.return_value = iter(success_stream)
-        mock_resp.__enter__.return_value = mock_resp
+        # Case A: Digest normalization unit tests
+        h64 = "67dae4a5d3f745e691ec5f7957d1fa183b06385d83637e100c4366e6c1e33d26"
+        self.assertEqual(normalize_digest(h64), h64)
+        self.assertEqual(normalize_digest(f"sha256:{h64}"), h64)
+        self.assertEqual(normalize_digest(f"  SHA256:{h64.upper()}  "), h64)
+        self.assertIsNone(normalize_digest("not-a-digest"))
+        self.assertIsNone(normalize_digest("sha256:short"))
+        self.assertIsNone(normalize_digest(""))
+        self.assertIsNone(normalize_digest(None))
 
-        mock_opener = MagicMock()
-        mock_opener.open.return_value = mock_resp
+        # Case B: Real daemon shape (bare 64-hex from /api/tags) matching catalog format ('sha256:...')
+        bare_daemon_digest = "d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a"
+        catalog_digest_prefixed = f"sha256:{bare_daemon_digest}"
 
-        expected_good = "sha256:d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a"
-        bad_actual = "sha256:badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbad1"
-
-        # Case A: Good digest matches
         resp_good = MagicMock()
         resp_good.status = 200
         resp_good.__iter__.return_value = iter([b'{"status": "success"}\n'])
@@ -1063,15 +1076,16 @@ class TestPaiSetupP3(unittest.TestCase):
         mock_opener_good.open.return_value = resp_good
 
         with patch("urllib.request.build_opener", return_value=mock_opener_good):
-            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=expected_good):
+            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=bare_daemon_digest):
                 res = pull_model_stream(
                     model_id="verified:model",
-                    expected_manifest_digest=expected_good,
+                    expected_manifest_digest=catalog_digest_prefixed,
                     show_console_bar=False,
                 )
                 self.assertEqual(res["status"], "done")
 
-        # Case B: Digest mismatch -> Purges model and raises DIGEST_MISMATCH
+        # Case C: True digest mismatch -> Purges model with warning and raises DIGEST_MISMATCH
+        bad_daemon_digest = "badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbad1"
         resp_bad = MagicMock()
         resp_bad.status = 200
         resp_bad.__iter__.return_value = iter([b'{"status": "success"}\n'])
@@ -1082,35 +1096,360 @@ class TestPaiSetupP3(unittest.TestCase):
 
         deleted_models = []
         with patch("urllib.request.build_opener", return_value=mock_opener_bad):
-            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=bad_actual):
+            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=bad_daemon_digest):
                 with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
                     with self.assertRaises(ModelPullError) as ctx:
                         pull_model_stream(
                             model_id="tampered:model",
-                            expected_manifest_digest=expected_good,
+                            expected_manifest_digest=catalog_digest_prefixed,
                             show_console_bar=False,
                         )
                     self.assertEqual(ctx.exception.code, "DIGEST_MISMATCH")
                     self.assertIn("tampered:model", deleted_models)
 
     # -------------------------------------------------------------------------
-    # Finding CN: CLI Guardrails for Free-Form and Unverified Models
+    # Finding CU: Fail-Closed on Missing Digest Without Deleting Model
     # -------------------------------------------------------------------------
-    def test_22_finding_cn_free_form_pull_model_guardrails_and_pattern(self) -> None:
+    def test_22_finding_cu_missing_digest_fails_closed_without_deletion(self) -> None:
         """
-        Finding CN:
-          - Model ID not matching <family>:<tag> pattern rejected with INVALID_MODEL_ID.
+        Finding CU:
+          - For catalog models with signed digest, if daemon reports no digest,
+            must FAIL with DIGEST_UNAVAILABLE (fail-closed).
+          - The downloaded model MUST NOT be deleted (left in place for user).
+          - Passing allow_unverified=True bypasses the check with a warning and does not delete.
+        """
+        def make_success_resp():
+            r = MagicMock()
+            r.status = 200
+            r.__iter__.return_value = iter([b'{"status": "success"}\n'])
+            r.__enter__.return_value = r
+            return r
+
+        deleted_models = []
+        expected_digest = "sha256:67dae4a5d3f745e691ec5f7957d1fa183b06385d83637e100c4366e6c1e33d26"
+
+        # Case A: allow_unverified=False -> Fails closed with DIGEST_UNAVAILABLE, NO delete
+        mock_opener_a = MagicMock()
+        mock_opener_a.open.return_value = make_success_resp()
+        with patch("urllib.request.build_opener", return_value=mock_opener_a):
+            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=None):
+                with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
+                    with self.assertRaises(ModelPullError) as ctx:
+                        pull_model_stream(
+                            model_id="catalog:model",
+                            expected_manifest_digest=expected_digest,
+                            allow_unverified=False,
+                            show_console_bar=False,
+                        )
+                    self.assertEqual(ctx.exception.code, "DIGEST_UNAVAILABLE")
+                    self.assertEqual(len(deleted_models), 0, "Model must NOT be deleted on DIGEST_UNAVAILABLE!")
+
+        # Case B: allow_unverified=True -> Succeeds with warning, NO delete
+        mock_opener_b = MagicMock()
+        mock_opener_b.open.return_value = make_success_resp()
+        with patch("urllib.request.build_opener", return_value=mock_opener_b):
+            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=None):
+                with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
+                    res = pull_model_stream(
+                        model_id="catalog:model",
+                        expected_manifest_digest=expected_digest,
+                        allow_unverified=True,
+                        show_console_bar=False,
+                    )
+                    self.assertEqual(res["status"], "done")
+                    self.assertEqual(len(deleted_models), 0)
+
+    # -------------------------------------------------------------------------
+    # Finding CX: HTTP 4xx Client Errors Fail Immediately Without Retrying
+    # -------------------------------------------------------------------------
+    def test_23_finding_cx_http_4xx_client_errors_fail_immediately(self) -> None:
+        """
+        Finding CX:
+          - HTTP 404 from daemon raises MODEL_NOT_FOUND immediately without retries.
+          - HTTP 400 from daemon raises CLIENT_ERROR immediately without retries.
+          - HTTP 500 from daemon retries with backoff up to max_retries.
+        """
+        # Case A: HTTP 404
+        err_404 = urllib.error.HTTPError(
+            url="http://127.0.0.1:11434/api/pull",
+            code=404,
+            msg="Not Found",
+            hdrs={},
+            fp=io.BytesIO(b'{"error": "model not found"}'),
+        )
+        mock_opener_404 = MagicMock()
+        mock_opener_404.open.side_effect = err_404
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_404):
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="nonexistent:model",
+                    max_retries=3,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "MODEL_NOT_FOUND")
+            self.assertEqual(mock_opener_404.open.call_count, 1, "HTTP 404 must NOT retry!")
+
+        # Case B: HTTP 400
+        err_400 = urllib.error.HTTPError(
+            url="http://127.0.0.1:11434/api/pull",
+            code=400,
+            msg="Bad Request",
+            hdrs={},
+            fp=io.BytesIO(b'{"error": "bad request"}'),
+        )
+        mock_opener_400 = MagicMock()
+        mock_opener_400.open.side_effect = err_400
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_400):
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="bad:model",
+                    max_retries=3,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "CLIENT_ERROR")
+            self.assertEqual(mock_opener_400.open.call_count, 1, "HTTP 400 must NOT retry!")
+
+        # Case C: HTTP 500 (Server Error) retries with backoff
+        def create_500():
+            return urllib.error.HTTPError(
+                url="http://127.0.0.1:11434/api/pull",
+                code=500,
+                msg="Internal Server Error",
+                hdrs={},
+                fp=io.BytesIO(b'{"error": "internal error"}'),
+            )
+
+        mock_opener_500 = MagicMock()
+        mock_opener_500.open.side_effect = [create_500(), create_500(), create_500()]
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_500):
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="server-err:model",
+                    max_retries=2,
+                    initial_backoff_sec=0.01,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "SERVER_ERROR")
+            self.assertEqual(mock_opener_500.open.call_count, 3, "HTTP 500 must retry up to max_retries!")
+
+    # -------------------------------------------------------------------------
+    # Finding CW: Real Loopback HTTP Server Integration Test
+    # -------------------------------------------------------------------------
+    def test_24_finding_cw_real_http_server_integration_suite(self) -> None:
+        """
+        Finding CW:
+          - Starts a real lightweight loopback http.server serving official Ollama endpoints.
+          - Tests query_ollama_model_digest against real bare-hex /api/tags JSON.
+          - Tests delete_ollama_model against real /api/delete endpoint.
+          - Tests pull_model_stream end-to-end with digest verification against real HTTP responses.
+          - Tests digest mismatch and CU fail-closed behavior against real HTTP responses.
+        """
+        qwen_bare_digest = "67dae4a5d3f745e691ec5f7957d1fa183b06385d83637e100c4366e6c1e33d26"
+        deleted_on_server = []
+
+        class FakeOllamaHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass  # Silence server access logs
+
+            def do_GET(self):
+                if self.path == "/api/tags":
+                    body = json.dumps({
+                        "models": [
+                            {
+                                "name": "qwen2.5:0.5b",
+                                "model": "qwen2.5:0.5b",
+                                "modified_at": "2026-10-27T00:00:00Z",
+                                "size": 397750176,
+                                "digest": qwen_bare_digest,
+                            },
+                            {
+                                "name": "no-digest:7b",
+                                "model": "no-digest:7b",
+                                "modified_at": "2026-10-27T00:00:00Z",
+                                "size": 1000000,
+                            },
+                        ]
+                    }).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path == "/api/version":
+                    body = b'{"version": "0.35.1"}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_POST(self):
+                if self.path == "/api/pull":
+                    content_length = int(self.headers.get("Content-Length", 0))
+                    req_body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                    model_name = req_body.get("name", "")
+
+                    if model_name == "nonexistent:model":
+                        self.send_response(404)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(b'{"error": "model nonexistent:model not found"}')
+                        return
+
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.end_headers()
+                    chunks = [
+                        b'{"status": "pulling manifest"}\n',
+                        b'{"status": "downloading", "digest": "sha256:layer1", "total": 1000, "completed": 500}\n',
+                        b'{"status": "downloading", "digest": "sha256:layer1", "total": 1000, "completed": 1000}\n',
+                        b'{"status": "verifying sha256 digest"}\n',
+                        b'{"status": "writing manifest"}\n',
+                        b'{"status": "success"}\n',
+                    ]
+                    for chunk in chunks:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def do_DELETE(self):
+                if self.path == "/api/delete":
+                    content_length = int(self.headers.get("Content-Length", 0))
+                    req_body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                    deleted_on_server.append(req_body.get("name"))
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"status": "success"}')
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+        # Start fake server on localhost port 0 (ephemeral free port)
+        server = http.server.HTTPServer(("127.0.0.1", 0), FakeOllamaHandler)
+        port = server.server_port
+        endpoint = f"http://127.0.0.1:{port}"
+
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        try:
+            # Subtest 1: Real query_ollama_model_digest against fake HTTP server
+            digest = query_ollama_model_digest(endpoint, "qwen2.5:0.5b")
+            self.assertEqual(digest, qwen_bare_digest)
+            self.assertIsNone(query_ollama_model_digest(endpoint, "no-digest:7b"))
+            self.assertIsNone(query_ollama_model_digest(endpoint, "unknown:model"))
+
+            # Subtest 2: Real delete_ollama_model against fake HTTP server
+            ok = delete_ollama_model(endpoint, "temp:model")
+            self.assertTrue(ok)
+            self.assertIn("temp:model", deleted_on_server)
+
+            # Subtest 3: Real pull_model_stream with catalog digest (sha256: prefix)
+            deleted_on_server.clear()
+            res = pull_model_stream(
+                model_id="qwen2.5:0.5b",
+                endpoint=endpoint,
+                expected_manifest_digest=f"sha256:{qwen_bare_digest}",
+                show_console_bar=False,
+            )
+            self.assertEqual(res["status"], "done")
+            self.assertEqual(len(deleted_on_server), 0, "Valid digest must NOT trigger deletion!")
+
+            # Subtest 4: Real pull_model_stream with forced digest mismatch
+            deleted_on_server.clear()
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="qwen2.5:0.5b",
+                    endpoint=endpoint,
+                    expected_manifest_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "DIGEST_MISMATCH")
+            self.assertIn("qwen2.5:0.5b", deleted_on_server, "Mismatched model MUST be purged from server!")
+
+            # Subtest 5: Finding CU against real HTTP server (daemon reports no digest for catalog model)
+            deleted_on_server.clear()
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="no-digest:7b",
+                    endpoint=endpoint,
+                    expected_manifest_digest="sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    allow_unverified=False,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "DIGEST_UNAVAILABLE")
+            self.assertEqual(len(deleted_on_server), 0, "Model must NOT be deleted on DIGEST_UNAVAILABLE!")
+
+            # Subtest 6: Finding CU bypass with allow_unverified=True against real HTTP server
+            deleted_on_server.clear()
+            res = pull_model_stream(
+                model_id="no-digest:7b",
+                endpoint=endpoint,
+                expected_manifest_digest="sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                allow_unverified=True,
+                show_console_bar=False,
+            )
+            self.assertEqual(res["status"], "done")
+            self.assertEqual(len(deleted_on_server), 0)
+
+            # Subtest 7: Finding CX HTTP 404 against real HTTP server
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="nonexistent:model",
+                    endpoint=endpoint,
+                    max_retries=3,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "MODEL_NOT_FOUND")
+
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    # -------------------------------------------------------------------------
+    # Finding CW: CLI Unverified-Model Rejection and Confirmation Guardrails
+    # -------------------------------------------------------------------------
+    def test_25_finding_cw_unverified_model_cli_rejection_and_confirmation(self) -> None:
+        """
+        Finding CW:
+          - CLI fails closed with UNVERIFIED_MODEL_REJECTED (exit code 1) when model
+            is not present in signed catalog and --allow-unverified-model is omitted.
+          - CLI rejects malformed model IDs not matching <family>:<tag> pattern.
         """
         setup_script = REPO_ROOT / "packaging" / "pai_setup.py"
-        proc_bad = subprocess.run(
+
+        # Case A: Malformed model ID pattern
+        proc_bad_id = subprocess.run(
             [sys.executable, str(setup_script), "--pull-model", "bad_id_no_colon"],
             capture_output=True,
             text=True,
         )
-        self.assertNotEqual(proc_bad.returncode, 0)
-        self.assertIn("invalid", proc_bad.stderr.lower())
+        self.assertEqual(proc_bad_id.returncode, 1)
+        self.assertIn("invalid", proc_bad_id.stderr.lower())
 
-    def test_23_finding_cn_layer_totals_override_catalog_estimate(self) -> None:
+        # Case B: Model not in catalog without --allow-unverified-model
+        proc_unverified = subprocess.run(
+            [sys.executable, str(setup_script), "--pull-model", "unverified-vendor:3b"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc_unverified.returncode, 1)
+        self.assertIn("unverified", proc_unverified.stderr.lower())
+        self.assertIn("--allow-unverified-model", proc_unverified.stderr)
+
+    # -------------------------------------------------------------------------
+    # Finding CN: Layer Totals Dynamic Override in Progress Tracker
+    # -------------------------------------------------------------------------
+    def test_26_finding_cn_layer_totals_override_catalog_estimate(self) -> None:
         """
         Finding CN:
           - Layer totals from stream override catalog known_total_bytes.
@@ -1127,4 +1466,6 @@ class TestPaiSetupP3(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    unittest.main()
+
     unittest.main()
