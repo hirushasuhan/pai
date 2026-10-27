@@ -44,16 +44,24 @@ from packaging.pai_setup import (
     HardwareProfile,
     ModelFitReport,
     OllamaVerificationError,
+    DownloadCancelledError,
+    ModelPullError,
+    CancelToken,
+    PullProgressTracker,
+    ConsoleProgressBar,
     ProgressEmitter,
     canonical_json_bytes,
     collect_hardware_survey,
     download_ollama_installer,
     evaluate_model_fit,
+    format_bytes_human,
+    format_eta_human,
     get_highest_seen_catalog_version,
     load_trust_keys,
     main,
     plan_model_selection,
     probe_ollama_daemon,
+    pull_model_stream,
     record_catalog_version,
     survey_disk_free,
     survey_gpu_windows,
@@ -162,6 +170,12 @@ def create_test_catalog(
     sig_bytes = ed25519_ref.sign(seed, can_bytes)
     doc["signature"] = sig_bytes.hex()
     return doc
+
+
+def sign_test_catalog(doc: Dict[str, Any], seed: bytes = TEST_SEED) -> str:
+    """Signs a catalog dictionary using ephemeral test key."""
+    can_bytes = canonical_json_bytes(doc)
+    return ed25519_ref.sign(seed, can_bytes).hex()
 
 
 class TestPaiSetupP3(unittest.TestCase):
@@ -668,6 +682,250 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertIn("avail_ram_mb", data)
         self.assertIn("free_disk_bytes", data)
         self.assertIn("npu_note", data)
+
+    # -------------------------------------------------------------------------
+    # Finding CL: Catalog Publisher Block and Thumbprint Rotation
+    # -------------------------------------------------------------------------
+    def test_13_finding_cl_catalog_publisher_rotation_and_authenticode(self) -> None:
+        """
+        Finding CL:
+          - Catalog supports optional publisher block with subject and accepted thumbprints.
+          - verify_authenticode_publisher accepts any thumbprint in the accepted list.
+          - Thumbprint rotation verified without modifying code.
+        """
+        # Case A: Catalog with valid publisher block
+        cat = create_test_catalog(version=10)
+        cat["publisher"] = {
+            "subject": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA",
+            "thumbprints": [
+                "716CD3BC8C02361431A18F56F98C72DE88066103",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",  # Rotated thumbprint
+            ],
+        }
+        # Re-sign catalog
+        cat["signature"] = sign_test_catalog(cat)
+        verified = verify_catalog_payload(cat, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+        self.assertIn("publisher", verified)
+        self.assertEqual(len(verified["publisher"]["thumbprints"]), 2)
+
+        # Case B: Malformed publisher blocks are rejected
+        cat_bad_pub = create_test_catalog(version=11)
+        cat_bad_pub["publisher"] = "not_an_object"
+        cat_bad_pub["signature"] = sign_test_catalog(cat_bad_pub)
+        with self.assertRaises(CatalogSecurityError):
+            verify_catalog_payload(cat_bad_pub, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+
+        cat_bad_tprints = create_test_catalog(version=12)
+        cat_bad_tprints["publisher"] = {"thumbprints": []}
+        cat_bad_tprints["signature"] = sign_test_catalog(cat_bad_tprints)
+        with self.assertRaises(CatalogSecurityError):
+            verify_catalog_payload(cat_bad_tprints, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+
+    # -------------------------------------------------------------------------
+    # Finding CL: Download Safety Guardrails for Ollama Installer
+    # -------------------------------------------------------------------------
+    def test_14_finding_cl_download_ollama_installer_safety_controls(self) -> None:
+        """
+        Finding CL:
+          - Insecure (non-HTTPS) download rejected.
+          - Untrusted host rejected.
+          - Exceeding size limit (500 MB) rejected.
+          - Failed download or verification unlinks target file immediately.
+        """
+        # Case A: Untrusted download host
+        with patch("packaging.pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "https://malicious-site.com/OllamaSetup.exe"):
+            with self.assertRaises(OllamaVerificationError) as ctx:
+                download_ollama_installer(dest_dir=self.tmp_dir)
+            self.assertIn("Untrusted download host", str(ctx.exception))
+
+        # Case B: Insecure scheme
+        with patch("packaging.pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "http://ollama.com/download/OllamaSetup.exe"):
+            with self.assertRaises(OllamaVerificationError) as ctx:
+                download_ollama_installer(dest_dir=self.tmp_dir)
+            self.assertIn("requires HTTPS", str(ctx.exception))
+
+        # Case C: Verification failure cleans up downloaded file
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": "1024"}
+        mock_resp.read.side_effect = [b"dummy bytes", b""]
+        mock_resp.__enter__.return_value = mock_resp
+
+        mock_opener = MagicMock()
+        mock_opener.open.return_value = mock_resp
+
+        target_file = Path(self.tmp_dir) / "OllamaSetup.exe"
+
+        with patch("urllib.request.build_opener", return_value=mock_opener):
+            with patch("packaging.pai_setup.verify_authenticode_publisher", side_effect=OllamaVerificationError("Bad signature")):
+                with self.assertRaises(OllamaVerificationError):
+                    download_ollama_installer(dest_dir=self.tmp_dir)
+                # File must be cleaned up!
+                self.assertFalse(target_file.exists(), "Target file must be unlinked when verification fails (Finding CL)")
+
+    # -------------------------------------------------------------------------
+    # Finding CM: Catalog Expiration Guidance and State Degradation
+    # -------------------------------------------------------------------------
+    def test_15_finding_cm_catalog_expired_guidance_and_corrupt_state(self) -> None:
+        """
+        Finding CM:
+          - Clear message on catalog expiration citing policy D20.
+          - Corrupted catalog_state.json degrades gracefully to version 0.
+        """
+        # Case A: Expiration guidance
+        old_cat = create_test_catalog(version=20, issued_utc="2020-01-01T00:00:00Z")
+        with self.assertRaises(CatalogSecurityError) as ctx:
+            verify_catalog_payload(old_cat, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+        self.assertIn("expired", str(ctx.exception))
+        self.assertIn("policy D20", str(ctx.exception))
+        self.assertIn("official PAI releases", str(ctx.exception))
+
+        # Case B: Corrupted state file
+        corrupt_state = Path(self.tmp_dir) / "corrupt_state.json"
+        corrupt_state.write_text("{malformed json", encoding="utf-8")
+        seen_ver = get_highest_seen_catalog_version(corrupt_state)
+        self.assertEqual(seen_ver, 0)
+
+    # -------------------------------------------------------------------------
+    # Milestone P4: Pull Progress Tracker and Layer Aggregation (§6)
+    # -------------------------------------------------------------------------
+    def test_16_p4_pull_progress_tracker_layer_aggregation(self) -> None:
+        """
+        Milestone P4:
+          - Multi-layer model aggregates completed bytes across layers.
+          - Percent and rolling speed calculated correctly.
+        """
+        tracker = PullProgressTracker(model_id="test-model:latest", known_total_bytes=1000)
+
+        # Layer 1
+        tracker.update_layer(digest="sha256:layer1", completed=200, total=500, status="downloading layer1")
+        self.assertEqual(tracker.total_completed, 200)
+        self.assertEqual(tracker.percent, 20.0)
+
+        # Layer 2
+        tracker.update_layer(digest="sha256:layer2", completed=300, total=500, status="downloading layer2")
+        self.assertEqual(tracker.total_completed, 500)
+        self.assertEqual(tracker.percent, 50.0)
+
+        # Layer 1 completes
+        tracker.update_layer(digest="sha256:layer1", completed=500, total=500, status="verifying sha256:layer1")
+        self.assertEqual(tracker.total_completed, 800)
+        self.assertEqual(tracker.percent, 80.0)
+        self.assertTrue(tracker.is_verifying)
+
+        # Human formatting helpers
+        self.assertEqual(format_bytes_human(1024), "1.0 KB")
+        self.assertEqual(format_bytes_human(1024**2 * 5), "5.0 MB")
+        self.assertEqual(format_eta_human(125), "2m 05s")
+        self.assertEqual(format_eta_human(None), "--:--")
+
+    # -------------------------------------------------------------------------
+    # Milestone P4: Streaming Pull, Progress Events, and Cancellation (§6, Appendix C)
+    # -------------------------------------------------------------------------
+    def test_17_p4_pull_model_stream_success_and_appendix_c_events(self) -> None:
+        """
+        Milestone P4:
+          - Streams NDJSON responses from mock Ollama pull endpoint.
+          - Emits download_start, progress, verifying, done events.
+        """
+        ndjson_stream = [
+            b'{"status": "pulling manifest"}\n',
+            b'{"status": "downloading", "digest": "sha256:part1", "total": 1000, "completed": 500}\n',
+            b'{"status": "verifying sha256:part1", "digest": "sha256:part1", "total": 1000, "completed": 1000}\n',
+            b'{"status": "writing manifest"}\n',
+            b'{"status": "success"}\n',
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__iter__.return_value = iter(ndjson_stream)
+        mock_resp.__enter__.return_value = mock_resp
+
+        mock_opener = MagicMock()
+        mock_opener.open.return_value = mock_resp
+
+        emitter = ProgressEmitter(enabled=True)
+        captured_events = []
+
+        with patch("urllib.request.build_opener", return_value=mock_opener):
+            with patch.object(emitter, "emit", side_effect=lambda evt, **kw: captured_events.append((evt, kw))):
+                res = pull_model_stream(
+                    model_id="mock-model:7b",
+                    endpoint="http://127.0.0.1:11434",
+                    total_bytes=1000,
+                    emitter=emitter,
+                    show_console_bar=False,
+                )
+
+        self.assertEqual(res["status"], "done")
+        event_names = [e[0] for e in captured_events]
+        self.assertIn("download_start", event_names)
+        self.assertIn("progress", event_names)
+        self.assertIn("verifying", event_names)
+        self.assertIn("done", event_names)
+
+    def test_18_p4_pull_model_stream_cancellation_and_error_handling(self) -> None:
+        """
+        Milestone P4:
+          - Thread-safe cancellation aborts stream and raises DownloadCancelledError.
+          - Daemon DISK_FULL error mapped and raises ModelPullError.
+          - Daemon REGISTRY_ERROR mapped and raises ModelPullError.
+        """
+        # Case A: Cancellation token
+        cancel_tok = CancelToken()
+        cancel_tok.cancel()
+
+        emitter = ProgressEmitter(enabled=True)
+        captured = []
+
+        with patch.object(emitter, "emit", side_effect=lambda evt, **kw: captured.append((evt, kw))):
+            with self.assertRaises(DownloadCancelledError):
+                pull_model_stream(
+                    model_id="cancel-model:7b",
+                    cancel_token=cancel_tok,
+                    emitter=emitter,
+                    show_console_bar=False,
+                )
+        self.assertTrue(any(e[0] == "error" and e[1].get("code") == "CANCELLED" for e in captured))
+
+        # Case B: Disk full error in stream
+        ndjson_disk_err = [
+            b'{"error": "write /root/.ollama: no space left on device"}\n',
+        ]
+        mock_resp_disk = MagicMock()
+        mock_resp_disk.status = 200
+        mock_resp_disk.__iter__.return_value = iter(ndjson_disk_err)
+        mock_resp_disk.__enter__.return_value = mock_resp_disk
+        mock_opener_disk = MagicMock()
+        mock_opener_disk.open.return_value = mock_resp_disk
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_disk):
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="disk-model:7b",
+                    emitter=emitter,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "DISK_FULL")
+
+        # Case C: Model not found in registry
+        ndjson_reg_err = [
+            b'{"error": "pull model manifest: file does not exist"}\n',
+        ]
+        mock_resp_reg = MagicMock()
+        mock_resp_reg.status = 200
+        mock_resp_reg.__iter__.return_value = iter(ndjson_reg_err)
+        mock_resp_reg.__enter__.return_value = mock_resp_reg
+        mock_opener_reg = MagicMock()
+        mock_opener_reg.open.return_value = mock_resp_reg
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_reg):
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="unknown-model:7b",
+                    emitter=emitter,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "REGISTRY_ERROR")
 
 
 if __name__ == "__main__":

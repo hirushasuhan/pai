@@ -1,33 +1,40 @@
 """
 Personal Agentic AI (PAI) - Setup Wizard and Hardware Survey Engine.
 
-Part of Milestone P3 for the v1.1.0 Packaging and Installer subsystem.
-Specification: docs/PACKAGING_SPEC.md (§4, §5, Appendix B, Appendix C)
+Part of Milestones P3 and P4 for the v1.1.0 Packaging and Installer subsystem.
+Specification: docs/PACKAGING_SPEC.md (§4, §5, §6, Appendix B, Appendix C)
 ADR-005, ADR-012, ADR-013
 
-Hard Rules Enforced (Findings CB, CC, CD, CD2, CE, CG, CH, CK):
+Hard Rules Enforced (Findings CB, CC, CD, CD2, CE, CG, CH, CK, CL, CM):
   1. Shipped code NEVER trusts test keys or contains private seeds (Finding CB).
      Production keys are read ONLY from <install root>/research/trust.json; fails closed.
      Explicit trust_path argument is developer/test only and NEVER read from env (Finding CK).
      Profile locations (%LOCALAPPDATA%, ~/.pai) and PAI_TRUST_PATH are strictly ignored (Finding CK).
   2. Monotonic catalog version enforcement via persistent state (Finding CD).
      Replay rollback rejected if catalog_version < highest seen version.
+     If state file is damaged/deleted, highest seen version resets to 0 (Finding CM).
   3. Catalog freshness: catalogs older than 90 days from issued_utc are rejected (Finding CD).
   4. Strict catalog schema: non-empty models, positive sizes, regex IDs and digests,
      kind="catalog" required, demo catalogs rejected in production (Finding CD2).
+     Optional publisher block supports thumbprint rotation via signed catalog (Finding CL).
   5. Fit rules: GPU offloading and 512 MB context allowance are explicitly labeled
      as estimates; preselection chooses ONLY "full" tier until measured (Finding CE).
   6. RAM rule uses available RAM at survey time with 2048 MB system reserve (Finding CE).
   7. CPU and multi-GPU surveys use real CIM properties and pick discrete GPU (Finding CE).
   8. Ollama installer publisher check: verified Authenticode Subject and Thumbprint
      with fail-closed validation on non-Windows; verified in-place before running (Finding CC).
-  9. Progress stream: emits only implemented P3 events (Finding CG).
+     Installer download enforces HTTPS, official hosts, size limit, deletion on failure,
+     and redirects to untrusted hosts are rejected (Finding CL).
+  9. Progress stream: emits implemented P3/P4 events per Appendix C (Findings CG, P4).
   10. Loopback connections bypass proxy; non-loopback OLLAMA_HOST rejected (Finding CH).
+  11. Streaming model pull engine aggregates layers, renders width-aware bar or 5% log,
+      supports exponential backoff resume, and thread-safe cancellation (Milestone P4).
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import ctypes
 import datetime
 import hashlib
@@ -38,12 +45,14 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("pai_setup")
 
@@ -75,6 +84,19 @@ class FitRuleViolationError(SetupError):
 
 class OllamaVerificationError(SetupError):
     """Raised when Ollama installer verification fails."""
+
+
+class DownloadCancelledError(SetupError):
+    """Raised when a model or installer download is cancelled by the user (§6, Milestone P4)."""
+
+
+class ModelPullError(SetupError):
+    """Raised when an Ollama model pull operation fails (Milestone P4)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"[{code}] {message}")
+        self.code = code
+        self.message = message
 
 
 # -----------------------------------------------------------------------------
@@ -403,7 +425,13 @@ def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, A
 
 
 def get_catalog_state_path() -> Path:
-    """Returns path to the per-user catalog state file storing highest seen version."""
+    """
+    Returns path to the per-user catalog state file storing highest seen version.
+    Finding CM: If catalog_state.json is corrupted or deleted, the highest seen
+    version reads as 0, so monotonic rollback defense resets. This is an expected
+    and acceptable property of an unprivileged per-user state file; it prevents
+    downgrade replay attacks during normal operation.
+    """
     user_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "PAI"
     return user_dir / "catalog_state.json"
 
@@ -492,18 +520,36 @@ def verify_catalog_payload(
             issued_dt = datetime.datetime.fromisoformat(clean_ts)
             now_dt = datetime.datetime.now(datetime.timezone.utc)
             age_seconds = (now_dt - issued_dt).total_seconds()
-            max_age_seconds = 90 * 86400  # 90 days
+            max_age_seconds = 90 * 86400  # 90 days (Finding CD, D20)
             if age_seconds > max_age_seconds:
                 days = age_seconds / 86400
                 raise CatalogSecurityError(
-                    f"Catalog is expired ({days:.1f} days old; maximum allowed freshness is 90 days)"
+                    f"Catalog has expired ({days:.1f} days old; maximum freshness is 90 days per policy D20). "
+                    "Please download an updated signed catalog from the official PAI releases repository."
                 )
             if age_seconds < -86400:  # Clock skew beyond 24h into future
                 raise CatalogSecurityError("Catalog issued_utc is in the future")
         except ValueError as ve:
             raise CatalogSecurityError(f"Malformed issued_utc timestamp: {ve}")
 
-    # 6. Strict Model Schema Validation (Finding CD2)
+    # 6. Optional Publisher Block Validation (Finding CL)
+    # Allows certificate rotation for external binaries (Ollama) via signed catalog
+    publisher = catalog_data.get("publisher")
+    if publisher is not None:
+        if not isinstance(publisher, dict):
+            raise CatalogSecurityError("Catalog 'publisher' field must be an object if present")
+        subj = publisher.get("subject")
+        if subj is not None and (not isinstance(subj, str) or not subj.strip()):
+            raise CatalogSecurityError("Catalog publisher 'subject' must be a non-empty string")
+        tprints = publisher.get("thumbprints")
+        if tprints is not None:
+            if not isinstance(tprints, list) or len(tprints) == 0:
+                raise CatalogSecurityError("Catalog publisher 'thumbprints' must be a non-empty list of hex strings")
+            for tp in tprints:
+                if not isinstance(tp, str) or not tp.strip():
+                    raise CatalogSecurityError(f"Invalid thumbprint in publisher block: {tp!r}")
+
+    # 7. Strict Model Schema Validation (Finding CD2)
     models = catalog_data["models"]
     if not isinstance(models, list) or len(models) == 0:
         raise CatalogSecurityError("Catalog 'models' list must be non-empty")
@@ -779,14 +825,35 @@ def probe_ollama_daemon(
     return {"running": False, "version": None, "endpoint": endpoint}
 
 
+class StrictRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """
+    Finding CL: Prevents redirects to different or untrusted hosts during installer download.
+    Only allows redirects within official allowed hosts and requires HTTPS.
+    """
+
+    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        parsed = urllib.parse.urlparse(newurl)
+        if parsed.scheme.lower() != "https":
+            raise OllamaVerificationError(f"Insecure redirect scheme rejected: {newurl}")
+        host = (parsed.hostname or "").lower()
+        if host not in ("ollama.com", "github.com", "objects.githubusercontent.com"):
+            raise OllamaVerificationError(f"Redirect to untrusted host rejected: {host}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+MAX_INSTALLER_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB max safety limit
+
+
 def verify_authenticode_publisher(
     installer_path: Path | str,
     expected_subject: str = OLLAMA_EXPECTED_SUBJECT,
     expected_thumbprint: str = OLLAMA_EXPECTED_THUMBPRINT,
+    expected_thumbprints: Optional[List[str]] = None,
 ) -> bool:
     """
     Verifies that a Windows binary carries a valid Authenticode signature
-    matching the official Ollama Inc. Subject and Thumbprint (Finding CC).
+    matching the official Ollama Inc. Subject and Thumbprint (Findings CC & CL).
+    Supports multiple accepted thumbprints for key rotation via catalog (Finding CL).
     Fails closed on non-Windows platforms.
     """
     if sys.platform != "win32":
@@ -796,11 +863,15 @@ def verify_authenticode_publisher(
     if not p.is_file():
         raise FileNotFoundError(f"File not found for publisher verification: {p}")
 
+    allowed_thumbprints = [t.strip().upper() for t in (expected_thumbprints or [expected_thumbprint]) if t.strip()]
+    if not allowed_thumbprints:
+        raise OllamaVerificationError("No accepted thumbprints configured for Authenticode verification")
+
     # Pass paths and parameters via environment variables to prevent quote escaping bugs
     env = os.environ.copy()
     env["PAI_INSTALLER_TARGET"] = str(p)
     env["PAI_EXPECTED_SUBJECT"] = expected_subject
-    env["PAI_EXPECTED_THUMBPRINT"] = expected_thumbprint
+    env["PAI_EXPECTED_THUMBPRINTS"] = ";".join(allowed_thumbprints)
 
     ps_code = (
         "$sig = Get-AuthenticodeSignature -LiteralPath $env:PAI_INSTALLER_TARGET; "
@@ -808,8 +879,9 @@ def verify_authenticode_publisher(
         "  Write-Error ('Invalid signature status: ' + $sig.Status); exit 1 "
         "}; "
         "$cert = $sig.SignerCertificate; "
-        "if ($cert.Thumbprint.ToUpperInvariant() -ne $env:PAI_EXPECTED_THUMBPRINT.ToUpperInvariant()) { "
-        "  Write-Error ('Thumbprint mismatch: ' + $cert.Thumbprint); exit 2 "
+        "$allowed = ($env:PAI_EXPECTED_THUMBPRINTS -split ';'); "
+        "if ($allowed -notcontains $cert.Thumbprint.ToUpperInvariant()) { "
+        "  Write-Error ('Thumbprint not in accepted list: ' + $cert.Thumbprint); exit 2 "
         "}; "
         "if ($cert.Subject -ne $env:PAI_EXPECTED_SUBJECT) { "
         "  Write-Error ('Subject mismatch: ' + $cert.Subject); exit 3 "
@@ -834,10 +906,21 @@ def verify_authenticode_publisher(
 def download_ollama_installer(
     dest_dir: Optional[Path | str] = None,
     timeout: float = 60.0,
+    expected_subject: Optional[str] = None,
+    expected_thumbprints: Optional[List[str]] = None,
 ) -> Path:
     """
     Downloads official Ollama installer into a private user-only destination folder
-    and verifies Authenticode publisher in-place before returning (Finding CC).
+    and verifies Authenticode publisher in-place before returning (Findings CC & CL).
+
+    Hardening Rules (Finding CL):
+      1. HTTPS only; official hosts only (ollama.com / github.com).
+      2. No redirection to different untrusted hosts.
+      3. Size limit strictly enforced (500 MB max).
+      4. If Authenticode verification fails, target file is immediately deleted.
+      5. Security Note: A narrow TOCTOU window exists between verification and child execution
+         where a concurrent process running under the same user could alter the file; writing to
+         a user-private directory (%LOCALAPPDATA%\\PAI\\downloads) prevents cross-user tampering.
     """
     if dest_dir:
         target_dir = Path(dest_dir).resolve()
@@ -847,27 +930,419 @@ def download_ollama_installer(
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / "OllamaSetup.exe"
 
-    logger.info("Downloading official Ollama installer from %s", OLLAMA_OFFICIAL_INSTALLER_URL)
+    parsed_url = urllib.parse.urlparse(OLLAMA_OFFICIAL_INSTALLER_URL)
+    if parsed_url.scheme.lower() != "https":
+        raise OllamaVerificationError("Installer download requires HTTPS (Finding CL)")
+    if (parsed_url.hostname or "").lower() not in ("ollama.com", "github.com"):
+        raise OllamaVerificationError(f"Untrusted download host: {parsed_url.hostname}")
+
+    opener = urllib.request.build_opener(StrictRedirectHandler())
     req = urllib.request.Request(
         OLLAMA_OFFICIAL_INSTALLER_URL,
         headers={"User-Agent": "PAI-Setup/1.0"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(target_path, "wb") as out_f:
-        shutil.copyfileobj(resp, out_f)
 
-    # Verify signature in-place before execution
-    verify_authenticode_publisher(target_path)
+    downloaded_bytes = 0
+    try:
+        with opener.open(req, timeout=timeout) as resp, open(target_path, "wb") as out_f:
+            clength = resp.headers.get("Content-Length")
+            if clength and int(clength) > MAX_INSTALLER_SIZE_BYTES:
+                raise OllamaVerificationError(f"Installer size ({clength} bytes) exceeds safety limit ({MAX_INSTALLER_SIZE_BYTES})")
+
+            chunk_size = 64 * 1024
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                downloaded_bytes += len(chunk)
+                if downloaded_bytes > MAX_INSTALLER_SIZE_BYTES:
+                    raise OllamaVerificationError(f"Downloaded stream exceeded safety limit of {MAX_INSTALLER_SIZE_BYTES} bytes")
+                out_f.write(chunk)
+
+        # In-place Authenticode verification
+        verify_authenticode_publisher(
+            target_path,
+            expected_subject=expected_subject or OLLAMA_EXPECTED_SUBJECT,
+            expected_thumbprints=expected_thumbprints,
+        )
+    except Exception as e:
+        # Finding CL: If verification or download fails, delete partial or untrusted file immediately
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except Exception:
+                pass
+        if isinstance(e, OllamaVerificationError):
+            raise
+        raise OllamaVerificationError(f"Failed to download or verify Ollama installer: {e}")
+
     return target_path
 
 
 # -----------------------------------------------------------------------------
-# CLI and Progress Stream Engine (Appendix C, Finding CG)
+# Milestone P4: Download Engine, Resume, Cancel & Progress (§6, Appendix C)
+# -----------------------------------------------------------------------------
+class CancelToken:
+    """Thread-safe cancellation token for model downloads (§6, Milestone P4)."""
+
+    def __init__(self) -> None:
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def raise_if_cancelled(self) -> None:
+        if self._cancelled.is_set():
+            raise DownloadCancelledError("Download cancelled by user")
+
+
+class PullProgressTracker:
+    """
+    Aggregates Ollama model layer pull progress (§6, Appendix C).
+    Calculates completed bytes, total bytes, rolling speed, ETA, and overall percent.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        known_total_bytes: Optional[int] = None,
+        speed_window_sec: float = 3.0,
+    ) -> None:
+        self.model_id = model_id
+        self.known_total_bytes = known_total_bytes
+        self.speed_window_sec = speed_window_sec
+        # Layer tracking by digest: {digest: {"completed": bytes, "total": bytes}}
+        self.layers: Dict[str, Dict[str, int]] = {}
+        # History for rolling speed calculation: deque of (timestamp, total_completed)
+        self.history: Deque[Tuple[float, int]] = collections.deque()
+        self.start_time = time.time()
+        self.last_status = "connecting"
+        self.is_verifying = False
+        self.is_done = False
+
+    def update_layer(
+        self,
+        digest: Optional[str],
+        completed: Optional[int],
+        total: Optional[int],
+        status: str,
+    ) -> None:
+        now = time.time()
+        self.last_status = status
+        if "verifying" in status.lower():
+            self.is_verifying = True
+
+        if digest:
+            if digest not in self.layers:
+                self.layers[digest] = {"completed": 0, "total": 0}
+            if completed is not None:
+                self.layers[digest]["completed"] = completed
+            if total is not None:
+                self.layers[digest]["total"] = total
+
+        total_comp = self.total_completed
+        self.history.append((now, total_comp))
+        while self.history and (now - self.history[0][0]) > self.speed_window_sec:
+            self.history.popleft()
+
+    @property
+    def total_completed(self) -> int:
+        if not self.layers:
+            return 0
+        return sum(l["completed"] for l in self.layers.values())
+
+    @property
+    def total_expected(self) -> int:
+        if self.known_total_bytes and self.known_total_bytes > 0:
+            return self.known_total_bytes
+        if self.layers:
+            sum_total = sum(l["total"] for l in self.layers.values())
+            if sum_total > 0:
+                return sum_total
+        return max(self.total_completed, 1)
+
+    @property
+    def percent(self) -> float:
+        tot = self.total_expected
+        if tot <= 0:
+            return 0.0
+        return min(100.0, (self.total_completed / tot) * 100.0)
+
+    @property
+    def bytes_per_sec(self) -> int:
+        if len(self.history) < 2:
+            return 0
+        t0, b0 = self.history[0]
+        t1, b1 = self.history[-1]
+        dt = t1 - t0
+        db = b1 - b0
+        if dt <= 0.001 or db < 0:
+            return 0
+        return int(db / dt)
+
+    @property
+    def eta_sec(self) -> Optional[int]:
+        speed = self.bytes_per_sec
+        if speed <= 0:
+            return None
+        rem_bytes = max(0, self.total_expected - self.total_completed)
+        return int(rem_bytes / speed)
+
+
+def format_bytes_human(num_bytes: int) -> str:
+    """Formats raw byte counts into human-readable strings."""
+    if num_bytes >= 1024**3:
+        return f"{num_bytes / (1024**3):.2f} GB"
+    if num_bytes >= 1024**2:
+        return f"{num_bytes / (1024**2):.1f} MB"
+    if num_bytes >= 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    return f"{num_bytes} B"
+
+
+def format_eta_human(eta_sec: Optional[int]) -> str:
+    """Formats ETA seconds into human-readable minutes and seconds."""
+    if eta_sec is None:
+        return "--:--"
+    m, s = divmod(eta_sec, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}h {m}m"
+    return f"{m}m {s:02d}s"
+
+
+class ConsoleProgressBar:
+    """
+    Renders console progress bar according to §6:
+    - Width-aware, single redrawn line (\\r), no flicker when isatty.
+    - Prints every 5% threshold when piped or redirected (not a TTY).
+    """
+
+    def __init__(self, model_id: str, is_tty: Optional[bool] = None):
+        self.model_id = model_id
+        self.is_tty = sys.stdout.isatty() if is_tty is None else is_tty
+        self.last_pct_logged = -1
+        self.last_line_len = 0
+
+    def update(self, tracker: PullProgressTracker) -> None:
+        pct = tracker.percent
+        comp_str = format_bytes_human(tracker.total_completed)
+        tot_str = format_bytes_human(tracker.total_expected)
+        speed_str = f"{format_bytes_human(tracker.bytes_per_sec)}/s" if tracker.bytes_per_sec > 0 else "--/s"
+        eta_str = format_eta_human(tracker.eta_sec)
+        status = tracker.last_status
+
+        if self.is_tty:
+            cols = shutil.get_terminal_size((80, 20)).columns
+            prefix = f"{self.model_id}: "
+            stats = f" {pct:5.1f}% ({comp_str}/{tot_str}) {speed_str} ETA {eta_str}"
+            rem_cols = max(10, cols - len(prefix) - len(stats) - 2)
+            filled = int((pct / 100.0) * rem_cols)
+            bar_chars = "=" * max(0, filled - 1) + (
+                ">" if filled > 0 and filled < rem_cols else ("=" if filled == rem_cols else "")
+            )
+            bar = f"[{bar_chars.ljust(rem_cols)}]"
+            line = f"{prefix}{bar}{stats}"
+            if len(line) > cols:
+                line = line[:cols]
+            padding = " " * max(0, self.last_line_len - len(line))
+            sys.stdout.write(f"\r{line}{padding}")
+            sys.stdout.flush()
+            self.last_line_len = len(line)
+        else:
+            pct_int = int(pct)
+            bucket = pct_int - (pct_int % 5)
+            if bucket > self.last_pct_logged and bucket <= 100:
+                self.last_pct_logged = bucket
+                print(
+                    f"[{self.model_id}] {bucket:3d}% ({comp_str}/{tot_str}) - {speed_str} - ETA {eta_str} - {status}",
+                    flush=True,
+                )
+
+    def finish(self, success: bool = True, message: str = "") -> None:
+        if self.is_tty:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        else:
+            if success:
+                print(f"[{self.model_id}] 100% Download complete.", flush=True)
+            else:
+                print(f"[{self.model_id}] Download failed: {message}", flush=True)
+
+
+def pull_model_stream(
+    model_id: str,
+    endpoint: Optional[str] = None,
+    total_bytes: Optional[int] = None,
+    cancel_token: Optional[CancelToken] = None,
+    emitter: Optional[ProgressEmitter] = None,
+    show_console_bar: bool = True,
+    max_retries: int = 3,
+    initial_backoff_sec: float = 0.5,
+) -> Dict[str, Any]:
+    """
+    Executes streaming model download via Ollama pull API (POST /api/pull).
+    Features (§6, Milestone P4):
+      - Emits NDJSON progress events (Appendix C): download_start, progress, verifying, done, error.
+      - Width-aware console progress bar with speed, ETA, and layers aggregation.
+      - Network failure resilience with exponential backoff retries and resume.
+      - Thread-safe cancellation via CancelToken.
+      - Error detection: DISK_FULL, REGISTRY_ERROR, CANCELLED, PULL_FAILED.
+    """
+    if endpoint is None:
+        env_host = os.environ.get("OLLAMA_HOST")
+        if env_host:
+            parsed = urllib.parse.urlparse(env_host if "://" in env_host else f"http://{env_host}")
+            host = parsed.hostname or ""
+            if host in ("127.0.0.1", "localhost", "::1"):
+                endpoint = f"http://{host}:{parsed.port or 11434}"
+            else:
+                endpoint = OLLAMA_DEFAULT_URL
+        else:
+            endpoint = OLLAMA_DEFAULT_URL
+
+    url = f"{endpoint.rstrip('/')}/api/pull"
+    tracker = PullProgressTracker(model_id=model_id, known_total_bytes=total_bytes)
+    bar = ConsoleProgressBar(model_id=model_id) if show_console_bar else None
+
+    if emitter:
+        emitter.emit("download_start", model=model_id, total_bytes=tracker.total_expected)
+
+    retries_left = max_retries
+    backoff = initial_backoff_sec
+    verifying_emitted = False
+
+    while True:
+        if cancel_token and cancel_token.is_cancelled():
+            if emitter:
+                emitter.emit("error", model=model_id, code="CANCELLED", message="Download cancelled by user")
+            if bar:
+                bar.finish(success=False, message="Cancelled")
+            raise DownloadCancelledError(f"Model download '{model_id}' was cancelled by user")
+
+        try:
+            req_data = json.dumps({"name": model_id, "stream": True}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=req_data,
+                headers={"Content-Type": "application/json", "User-Agent": "PAI-Setup/1.0"},
+                method="POST",
+            )
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+            with opener.open(req, timeout=30.0) as resp:
+                if resp.status != 200:
+                    raise ModelPullError("PULL_FAILED", f"Ollama daemon returned HTTP {resp.status}")
+
+                for line_bytes in resp:
+                    if cancel_token and cancel_token.is_cancelled():
+                        if emitter:
+                            emitter.emit("error", model=model_id, code="CANCELLED", message="Download cancelled by user")
+                        if bar:
+                            bar.finish(success=False, message="Cancelled")
+                        raise DownloadCancelledError(f"Model download '{model_id}' was cancelled by user")
+
+                    line_str = line_bytes.decode("utf-8", errors="replace").strip()
+                    if not line_str:
+                        continue
+
+                    try:
+                        chunk = json.loads(line_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if "error" in chunk:
+                        err_msg = chunk["error"]
+                        code = "PULL_FAILED"
+                        err_lower = err_msg.lower()
+                        if "space" in err_lower or "disk full" in err_lower:
+                            code = "DISK_FULL"
+                        elif "not found" in err_lower or "manifest" in err_lower:
+                            code = "REGISTRY_ERROR"
+
+                        if emitter:
+                            emitter.emit("error", model=model_id, code=code, message=err_msg)
+                        if bar:
+                            bar.finish(success=False, message=err_msg)
+                        raise ModelPullError(code, err_msg)
+
+                    status = chunk.get("status", "")
+                    digest = chunk.get("digest")
+                    total = chunk.get("total")
+                    completed = chunk.get("completed")
+
+                    tracker.update_layer(digest, completed, total, status)
+
+                    if tracker.is_verifying and not verifying_emitted:
+                        verifying_emitted = True
+                        if emitter:
+                            emitter.emit("verifying", model=model_id)
+
+                    if emitter:
+                        emitter.emit(
+                            "progress",
+                            model=model_id,
+                            completed=tracker.total_completed,
+                            total=tracker.total_expected,
+                            bytes_per_sec=tracker.bytes_per_sec,
+                            eta_sec=tracker.eta_sec,
+                            status=status,
+                        )
+
+                    if bar:
+                        bar.update(tracker)
+
+                    if status.lower() == "success":
+                        tracker.is_done = True
+                        if emitter:
+                            emitter.emit("done", model=model_id)
+                        if bar:
+                            bar.finish(success=True)
+                        return {
+                            "model": model_id,
+                            "completed_bytes": tracker.total_completed,
+                            "status": "done",
+                        }
+
+            if tracker.is_done:
+                return {"model": model_id, "completed_bytes": tracker.total_completed, "status": "done"}
+
+        except (urllib.error.URLError, TimeoutError, ConnectionResetError) as e:
+            if cancel_token and cancel_token.is_cancelled():
+                raise DownloadCancelledError(f"Model download '{model_id}' was cancelled by user")
+            retries_left -= 1
+            if retries_left < 0:
+                msg = f"Network connection lost after {max_retries} retries: {e}"
+                if emitter:
+                    emitter.emit("error", model=model_id, code="NETWORK_ERROR", message=msg)
+                if bar:
+                    bar.finish(success=False, message=msg)
+                raise ModelPullError("NETWORK_ERROR", msg)
+            time.sleep(backoff)
+            backoff *= 2.0
+
+
+# -----------------------------------------------------------------------------
+# CLI and Progress Stream Engine (Appendix C, Findings CG & P4)
 # -----------------------------------------------------------------------------
 class ProgressEmitter:
     """Emits newline-delimited JSON events to stdout conforming to Appendix C."""
 
-    # P3 defined progress event types
-    P3_EVENTS = {"survey", "ollama_status", "fit", "error"}
+    # P3 and P4 supported event types (§6, Appendix C)
+    SUPPORTED_EVENTS = {
+        "survey",
+        "ollama_status",
+        "fit",
+        "download_start",
+        "progress",
+        "verifying",
+        "done",
+        "error",
+    }
+    P3_EVENTS = SUPPORTED_EVENTS  # Backward compatibility alias
 
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
@@ -887,6 +1362,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--progress-json", action="store_true", help="Emit Appendix C NDJSON progress events")
     parser.add_argument("--probe-ollama", action="store_true", help="Check if Ollama daemon is reachable")
     parser.add_argument("--model-drive", default=None, help="Custom target directory for disk space survey")
+    parser.add_argument("--pull-model", default=None, help="Download a specific model ID via Ollama pull API (§6)")
+    parser.add_argument("--pull-preselected", action="store_true", help="Download preselected models from catalog (§6)")
 
     args = parser.parse_args(argv)
     emitter = ProgressEmitter(enabled=args.progress_json)
@@ -951,6 +1428,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  {flag} {r.model_id} ({r.family}) - GPU: {r.fits_gpu.upper()}, Disk: {'OK' if r.fits_disk else 'FAIL'}")
         for rej in r.rejection_reasons:
             print(f"      * {rej}")
+
+    # 5. Milestone P4: Model download execution if requested
+    if args.pull_model:
+        if not ollama_status["running"]:
+            emitter.emit("error", code="OLLAMA_NOT_RUNNING", message="Ollama daemon is not reachable on localhost")
+            print("ERROR: Ollama daemon is not running. Please start Ollama before pulling models.", file=sys.stderr)
+            return 1
+        try:
+            print(f"\nStarting model pull for {args.pull_model}...")
+            pull_model_stream(args.pull_model, emitter=emitter, show_console_bar=True)
+        except Exception as e:
+            print(f"ERROR: Pull failed: {e}", file=sys.stderr)
+            return 1
+
+    elif args.pull_preselected:
+        if not ollama_status["running"]:
+            emitter.emit("error", code="OLLAMA_NOT_RUNNING", message="Ollama daemon is not reachable on localhost")
+            print("ERROR: Ollama daemon is not running. Please start Ollama before pulling models.", file=sys.stderr)
+            return 1
+        preselected = [r for r in recommendations if r.is_preselected]
+        if not preselected:
+            print("\nNo models met preselection criteria on this hardware profile.")
+            return 0
+        for r in preselected:
+            print(f"\nPulling preselected model: {r.model_id} ({format_bytes_human(r.download_bytes)})...")
+            try:
+                pull_model_stream(r.model_id, total_bytes=r.download_bytes, emitter=emitter, show_console_bar=True)
+            except Exception as e:
+                print(f"ERROR: Pulling {r.model_id} failed: {e}", file=sys.stderr)
+                return 1
 
     return 0
 
