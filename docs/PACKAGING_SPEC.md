@@ -14,14 +14,33 @@
 
 ## 1. Sequencing with the N+1 evaluation window (read first)
 
-The N+1 window started on 2026-10-27 for tag `v1.0.0-rc1` (commit `8ce81cb`). It is valid only while `research/` (tree `506e520b…`) and `core/` (tree `14c60746…`) are unchanged and the `pai-core` binary is not rebuilt. Therefore:
+**Window Postponement (2026-10-27):** The N+1 window start tentatively recorded on 2026-10-27 for tag `v1.0.0-rc1` has been formally postponed by owner decision and accepted by the reviewer. The few hours of telemetry collected on 2026-10-27 are archived via `pai clear-shadow` and do not count toward evaluation quotas. Because any modification to `research/` or `core/` restarts the 14-day evaluation window, implementing planned features (setup in `pai`, managed Ollama start, interactive shell) upfront in the Build Stage avoids invalidating a 14-day run.
 
-- All packaging work goes into a new top-level folder `packaging/` and into `tools/`. Nothing in `research/` or `core/` is edited until the window is closed and reviewed. Packaging code may import `research/` modules read-only.
-- Features that naturally belong in `research/pai.py` (a `pai setup` wizard, a progress flag, catalog download) are first built as a standalone tool, `packaging/pai_setup.py`. After the window, a separate reviewed commit may move them into `research/`.
-- Installer tests must not write to the owner's real `~/.pai` log or to the repository. Use Windows Sandbox (with a dedicated configuration that allows networking, used only for installer tests) or a clean virtual machine, never the development profile.
-- The shipped payload is built from a tag, byte for byte. The window has no effect on building an installer from `v1.0.0-rc1` for testing. The public 1.0.0 installer is built after the N+1 review.
+The sequenced release order:
+1. **Build stage (no window running; each change reviewed sequentially):**
+   - Close Milestone P5: Resolve Finding DK (safe manifest-scoped rollback, non-empty directory guard), run the owner's manual installer checklist on `1.1.0-rc1`, and confirm decisions D8 to D11.
+   - Milestone P6: Move setup wizard into `pai setup` in `research/` (own reviewed commit).
+   - ADR-014 Managed Ollama Start: Auto-start local Ollama daemon, Authenticode verification on `ollama.exe`, loopback binding, child PID tracking, consent prompt (own reviewed commit).
+   - ADR-014 Interactive Shell: Terminal detection guard (`isatty`), conversational REPL, slash dispatcher to canonical subcommands, interrupt handling, banner (own reviewed commit).
+   - Resolve Decision D17 (Ollama start consent default).
+2. **Freeze:**
+   - One candidate commit with CI green on all three jobs (`rust-core`, `python-research`, `linux-portability`) and reviewer acceptance of all build stage changes.
+   - Tagged as a candidate release (e.g. `v1.1.0-rc2`).
+   - The standalone installer is built from that tag.
+   - Immutable hash pins recorded: `research/` tree, `core/` tree, `pai-core.exe` SHA-256, and installer SHA-256.
+3. **Evaluation Window (at least 14 days, at least 300 organic CLI comparisons, 0 discrepancies, one binary hash, no rebuild, trees equal to pin):**
+   - The user installs the candidate using `PAI-Setup-<version>-win-x64.exe` and uses the installed `pai` from PATH for daily work; this provides empirical evidence of the shipped product.
+   - `pai clear-shadow` is executed once at the start of the window and the start timestamp is logged.
+   - Neither `research/` nor `core/` may be modified during the window. Any change to the pinned trees restarts the 14-day window unless the reviewer rules otherwise in writing.
+   - Allowed work during the window: documentation, `tools/`, installer packaging scripts, `install.ps1` (P2b), and Linux portability work that does not touch the evaluated trees.
+4. **Post-Window:**
+   - Reviewer audit of evaluation window evidence.
+   - Removal of Python reference fallback (separate commit, separate review).
+   - Tag `v1.0.0`.
+   - The official 1.1.0 installer is built from that tag as specified below.
+
 - **Note on reproducibility (Finding DH):** Only the payload directory and archive (`dist/payload`) are bit-for-bit reproducible across builds. The Inno Setup compiled installer (`PAI-Setup-*.exe`) embeds internal compilation timestamps into PE headers and table structures; distinct ISCC invocations therefore produce distinct file hashes despite identical input payloads.
-- **Window note (2026-10-27, Finding DH):** `tools/check_n_plus_1.py` was adjusted during the evaluation window to allow the health check report to continue when `pai doctor` exits non-zero due to low free host RAM, provided its JSON output contains `shadow_telemetry`. The script is located in `tools/` (outside evaluated `core/` and `research/` trees), does not loosen evaluation criteria, and continues to strictly enforce tree identities and the pinned binary SHA-256.
+- **Window note (2026-10-27, Finding DH):** `tools/check_n_plus_1.py` was adjusted to allow health check reports to continue when `pai doctor` exits non-zero due to low free host RAM, provided its JSON output contains `shadow_telemetry`. The script is located in `tools/` (outside evaluated `core/` and `research/` trees), does not loosen evaluation criteria, and strictly enforces tree identities and the pinned binary SHA-256.
 
 Dev-checkout helpers that already exist in the repository root (`pai.cmd`, `install.bat`) are for people who run from a git checkout with their own Python. They are not the end-user installer: they need a system `python` on PATH and do not pin the core binary. They stay as the "developer install".
 
@@ -109,7 +128,7 @@ Use Ollama's pull API (`POST /api/pull`, streamed). The stream sends newline-del
 
 - **PowerShell ExecutionPolicy Bypass (Finding DF):** When invoking `tools/update_path.ps1` from the Inno Setup installer (`pai.iss`) or portable helper scripts (`install.bat`, `uninstall.bat`), `-ExecutionPolicy Bypass` is specified. This flag is process-scoped strictly to the execution of that specific helper script; it does not change machine-wide or user-wide PowerShell execution policies. This is standard for local installer helper scripts, but security scanners may flag the switch; it is restricted solely to this PATH-management invocation.
 - **Test-Only Switches in Production Artifacts (Finding DG):** The Inno Setup installer accepts an optional `/REG_SUBKEY=` command-line parameter, and the PATH scripts inspect the `PAI_REG_SUBKEY` environment variable. These exist exclusively to allow automated test harnesses (such as `tools/test_installer_p5.py`) to redirect PATH modifications to isolated temporary registry test keys without mutating the real user `HKCU\Environment` key. The scripts enforce fail-closed validation: any subkey name that is not `Environment` and does not begin with `Test_` or `PAI_TEST_` is immediately rejected with an error. These switches are strictly test-isolation hooks and are not end-user features.
-- **Post-Install Rollback on Failure (Finding DI):** If writing `agreement_acceptance.json` fails or the user PATH update script (`tools/update_path.ps1`) exits non-zero during installation, the installer executes automated rollback: it reverts any partially modified PATH entry, recursively deletes the target installation folder (`{app}`) using `DelTree`, and terminates with non-zero exit code (exit code 2 for agreement write failure, exit code 3 for PATH update failure). This restores the filesystem and registry to their pre-installation state without leaving orphaned binaries or incomplete uninstall records. In GUI mode, an informative dialog explains the rollback and termination.
+- **Post-Install Rollback on Failure (Findings DI and DK):** If writing `agreement_acceptance.json` fails or the user PATH update script (`tools/update_path.ps1`) exits non-zero during installation, the installer executes automated rollback: it reverts any partially modified PATH entry, deletes only the files placed by PAI (the installed manifest file list plus generated files `agreement_acceptance.json` and `unins000.*`), removes the target installation folder (`{app}`) only if it is completely empty, and terminates with non-zero exit code (exit code 2 for agreement write failure, exit code 3 for PATH update failure). Pre-existing user files are preserved, and the Inno uninstall registry key is cleaned up. In GUI mode, an informative dialog explains the rollback and termination.
 
 ## 9. Test matrix (acceptance)
 
@@ -135,8 +154,10 @@ Run in Windows Sandbox or a clean VM, never on the development profile during th
 | P2 | `pai.exe` launcher, portable zip with `install.bat` (PATH step, uninstall script) | no |
 | P3 | `packaging/pai_setup.py`: hardware survey, signed-catalog check, fit rules, Ollama detection and installation, `--progress-json` | no (imports read-only) |
 | P4 | Download engine and progress UI (console and installer page), resume and cancel | no |
-| P5 | Inno Setup script: agreement page, wizard pages, PATH, uninstall; test matrix of section 9 | no |
-| P6 | After the N+1 review: move the setup wizard into `pai setup` (`research/`), release 1.0.0 installer, signing decision applied | yes (separate reviewed commit) |
+| P5 | Inno Setup script: agreement page, wizard pages, PATH, safe rollback (Finding DK), uninstall; test matrix of section 9 | no |
+| P6 | Build stage (pre-freeze): move the setup wizard into `pai setup` (`research/`) | yes (separate reviewed commit) |
+| Managed Ollama | Build stage (pre-freeze): managed local Ollama start, Authenticode check on `ollama.exe`, PID tracking (ADR-014) | yes (separate reviewed commit) |
+| Interactive Shell | Build stage (pre-freeze): terminal guard, REPL, slash dispatcher to canonical subcommands (ADR-014) | yes (separate reviewed commit) |
 | P1b | Extend `packaging/build_payload.py`: `--platform` (`win-x64`, `linux-x64`), platform field in the manifest, binary-format check (PE or ELF), `dist/` in `.gitignore` | no |
 | P2b | `packaging/install.ps1`: the PowerShell one-line bootstrap (section 14); needs D11 and the P2 portable zip | no |
 | P7 | Linux: CI build of `pai-core` for Linux, `packaging/install.sh`, Linux hardware survey and Ollama handling, Linux test matrix (section 14.3 to 14.5). Release 1.2.0, labelled preview | no (imports read-only; Linux-only fixes in `research/` only as separate reviewed commits) |
@@ -152,34 +173,37 @@ Run in Windows Sandbox or a clean VM, never on the development profile during th
 - **D14** whether the PowerShell one-line install ships with 1.1.0 (default: yes, as a second front door next to `PAI-Setup`, never the only one) and whether the project page shows it as the recommended method (default: no, the installer stays recommended).
 - **D15** Linux Python runtime: A) a pinned standalone CPython build shipped in the payload (default, same behaviour on every distribution), or B) the system `python3` above a stated minimum version.
 - **D16** Linux support level for 1.2.0: labelled "preview" until a Linux evaluation is recorded (default), or full support from the first release.
+- **D17** default consent mode for starting Ollama (ADR-014): Ask once (recommended default), Always, or Never.
 
 ## 12. Instructions for the coding agent
 
-1. Do not touch `research/`, `core/` or the `pai-core` binary until the reviewer says the N+1 window is closed. Work in `packaging/` and `tools/`.
-2. One report per milestone P1 to P5, each with: what changed, the trust-boundary table (installer, network, downloaded executables, catalog, PATH, launcher environment), hostile-input tests with a negative control for each, claims-lint green, CI green.
+1. During the Build Stage: complete P5, P6, managed Ollama start, and interactive shell with sequential reviews. Do not edit `research/` or `core/` once the freeze candidate tag (e.g. `v1.1.0-rc2`) is pinned and the 14-day evaluation window commences. Work during the window is strictly restricted to `packaging/`, `tools/`, and docs.
+2. One report per milestone, each with: what changed, the trust-boundary table (installer, network, downloaded executables, catalog, PATH, launcher environment), hostile-input tests with a negative control for each, claims-lint green, CI green.
 3. Do not invent model names, sizes or licences. Sizes come from registry manifests, licences from official model cards, and every catalog entry carries its source link and the date it was read.
 4. Never ask for, store or generate signing keys. Signing steps are documented for the owner to run offline.
 5. Test installers only in a sandbox or VM. Report which machine profile each result came from.
 
-## 13. Versioning and release train (decided 2026-10-27, proposal until the owner confirms)
+## 13. Versioning and release train (updated 2026-10-27 per postponed window)
 
 The installer is a delivery mechanism, so it is built alongside the core and not left to the very end. The true end of the project (native engine, OS control; Phases 3 to 5) is far away, and waiting for it would delay all real-world testing for months. Problems that only an installer shows (PATH, antivirus and SmartScreen, Ollama and graphics driver differences, non-ASCII user names, low disk) are cheaper to find now.
 
 | Version | Content | Rule |
 |---|---|---|
-| 1.0.0-rc1 | Release N (exists: tag `v1.0.0-rc1`, commit `8ce81cb`) | N+1 evaluation window runs on it |
-| 1.0.0 | After the N+1 review: Python fallback removed | Core finished; no installer work in `research/` before this |
-| 1.1.0 | First installable release: installer, agreement, `pai` on PATH, Ollama check, hardware-aware model setup, progress bar | Built from the 1.0.0 tag; core behaviour unchanged (below); includes the PowerShell one-line install (section 14.2) if D14 is accepted |
-| 1.2.0 | Linux installer (`install.sh`) and Linux `pai-core` build, labelled preview | Needs the Linux items of section 14; the Windows 1.1.0 behaviour is unchanged |
+| 1.0.0-rc1 | Baseline Release N preview (tag `v1.0.0-rc1`, commit `8ce81cb`) | Used for initial packaging prototypes (P1–P5) |
+| 1.1.0-rc1 | Initial packaging preview build (tag `v1.1.0-rc1`) | Used for manual installer tests in sandbox/VM |
+| 1.1.0-rc2 | Freeze candidate (after P5 close, P6 setup in `research/`, managed Ollama, interactive shell) | The 14-day N+1 evaluation window runs on this installed build |
+| 1.0.0 | Post-window: Python fallback removed from reference core | Core finished; official v1.0.0 tag |
+| 1.1.0 | First installable public release: installer, agreement, `pai` on PATH, Ollama check, hardware-aware model setup, progress bar, interactive shell, managed service | Built from the 1.0.0 tag; core behaviour unchanged; includes PowerShell one-line install if D14 is accepted |
+| 1.2.0 | Linux installer (`install.sh`) and Linux `pai-core` build, labelled preview | Needs the Linux items of section 14; Windows 1.1.0 behaviour unchanged |
 | 1.5.0 | Automation interface and optional image generation (`docs/ROADMAP.md`) | Entry gate in the ROADMAP |
 
 **Preview builds.** Installer builds made before 1.1.0 are tagged `v1.1.0-rc1`, `-rc2` and so on, labelled "preview", and tested in a sandbox or VM. They are given only to the owner and a few trusted testers, because the evaluation window and the agreement review (D8) are not finished.
 
-**Preview builds and the updater (proposal, added 2026-10-27).** The updater keeps the highest version it has seen (anti-rollback). A preview build must not be signed with the number of the final release, and preview installs must not write that state, or the real release could be rejected as "not newer". Until a scheme is agreed, preview builds are installed by hand only, `pai --version` shows the tag (for example `1.0.0-rc1`), and the manifest's `tag` field is the source of that text.
+**Preview builds and the updater.** The updater keeps the highest version it has seen (anti-rollback). A preview build must not be signed with the number of the final release, and preview installs must not write that state, or the real release could be rejected as "not newer". Preview builds are installed by hand only, `pai --version` shows the tag (for example `1.1.0-rc2`), and the manifest's `tag` field is the source of that text.
 
-**What 1.1.0 may change in `research/`.** Only new setup, catalog and model-download code and the entry point that calls it. The files that make up the evaluated core path (`pai_core_bridge.py`, `ingest.py`, `verify_loop.py`, `updater.py` and the Rust `core/`) must be byte-identical to the 1.0.0 tag. The release script prints the list of changed files between the two tags and fails if any of those files appear in it.
+**What 1.1.0 may change in `research/`.** Setup, catalog and model-download code (`pai setup`), managed service startup, and interactive shell REPL. The files that make up the evaluated core bridge path (`pai_core_bridge.py`, `ingest.py`, `verify_loop.py`, `updater.py` and the Rust `core/`) must remain byte-identical to the 1.0.0 tag. The release script prints the list of changed files between the two tags and fails if any core files appear in it.
 
-**Release gates for 1.1.0.** The test matrix of section 9 passes on recorded machine profiles; the release manifest is signed offline (ADR-005); the installer's SHA-256 is published; an antivirus scan result is recorded; release notes state what was and was not evaluated; claims-lint and CI are green; decisions D8 to D13 are recorded.
+**Release gates for 1.1.0.** The test matrix of section 9 passes on recorded machine profiles; the release manifest is signed offline (ADR-005); the installer's SHA-256 is published; an antivirus scan result is recorded; release notes state what was and was not evaluated; claims-lint and CI are green; decisions D8 to D13 and D17 are recorded.
 
 **Where users download from.** If the repository stays private (Finding AV), release assets and the catalog are not reachable without a login, and the installer could not fetch the catalog. Public downloads need a public host (for example a separate public releases repository or a website). Decide this with D11 before building the download code.
 

@@ -259,15 +259,20 @@ Proposed in [ADR-012](adr/ADR-012-inference-runtime-strategy.md), 2026-10-23. To
 
 ---
 
-## 📦 Packaging and first-run setup (planned, not scheduled)
+## 📦 Packaging and first-run setup (in progress, build stage)
 
-Proposed in [ADR-013](adr/ADR-013-installer-and-distribution.md) and specified in [PACKAGING_SPEC.md](PACKAGING_SPEC.md), 2026-10-27: a single Inno Setup installer with an agreement page, `pai` on the user's PATH, the Ollama server as a verified prerequisite, and hardware-aware model selection from a signed catalog with a download progress bar. Milestones P1 to P5 live in `packaging/` and `tools/` and do not touch `research/` or `core/` while the N+1 window is open; P6 (moving the wizard into `pai setup`) follows the N+1 review. Planned as release **1.1.0** (after 1.0.0 and before 1.5.0); preview builds are tagged `v1.1.0-rcN`. See section 13 of the spec. Section 14 adds a PowerShell one-line install (an extra front door next to the installer, proposed for 1.1.0) and a Linux installer (proposed as release 1.2.0, labelled preview until a Linux evaluation is recorded).
+Proposed in [ADR-013](adr/ADR-013-installer-and-distribution.md) and specified in [PACKAGING_SPEC.md](PACKAGING_SPEC.md), 2026-10-27: a single Inno Setup installer with an agreement page, `pai` on the user's PATH, the Ollama server as a verified prerequisite, and hardware-aware model selection from a signed catalog with a download progress bar. Per the user's decision to postpone the N+1 evaluation window, the sequencing is:
+1. **Build stage (no window active):** Close P5 (Finding DK, manual installer checklist, decisions D8–D11), P6 (move setup wizard into `pai setup` in `research/`), ADR-014 managed Ollama start, interactive shell, and decision D17.
+2. **Freeze:** One candidate commit with CI green across all 3 jobs and reviewer acceptance; tagged as release candidate (e.g. `v1.1.0-rc2`), installer built, and pins recorded (`research/` tree, `core/` tree, `pai-core.exe` SHA-256, installer SHA-256).
+3. **Window (≥14 days, ≥300 organic CLI comparisons, 0 discrepancies, single binary hash, no rebuild, trees equal to pin):** Executed using the installed `pai` on PATH from the candidate installer.
+4. **Post-window:** Reviewer review, Python fallback removal (separate commit/review), tag `v1.0.0`, and final 1.1.0 installer built from tag.
+Section 14 of the spec adds a PowerShell one-line install (an extra front door next to the installer, proposed for 1.1.0) and a Linux installer (proposed as release 1.2.0, labelled preview until a Linux evaluation is recorded).
 
 ---
 
-## 💬 Interactive Shell and Managed Service (planned, post-N+1 window)
+## 💬 Interactive Shell and Managed Service (in progress, build stage pre-freeze)
 
-Proposed in [ADR-014](adr/ADR-014-interactive-shell-and-managed-ollama.md), 2026-10-27: an interactive terminal REPL launched by running `pai` without arguments (when `isatty` is true) with slash commands dispatching directly to existing canonical subcommands (`/analyze`, `/code`, `/docs`, `/forecast`, `/doctor`, `/chat`, `/help`, `/exit`), coupled with managed loopback startup of the local Ollama daemon. The managed starter checks the official per-user path, enforces Authenticode signature verification, never searches PATH, binds strictly to loopback (`127.0.0.1`), prompts for user consent, and tracks child process lifetime so only PAI-initiated servers are stopped on exit. Designed as a post-N+1 window deliverable built across two separately reviewed commits (service management first, shell second) with zero changes to `research/` or `core/` during the evaluation window.
+Proposed in [ADR-014](adr/ADR-014-interactive-shell-and-managed-ollama.md), 2026-10-27: an interactive terminal REPL launched by running `pai` without arguments (when `isatty` is true) with slash commands dispatching directly to existing canonical subcommands (`/analyze`, `/code`, `/docs`, `/forecast`, `/doctor`, `/chat`, `/help`, `/exit`), coupled with managed loopback startup of the local Ollama daemon. The managed starter checks the official per-user path (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`), enforces Authenticode signature verification on the exact executed binary, never searches PATH, binds strictly to loopback (`127.0.0.1`), prompts for user consent, and tracks child process PID so only PAI-initiated daemon processes are stopped on exit. Scheduled for implementation during the Build Stage prior to the N+1 freeze and evaluation window across two separately reviewed commits (service management first, shell second).
 
 ---
 
