@@ -259,6 +259,12 @@ Proposed in [ADR-012](adr/ADR-012-inference-runtime-strategy.md), 2026-10-23. To
 
 ---
 
+## 📦 Packaging and first-run setup (planned, not scheduled)
+
+Proposed in [ADR-013](adr/ADR-013-installer-and-distribution.md) and specified in [PACKAGING_SPEC.md](PACKAGING_SPEC.md), 2026-10-27: a single Inno Setup installer with an agreement page, `pai` on the user's PATH, the Ollama server as a verified prerequisite, and hardware-aware model selection from a signed catalog with a download progress bar. Milestones P1 to P5 live in `packaging/` and `tools/` and do not touch `research/` or `core/` while the N+1 window is open; P6 (moving the wizard into `pai setup`) follows the N+1 review. Planned as release **1.1.0** (after 1.0.0 and before 1.5.0); preview builds are tagged `v1.1.0-rcN`. See section 13 of the spec.
+
+---
+
 ## ⚠️ Roadmap Risks (status after the second review pass)
 
 | ID | Risk | Status | Where handled |
