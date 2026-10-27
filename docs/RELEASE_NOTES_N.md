@@ -11,7 +11,7 @@
 
 ## 1. Overview & Architecture
 
-In Release N, the high-performance, memory-safe Rust core (`core/`, `pai-core`) becomes **default-on** for all supported runtime operations.
+In Release N, the memory-safe Rust core (`core/`, `pai-core`) becomes **default-on** for all supported runtime operations.
 
 - **Default-On Behavior:** When `pai-core` exists and passes the startup handshake, PAI automatically activates Rust core execution.
 - **Graceful Fallback:** If the `pai-core` binary is missing or fails the protocol handshake, PAI gracefully falls back to the authoritative Python reference implementation and logs a warning notice.
@@ -24,7 +24,7 @@ In Release N, the high-performance, memory-safe Rust core (`core/`, `pai-core`) 
 
 ## 2. Code Provenance & Scope Separation
 
-To ensure absolute audit clarity and rigor, the code included in Release N is separated into two distinct provenance tiers:
+To ensure a clear audit trail and rigor, the code included in Release N is separated into two distinct provenance tiers:
 
 1. **Evaluated Scope (7-Day Shadow Window):**
    - **Commit:** `9ac1bc5b056f53fb88c1206fec896df9ffc85c1f`
@@ -35,7 +35,7 @@ To ensure absolute audit clarity and rigor, the code included in Release N is se
    - **Discrepancy Policy (`b3e3337`):** Authoritative fallback for value comparisons, deny-wins policy for accept/deny primitives.
    - **Default-On Flip & Graceful Fallback (`e3d0929`):** Flipped `PAI_USE_RUST_CORE` default to `1` with graceful fallback when unconfigured, plus kill switch.
    - **Binary Trust & Fail-Closed Metadata (Findings BE, BF, BG):** Secured binary resolution against unauthenticated `PATH` binaries, enforced fail-closed (`UpdateRejected`) on release metadata differentials, strict secret scanning wins, rejection-wins file ingestion, and distinct input documentation corrections (`research/` tree `51180736821654ebdff2381054a6ff508987eef8`).
-   - *Provenance Note:* These post-window changes were **not** evaluated during the 7-day shadow window. Their correctness and safety are validated by the comprehensive unit test suite, golden conformance vectors, differential fuzzing, and GitHub Actions CI.
+   - *Provenance Note:* These post-window changes were **not** evaluated during the 7-day shadow window. Their correctness and safety are exercised by the comprehensive unit test suite, golden conformance vectors, differential fuzzing, and GitHub Actions CI.
 
 ---
 
@@ -64,7 +64,7 @@ In accordance with the 7-day shadow evaluation review protocol, the following 6 
 3. **Verdict Frame Diversity:** The 38 evaluated `verify_verdict_frame` comparisons originated from 3 distinct underlying benchmark tasks.
 4. **Input Pool Saturation:** Distinct input counts (**57 for `ingest_file`**, **39 for `ingest_folder`**) reflect the size of the prepared corpus pool rather than unconstrained real-world variety.
 5. **Known Diagnostic Records:** Three non-CLI comparisons with `source: "unknown"` (zero discrepancies) occurred during initial bridge smoke testing on October 20 when modules were directly imported without initializing `pai.main()`.
-6. **Out-of-Quota Bridged Operations:** Non-CLI bridged primitives (tier calculation, outbound URL policy, Ed25519 signatures, release verification, and secret scanning) were validated via 10,000-case differential fuzzing, golden vectors (200 tier, 87 URL), and multi-platform CI rather than shadow evaluation window quotas. `extract_example_assertions` shadow evidence in the window comprises 3 CLI comparisons alongside extensive unit tests and conformance vectors.
+6. **Out-of-Quota Bridged Operations:** Non-CLI bridged primitives (tier calculation, outbound URL policy, Ed25519 signatures, release verification, and secret scanning) were exercised via 10,000-case differential fuzzing, golden vectors (200 tier, 87 URL), and multi-platform CI rather than shadow evaluation window quotas. `extract_example_assertions` shadow evidence in the window comprises 3 CLI comparisons alongside extensive unit tests and conformance vectors.
 
 ---
 
