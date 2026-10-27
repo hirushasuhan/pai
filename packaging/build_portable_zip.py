@@ -43,6 +43,7 @@ from packaging.build_payload import (
     EXPECTED_BINARY_SHA256,
     EXPECTED_CORE_TREE,
     EXPECTED_RESEARCH_TREE,
+    PINNED_PYTHON_ZIP_SHA256,
     SUPPORTED_PLATFORMS,
     PayloadBuildError,
     build_payload,
@@ -216,6 +217,8 @@ def build_portable_zip(
     platform: str = DEFAULT_PLATFORM,
     staging_dir: Optional[Path | str] = None,
     embed_python_dir: Optional[Path | str] = None,
+    embed_python_zip: Optional[Path | str] = None,
+    expected_python_sha256: Optional[str] = PINNED_PYTHON_ZIP_SHA256,
     clean: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -269,6 +272,8 @@ def build_portable_zip(
             launcher_path=launcher_bin,
             extra_files=extra_files,
             embed_python_dir=embed_python_dir,
+            embed_python_zip=embed_python_zip,
+            expected_python_sha256=expected_python_sha256,
             clean=clean,
         )
 
@@ -314,6 +319,7 @@ def main() -> None:
     parser.add_argument("--platform", default=DEFAULT_PLATFORM, choices=SUPPORTED_PLATFORMS, help=f"Target platform (default: {DEFAULT_PLATFORM})")
     parser.add_argument("--binary", default=None, help="Path to evaluated pai-core executable")
     parser.add_argument("--embed-python", default=None, help="Path to embedded Python runtime folder")
+    parser.add_argument("--embed-python-zip", default=None, help="Path to official embeddable Python zip")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -324,6 +330,7 @@ def main() -> None:
         binary_path=args.binary,
         platform=args.platform,
         embed_python_dir=args.embed_python,
+        embed_python_zip=args.embed_python_zip,
     )
     print(f"\nPortable zip created successfully:")
     print(f"  Path:       {res['zip_path']}")

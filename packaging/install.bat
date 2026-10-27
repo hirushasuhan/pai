@@ -44,27 +44,57 @@ set "PAI_STAGING_DIR=%STAGING_DIR%"
 set "PAI_TARGET_DIR=%TARGET_DIR%"
 
 powershell -NoProfile -Command ^
+    "$ErrorActionPreference = 'Stop';" ^
     "$stage = $env:PAI_STAGING_DIR;" ^
     "$target = $env:PAI_TARGET_DIR;" ^
     "$manifestPath = Join-Path $stage 'manifest.json';" ^
-    "if (-not (Test-Path $manifestPath)) { Write-Error 'manifest.json missing in staging.'; exit 1 }" ^
-    "$manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json;" ^
+    "if (-not (Test-Path -LiteralPath $manifestPath)) { Write-Error 'manifest.json missing in staging.'; exit 1 }" ^
+    "$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json;" ^
     "$files = $manifest.files;" ^
     "if (-not $files) { Write-Error 'manifest.json has empty files entry.'; exit 1 }" ^
+    "$manifestSet = @{};" ^
     "foreach ($prop in $files.psobject.Properties) {" ^
     "    $rel = $prop.Name.Replace('/', [IO.Path]::DirectorySeparatorChar);" ^
+    "    $manifestSet[$rel.ToLowerInvariant()] = $true;" ^
     "    $targetFile = Join-Path $stage $rel;" ^
-    "    if (-not (Test-Path $targetFile)) { Write-Error ('Missing staged file: ' + $rel); exit 1 }" ^
-    "    $actualSize = (Get-Item $targetFile).Length;" ^
+    "    if (-not (Test-Path -LiteralPath $targetFile)) { Write-Error ('Missing staged file: ' + $rel); exit 1 }" ^
+    "    $actualSize = (Get-Item -LiteralPath $targetFile).Length;" ^
     "    if ($actualSize -ne $prop.Value.size) { Write-Error ('Size mismatch for: ' + $rel); exit 1 }" ^
-    "    $actualHash = (Get-FileHash $targetFile -Algorithm SHA256).Hash.ToLower();" ^
+    "    $actualHash = (Get-FileHash -LiteralPath $targetFile -Algorithm SHA256).Hash.ToLower();" ^
     "    if ($actualHash -ne $prop.Value.sha256.ToLower()) { Write-Error ('SHA-256 mismatch for: ' + $rel); exit 1 }" ^
     "}" ^
-    "Write-Host '[OK] All staged files verified against signed manifest.' -ForegroundColor Green;" ^
+    "$stagedItems = Get-ChildItem -LiteralPath $stage -Recurse -File;" ^
+    "foreach ($item in $stagedItems) {" ^
+    "    $relPath = $item.FullName.Substring($stage.Length).TrimStart([IO.Path]::DirectorySeparatorChar);" ^
+    "    if ($relPath -ieq 'manifest.json' -or $relPath -ieq 'manifest.sig') { continue }" ^
+    "    if (-not $manifestSet.ContainsKey($relPath.ToLowerInvariant())) {" ^
+    "        Write-Error ('Unlisted file in payload staging directory: ' + $relPath);" ^
+    "        exit 1" ^
+    "    }" ^
+    "}" ^
+    "$hasSig = Test-Path -LiteralPath (Join-Path $stage 'manifest.sig');" ^
+    "if ($hasSig) {" ^
+    "    Write-Host '[OK] All staged files verified against manifest checksums (signature file present).' -ForegroundColor Green;" ^
+    "} else {" ^
+    "    Write-Host '[OK] All staged files verified against manifest.json checksums.' -ForegroundColor Green;" ^
+    "}" ^
     "$backup = $target + '_backup';" ^
-    "if (Test-Path $backup) { Remove-Item -LiteralPath $backup -Recurse -Force };" ^
-    "if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $backup -Force };" ^
-    "Move-Item -LiteralPath $stage -Destination $target -Force;" ^
+    "if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force };" ^
+    "$hadTarget = Test-Path -LiteralPath $target;" ^
+    "if ($hadTarget) { Move-Item -LiteralPath $target -Destination $backup -Force };" ^
+    "try {" ^
+    "    if ($env:PAI_TEST_FAIL_SWAP_MOVE -eq '1') { throw 'Simulated swap move failure for negative control' }" ^
+    "    Move-Item -LiteralPath $stage -Destination $target -Force;" ^
+    "} catch {" ^
+    "    $moveErr = $_.Exception.Message;" ^
+    "    if ($hadTarget -and (Test-Path -LiteralPath $backup)) {" ^
+    "        Write-Host '[ROLLBACK] Restoring previous installation from backup...' -ForegroundColor Yellow;" ^
+    "        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force };" ^
+    "        Move-Item -LiteralPath $backup -Destination $target -Force;" ^
+    "    };" ^
+    "    Write-Error ('Failed to move staged directory into target: ' + $moveErr);" ^
+    "    exit 1" ^
+    "}" ^
     "if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force };" ^
     "exit 0"
 
@@ -94,7 +124,10 @@ echo Configuring User PATH for %BIN_DIR%...
 
 powershell -NoProfile -Command ^
     "$targetDir = $env:PAI_BIN_DIR;" ^
-    "$subKey = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY } else { 'Environment' };" ^
+    "$rawSub = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY.Trim() } else { 'Environment' };" ^
+    "if (-not $rawSub -or $rawSub -ieq 'Environment') { $subKey = 'Environment' } " ^
+    "elseif ($rawSub.StartsWith('Test_', [System.StringComparison]::OrdinalIgnoreCase) -or $rawSub.StartsWith('PAI_TEST_', [System.StringComparison]::OrdinalIgnoreCase)) { $subKey = $rawSub } " ^
+    "else { Write-Error ('Rejected non-test PAI_REG_SUBKEY: ' + $rawSub + '. Custom subkeys must start with Test_ or PAI_TEST_ prefix.'); exit 1 };" ^
     "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $true);" ^
     "if (-not $key) { Write-Error ('Cannot open HKCU:\' + $subKey); exit 1 }" ^
     "$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" ^
@@ -115,6 +148,8 @@ powershell -NoProfile -Command ^
     "$key.Close();" ^
     "Add-Type -Namespace Win32 -Name Native -MemberDefinition '[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);' -ErrorAction SilentlyContinue;" ^
     "[Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref][UIntPtr]::Zero) | Out-Null"
+
+if errorlevel 1 goto path_failed
 
 :: 4. Run setup wizard if present (Milestone P3+)
 if exist "%TARGET_DIR%\packaging\pai_setup.py" (
@@ -137,3 +172,9 @@ echo To uninstall at any time, run:
 echo    "%TARGET_DIR%\uninstall.bat"
 echo ===================================================================
 echo.
+exit /b 0
+
+:path_failed
+echo.
+echo [ERROR] Failed to configure User PATH in registry!
+exit /b 1

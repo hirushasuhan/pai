@@ -20,9 +20,12 @@ echo Removing %BIN_DIR% from User PATH...
 
 powershell -NoProfile -Command ^
     "$targetDir = $env:PAI_BIN_DIR;" ^
-    "$subKey = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY } else { 'Environment' };" ^
+    "$rawSub = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY.Trim() } else { 'Environment' };" ^
+    "if (-not $rawSub -or $rawSub -ieq 'Environment') { $subKey = 'Environment' } " ^
+    "elseif ($rawSub.StartsWith('Test_', [System.StringComparison]::OrdinalIgnoreCase) -or $rawSub.StartsWith('PAI_TEST_', [System.StringComparison]::OrdinalIgnoreCase)) { $subKey = $rawSub } " ^
+    "else { Write-Error ('Rejected non-test PAI_REG_SUBKEY: ' + $rawSub + '. Custom subkeys must start with Test_ or PAI_TEST_ prefix.'); exit 1 };" ^
     "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $true);" ^
-    "if (-not $key) { Write-Error 'Cannot open HKCU:\Environment'; exit 1 }" ^
+    "if (-not $key) { Write-Error ('Cannot open HKCU:\' + $subKey); exit 1 }" ^
     "$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" ^
     "$kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
     "if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
@@ -37,6 +40,8 @@ powershell -NoProfile -Command ^
     "Write-Host ('[SUCCESS] Removed ' + $targetDir + ' from User PATH.') -ForegroundColor Green;" ^
     "Add-Type -Namespace Win32 -Name Native -MemberDefinition '[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);' -ErrorAction SilentlyContinue;" ^
     "[Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref][UIntPtr]::Zero) | Out-Null"
+
+if errorlevel 1 exit /b 1
 
 echo.
 echo Note: Installed program files in %TARGET_DIR% can now be safely deleted.

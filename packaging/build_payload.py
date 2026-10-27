@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -46,6 +47,12 @@ DEFAULT_PLATFORM = "win-x64" if sys.platform == "win32" else "linux-x64"
 EXPECTED_CORE_TREE = "14c60746ca9a41d91aafd88cc0c7d98719cfe3a9"
 EXPECTED_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
 EXPECTED_BINARY_SHA256 = "6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe"
+
+# Pinned official embeddable Python distribution for Windows x64 (Finding BU)
+PINNED_PYTHON_VERSION = "3.14.0"
+PINNED_PYTHON_ZIP_SHA256 = "8d4d3590c10449d78aa4375f534e6d5f3027d67fdc362dd1a882279db6f90fdf"
+PINNED_PYTHON_ZIP_URL = "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip"
+PINNED_PYTHON_ZIP_CHECKED_ON = "2026-10-27"
 
 _VERSION_RE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -317,6 +324,65 @@ def verify_extracted_integrity(
             )
 
 
+def extract_embed_python_zip(
+    zip_path: str | Path,
+    dest_py_dir: str | Path,
+    expected_sha256: Optional[str] = PINNED_PYTHON_ZIP_SHA256,
+) -> Dict[str, Any]:
+    """
+    Safely verifies and extracts the official embeddable Python zip distribution (Finding BU).
+    Enforces safe relative paths (no traversal, no colons, no symlinks).
+    Appends '..\\research' to all *._pth files for isolated research tree loading.
+    Returns python_runtime metadata dict for manifest.json.
+    """
+    zp = Path(zip_path).resolve()
+    if not zp.is_file():
+        raise FileNotFoundError(f"Embeddable Python zip not found at '{zp}'")
+
+    actual_sha = sha256_file(zp)
+    if expected_sha256 and actual_sha.lower() != expected_sha256.lower():
+        raise PayloadBuildError(
+            f"Python embed zip SHA-256 mismatch for '{zp}': got '{actual_sha}', expected '{expected_sha256}'"
+        )
+
+    dest = Path(dest_py_dir).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zp, "r") as zf:
+        for member in zf.infolist():
+            rel = member.filename.replace("\\", "/")
+            if (
+                rel.startswith("/")
+                or "\\" in rel
+                or ":" in rel
+                or any(part in ("..", "", ".") for part in rel.split("/"))
+            ):
+                raise UnsafePathError(f"Unsafe path in Python embed zip: {rel!r}")
+            # Prevent zip symlinks
+            if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                raise SymlinkRejectedError(f"Symlink in Python embed zip prohibited: {rel!r}")
+
+            zf.extract(member, path=str(dest))
+
+    # Append ..\research to *._pth files
+    pth_files = list(dest.glob("*._pth"))
+    if not pth_files:
+        (dest / "python._pth").write_text(".\n..\\research\n", encoding="utf-8")
+    else:
+        for pf in pth_files:
+            lines = [ln.strip() for ln in pf.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if "..\\research" not in lines and "../research" not in lines:
+                lines.append("..\\research")
+                pf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    return {
+        "version": PINNED_PYTHON_VERSION,
+        "sha256": actual_sha,
+        "source_url": PINNED_PYTHON_ZIP_URL,
+        "checked_on": PINNED_PYTHON_ZIP_CHECKED_ON,
+    }
+
+
 def scan_and_validate_payload(
     dest_dir: Path,
     excluded_files: Optional[Set[str]] = None,
@@ -382,6 +448,7 @@ def write_manifest(
     research_tree_sha: str,
     files_map: Dict[str, Dict[str, Any]],
     platform: str = "win-x64",
+    python_runtime: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Path, bytes, Dict[str, Any]]:
     """
     Serializes and atomically writes manifest.json.
@@ -406,6 +473,8 @@ def write_manifest(
         },
         "files": {k: files_map[k] for k in sorted(files_map.keys())},
     }
+    if python_runtime:
+        doc["python_runtime"] = python_runtime
 
     manifest_bytes = json.dumps(doc, indent=2, sort_keys=True).encode("utf-8")
     manifest_path = dest_dir / MANIFEST
@@ -442,6 +511,8 @@ def build_payload(
     version: Optional[str] = None,
     clean: bool = False,
     embed_python_dir: Optional[str | Path] = None,
+    embed_python_zip: Optional[str | Path] = None,
+    expected_python_sha256: Optional[str] = PINNED_PYTHON_ZIP_SHA256,
     launcher_path: Optional[str | Path] = None,
     extra_files: Optional[Dict[str, str | Path]] = None,
 ) -> Dict[str, Any]:
@@ -516,8 +587,15 @@ def build_payload(
     else:
         raise PayloadBuildError("Constitution file not found to pin constitution_sha256")
 
-    # Step 8: Optional embeddable Python distribution staging
-    if embed_python_dir:
+    # Step 8: Optional embeddable Python distribution staging (Finding BU)
+    python_runtime_meta: Optional[Dict[str, Any]] = None
+    if embed_python_zip:
+        python_runtime_meta = extract_embed_python_zip(
+            embed_python_zip,
+            out / "python",
+            expected_sha256=expected_python_sha256,
+        )
+    elif embed_python_dir:
         embed_p = Path(embed_python_dir).resolve()
         if embed_p.is_dir():
             target_py = out / "python"
@@ -532,6 +610,10 @@ def build_payload(
                     if "..\\research" not in lines and "../research" not in lines:
                         lines.append("..\\research")
                         pf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            python_runtime_meta = {
+                "version": "local",
+                "source": str(embed_p),
+            }
 
     # Step 9: Optional launcher binary staging
     if launcher_path:
@@ -570,6 +652,7 @@ def build_payload(
         core_tree_sha=core_tree_sha,
         research_tree_sha=res_tree_sha,
         files_map=files_map,
+        python_runtime=python_runtime_meta,
     )
 
     total_bytes = sum(meta["size"] for meta in files_map.values())
@@ -611,6 +694,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--version", default=None, help="Release version (e.g. 1.0.0)")
     parser.add_argument("--product", default=DEFAULT_PRODUCT, help="Product identifier in manifest")
     parser.add_argument("--constitution", default=None, help="Path to CONSTITUTION.md")
+    parser.add_argument("--embed-python-zip", default=None, help="Path to official embeddable Python zip")
+    parser.add_argument("--expected-python-sha256", default=PINNED_PYTHON_ZIP_SHA256, help="Expected Python zip SHA-256")
     parser.add_argument("--clean", action="store_true", help="Clean out directory before building")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
@@ -633,6 +718,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             platform=args.platform,
             version=args.version,
             clean=args.clean,
+            embed_python_zip=args.embed_python_zip,
+            expected_python_sha256=args.expected_python_sha256,
         )
         print(f"Payload successfully built at: {res['out_dir']}")
         print(f"Platform: {res['platform']}")

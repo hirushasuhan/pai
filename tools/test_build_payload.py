@@ -38,6 +38,8 @@ from packaging.build_payload import (
     EXPECTED_BINARY_SHA256,
     EXPECTED_CORE_TREE,
     EXPECTED_RESEARCH_TREE,
+    PINNED_PYTHON_VERSION,
+    PINNED_PYTHON_ZIP_SHA256,
     SUPPORTED_PLATFORMS,
     BinaryFormatMismatchError,
     BinaryHashMismatchError,
@@ -49,6 +51,7 @@ from packaging.build_payload import (
     TreeMismatchError,
     UnsafePathError,
     build_payload,
+    extract_embed_python_zip,
     extract_tag_archive,
     scan_and_validate_payload,
     sha256_file,
@@ -475,6 +478,46 @@ class TestBuildPayloadP1(unittest.TestCase):
             verify_binary_format(corrupt_bin, platform="win-x64")
         with self.assertRaises(BinaryFormatMismatchError):
             verify_binary_format(corrupt_bin, platform="linux-x64")
+
+    def test_15_embed_python_zip_extraction_and_pth(self) -> None:
+        """Validates that extract_embed_python_zip extracts safely and appends ..\\research to ._pth."""
+        import zipfile
+        fake_zip = Path(self.tmp_dir) / "fake_py.zip"
+        dest_py = Path(self.tmp_dir) / "extracted_py"
+
+        with zipfile.ZipFile(fake_zip, "w") as zf:
+            zf.writestr("python.exe", b"MZ_FAKE_PYTHON")
+            zf.writestr("python314._pth", "python314.zip\n.\n")
+
+        expected_hash = sha256_file(fake_zip)
+        meta = extract_embed_python_zip(fake_zip, dest_py, expected_sha256=expected_hash)
+        self.assertEqual(meta["version"], PINNED_PYTHON_VERSION)
+        self.assertEqual(meta["sha256"], expected_hash)
+        self.assertTrue((dest_py / "python.exe").is_file())
+        pth_text = (dest_py / "python314._pth").read_text(encoding="utf-8")
+        self.assertIn("..\\research", pth_text)
+
+    def test_16_embed_python_zip_hostile_hash_and_path_traversal(self) -> None:
+        """Negative controls: sha256 mismatch and path traversal in python zip fail closed."""
+        import zipfile
+        bad_hash_zip = Path(self.tmp_dir) / "bad_hash.zip"
+        dest_py = Path(self.tmp_dir) / "bad_py"
+
+        with zipfile.ZipFile(bad_hash_zip, "w") as zf:
+            zf.writestr("test.txt", b"hello")
+
+        # 1. SHA-256 mismatch rejection
+        with self.assertRaises(PayloadBuildError):
+            extract_embed_python_zip(bad_hash_zip, dest_py, expected_sha256="0" * 64)
+
+        # 2. Path traversal rejection
+        traversal_zip = Path(self.tmp_dir) / "traversal.zip"
+        with zipfile.ZipFile(traversal_zip, "w") as zf:
+            zf.writestr("../evil.txt", b"evil")
+        trav_hash = sha256_file(traversal_zip)
+
+        with self.assertRaises(UnsafePathError):
+            extract_embed_python_zip(traversal_zip, dest_py, expected_sha256=trav_hash)
 
 
 if __name__ == "__main__":

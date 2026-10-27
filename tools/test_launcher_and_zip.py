@@ -39,6 +39,10 @@ from packaging.build_payload import (
     EXPECTED_BINARY_SHA256,
     EXPECTED_CORE_TREE,
     EXPECTED_RESEARCH_TREE,
+    PINNED_PYTHON_VERSION,
+    PINNED_PYTHON_ZIP_SHA256,
+    PINNED_PYTHON_ZIP_URL,
+    PINNED_PYTHON_ZIP_CHECKED_ON,
     build_payload,
     sha256_file,
 )
@@ -529,7 +533,7 @@ class TestLauncherAndZipP2(unittest.TestCase):
         self.assertTrue(install_bat.is_file())
 
         # Isolated test registry subkey in HKCU
-        test_reg_subkey = "Environment_PaiTest_P2"
+        test_reg_subkey = "PAI_TEST_Environment_P2"
 
         # Initialize test subkey with an unexpanded variable (%USERPROFILE%\bin) as REG_EXPAND_SZ
         key_init = winreg.CreateKey(winreg.HKEY_CURRENT_USER, test_reg_subkey)
@@ -543,6 +547,7 @@ class TestLauncherAndZipP2(unittest.TestCase):
             env = os.environ.copy()
             env["PAI_INSTALL_DIR"] = str(target_install)
             env["PAI_REG_SUBKEY"] = test_reg_subkey
+            env["PAI_DIR"] = str(self.isolated_pai_dir)
 
             # 1. Run the real install.bat
             proc_inst = subprocess.run([str(install_bat)], capture_output=True, text=True, env=env)
@@ -593,6 +598,148 @@ class TestLauncherAndZipP2(unittest.TestCase):
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, test_reg_subkey)
             except OSError:
                 pass
+
+    def test_17_hostile_install_unlisted_file_fails_closed(self) -> None:
+        """
+        Validates Finding BV:
+        install.bat fails closed and aborts without mutating target or PATH
+        when an unlisted file is present in the staged payload.
+        """
+        payload_dir = self._setup_test_install(with_embedded_python=True)
+        install_bat = payload_dir / "install.bat"
+        self.assertTrue(install_bat.is_file())
+
+        # Inject unlisted unexpected file into source payload
+        unlisted = payload_dir / "unlisted_trojan.exe"
+        unlisted.write_text("unlisted malicious content", encoding="utf-8")
+
+        target_install = Path(self.tmp_dir) / "Target_Unlisted_Test"
+        env = os.environ.copy()
+        env["PAI_INSTALL_DIR"] = str(target_install)
+        env["PAI_REG_SUBKEY"] = "PAI_TEST_Unlisted"
+        env["PAI_DIR"] = str(self.isolated_pai_dir)
+
+        proc = subprocess.run([str(install_bat)], capture_output=True, text=True, env=env)
+        self.assertNotEqual(proc.returncode, 0, "install.bat must fail closed when unlisted file exists")
+        normalized_output = " ".join((proc.stdout + proc.stderr).split())
+        self.assertIn("Unlisted file in payload staging directory: unlisted_trojan.exe", normalized_output)
+        self.assertFalse(target_install.exists(), "Target directory must not be created on verification failure")
+
+    def test_18_install_swap_failure_rollback(self) -> None:
+        """
+        Validates Finding BV:
+        Atomic directory swap with backup rollback:
+        When moving staged files to target fails, the installer aborts and cleanly
+        restores the previous installation from backup.
+        """
+        payload_dir = self._setup_test_install(with_embedded_python=True)
+        install_bat = payload_dir / "install.bat"
+        self.assertTrue(install_bat.is_file())
+
+        target_install = Path(self.tmp_dir) / "Target_Rollback_Test"
+        target_install.mkdir(parents=True, exist_ok=True)
+        marker_file = target_install / "pre_existing_version.txt"
+        marker_file.write_text("v1.0.0-existing-canary", encoding="utf-8")
+
+        env = os.environ.copy()
+        env["PAI_INSTALL_DIR"] = str(target_install)
+        env["PAI_REG_SUBKEY"] = "PAI_TEST_Rollback"
+        env["PAI_DIR"] = str(self.isolated_pai_dir)
+        env["PAI_TEST_FAIL_SWAP_MOVE"] = "1"
+
+        proc = subprocess.run([str(install_bat)], capture_output=True, text=True, env=env)
+        self.assertNotEqual(proc.returncode, 0, "install.bat must return error on swap failure")
+        normalized_output = " ".join((proc.stdout + proc.stderr).split())
+        self.assertIn("[ROLLBACK] Restoring previous installation from backup...", normalized_output)
+        self.assertTrue(target_install.exists(), "Target directory must exist after rollback")
+        self.assertTrue(marker_file.is_file(), "Original installation files must be restored")
+        self.assertEqual(marker_file.read_text(encoding="utf-8"), "v1.0.0-existing-canary")
+        self.assertFalse((target_install.parent / (target_install.name + "_backup")).exists(), "Staged backup must be cleanly removed or swapped")
+
+    def test_19_hostile_reg_subkey_rejected(self) -> None:
+        """
+        Validates Finding BV:
+        install.bat rejects arbitrary/hostile PAI_REG_SUBKEY values that do not start with
+        the permitted 'Test_' or 'PAI_TEST_' prefixes, preventing registry hijacking.
+        """
+        payload_dir = self._setup_test_install(with_embedded_python=True)
+        install_bat = payload_dir / "install.bat"
+        self.assertTrue(install_bat.is_file())
+
+        target_install = Path(self.tmp_dir) / "Target_Hostile_Reg"
+        env = os.environ.copy()
+        env["PAI_INSTALL_DIR"] = str(target_install)
+        env["PAI_REG_SUBKEY"] = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        env["PAI_DIR"] = str(self.isolated_pai_dir)
+
+        proc = subprocess.run([str(install_bat)], capture_output=True, text=True, env=env)
+        self.assertNotEqual(proc.returncode, 0, "Arbitrary PAI_REG_SUBKEY without test prefix must fail")
+        normalized_output = " ".join((proc.stdout + proc.stderr).split())
+        self.assertIn("Rejected non-test PAI_REG_SUBKEY", normalized_output)
+
+    def test_20_real_embed_python_runtime_and_doctor(self) -> None:
+        """
+        Validates Finding BU:
+        Builds payload using the real official embeddable Python zip (python-3.14.0-embed-amd64.zip),
+        verifies pinned SHA-256 against python.org SPDX, checks ..\\research in python314._pth,
+        verifies python_runtime recorded in manifest.json, and runs pai doctor under isolated PAI_DIR.
+        """
+        official_zip = Path(tempfile.gettempdir()) / f"python-{PINNED_PYTHON_VERSION}-embed-amd64.zip"
+        if not official_zip.is_file():
+            self.skipTest(f"Official Python embed zip not cached at {official_zip}")
+
+        # Verify hash of official zip before use
+        actual_sha = sha256_file(official_zip)
+        self.assertEqual(
+            actual_sha.lower(),
+            PINNED_PYTHON_ZIP_SHA256.lower(),
+            f"Official Python zip SHA-256 mismatch against {PINNED_PYTHON_ZIP_URL}",
+        )
+
+        out_payload = Path(self.tmp_dir) / "real_embed_payload"
+        res = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_payload,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            platform="win-x64",
+            launcher_path=self.ref_launcher,
+            embed_python_zip=official_zip,
+            extra_files={
+                "install.bat": self.repo_root / "packaging" / "install.bat",
+                "uninstall.bat": self.repo_root / "packaging" / "uninstall.bat",
+            },
+        )
+
+        # 1. Verify manifest metadata
+        manifest = res["manifest"]
+        self.assertIn("python_runtime", manifest)
+        py_meta = manifest["python_runtime"]
+        self.assertEqual(py_meta["version"], PINNED_PYTHON_VERSION)
+        self.assertEqual(py_meta["sha256"], PINNED_PYTHON_ZIP_SHA256)
+        self.assertEqual(py_meta["source_url"], PINNED_PYTHON_ZIP_URL)
+        self.assertEqual(py_meta["checked_on"], PINNED_PYTHON_ZIP_CHECKED_ON)
+
+        # 2. Verify ..\research in python314._pth
+        pth_path = out_payload / "python" / f"python{PINNED_PYTHON_VERSION.replace('.', '')[:3]}._pth"
+        self.assertTrue(pth_path.is_file(), f"pth file missing at {pth_path}")
+        pth_content = pth_path.read_text(encoding="utf-8")
+        self.assertIn("..\\research", pth_content)
+
+        # 3. Verify launcher executes pai doctor --skip-smoke --json in embedded environment
+        pai_exe = out_payload / "bin" / "pai.exe"
+        env = os.environ.copy()
+        env["PAI_DIR"] = str(self.isolated_pai_dir)
+        env.pop("PAI_ALLOW_SYSTEM_PYTHON", None)
+
+        proc = subprocess.run([str(pai_exe), "doctor", "--skip-smoke", "--json"], capture_output=True, text=True, env=env)
+        # Note: pai doctor exits with code 1 if any check (e.g. sandbox probe or low RAM) flags a warning,
+        # but outputs valid structured diagnostic JSON. We assert JSON structure and python runtime identity.
+        doc_json = json.loads(proc.stdout)
+        self.assertIn("os", doc_json)
+        self.assertEqual(doc_json["os"]["python_version"], PINNED_PYTHON_VERSION)
+        self.assertIn("telemetry", doc_json)
+        self.assertIn("checks", doc_json)
 
 
 if __name__ == "__main__":
