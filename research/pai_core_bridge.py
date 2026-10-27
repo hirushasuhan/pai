@@ -132,25 +132,24 @@ def is_rust_core_enabled() -> bool:
     Returns True if Rust core should be used for execution.
     In Release N:
     - If kill-switch PAI_RUST_FALLBACK_PYTHON=1 is set -> False (pure Python).
-    - If PAI_USE_RUST_CORE is explicitly '1' in env -> True (strict mode; fails closed if binary missing).
-    - If PAI_USE_RUST_CORE is explicitly '0' in env -> False (pure Python).
-    - If PAI_USE_RUST_CORE is False (module var) -> False.
-    - Otherwise (default-on):
-        - If binary exists and passes handshake -> True.
-        - Else -> False (graceful fallback to pure Python with warning).
+    - If PAI_USE_RUST_CORE module flag is False -> False (pure Python).
+    - If binary exists and passes handshake -> True.
+    - If binary is missing or failed handshake:
+        - If PAI_USE_RUST_CORE is explicitly '1' in env -> True (strict mode; fails closed).
+        - Otherwise (default-on): False (graceful fallback to pure Python with warning).
     """
     global _FALLBACK_WARNING_EMITTED
     if is_python_fallback_forced():
         return False
 
-    env_val = os.environ.get("PAI_USE_RUST_CORE")
-    if env_val is not None:
-        return env_val.lower() in ("1", "true", "yes")
-
     if PAI_USE_RUST_CORE is False:
         return False
 
     if is_core_binary_available():
+        return True
+
+    env_val = os.environ.get("PAI_USE_RUST_CORE")
+    if env_val is not None and env_val.lower() in ("1", "true", "yes"):
         return True
 
     if not _FALLBACK_WARNING_EMITTED:
