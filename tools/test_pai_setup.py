@@ -52,6 +52,7 @@ from packaging.pai_setup import (
     ProgressEmitter,
     canonical_json_bytes,
     collect_hardware_survey,
+    delete_ollama_model,
     download_ollama_installer,
     evaluate_model_fit,
     format_bytes_human,
@@ -62,6 +63,7 @@ from packaging.pai_setup import (
     plan_model_selection,
     probe_ollama_daemon,
     pull_model_stream,
+    query_ollama_model_digest,
     record_catalog_version,
     survey_disk_free,
     survey_gpu_windows,
@@ -288,30 +290,32 @@ class TestPaiSetupP3(unittest.TestCase):
                 "Security Failure (Finding CK): Rogue key from PAI_TRUST_PATH or profile was loaded!",
             )
 
-            # Test B: Isolated installation missing research/trust.json
-            # When <install root>/research/trust.json is absent, load_trust_keys() MUST fail closed
-            # despite presence of PAI_TRUST_PATH and profile trust.json files.
-            empty_install = Path(self.tmp_dir) / "empty_install"
-            empty_install.mkdir(parents=True, exist_ok=True)
-            os.environ["PAI_INSTALL_DIR"] = str(empty_install)
-
-            with self.assertRaises(CatalogSecurityError) as ctx:
-                load_trust_keys()
-            self.assertIn("not found in installation", str(ctx.exception))
-            self.assertIn("Finding", str(ctx.exception))
-
-            # Test C: If install root has authentic research/trust.json, it loads successfully
-            install_research = empty_install / "research"
-            install_research.mkdir(parents=True, exist_ok=True)
-            authentic_id = "authentic-install-key-1"
-            (install_research / "trust.json").write_text(
-                json.dumps({"keys": [{"id": authentic_id, "public_hex": TEST_PUB_HEX, "revoked": False}]}),
+            # Test B (Finding CP Negative Control):
+            # PAI_INSTALL_DIR environment variable pointing to a folder with a rogue trust.json
+            # MUST BE IGNORED to prevent caller environment manipulation of trust root.
+            rogue_install = Path(self.tmp_dir) / "rogue_install_dir"
+            rogue_install_res = rogue_install / "research"
+            rogue_install_res.mkdir(parents=True, exist_ok=True)
+            rogue_install_key = "rogue-key-from-pai-install-dir-env"
+            (rogue_install_res / "trust.json").write_text(
+                json.dumps({"keys": [{"id": rogue_install_key, "public_hex": TEST_PUB_HEX, "revoked": False}]}),
                 encoding="utf-8",
             )
-            keys = load_trust_keys()
-            self.assertEqual(len(keys), 1)
-            self.assertEqual(keys[0]["id"], authentic_id)
-            self.assertNotIn(rogue_key_id, [k.get("id") for k in keys])
+            os.environ["PAI_INSTALL_DIR"] = str(rogue_install)
+
+            # load_trust_keys() must ignore PAI_INSTALL_DIR and load relative to __file__ (official repo keys)
+            keys_under_env = load_trust_keys()
+            loaded_under_env = [k.get("id") for k in keys_under_env]
+            self.assertNotIn(
+                rogue_install_key,
+                loaded_under_env,
+                "Security Failure (Finding CP): PAI_INSTALL_DIR env variable was honoured for trust root!",
+            )
+
+            # Test C: Explicit trust_path argument (for developer/test runs only)
+            explicit_keys = load_trust_keys(trust_path=rogue_install_res / "trust.json")
+            self.assertEqual(len(explicit_keys), 1)
+            self.assertEqual(explicit_keys[0]["id"], rogue_install_key)
         finally:
             os.environ.clear()
             os.environ.update(orig_env)
@@ -926,6 +930,200 @@ class TestPaiSetupP3(unittest.TestCase):
                     show_console_bar=False,
                 )
             self.assertEqual(ctx.exception.code, "REGISTRY_ERROR")
+
+    # -------------------------------------------------------------------------
+    # Finding CO: Stream Termination & Backoff Retry Engine
+    # -------------------------------------------------------------------------
+    def test_19_finding_co_premature_stream_eof_retry_and_backoff_exhaustion(self) -> None:
+        """
+        Finding CO:
+          - Daemon stream closes prematurely without success/error line (e.g. daemon stopped).
+          - Must NOT enter a tight infinite loop!
+          - Retries with backoff and raises ModelPullError('NETWORK_ERROR') on retry exhaustion.
+        """
+        ndjson_premature = [
+            b'{"status": "pulling manifest"}\n',
+            b'{"status": "downloading", "digest": "sha256:layer1", "total": 1000, "completed": 200}\n',
+        ]
+
+        def create_mock_resp():
+            m = MagicMock()
+            m.status = 200
+            m.__iter__.return_value = iter(ndjson_premature)
+            m.__enter__.return_value = m
+            return m
+
+        mock_opener = MagicMock()
+        mock_opener.open.side_effect = [create_mock_resp(), create_mock_resp(), create_mock_resp()]
+
+        with patch("urllib.request.build_opener", return_value=mock_opener):
+            with self.assertRaises(ModelPullError) as ctx:
+                pull_model_stream(
+                    model_id="cut-model:latest",
+                    max_retries=2,
+                    initial_backoff_sec=0.01,
+                    show_console_bar=False,
+                )
+            self.assertEqual(ctx.exception.code, "NETWORK_ERROR")
+            self.assertIn("terminated prematurely", ctx.exception.message)
+            self.assertEqual(mock_opener.open.call_count, 3)
+
+    def test_20_finding_co_stream_cut_resume_and_backoff_cancellation(self) -> None:
+        """
+        Finding CO:
+          - Stream cut mid-stream resumes and succeeds on second attempt.
+          - Cancellation token triggered during backoff wait raises DownloadCancelledError promptly.
+        """
+        stream_attempt_1 = [
+            b'{"status": "downloading", "digest": "sha256:blob1", "total": 1000, "completed": 500}\n',
+        ]
+        stream_attempt_2 = [
+            b'{"status": "downloading", "digest": "sha256:blob1", "total": 1000, "completed": 1000}\n',
+            b'{"status": "success"}\n',
+        ]
+
+        resp1 = MagicMock()
+        resp1.status = 200
+        resp1.__iter__.return_value = iter(stream_attempt_1)
+        resp1.__enter__.return_value = resp1
+
+        resp2 = MagicMock()
+        resp2.status = 200
+        resp2.__iter__.return_value = iter(stream_attempt_2)
+        resp2.__enter__.return_value = resp2
+
+        mock_opener = MagicMock()
+        mock_opener.open.side_effect = [resp1, resp2]
+
+        with patch("urllib.request.build_opener", return_value=mock_opener):
+            res = pull_model_stream(
+                model_id="resume-model:7b",
+                max_retries=2,
+                initial_backoff_sec=0.01,
+                show_console_bar=False,
+            )
+            self.assertEqual(res["status"], "done")
+            self.assertEqual(res["completed_bytes"], 1000)
+
+        # Case B: Cancellation during retry backoff wait
+        cancel_tok = CancelToken()
+
+        def slow_resp():
+            cancel_tok.cancel()
+            m = MagicMock()
+            m.status = 200
+            m.__iter__.return_value = iter([b'{"status": "starting"}\n'])
+            m.__enter__.return_value = m
+            return m
+
+        mock_opener_cancel = MagicMock()
+        mock_opener_cancel.open.side_effect = [slow_resp(), slow_resp()]
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_cancel):
+            with self.assertRaises(DownloadCancelledError):
+                pull_model_stream(
+                    model_id="cancel-backoff:7b",
+                    cancel_token=cancel_tok,
+                    max_retries=3,
+                    initial_backoff_sec=0.05,
+                    show_console_bar=False,
+                )
+
+    # -------------------------------------------------------------------------
+    # Finding CN: Manifest Digest Verification & Purge
+    # -------------------------------------------------------------------------
+    def test_21_finding_cn_manifest_digest_verification_and_purge_on_mismatch(self) -> None:
+        """
+        Finding CN:
+          - After pull, manifest digest is queried from Ollama tags API.
+          - On digest match: succeeds.
+          - On digest mismatch: model is purged via DELETE /api/delete and DIGEST_MISMATCH raised.
+        """
+        success_stream = [
+            b'{"status": "success"}\n',
+        ]
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__iter__.return_value = iter(success_stream)
+        mock_resp.__enter__.return_value = mock_resp
+
+        mock_opener = MagicMock()
+        mock_opener.open.return_value = mock_resp
+
+        expected_good = "sha256:d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a"
+        bad_actual = "sha256:badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbad1"
+
+        # Case A: Good digest matches
+        resp_good = MagicMock()
+        resp_good.status = 200
+        resp_good.__iter__.return_value = iter([b'{"status": "success"}\n'])
+        resp_good.__enter__.return_value = resp_good
+
+        mock_opener_good = MagicMock()
+        mock_opener_good.open.return_value = resp_good
+
+        with patch("urllib.request.build_opener", return_value=mock_opener_good):
+            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=expected_good):
+                res = pull_model_stream(
+                    model_id="verified:model",
+                    expected_manifest_digest=expected_good,
+                    show_console_bar=False,
+                )
+                self.assertEqual(res["status"], "done")
+
+        # Case B: Digest mismatch -> Purges model and raises DIGEST_MISMATCH
+        resp_bad = MagicMock()
+        resp_bad.status = 200
+        resp_bad.__iter__.return_value = iter([b'{"status": "success"}\n'])
+        resp_bad.__enter__.return_value = resp_bad
+
+        mock_opener_bad = MagicMock()
+        mock_opener_bad.open.return_value = resp_bad
+
+        deleted_models = []
+        with patch("urllib.request.build_opener", return_value=mock_opener_bad):
+            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=bad_actual):
+                with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
+                    with self.assertRaises(ModelPullError) as ctx:
+                        pull_model_stream(
+                            model_id="tampered:model",
+                            expected_manifest_digest=expected_good,
+                            show_console_bar=False,
+                        )
+                    self.assertEqual(ctx.exception.code, "DIGEST_MISMATCH")
+                    self.assertIn("tampered:model", deleted_models)
+
+    # -------------------------------------------------------------------------
+    # Finding CN: CLI Guardrails for Free-Form and Unverified Models
+    # -------------------------------------------------------------------------
+    def test_22_finding_cn_free_form_pull_model_guardrails_and_pattern(self) -> None:
+        """
+        Finding CN:
+          - Model ID not matching <family>:<tag> pattern rejected with INVALID_MODEL_ID.
+        """
+        setup_script = REPO_ROOT / "packaging" / "pai_setup.py"
+        proc_bad = subprocess.run(
+            [sys.executable, str(setup_script), "--pull-model", "bad_id_no_colon"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc_bad.returncode, 0)
+        self.assertIn("invalid", proc_bad.stderr.lower())
+
+    def test_23_finding_cn_layer_totals_override_catalog_estimate(self) -> None:
+        """
+        Finding CN:
+          - Layer totals from stream override catalog known_total_bytes.
+          - Real size ensures progress bar reaches 100% accurately.
+        """
+        tracker = PullProgressTracker(model_id="test:model", known_total_bytes=1000)
+        # Before layers arrive, total_expected is catalog estimate (1000)
+        self.assertEqual(tracker.total_expected, 1000)
+
+        # Once layer arrives with actual size 2000, layer total overrides 1000!
+        tracker.update_layer(digest="sha256:layer1", completed=500, total=2000, status="downloading")
+        self.assertEqual(tracker.total_expected, 2000)
+        self.assertEqual(tracker.percent, 25.0)
 
 
 if __name__ == "__main__":

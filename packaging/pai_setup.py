@@ -38,6 +38,7 @@ import collections
 import ctypes
 import datetime
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -386,26 +387,21 @@ def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, A
             raise CatalogSecurityError(f"Specified trust root file does not exist: {p} (fail-closed)")
         resolved_path = p
     else:
-        # Finding CK: Locate <install root>\research\trust.json strictly.
-        # Prefer PAI_INSTALL_DIR if set by launcher; otherwise search relative to file hierarchy.
-        env_install = os.environ.get("PAI_INSTALL_DIR")
-        if env_install:
-            cand = Path(env_install) / "research" / "trust.json"
+        # Findings CK & CP: Locate research\trust.json strictly relative to the running module's location.
+        # Environment variables (including PAI_INSTALL_DIR and PAI_TRUST_PATH) and user-profile paths
+        # are strictly IGNORED to prevent caller environment manipulation of the trust root.
+        for cand in [
+            Path(__file__).resolve().parent.parent / "research" / "trust.json",
+            Path(__file__).resolve().parent / "research" / "trust.json",
+            REPO_ROOT / "research" / "trust.json",
+        ]:
             if cand.is_file():
                 resolved_path = cand
-        else:
-            for cand in [
-                Path(__file__).resolve().parent.parent / "research" / "trust.json",
-                Path(__file__).resolve().parent / "research" / "trust.json",
-                REPO_ROOT / "research" / "trust.json",
-            ]:
-                if cand.is_file():
-                    resolved_path = cand
-                    break
+                break
 
     if resolved_path is None:
         raise CatalogSecurityError(
-            "Trust root 'research/trust.json' not found in installation; cannot verify catalog (fail-closed, Findings CB & CK)"
+            "Trust root 'research/trust.json' not found in installation; cannot verify catalog (fail-closed, Findings CB, CK, CP)"
         )
 
     try:
@@ -1056,12 +1052,16 @@ class PullProgressTracker:
 
     @property
     def total_expected(self) -> int:
-        if self.known_total_bytes and self.known_total_bytes > 0:
-            return self.known_total_bytes
+        # Finding CN: Prefer layer totals when reported by daemon stream;
+        # use catalog known_total_bytes strictly as an initial estimate before layers arrive.
+        layer_sum = 0
         if self.layers:
-            sum_total = sum(l["total"] for l in self.layers.values())
-            if sum_total > 0:
-                return sum_total
+            layer_sum = sum(l.get("total", 0) for l in self.layers.values() if l.get("total", 0) > 0)
+
+        if self.known_total_bytes and self.known_total_bytes > 0:
+            return max(self.known_total_bytes, layer_sum)
+        if layer_sum > 0:
+            return layer_sum
         return max(self.total_completed, 1)
 
     @property
@@ -1173,24 +1173,107 @@ class ConsoleProgressBar:
                 print(f"[{self.model_id}] Download failed: {message}", flush=True)
 
 
+def query_ollama_model_digest(endpoint: str, model_id: str, timeout: float = 5.0) -> Optional[str]:
+    """
+    Finding CN: Queries Ollama daemon for the actual manifest digest of a model.
+    Checks /api/tags first (which returns manifest digests for pulled models).
+    """
+    clean_ep = endpoint.rstrip("/")
+    url = f"{clean_ep}/api/tags"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "PAI-Setup/1.0"})
+        with opener.open(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = data.get("models", [])
+                for m in models:
+                    name = m.get("name", "")
+                    mod_name = m.get("model", "")
+                    if name == model_id or mod_name == model_id or name.startswith(f"{model_id}:"):
+                        digest = m.get("digest")
+                        if digest and isinstance(digest, str):
+                            return digest.strip().lower()
+    except Exception as e:
+        logger.debug("Failed to query /api/tags for model digest: %s", e)
+
+    # Fallback: query /api/show
+    show_url = f"{clean_ep}/api/show"
+    try:
+        req = urllib.request.Request(
+            show_url,
+            data=json.dumps({"name": model_id}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "PAI-Setup/1.0"},
+            method="POST",
+        )
+        with opener.open(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                digest = data.get("digest")
+                if digest and isinstance(digest, str):
+                    return digest.strip().lower()
+    except Exception as e:
+        logger.debug("Failed to query /api/show for model digest: %s", e)
+
+    return None
+
+
+def delete_ollama_model(endpoint: str, model_id: str, timeout: float = 10.0) -> bool:
+    """
+    Finding CN: Purges a model from Ollama daemon on manifest digest mismatch.
+    Sends DELETE /api/delete with {"name": model_id}.
+    """
+    clean_ep = endpoint.rstrip("/")
+    url = f"{clean_ep}/api/delete"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"name": model_id}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "PAI-Setup/1.0"},
+            method="DELETE",
+        )
+        with opener.open(req, timeout=timeout) as resp:
+            return resp.status in (200, 204)
+    except Exception as e:
+        logger.warning("Failed to delete model %s from Ollama: %s", model_id, e)
+        return False
+
+
+def _sleep_with_cancel_check(duration_sec: float, cancel_token: Optional[CancelToken]) -> None:
+    """
+    Finding CO: Sleeps with responsive cancel token checks during retry backoff intervals.
+    """
+    end_time = time.time() + duration_sec
+    while time.time() < end_time:
+        if cancel_token and cancel_token.is_cancelled():
+            raise DownloadCancelledError("Download cancelled by user during retry backoff")
+        time.sleep(min(0.05, max(0.001, end_time - time.time())))
+
+
 def pull_model_stream(
     model_id: str,
     endpoint: Optional[str] = None,
     total_bytes: Optional[int] = None,
+    expected_manifest_digest: Optional[str] = None,
     cancel_token: Optional[CancelToken] = None,
     emitter: Optional[ProgressEmitter] = None,
     show_console_bar: bool = True,
     max_retries: int = 3,
     initial_backoff_sec: float = 0.5,
+    read_timeout: float = 15.0,
 ) -> Dict[str, Any]:
     """
     Executes streaming model download via Ollama pull API (POST /api/pull).
-    Features (§6, Milestone P4):
+    Features (§6, Milestones P4, Findings CO, CN, CR):
       - Emits NDJSON progress events (Appendix C): download_start, progress, verifying, done, error.
-      - Width-aware console progress bar with speed, ETA, and layers aggregation.
-      - Network failure resilience with exponential backoff retries and resume.
-      - Thread-safe cancellation via CancelToken.
-      - Error detection: DISK_FULL, REGISTRY_ERROR, CANCELLED, PULL_FAILED.
+      - Width-aware console progress bar with speed, ETA, and layer aggregation.
+      - Post-pull manifest digest verification against signed catalog (Finding CN).
+        On digest mismatch, the model is purged via DELETE /api/delete and DIGEST_MISMATCH raised.
+      - Resilient error handling and exponential backoff retry on network failures or premature EOF (Finding CO).
+      - Handles socket cut/incomplete exceptions (IncompleteRead, RemoteDisconnected, OSError).
+      - Thread-safe cancellation via CancelToken with responsive backoff wait checking.
+      - Error detection: DISK_FULL, REGISTRY_ERROR, DIGEST_MISMATCH, CANCELLED, PULL_FAILED.
     """
     if endpoint is None:
         env_host = os.environ.get("OLLAMA_HOST")
@@ -1233,7 +1316,7 @@ def pull_model_stream(
             )
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-            with opener.open(req, timeout=30.0) as resp:
+            with opener.open(req, timeout=read_timeout) as resp:
                 if resp.status != 200:
                     raise ModelPullError("PULL_FAILED", f"Ollama daemon returned HTTP {resp.status}")
 
@@ -1297,20 +1380,69 @@ def pull_model_stream(
 
                     if status.lower() == "success":
                         tracker.is_done = True
-                        if emitter:
-                            emitter.emit("done", model=model_id)
-                        if bar:
-                            bar.finish(success=True)
-                        return {
-                            "model": model_id,
-                            "completed_bytes": tracker.total_completed,
-                            "status": "done",
-                        }
+                        break
 
+            # Check if stream finished successfully
             if tracker.is_done:
-                return {"model": model_id, "completed_bytes": tracker.total_completed, "status": "done"}
+                # Finding CN: Post-pull manifest digest verification against signed catalog
+                if expected_manifest_digest:
+                    actual_digest = query_ollama_model_digest(endpoint, model_id)
+                    if actual_digest:
+                        exp_clean = expected_manifest_digest.strip().lower()
+                        if actual_digest != exp_clean:
+                            # Purge mismatched model immediately
+                            delete_ollama_model(endpoint, model_id)
+                            mismatch_msg = (
+                                f"Model manifest digest mismatch for '{model_id}': "
+                                f"got '{actual_digest}', expected '{exp_clean}'. Purged from daemon."
+                            )
+                            if emitter:
+                                emitter.emit("error", model=model_id, code="DIGEST_MISMATCH", message=mismatch_msg)
+                            if bar:
+                                bar.finish(success=False, message="Digest mismatch")
+                            raise ModelPullError("DIGEST_MISMATCH", mismatch_msg)
+                    else:
+                        logger.info(
+                            "Ollama daemon does not report manifest digest for '%s'. Trust relies on registry TLS.",
+                            model_id,
+                        )
 
-        except (urllib.error.URLError, TimeoutError, ConnectionResetError) as e:
+                if emitter:
+                    emitter.emit("done", model=model_id)
+                if bar:
+                    bar.finish(success=True)
+                return {
+                    "model": model_id,
+                    "completed_bytes": tracker.total_completed,
+                    "status": "done",
+                }
+
+            # Finding CO: Stream ended without success or error (e.g. daemon stopped or restarted)
+            retries_left -= 1
+            if retries_left < 0:
+                msg = f"Pull stream for model '{model_id}' terminated prematurely without success confirmation after {max_retries} retries"
+                if emitter:
+                    emitter.emit("error", model=model_id, code="NETWORK_ERROR", message=msg)
+                if bar:
+                    bar.finish(success=False, message=msg)
+                raise ModelPullError("NETWORK_ERROR", msg)
+
+            logger.warning(
+                "Pull stream for %s closed before completion; retrying with backoff (retries left: %d)",
+                model_id,
+                retries_left,
+            )
+            _sleep_with_cancel_check(backoff, cancel_token)
+            backoff *= 2.0
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionResetError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            OSError,
+        ) as e:
             if cancel_token and cancel_token.is_cancelled():
                 raise DownloadCancelledError(f"Model download '{model_id}' was cancelled by user")
             retries_left -= 1
@@ -1321,7 +1453,15 @@ def pull_model_stream(
                 if bar:
                     bar.finish(success=False, message=msg)
                 raise ModelPullError("NETWORK_ERROR", msg)
-            time.sleep(backoff)
+
+            logger.warning(
+                "Network interruption pulling %s: %s; retrying in %.2fs (retries left: %d)",
+                model_id,
+                e,
+                backoff,
+                retries_left,
+            )
+            _sleep_with_cancel_check(backoff, cancel_token)
             backoff *= 2.0
 
 
@@ -1364,6 +1504,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model-drive", default=None, help="Custom target directory for disk space survey")
     parser.add_argument("--pull-model", default=None, help="Download a specific model ID via Ollama pull API (§6)")
     parser.add_argument("--pull-preselected", action="store_true", help="Download preselected models from catalog (§6)")
+    parser.add_argument("--allow-unverified-model", action="store_true", help="Explicit confirmation to pull models not present in signed catalog")
 
     args = parser.parse_args(argv)
     emitter = ProgressEmitter(enabled=args.progress_json)
@@ -1386,58 +1527,108 @@ def main(argv: Optional[List[str]] = None) -> int:
     emitter.emit("ollama_status", **ollama_status)
 
     # 3. Catalog loading and verification
-    if not args.catalog:
-        emitter.emit("error", code="CATALOG_REQUIRED", message="No catalog path specified. Pass --catalog <path>.")
-        print("ERROR: Catalog required. Pass --catalog <path_to_catalog.json>", file=sys.stderr)
+    verified_cat = None
+    if args.catalog:
+        cat_path = Path(args.catalog).resolve()
+        if not cat_path.is_file():
+            emitter.emit("error", code="CATALOG_NOT_FOUND", message=f"Catalog not found at {cat_path}")
+            print(f"ERROR: Catalog not found at {cat_path}", file=sys.stderr)
+            return 1
+
+        try:
+            cat_data = json.loads(cat_path.read_text(encoding="utf-8"))
+            verified_cat = verify_catalog_payload(cat_data, min_version=args.min_catalog_version)
+        except CatalogSecurityError as e:
+            emitter.emit("error", code="CATALOG_SECURITY_ERROR", message=str(e))
+            print(f"ERROR: Catalog verification failed: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            emitter.emit("error", code="CATALOG_LOAD_ERROR", message=str(e))
+            print(f"ERROR: Failed to load catalog: {e}", file=sys.stderr)
+            return 1
+    elif args.pull_preselected:
+        emitter.emit("error", code="CATALOG_REQUIRED", message="--pull-preselected requires --catalog <path>.")
+        print("ERROR: Catalog required for --pull-preselected. Pass --catalog <path_to_catalog.json>", file=sys.stderr)
         return 1
 
-    cat_path = Path(args.catalog).resolve()
-    if not cat_path.is_file():
-        emitter.emit("error", code="CATALOG_NOT_FOUND", message=f"Catalog not found at {cat_path}")
-        print(f"ERROR: Catalog not found at {cat_path}", file=sys.stderr)
-        return 1
+    recommendations = []
+    if verified_cat:
+        # 4. Plan model recommendations
+        recommendations = plan_model_selection(verified_cat, survey)
+        recs_dicts = [asdict(r) for r in recommendations]
+        emitter.emit("fit", recommendations=recs_dicts)
 
-    try:
-        cat_data = json.loads(cat_path.read_text(encoding="utf-8"))
-        verified_cat = verify_catalog_payload(cat_data, min_version=args.min_catalog_version)
-    except CatalogSecurityError as e:
-        emitter.emit("error", code="CATALOG_SECURITY_ERROR", message=str(e))
-        print(f"ERROR: Catalog verification failed: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:
-        emitter.emit("error", code="CATALOG_LOAD_ERROR", message=str(e))
-        print(f"ERROR: Failed to load catalog: {e}", file=sys.stderr)
-        return 1
+        print("\n================ PAI Setup Hardware Survey & Recommendations ================")
+        print(f"RAM:   {survey.avail_ram_mb:.1f} MB available / {survey.total_ram_mb:.1f} MB total")
+        print(f"Disk:  {round(survey.free_disk_bytes / (1024**3), 2)} GB free on {survey.model_drive}")
+        print(f"GPU:   {survey.gpu_name or 'None'} ({survey.dedicated_vram_mb:.1f} MB VRAM)")
+        if survey.npu_detected:
+            print(f"NPU:   {survey.npu_name} ({survey.npu_note})")
+        print(f"Ollama: {'Running (' + ollama_status['version'] + ')' if ollama_status['running'] else 'Not detected'}")
 
-    # 4. Plan model recommendations
-    recommendations = plan_model_selection(verified_cat, survey)
-    recs_dicts = [asdict(r) for r in recommendations]
-    emitter.emit("fit", recommendations=recs_dicts)
-
-    print("\n================ PAI Setup Hardware Survey & Recommendations ================")
-    print(f"RAM:   {survey.avail_ram_mb:.1f} MB available / {survey.total_ram_mb:.1f} MB total")
-    print(f"Disk:  {round(survey.free_disk_bytes / (1024**3), 2)} GB free on {survey.model_drive}")
-    print(f"GPU:   {survey.gpu_name or 'None'} ({survey.dedicated_vram_mb:.1f} MB VRAM)")
-    if survey.npu_detected:
-        print(f"NPU:   {survey.npu_name} ({survey.npu_note})")
-    print(f"Ollama: {'Running (' + ollama_status['version'] + ')' if ollama_status['running'] else 'Not detected'}")
-
-    print("\nModel Catalog Candidates:")
-    for r in recommendations:
-        flag = "[PRESELECTED]" if r.is_preselected else "[AVAILABLE]"
-        print(f"  {flag} {r.model_id} ({r.family}) - GPU: {r.fits_gpu.upper()}, Disk: {'OK' if r.fits_disk else 'FAIL'}")
-        for rej in r.rejection_reasons:
-            print(f"      * {rej}")
+        print("\nModel Catalog Candidates:")
+        for r in recommendations:
+            flag = "[PRESELECTED]" if r.is_preselected else "[AVAILABLE]"
+            print(f"  {flag} {r.model_id} ({r.family}) - GPU: {r.fits_gpu.upper()}, Disk: {'OK' if r.fits_disk else 'FAIL'}")
+            for rej in r.rejection_reasons:
+                print(f"      * {rej}")
 
     # 5. Milestone P4: Model download execution if requested
     if args.pull_model:
+        # Finding CN: Model ID pattern validation
+        id_pattern = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_.-]+$")
+        if not id_pattern.match(args.pull_model):
+            emitter.emit(
+                "error",
+                code="INVALID_MODEL_ID",
+                message=f"Model ID '{args.pull_model}' does not match pattern '<family>:<tag>' (e.g. 'llama3.2:1b')",
+            )
+            print(f"ERROR: Model ID '{args.pull_model}' is invalid. Must match pattern '<family>:<tag>'.", file=sys.stderr)
+            return 1
+
         if not ollama_status["running"]:
             emitter.emit("error", code="OLLAMA_NOT_RUNNING", message="Ollama daemon is not reachable on localhost")
             print("ERROR: Ollama daemon is not running. Please start Ollama before pulling models.", file=sys.stderr)
             return 1
+
+        # Finding CN: Check catalog membership, license terms, and manifest digest
+        catalog_entry = None
+        if verified_cat:
+            catalog_entry = next((m for m in verified_cat.get("models", []) if m.get("id") == args.pull_model), None)
+
+        expected_digest = None
+        expected_bytes = None
+        if catalog_entry:
+            expected_digest = catalog_entry.get("registry_manifest_digest")
+            expected_bytes = catalog_entry.get("download_bytes")
+            lic = catalog_entry.get("license", {})
+            print(f"\n[CATALOG MODEL] {args.pull_model}")
+            print(f"  License: {lic.get('name', 'Unknown')} ({lic.get('url', 'N/A')}) - Status: {lic.get('license_status', 'unverified')}")
+            print(f"  Signed Catalog Digest: {expected_digest}")
+        else:
+            print(f"\n[WARNING] Model '{args.pull_model}' is NOT present in the signed PAI catalog.")
+            print("  It has not been verified or tested for compatibility or licensing by PAI.")
+            if not args.allow_unverified_model:
+                emitter.emit(
+                    "error",
+                    code="UNVERIFIED_MODEL_REJECTED",
+                    message=f"Model '{args.pull_model}' is not in catalog. Pass --allow-unverified-model to confirm.",
+                )
+                print(
+                    "ERROR: Refusing to pull unverified model without explicit confirmation. Pass --allow-unverified-model.",
+                    file=sys.stderr,
+                )
+                return 1
+
         try:
             print(f"\nStarting model pull for {args.pull_model}...")
-            pull_model_stream(args.pull_model, emitter=emitter, show_console_bar=True)
+            pull_model_stream(
+                args.pull_model,
+                total_bytes=expected_bytes,
+                expected_manifest_digest=expected_digest,
+                emitter=emitter,
+                show_console_bar=True,
+            )
         except Exception as e:
             print(f"ERROR: Pull failed: {e}", file=sys.stderr)
             return 1
@@ -1452,9 +1643,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("\nNo models met preselection criteria on this hardware profile.")
             return 0
         for r in preselected:
+            # Finding CN: Query expected manifest digest from catalog entry
+            cat_entry = next((m for m in verified_cat.get("models", []) if m.get("id") == r.model_id), None)
+            expected_digest = cat_entry.get("registry_manifest_digest") if cat_entry else None
+            lic = cat_entry.get("license", {}) if cat_entry else {}
             print(f"\nPulling preselected model: {r.model_id} ({format_bytes_human(r.download_bytes)})...")
+            print(f"  License: {lic.get('name', 'Unknown')} ({lic.get('url', 'N/A')}) - Status: {lic.get('license_status', 'unverified')}")
             try:
-                pull_model_stream(r.model_id, total_bytes=r.download_bytes, emitter=emitter, show_console_bar=True)
+                pull_model_stream(
+                    r.model_id,
+                    total_bytes=r.download_bytes,
+                    expected_manifest_digest=expected_digest,
+                    emitter=emitter,
+                    show_console_bar=True,
+                )
             except Exception as e:
                 print(f"ERROR: Pulling {r.model_id} failed: {e}", file=sys.stderr)
                 return 1

@@ -1,3 +1,6 @@
+# [SUPERSEDED] This historical log is superseded by payload_post_bw_overlay_full.txt (Finding CQ).
+# Generated prior to automated machine header integration; retained for provenance only.
+
 test_end_to_end_source_trust_spoof_blocked_by_agent_core (test_agent.AgentCycle.test_end_to_end_source_trust_spoof_blocked_by_agent_core)
 Threat T14 end-to-end: Fake network delivers payload with spoofed '[Source: local_knowledge]'. Verified with NeuroSymbolicReasoner. ... ok
 test_full_cycle_offline (test_agent.AgentCycle.test_full_cycle_offline) ... ok

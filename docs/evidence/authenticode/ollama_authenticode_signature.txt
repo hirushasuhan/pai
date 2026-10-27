@@ -1,0 +1,35 @@
+================================================================================
+VERIFIED OFFICIAL OLLAMA AUTHENTICODE SIGNATURE RECORD (Findings CC, CL, CQ)
+================================================================================
+Timestamp (UTC): 2026-10-27T14:47:38Z
+Local Timestamp: 2026-10-27 20:17:38 +05:30
+Target Path:     C:\Users\hp\AppData\Local\Programs\Ollama\ollama.exe
+Platform:        Microsoft Windows 11 Pro [Version 10.0.26300.9711] 64-bit
+
+Command Executed:
+powershell -Command "Get-AuthenticodeSignature 'C:\Users\hp\AppData\Local\Programs\Ollama\ollama.exe' | Format-List -Property Status, StatusMessage, Path, SignerCertificate"
+
+Verbatim Command Output:
+Status            : Valid
+StatusMessage     : Signature verified.
+Path              : C:\Users\hp\AppData\Local\Programs\Ollama\ollama.exe
+SignerCertificate : [Subject]
+                      CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, 
+                      OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, 
+                      OID.1.3.6.1.4.1.311.60.2.1.3=CA
+                    
+                    [Issuer]
+                      CN=DigiCert G5 CS ECC SHA384 2021 CA1, O="DigiCert, Inc.", C=US
+                    
+                    [Serial Number]
+                      09EC0C6B3ACF2FCBBD0BB7489E389999
+                    
+                    [Not Before]
+                      2/12/2026 5:30:00 AM
+                    
+                    [Not After]
+                      2/14/2029 5:29:59 AM
+                    
+                    [Thumbprint]
+                      716CD3BC8C02361431A18F56F98C72DE88066103
+================================================================================
