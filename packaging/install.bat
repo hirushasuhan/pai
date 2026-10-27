@@ -137,13 +137,13 @@ powershell -NoProfile -Command ^
     "$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" ^
     "$kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
     "if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
-    "$parts = if ($raw) { $raw -split ';' | Where-Object { $_ } } else { @() };" ^
+    "$parts = if ($raw) { @($raw -split ';' | Where-Object { $_ }) } else { @() };" ^
     "$matched = $parts | Where-Object {" ^
     "    $_.TrimEnd('\') -ieq $targetDir.TrimEnd('\') -or " ^
     "    [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $targetDir.TrimEnd('\')" ^
     "};" ^
     "if (-not $matched) {" ^
-    "    $newVal = (($parts + $targetDir) -join ';');" ^
+    "    $newVal = ((@($parts) + $targetDir) -join ';');" ^
     "    $key.SetValue('Path', $newVal, $kind);" ^
     "    Write-Host ('[SUCCESS] Added ' + $targetDir + ' to User PATH.') -ForegroundColor Green;" ^
     "} else {" ^

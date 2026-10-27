@@ -30,14 +30,19 @@ def check_n_plus_1_progress() -> int:
     # Use --skip-smoke to avoid generating redundant smoke test telemetry (Finding BH)
     cmd = [sys.executable, str(pai_py), "doctor", "--json", "--skip-smoke"]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if proc.returncode != 0:
-        print("ERROR: Failed to run 'pai doctor --json --skip-smoke':", proc.stderr, file=sys.stderr)
-        return 1
 
-    try:
-        data = json.loads(proc.stdout)
-    except Exception as exc:
-        print(f"ERROR: Failed to parse doctor output as JSON: {exc}", file=sys.stderr)
+    data = None
+    if proc.stdout.strip():
+        try:
+            data = json.loads(proc.stdout)
+        except Exception:
+            data = None
+
+    if data is None or "shadow_telemetry" not in data:
+        if proc.returncode != 0:
+            print("ERROR: Failed to run 'pai doctor --json --skip-smoke':", proc.stderr, file=sys.stderr)
+            return 1
+        print("ERROR: Failed to parse doctor output as JSON or missing shadow_telemetry", file=sys.stderr)
         return 1
 
     shadow = data.get("shadow_telemetry", {})

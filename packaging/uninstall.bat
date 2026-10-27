@@ -29,11 +29,11 @@ powershell -NoProfile -Command ^
     "$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" ^
     "$kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
     "if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
-    "$parts = if ($raw) { $raw -split ';' | Where-Object { $_ } } else { @() };" ^
-    "$newParts = $parts | Where-Object {" ^
+    "$parts = if ($raw) { @($raw -split ';' | Where-Object { $_ }) } else { @() };" ^
+    "$newParts = @($parts | Where-Object {" ^
     "    $_.TrimEnd('\') -ine $targetDir.TrimEnd('\') -and " ^
     "    [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ine $targetDir.TrimEnd('\')" ^
-    "};" ^
+    "});" ^
     "$newVal = ($newParts -join ';');" ^
     "$key.SetValue('Path', $newVal, $kind);" ^
     "$key.Close();" ^

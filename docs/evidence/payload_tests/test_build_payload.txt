@@ -1,15 +1,18 @@
 ================================================================================
 PAI BUILD PAYLOAD UNIT TESTS (17 TESTS, MILESTONE P2/P3) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
 ================================================================================
-Timestamp (UTC): 2026-10-27T16:08:06.971740+00:00
+Timestamp (UTC): 2026-10-27T16:46:18.172128+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        e0e36646a88193ce71a597a3ffa79c3bb3cd7796
+Git HEAD:        95f9d377f3c2c044540450c54843215857a47143
 Research Tree:   506e520b33a0af8c3f0276114483ce26b9bd3787
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
+pai_setup SHA256: f79bca09f4a6b84e63b0c61c89c28051941d68c0a1ad068b90b5b5c4b861f44c
+pai.iss SHA256:   0f9c06581bb203678779df9146bea4ae28ccd48c86a03b31ce87d7bcb0aec7ef
+agreement SHA256: 426463d87e23414a1686d131f79da68572cb2c9850af7de4a76a9ce3b06772be
 ================================================================================
 
 Command: python tools/test_build_payload.py
@@ -20,6 +23,6 @@ STDOUT:
 STDERR:
 ........s........
 ----------------------------------------------------------------------
-Ran 17 tests in 15.070s
+Ran 17 tests in 14.401s
 
 OK (skipped=1)
