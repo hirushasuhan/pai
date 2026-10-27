@@ -223,6 +223,86 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertEqual(keys[0]["id"], "ok-1")
 
     # -------------------------------------------------------------------------
+    # Finding CK: Trust Root Source Hardening & Negative Controls
+    # -------------------------------------------------------------------------
+    def test_02b_finding_ck_profile_and_env_trust_paths_ignored_negative_controls(self) -> None:
+        """
+        Finding CK:
+          - In installed product, the ONLY trust root is <install root>/research/trust.json.
+          - Explicit trust_path argument is developer/test only and NEVER read from env.
+          - Profile locations (%LOCALAPPDATA%, ~/.pai) and PAI_TRUST_PATH are strictly ignored.
+          - Negative control 1: Valid-looking trust.json in PAI_TRUST_PATH is ignored.
+          - Negative control 2: Valid-looking trust.json in %LOCALAPPDATA%/PAI is ignored.
+          - Negative control 3: Valid-looking trust.json in ~/.pai is ignored.
+          - Negative control 4: When <install root>/research/trust.json is absent, load_trust_keys()
+            fails closed even if valid-looking trust files exist in env or profile paths.
+        """
+        rogue_key_id = "rogue-key-ck-unauthorized"
+        rogue_trust_content = json.dumps({
+            "keys": [{"id": rogue_key_id, "public_hex": TEST_PUB_HEX, "revoked": False}]
+        })
+
+        # Set up rogue trust file in a temp path
+        rogue_trust_path = Path(self.tmp_dir) / "rogue_trust.json"
+        rogue_trust_path.write_text(rogue_trust_content, encoding="utf-8")
+
+        # Fake profile locations
+        fake_localappdata = Path(self.tmp_dir) / "fake_localappdata"
+        fake_pai_appdata = fake_localappdata / "PAI"
+        fake_pai_appdata.mkdir(parents=True, exist_ok=True)
+        (fake_pai_appdata / "trust.json").write_text(rogue_trust_content, encoding="utf-8")
+
+        fake_home = Path(self.tmp_dir) / "fake_home"
+        fake_dot_pai = fake_home / ".pai"
+        fake_dot_pai.mkdir(parents=True, exist_ok=True)
+        (fake_dot_pai / "trust.json").write_text(rogue_trust_content, encoding="utf-8")
+
+        orig_env = dict(os.environ)
+        try:
+            # Set hostile environment variables pointing to rogue trust files
+            os.environ["PAI_TRUST_PATH"] = str(rogue_trust_path)
+            os.environ["LOCALAPPDATA"] = str(fake_localappdata)
+            os.environ["USERPROFILE"] = str(fake_home)
+
+            # Test A: Default load_trust_keys() must find the official repo/install research/trust.json,
+            # and MUST NOT load the rogue key from PAI_TRUST_PATH or profile folders.
+            active_keys = load_trust_keys()
+            loaded_ids = [k.get("id") for k in active_keys]
+            self.assertNotIn(
+                rogue_key_id,
+                loaded_ids,
+                "Security Failure (Finding CK): Rogue key from PAI_TRUST_PATH or profile was loaded!",
+            )
+
+            # Test B: Isolated installation missing research/trust.json
+            # When <install root>/research/trust.json is absent, load_trust_keys() MUST fail closed
+            # despite presence of PAI_TRUST_PATH and profile trust.json files.
+            empty_install = Path(self.tmp_dir) / "empty_install"
+            empty_install.mkdir(parents=True, exist_ok=True)
+            os.environ["PAI_INSTALL_DIR"] = str(empty_install)
+
+            with self.assertRaises(CatalogSecurityError) as ctx:
+                load_trust_keys()
+            self.assertIn("not found in installation", str(ctx.exception))
+            self.assertIn("Finding", str(ctx.exception))
+
+            # Test C: If install root has authentic research/trust.json, it loads successfully
+            install_research = empty_install / "research"
+            install_research.mkdir(parents=True, exist_ok=True)
+            authentic_id = "authentic-install-key-1"
+            (install_research / "trust.json").write_text(
+                json.dumps({"keys": [{"id": authentic_id, "public_hex": TEST_PUB_HEX, "revoked": False}]}),
+                encoding="utf-8",
+            )
+            keys = load_trust_keys()
+            self.assertEqual(len(keys), 1)
+            self.assertEqual(keys[0]["id"], authentic_id)
+            self.assertNotIn(rogue_key_id, [k.get("id") for k in keys])
+        finally:
+            os.environ.clear()
+            os.environ.update(orig_env)
+
+    # -------------------------------------------------------------------------
     # Finding CD & CD2: Replay Rollback, Freshness, and Schema Validation
     # -------------------------------------------------------------------------
     def test_03_catalog_verification_and_monotonic_rollback_defense(self) -> None:

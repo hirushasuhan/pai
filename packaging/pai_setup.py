@@ -5,9 +5,11 @@ Part of Milestone P3 for the v1.1.0 Packaging and Installer subsystem.
 Specification: docs/PACKAGING_SPEC.md (§4, §5, Appendix B, Appendix C)
 ADR-005, ADR-012, ADR-013
 
-Hard Rules Enforced (Findings CB, CC, CD, CD2, CE, CG, CH):
+Hard Rules Enforced (Findings CB, CC, CD, CD2, CE, CG, CH, CK):
   1. Shipped code NEVER trusts test keys or contains private seeds (Finding CB).
-     Production keys are read ONLY from trust.json; fails closed if missing/empty/invalid.
+     Production keys are read ONLY from <install root>/research/trust.json; fails closed.
+     Explicit trust_path argument is developer/test only and NEVER read from env (Finding CK).
+     Profile locations (%LOCALAPPDATA%, ~/.pai) and PAI_TRUST_PATH are strictly ignored (Finding CK).
   2. Monotonic catalog version enforcement via persistent state (Finding CD).
      Replay rollback rejected if catalog_version < highest seen version.
   3. Catalog freshness: catalogs older than 90 days from issued_utc are rejected (Finding CD).
@@ -347,8 +349,12 @@ def canonical_json_bytes(doc: Dict[str, Any]) -> bytes:
 def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
     """
     Loads trusted verification keys strictly from trust.json.
-    Hard Rule (Finding CB): NEVER contains fallback test keys or seeds.
-    Fails closed if trust.json is missing, empty, or has no active keys.
+    Hard Rules (Findings CB & CK):
+      - In the installed product the ONLY trust root is <install root>\\research\\trust.json
+      - An explicit path argument is allowed for tests and developer runs only, and is
+        NEVER read from the environment or user profile.
+      - User-profile locations (%LOCALAPPDATA%\\PAI, ~/.pai) and PAI_TRUST_PATH are strictly ignored.
+      - Fails closed if missing, empty, or has no active keys.
     """
     resolved_path: Optional[Path] = None
 
@@ -358,33 +364,26 @@ def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, A
             raise CatalogSecurityError(f"Specified trust root file does not exist: {p} (fail-closed)")
         resolved_path = p
     else:
-        search_paths: List[Path] = []
-        env_trust = os.environ.get("PAI_TRUST_PATH")
-        if env_trust:
-            search_paths.append(Path(env_trust))
-
+        # Finding CK: Locate <install root>\research\trust.json strictly.
+        # Prefer PAI_INSTALL_DIR if set by launcher; otherwise search relative to file hierarchy.
         env_install = os.environ.get("PAI_INSTALL_DIR")
         if env_install:
-            search_paths.append(Path(env_install) / "trust.json")
-
-        # Standard locations
-        search_paths.extend([
-            REPO_ROOT / "trust.json",
-            RESEARCH_DIR / "trust.json",
-            Path(__file__).resolve().parent.parent / "trust.json",
-            Path(__file__).resolve().parent.parent / "research" / "trust.json",
-            Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "PAI" / "trust.json",
-            Path.home() / ".pai" / "trust.json",
-        ])
-
-        for p in search_paths:
-            if p.is_file():
-                resolved_path = p
-                break
+            cand = Path(env_install) / "research" / "trust.json"
+            if cand.is_file():
+                resolved_path = cand
+        else:
+            for cand in [
+                Path(__file__).resolve().parent.parent / "research" / "trust.json",
+                Path(__file__).resolve().parent / "research" / "trust.json",
+                REPO_ROOT / "research" / "trust.json",
+            ]:
+                if cand.is_file():
+                    resolved_path = cand
+                    break
 
     if resolved_path is None:
         raise CatalogSecurityError(
-            "Trust root 'trust.json' not found; cannot verify catalog (fail-closed, Finding CB)"
+            "Trust root 'research/trust.json' not found in installation; cannot verify catalog (fail-closed, Findings CB & CK)"
         )
 
     try:
