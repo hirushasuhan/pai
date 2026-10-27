@@ -306,13 +306,21 @@ P1b and P7 follow the same rules as the other milestones (one report each, trust
 {"event":"error","model":"<id>","code":"DISK_FULL","message":"<text>"}
 ```
 
-## Appendix D. PATH update pattern (PowerShell)
+## Appendix D. PATH update pattern (PowerShell, registry)
+
+Revised 2026-10-27 after the P2 fix (Finding BQ). The earlier pattern used `[Environment]::GetEnvironmentVariable` and `SetEnvironmentVariable`. The owner's test on Windows 11 showed that this expands an entry such as `%USERPROFILE%\bin` into fixed text and writes the value back as a plain string, losing the "expandable string" type. The installer therefore reads and writes the registry value directly. The path is passed in an environment variable, never pasted into the command text, so apostrophes, spaces and `%` in a user name cannot break it.
 
 ```powershell
-$dir  = "$env:LOCALAPPDATA\Programs\PAI\bin"
-$cur  = [Environment]::GetEnvironmentVariable('Path','User')
-$parts = if ($cur) { $cur -split ';' | Where-Object { $_ } } else { @() }
-if (-not ($parts | Where-Object { $_.TrimEnd('\') -ieq $dir })) {
-    [Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User')
-}
+$dir = $env:PAI_BIN_DIR            # set by the calling script
+$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+$kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+$parts = if ($raw) { $raw -split ';' | Where-Object { $_ } } else { @() }
+$have = $parts | Where-Object { $_.TrimEnd('\') -ieq $dir.TrimEnd('\') -or
+                                [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $dir.TrimEnd('\') }
+if (-not $have) { $key.SetValue('Path', (($parts + $dir) -join ';'), $kind) }
+$key.Close()
+# then broadcast WM_SETTINGCHANGE ("Environment") so new windows see the change
 ```
+
+Rules: never `setx` (it truncates long values); keep the original value type; remove only the exact entry on uninstall; tests run the real scripts against an isolated test subkey, with a PATH that contains an expandable entry.
