@@ -544,6 +544,8 @@ class TestBridgeDifferential(unittest.TestCase):
         """Verifies that when PAI_USE_RUST_CORE=1 and binary is missing, both paths refuse fail-closed."""
         from unittest import mock
 
+        old_env = os.environ.get("PAI_USE_RUST_CORE")
+        os.environ["PAI_USE_RUST_CORE"] = "1"
         pai_core_bridge.PAI_USE_RUST_CORE = True
         try:
             with mock.patch("pai_core_bridge.find_core_binary", side_effect=pai_core_bridge.CoreBridgeUnavailableError("missing")):
@@ -554,7 +556,70 @@ class TestBridgeDifferential(unittest.TestCase):
                 with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
                     verify_verdict_frame("stdout", "nonce", "key")
         finally:
+            if old_env is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_env
+            else:
+                os.environ.pop("PAI_USE_RUST_CORE", None)
             pai_core_bridge.PAI_USE_RUST_CORE = False
+
+    def test_default_on_when_binary_present(self):
+        """Verifies that in default mode (no env var), binary present means default-on."""
+        from unittest import mock
+
+        old_env = os.environ.pop("PAI_USE_RUST_CORE", None)
+        old_fb = os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+        old_flag = pai_core_bridge.PAI_USE_RUST_CORE
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        try:
+            with mock.patch("pai_core_bridge.is_core_binary_available", return_value=True):
+                self.assertTrue(pai_core_bridge.is_rust_core_enabled())
+                self.assertEqual(pai_core_bridge.get_bridge_mode(), "default-on")
+        finally:
+            if old_env is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_env
+            if old_fb is not None:
+                os.environ["PAI_RUST_FALLBACK_PYTHON"] = old_fb
+            pai_core_bridge.PAI_USE_RUST_CORE = old_flag
+
+    def test_default_on_graceful_fallback_when_binary_missing(self):
+        """Verifies that in default mode without explicit env var, missing binary gracefully falls back to Python."""
+        from unittest import mock
+
+        old_env = os.environ.pop("PAI_USE_RUST_CORE", None)
+        old_fb = os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
+        old_flag = pai_core_bridge.PAI_USE_RUST_CORE
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.reset_fallback_warning()
+        try:
+            with mock.patch("pai_core_bridge.find_core_binary", side_effect=pai_core_bridge.CoreBridgeUnavailableError("missing")):
+                self.assertFalse(pai_core_bridge.is_rust_core_enabled())
+                self.assertEqual(pai_core_bridge.get_bridge_mode(), "binary-missing fallback")
+                # Extractor gracefully uses Python reference without raising
+                prompt = "Write `solve(x)`.\nExample:\n  solve(1) -> 2\n"
+                stmts = extract_example_assertions(prompt, entry_point="solve")
+                self.assertEqual(stmts, ["assert solve(1) == 2"])
+        finally:
+            if old_env is not None:
+                os.environ["PAI_USE_RUST_CORE"] = old_env
+            if old_fb is not None:
+                os.environ["PAI_RUST_FALLBACK_PYTHON"] = old_fb
+            pai_core_bridge.PAI_USE_RUST_CORE = old_flag
+
+    def test_kill_switch_forces_pure_python(self):
+        """Verifies that PAI_RUST_FALLBACK_PYTHON=1 forces pure Python mode regardless of binary."""
+        from unittest import mock
+
+        old_fb = os.environ.get("PAI_RUST_FALLBACK_PYTHON")
+        os.environ["PAI_RUST_FALLBACK_PYTHON"] = "1"
+        try:
+            self.assertTrue(pai_core_bridge.is_python_fallback_forced())
+            self.assertFalse(pai_core_bridge.is_rust_core_enabled())
+            self.assertEqual(pai_core_bridge.get_bridge_mode(), "forced fallback (kill-switch)")
+        finally:
+            if old_fb is not None:
+                os.environ["PAI_RUST_FALLBACK_PYTHON"] = old_fb
+            else:
+                os.environ.pop("PAI_RUST_FALLBACK_PYTHON", None)
 
     def test_shadow_mode_bridge_exception_handling(self):
         """Verifies that bridge exceptions in shadow mode record discrepancies and preserve Python assertions."""

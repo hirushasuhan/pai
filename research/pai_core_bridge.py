@@ -69,21 +69,93 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("pai.core_bridge")
 
-PAI_USE_RUST_CORE = os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes")
+PAI_USE_RUST_CORE = os.environ.get("PAI_USE_RUST_CORE", "1").lower() in ("1", "true", "yes")
 PAI_RUST_FALLBACK_PYTHON = os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes")
 PAI_SHADOW_COMPARE = os.environ.get("PAI_SHADOW_COMPARE", "1").lower() in ("1", "true", "yes")
 
+_FALLBACK_WARNING_EMITTED = False
+
+
+def reset_fallback_warning() -> None:
+    """Resets the single-warning gate for graceful fallback logging."""
+    global _FALLBACK_WARNING_EMITTED
+    _FALLBACK_WARNING_EMITTED = False
+
 
 def is_python_fallback_forced() -> bool:
-    """Returns True if the 1-release fallback to Python is active."""
-    return bool(PAI_RUST_FALLBACK_PYTHON) or (os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes"))
+    """Returns True if the 1-release fallback to Python is active via kill switch."""
+    if PAI_RUST_FALLBACK_PYTHON:
+        return True
+    return os.environ.get("PAI_RUST_FALLBACK_PYTHON", "0").lower() in ("1", "true", "yes")
+
+
+def is_core_binary_available() -> bool:
+    """Checks whether a valid pai-core binary exists and passes handshake."""
+    try:
+        bin_path = find_core_binary()
+        return bool(bin_path)
+    except Exception:
+        return False
+
+
+def get_bridge_mode() -> str:
+    """
+    Returns the active bridge operational mode description:
+    - 'forced fallback (kill-switch)': PAI_RUST_FALLBACK_PYTHON active
+    - 'explicitly-disabled': PAI_USE_RUST_CORE explicitly '0'/'false'
+    - 'explicitly-enabled': PAI_USE_RUST_CORE explicitly '1'/'true' in env
+    - 'default-on': binary exists and handshake succeeds by default
+    - 'binary-missing fallback': defaulted to on, but binary missing/invalid
+    """
+    if is_python_fallback_forced():
+        return "forced fallback (kill-switch)"
+
+    env_val = os.environ.get("PAI_USE_RUST_CORE")
+    if env_val is not None:
+        if env_val.lower() in ("1", "true", "yes"):
+            return "explicitly-enabled"
+        return "explicitly-disabled"
+
+    if PAI_USE_RUST_CORE is False:
+        return "explicitly-disabled"
+
+    if is_core_binary_available():
+        return "default-on"
+    return "binary-missing fallback"
 
 
 def is_rust_core_enabled() -> bool:
-    """Returns True if Rust core is enabled and Python fallback is not forced."""
+    """
+    Returns True if Rust core should be used for execution.
+    In Release N:
+    - If kill-switch PAI_RUST_FALLBACK_PYTHON=1 is set -> False (pure Python).
+    - If PAI_USE_RUST_CORE is explicitly '1' in env -> True (strict mode; fails closed if binary missing).
+    - If PAI_USE_RUST_CORE is explicitly '0' in env -> False (pure Python).
+    - If PAI_USE_RUST_CORE is False (module var) -> False.
+    - Otherwise (default-on):
+        - If binary exists and passes handshake -> True.
+        - Else -> False (graceful fallback to pure Python with warning).
+    """
+    global _FALLBACK_WARNING_EMITTED
     if is_python_fallback_forced():
         return False
-    return bool(PAI_USE_RUST_CORE) or (os.environ.get("PAI_USE_RUST_CORE", "0").lower() in ("1", "true", "yes"))
+
+    env_val = os.environ.get("PAI_USE_RUST_CORE")
+    if env_val is not None:
+        return env_val.lower() in ("1", "true", "yes")
+
+    if PAI_USE_RUST_CORE is False:
+        return False
+
+    if is_core_binary_available():
+        return True
+
+    if not _FALLBACK_WARNING_EMITTED:
+        _FALLBACK_WARNING_EMITTED = True
+        logger.warning(
+            "pai-core binary not found or failed handshake; gracefully falling back to pure Python reference mode."
+        )
+    return False
 
 
 def is_shadow_compare_enabled() -> bool:

@@ -338,14 +338,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             find_core_binary,
             is_rust_core_enabled,
             is_python_fallback_forced,
+            get_bridge_mode,
         )
         if is_rust_core_enabled() and not is_python_fallback_forced():
             find_core_binary()
         ingest_limits = get_ingest_limits()
-    except CoreBridgeUnavailableError:
+    except CoreBridgeUnavailableError as e:
         core_bridge_ok = False
         core_bridge_err_msg = (
-            "pai-core binary not found. Build with 'cargo build --release' in core/ "
+            f"pai-core bridge unavailable ({e}). Build with 'cargo build --release' in core/ "
             "or set PAI_RUST_FALLBACK_PYTHON=1 to select the Python reference path."
         )
         from pai_core_bridge import py_get_ingest_limits
@@ -498,6 +499,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             get_shadow_telemetry_summary,
             get_shadow_discrepancies,
         )
+        bridge_mode = get_bridge_mode()
         if not core_bridge_ok:
             checks_table.append({
                 "check": "core_bridge",
@@ -509,6 +511,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 "check": "core_bridge_shadow",
                 "passed": True,
                 "detail": "fallback to Python active",
+            })
+        elif bridge_mode == "binary-missing fallback":
+            checks_table.append({
+                "check": "core_bridge_shadow",
+                "passed": True,
+                "detail": "fallback to Python active (pai-core binary missing or failed handshake)",
             })
         elif not is_rust_core_enabled():
             checks_table.append({
@@ -610,6 +618,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "sandbox": sandbox_info,
         "smoke_tests": smoke_results,
         "checks": checks_table,
+        "bridge_mode": bridge_mode,
         "shadow_discrepancies": shadow_discrepancies_list,
         "shadow_telemetry": shadow_summary,
     }
@@ -679,6 +688,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"{c['name']:<22} {c['required_ram_mb']:<10.1f}MB {c['calibration_status']:<24} {c['license_status']:<12} {fit_lbl}")
 
     print("\n--- Core Bridge Shadow Telemetry ---")
+    print(f"Bridge Mode          : [{bridge_mode}]")
     st = doc_data.get("shadow_telemetry", {})
     cli_comp = st.get("cli_comparisons", 0)
     cli_disc = st.get("cli_discrepancies", 0)
