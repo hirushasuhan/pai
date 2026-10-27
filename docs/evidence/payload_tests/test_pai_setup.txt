@@ -1,0 +1,48 @@
+================================================================================
+PAI SETUP UNIT TESTS (27 TESTS, FINDINGS CT, CU, CV, CW, CX) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
+================================================================================
+Timestamp (UTC): 2026-10-27T16:07:53.405117+00:00
+Platform:        Windows-11-10.0.26300-SP0
+Python Runtime:  C:\Python314\python.exe
+Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
+Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
+Git HEAD:        e0e36646a88193ce71a597a3ffa79c3bb3cd7796
+Research Tree:   506e520b33a0af8c3f0276114483ce26b9bd3787
+Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
+pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
+================================================================================
+
+Command: python tools/test_pai_setup.py
+Exit Code: 0
+
+STDOUT:
+{"event": "download_start", "model": "disk-model:7b", "total_bytes": 1}
+{"event": "error", "model": "disk-model:7b", "code": "DISK_FULL", "message": "write /root/.ollama: no space left on device"}
+{"event": "download_start", "model": "unknown-model:7b", "total_bytes": 1}
+{"event": "error", "model": "unknown-model:7b", "code": "REGISTRY_ERROR", "message": "pull model manifest: file does not exist"}
+
+STDERR:
+..........Non-loopback OLLAMA_HOST 'http://192.168.1.100:11434' ignored for security; falling back to 127.0.0.1
+.........Pull stream for cut-model:latest closed before completion; retrying with backoff (retries left: 1)
+Pull stream for cut-model:latest closed before completion; retrying with backoff (retries left: 0)
+.Pull stream for resume-model:7b closed before completion; retrying with backoff (retries left: 1)
+Pull stream for cancel-backoff:7b closed before completion; retrying with backoff (retries left: 2)
+.WARNING: Manifest digest mismatch for 'tampered:model' (expected sha256:d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a, got badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbad1). Deleting downloaded model 'tampered:model' from Ollama daemon to prevent execution of unverified weights. Note: If a model with this name existed prior to this pull, it will be removed.
+
+WARNING: Manifest digest mismatch for 'tampered:model' (expected sha256:d15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15ab1e15a, got badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbad1). Deleting downloaded model 'tampered:model' from Ollama daemon to prevent execution of unverified weights. Note: If a model with this name existed prior to this pull, it will be removed.
+.WARNING: Ollama daemon did not return a manifest digest for catalog model 'catalog:model' via /api/tags. Verification skipped because --allow-unverified-model was specified.
+
+WARNING: Ollama daemon did not return a manifest digest for catalog model 'catalog:model' via /api/tags. Verification skipped because --allow-unverified-model was specified.
+.Ollama daemon HTTP error 500 pulling server-err:model; retrying in 0.01s (retries left: 1)
+Ollama daemon HTTP error 500 pulling server-err:model; retrying in 0.02s (retries left: 0)
+.WARNING: Manifest digest mismatch for 'qwen2.5:0.5b' (expected sha256:0000000000000000000000000000000000000000000000000000000000000000, got 67dae4a5d3f745e691ec5f7957d1fa183b06385d83637e100c4366e6c1e33d26). Deleting downloaded model 'qwen2.5:0.5b' from Ollama daemon to prevent execution of unverified weights. Note: If a model with this name existed prior to this pull, it will be removed.
+
+WARNING: Manifest digest mismatch for 'qwen2.5:0.5b' (expected sha256:0000000000000000000000000000000000000000000000000000000000000000, got 67dae4a5d3f745e691ec5f7957d1fa183b06385d83637e100c4366e6c1e33d26). Deleting downloaded model 'qwen2.5:0.5b' from Ollama daemon to prevent execution of unverified weights. Note: If a model with this name existed prior to this pull, it will be removed.
+WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-digest:7b' via /api/tags. Verification skipped because --allow-unverified-model was specified.
+
+WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-digest:7b' via /api/tags. Verification skipped because --allow-unverified-model was specified.
+...
+----------------------------------------------------------------------
+Ran 27 tests in 12.893s
+
+OK

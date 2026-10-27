@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+Executes unit test suites and saves evidence logs with automated machine headers (Finding DA).
+Outputs:
+  - docs/evidence/payload_tests/test_pai_setup.txt
+  - docs/evidence/payload_tests/test_build_payload.txt
+"""
+
+import datetime
+import hashlib
+import os
+import platform
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def get_machine_header(suite_title: str) -> str:
+    lines = [
+        "=" * 80,
+        f"{suite_title.upper()} - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)",
+        "=" * 80,
+        f"Timestamp (UTC): {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+        f"Platform:        {platform.platform()}",
+        f"Python Runtime:  {sys.executable}",
+        f"Python Version:  {sys.version.splitlines()[0]}",
+        f"Processor:       {platform.processor()}",
+    ]
+    try:
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT).decode().strip()
+        lines.append(f"Git HEAD:        {head}")
+        res_tree = subprocess.check_output(["git", "rev-parse", "HEAD:research"], cwd=REPO_ROOT).decode().strip()
+        lines.append(f"Research Tree:   {res_tree}")
+        core_tree = subprocess.check_output(["git", "rev-parse", "HEAD:core"], cwd=REPO_ROOT).decode().strip()
+        lines.append(f"Core Tree:       {core_tree}")
+        core_bin = REPO_ROOT / "core" / "target" / "release" / ("pai-core.exe" if sys.platform == "win32" else "pai-core")
+        if core_bin.is_file():
+            core_sha = hashlib.sha256(core_bin.read_bytes()).hexdigest()
+            lines.append(f"pai-core SHA256: {core_sha}")
+    except Exception as e:
+        lines.append(f"Git Info:        Failed ({e})")
+    lines.append("=" * 80)
+    return "\n".join(lines)
+
+
+def run_suite_and_save(suite_script: str, output_path: Path, title: str) -> None:
+    header = get_machine_header(title)
+    print(f"Running {suite_script}...")
+    res = subprocess.run(
+        [sys.executable, suite_script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    full_log = f"{header}\n\nCommand: python {suite_script}\nExit Code: {res.returncode}\n\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(full_log, encoding="utf-8")
+    print(f"[EVIDENCE] Wrote {output_path} (Exit: {res.returncode})")
+    if res.returncode != 0:
+        raise RuntimeError(f"Suite {suite_script} failed with exit code {res.returncode}")
+
+
+def main() -> None:
+    evidence_dir = REPO_ROOT / "docs" / "evidence" / "payload_tests"
+    run_suite_and_save(
+        "tools/test_pai_setup.py",
+        evidence_dir / "test_pai_setup.txt",
+        "PAI Setup Unit Tests (27 Tests, Findings CT, CU, CV, CW, CX)",
+    )
+    run_suite_and_save(
+        "tools/test_build_payload.py",
+        evidence_dir / "test_build_payload.txt",
+        "PAI Build Payload Unit Tests (17 Tests, Milestone P2/P3)",
+    )
+
+
+if __name__ == "__main__":
+    main()

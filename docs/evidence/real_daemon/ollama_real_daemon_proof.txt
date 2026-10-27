@@ -1,11 +1,12 @@
 ================================================================================
-REAL OLLAMA DAEMON CRYPTOGRAPHIC DIGEST PROOF (Findings CT, CU, CW, CX)
+REAL OLLAMA DAEMON CRYPTOGRAPHIC DIGEST PROOF (Findings CT, CU, CW, CX, CY, DA)
 ================================================================================
-Timestamp (UTC): 2026-10-27T15:47:35.555877+00:00
+Timestamp (UTC): 2026-10-27T16:07:30.333714+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        e0db096f1292d6ceee46bd54e0a28977b8bf5284
+pai_setup SHA256:f79bca09f4a6b84e63b0c61c89c28051941d68c0a1ad068b90b5b5c4b861f44c
+Git HEAD:        e0e36646a88193ce71a597a3ffa79c3bb3cd7796
 Research Tree:   506e520b33a0af8c3f0276114483ce26b9bd3787
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 ================================================================================
@@ -18,7 +19,7 @@ Raw /api/tags entry for model:
 {
   "name": "qwen2.5:0.5b",
   "model": "qwen2.5:0.5b",
-  "modified_at": "2026-10-27T21:16:40.6933717+05:30",
+  "modified_at": "2026-10-27T21:36:04.9073632+05:30",
   "size": 397821319,
   "digest": "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67",
   "details": {
@@ -41,14 +42,24 @@ Raw /api/tags entry for model:
 Reported raw digest: 'a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67' (length=64)
 Confirmed: Digest is a bare 64-character hex string without 'sha256:' prefix (Finding CT).
 
---- STEP 2: Ground Truth Origin of Manifest Digest ---
-Local OCI manifest file path: C:\Users\hp\.ollama\models\manifests\registry.ollama.ai\library\qwen2.5\0.5b
-Manifest file size:               857 bytes
-Computed SHA-256 of manifest:     a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
-/api/tags reported digest:        a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
-SHA-256 match:                    True
-Proved: The catalog 'registry_manifest_digest' corresponds exactly to the SHA-256
-hash of the registry manifest blob as published by the OCI registry.
+--- STEP 2: Ground Truth Origin & Upstream Registry Verification (Finding CY) ---
+Querying Upstream OCI Registry: https://registry.ollama.ai/v2/library/qwen2.5/manifests/0.5b
+Registry Response Header (Digest): a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+Registry Downloaded Body SHA-256:  a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+Local OCI manifest file path:      C:\Users\hp\.ollama\models\manifests\registry.ollama.ai\library\qwen2.5\0.5b
+Local manifest file size:          857 bytes
+Local manifest file SHA-256:       a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+Local /api/tags reported digest:   a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+
+Direct Cryptographic Comparison:
+  [1] Upstream Registry Header Digest: a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+  [2] Upstream Registry Body SHA-256:  a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+  [3] Local Daemon Manifest SHA-256:   a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+  [4] Local Daemon /api/tags Digest:   a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
+All 4 Values Match (Normalized):       True
+Proved: The digest published by registry.ollama.ai matches the SHA-256 of the
+manifest bytes downloaded from the registry, the SHA-256 of the daemon's local manifest
+file, and the bare-hex digest returned by the local daemon's /api/tags endpoint.
 
 --- STEP 3: Real Model Verification Pass (Normalized Digest) ---
 Signed Catalog Digest Format: sha256:a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67
