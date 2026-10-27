@@ -443,6 +443,7 @@ def build_payload(
     clean: bool = False,
     embed_python_dir: Optional[str | Path] = None,
     launcher_path: Optional[str | Path] = None,
+    extra_files: Optional[Dict[str, str | Path]] = None,
 ) -> Dict[str, Any]:
     """
     End-to-end payload assembly pipeline for Milestones P1 and P1b.
@@ -527,6 +528,14 @@ def build_payload(
         launch_p = Path(launcher_path).resolve()
         if launch_p.is_file():
             shutil.copy2(str(launch_p), str(bin_dir / launch_p.name))
+
+    # Optional extra release files staging (e.g. install.bat, uninstall.bat)
+    if extra_files:
+        for rel_dest, src_p in extra_files.items():
+            src_path = Path(src_p).resolve()
+            dest_path = out / rel_dest
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_path), str(dest_path))
 
     # Step 10: Scan payload and compute hashes for manifest
     files_map = scan_and_validate_payload(out)
