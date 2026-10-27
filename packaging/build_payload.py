@@ -522,12 +522,23 @@ def build_payload(
         if embed_p.is_dir():
             target_py = out / "python"
             shutil.copytree(str(embed_p), str(target_py), dirs_exist_ok=True)
+            # Ensure ._pth lists ..\research for isolated imports (Finding BN)
+            pth_files = list(target_py.glob("*._pth"))
+            if not pth_files:
+                (target_py / "python._pth").write_text(".\n..\\research\n", encoding="utf-8")
+            else:
+                for pf in pth_files:
+                    lines = [ln.strip() for ln in pf.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                    if "..\\research" not in lines and "../research" not in lines:
+                        lines.append("..\\research")
+                        pf.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # Step 9: Optional launcher binary staging
     if launcher_path:
         launch_p = Path(launcher_path).resolve()
-        if launch_p.is_file():
-            shutil.copy2(str(launch_p), str(bin_dir / launch_p.name))
+        dest_launch = (bin_dir / launch_p.name).resolve()
+        if launch_p.is_file() and launch_p != dest_launch:
+            shutil.copy2(str(launch_p), str(dest_launch))
 
     # Optional extra release files staging (e.g. install.bat, uninstall.bat)
     if extra_files:

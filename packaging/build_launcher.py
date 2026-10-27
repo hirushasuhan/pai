@@ -29,6 +29,27 @@ class LauncherBuildError(Exception):
     """Raised when the native launcher cannot be compiled or validated."""
 
 
+HARDENING_FLAGS_GCC = [
+    "-O2",
+    "-s",
+    "-municode",
+    "-Wl,--dynamicbase",
+    "-Wl,--nxcompat",
+    "-Wl,--high-entropy-va",
+    "-lbcrypt",
+]
+HARDENING_FLAGS_MSVC = [
+    "/O2",
+    "/W3",
+    "/DUNICODE",
+    "/D_UNICODE",
+    "/DYNAMICBASE",
+    "/NXCOMPAT",
+    "/HIGHENTROPYVA",
+    "bcrypt.lib",
+]
+
+
 class CompilerNotFoundError(LauncherBuildError):
     """Raised when no compatible C compiler is found on the host system."""
 
@@ -41,17 +62,17 @@ def find_c_compiler() -> Tuple[str, str, List[str]]:
     # 1. Check gcc (e.g. MinGW-w64 / LLVM-MinGW)
     gcc_path = shutil.which("gcc")
     if gcc_path:
-        return "gcc", gcc_path, ["-O2", "-s", "-municode", "-lbcrypt"]
+        return "gcc", gcc_path, HARDENING_FLAGS_GCC
 
     # 2. Check clang
     clang_path = shutil.which("clang")
     if clang_path:
-        return "clang", clang_path, ["-O2", "-s", "-municode", "-lbcrypt"]
+        return "clang", clang_path, HARDENING_FLAGS_GCC
 
     # 3. Check MSVC cl.exe
     cl_path = shutil.which("cl")
     if cl_path:
-        return "cl", cl_path, ["/O2", "/W3", "/DUNICODE", "/D_UNICODE", "bcrypt.lib"]
+        return "cl", cl_path, HARDENING_FLAGS_MSVC
 
     raise CompilerNotFoundError(
         "No compatible C compiler (gcc, clang, cl) found on PATH to compile launcher. "
@@ -97,9 +118,9 @@ def build_launcher(
             raise CompilerNotFoundError(f"Specified compiler '{compiler}' not found on PATH.")
         comp_type = compiler.lower()
         if "cl" in comp_type:
-            flags = ["/O2", "/W3", "/DUNICODE", "/D_UNICODE", "bcrypt.lib"]
+            flags = HARDENING_FLAGS_MSVC
         else:
-            flags = ["-O2", "-s", "-municode", "-lbcrypt"]
+            flags = HARDENING_FLAGS_GCC
     else:
         comp_type, comp_exec, flags = find_c_compiler()
 

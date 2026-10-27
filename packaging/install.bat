@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal disabledelayedexpansion
 
 echo ===================================================================
 echo        Personal Agentic AI (PAI) - Portable Installation Setup
@@ -10,43 +10,111 @@ echo.
 set "SOURCE_DIR=%~dp0"
 if "%SOURCE_DIR:~-1%"=="\" set "SOURCE_DIR=%SOURCE_DIR:~0,-1%"
 
-:: Target defaults to %LOCALAPPDATA%\Programs\PAI unless PAI_INSTALL_DIR is set
-if "%PAI_INSTALL_DIR%"=="" (
-    set "TARGET_DIR=%LOCALAPPDATA%\Programs\PAI"
-) else (
-    set "TARGET_DIR=%PAI_INSTALL_DIR%"
-)
+if not "%PAI_INSTALL_DIR%"=="" goto use_custom_target
+set "TARGET_DIR=%LOCALAPPDATA%\Programs\PAI"
+goto after_target_select
+
+:use_custom_target
+set "TARGET_DIR=%PAI_INSTALL_DIR%"
+echo [NOTICE] Using custom installation directory from PAI_INSTALL_DIR:
+echo          %TARGET_DIR%
+echo.
+
+:after_target_select
+set "BIN_DIR=%TARGET_DIR%\bin"
 
 echo Source Directory: %SOURCE_DIR%
 echo Target Directory: %TARGET_DIR%
 echo.
 
-:: 2. Copy payload to target if source and target differ
-if /I not "%SOURCE_DIR%"=="%TARGET_DIR%" (
-    echo Copying files to %TARGET_DIR%...
-    if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
-    xcopy /E /I /Y /Q "%SOURCE_DIR%\*" "%TARGET_DIR%\" >nul
-    if errorlevel 1 (
-        echo [ERROR] Failed to copy files to %TARGET_DIR%.
-        exit /b 1
-    )
-    echo [OK] Files copied successfully.
-)
+:: 2. Staged copy and manifest verification (Finding BP)
+if /I "%SOURCE_DIR%"=="%TARGET_DIR%" goto after_copy
 
-:: 3. Configure User PATH using the Appendix D pattern (registry User scope, case-insensitive, empty PATH handling)
-set "BIN_DIR=%TARGET_DIR%\bin"
+echo Staging files for installation...
+set "STAGING_DIR=%TARGET_DIR%_staging"
+
+if exist "%STAGING_DIR%" rmdir /S /Q "%STAGING_DIR%"
+mkdir "%STAGING_DIR%"
+
+xcopy /E /I /Y /Q "%SOURCE_DIR%\*" "%STAGING_DIR%\" >nul
+if errorlevel 1 goto copy_failed
+
+echo Verifying staged files against manifest.json...
+set "PAI_STAGING_DIR=%STAGING_DIR%"
+set "PAI_TARGET_DIR=%TARGET_DIR%"
+
+powershell -NoProfile -Command ^
+    "$stage = $env:PAI_STAGING_DIR;" ^
+    "$target = $env:PAI_TARGET_DIR;" ^
+    "$manifestPath = Join-Path $stage 'manifest.json';" ^
+    "if (-not (Test-Path $manifestPath)) { Write-Error 'manifest.json missing in staging.'; exit 1 }" ^
+    "$manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json;" ^
+    "$files = $manifest.files;" ^
+    "if (-not $files) { Write-Error 'manifest.json has empty files entry.'; exit 1 }" ^
+    "foreach ($prop in $files.psobject.Properties) {" ^
+    "    $rel = $prop.Name.Replace('/', [IO.Path]::DirectorySeparatorChar);" ^
+    "    $targetFile = Join-Path $stage $rel;" ^
+    "    if (-not (Test-Path $targetFile)) { Write-Error ('Missing staged file: ' + $rel); exit 1 }" ^
+    "    $actualSize = (Get-Item $targetFile).Length;" ^
+    "    if ($actualSize -ne $prop.Value.size) { Write-Error ('Size mismatch for: ' + $rel); exit 1 }" ^
+    "    $actualHash = (Get-FileHash $targetFile -Algorithm SHA256).Hash.ToLower();" ^
+    "    if ($actualHash -ne $prop.Value.sha256.ToLower()) { Write-Error ('SHA-256 mismatch for: ' + $rel); exit 1 }" ^
+    "}" ^
+    "Write-Host '[OK] All staged files verified against signed manifest.' -ForegroundColor Green;" ^
+    "$backup = $target + '_backup';" ^
+    "if (Test-Path $backup) { Remove-Item -LiteralPath $backup -Recurse -Force };" ^
+    "if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $backup -Force };" ^
+    "Move-Item -LiteralPath $stage -Destination $target -Force;" ^
+    "if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force };" ^
+    "exit 0"
+
+if errorlevel 1 goto verify_failed
+
+echo [OK] Files installed successfully to %TARGET_DIR%.
+goto after_copy
+
+:copy_failed
+echo [ERROR] Failed to stage files into %STAGING_DIR%.
+if exist "%STAGING_DIR%" rmdir /S /Q "%STAGING_DIR%"
+exit /b 1
+
+:verify_failed
+echo.
+echo [ERROR] Staged payload failed manifest checksum verification!
+echo Aborting installation without touching target directory or PATH.
+if exist "%STAGING_DIR%" rmdir /S /Q "%STAGING_DIR%"
+exit /b 1
+
+:after_copy
+
+:: 3. Configure User PATH using registry API to preserve REG_EXPAND_SZ and unexpanded variables (Findings BO, BQ)
+set "PAI_BIN_DIR=%BIN_DIR%"
+if "%PAI_REG_SUBKEY%"=="" set "PAI_REG_SUBKEY=Environment"
 echo Configuring User PATH for %BIN_DIR%...
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$dir = '%BIN_DIR%';" ^
-    "$cur = [Environment]::GetEnvironmentVariable('Path', 'User');" ^
-    "$parts = if ($cur) { $cur -split ';' | Where-Object { $_ } } else { @() };" ^
-    "if (-not ($parts | Where-Object { $_.TrimEnd('\') -ieq $dir })) {" ^
-    "    [Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User');" ^
-    "    Write-Host '[SUCCESS] Added ' $dir ' to User PATH.' -ForegroundColor Green;" ^
+powershell -NoProfile -Command ^
+    "$targetDir = $env:PAI_BIN_DIR;" ^
+    "$subKey = if ($env:PAI_REG_SUBKEY) { $env:PAI_REG_SUBKEY } else { 'Environment' };" ^
+    "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $true);" ^
+    "if (-not $key) { Write-Error ('Cannot open HKCU:\' + $subKey); exit 1 }" ^
+    "$raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" ^
+    "$kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
+    "if (-not $kind -or $kind -eq [Microsoft.Win32.RegistryValueKind]::None) { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString };" ^
+    "$parts = if ($raw) { $raw -split ';' | Where-Object { $_ } } else { @() };" ^
+    "$matched = $parts | Where-Object {" ^
+    "    $_.TrimEnd('\') -ieq $targetDir.TrimEnd('\') -or " ^
+    "    [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $targetDir.TrimEnd('\')" ^
+    "};" ^
+    "if (-not $matched) {" ^
+    "    $newVal = (($parts + $targetDir) -join ';');" ^
+    "    $key.SetValue('Path', $newVal, $kind);" ^
+    "    Write-Host ('[SUCCESS] Added ' + $targetDir + ' to User PATH.') -ForegroundColor Green;" ^
     "} else {" ^
-    "    Write-Host '[INFO] ' $dir ' is already in User PATH.' -ForegroundColor Cyan;" ^
-    "}"
+    "    Write-Host ('[INFO] ' + $targetDir + ' is already in User PATH.') -ForegroundColor Cyan;" ^
+    "};" ^
+    "$key.Close();" ^
+    "Add-Type -Namespace Win32 -Name Native -MemberDefinition '[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);' -ErrorAction SilentlyContinue;" ^
+    "[Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref][UIntPtr]::Zero) | Out-Null"
 
 :: 4. Run setup wizard if present (Milestone P3+)
 if exist "%TARGET_DIR%\packaging\pai_setup.py" (

@@ -13,8 +13,13 @@
  *     - Set PAI_CORE_SHA256 to the pinned hash (overrides user environment, Finding BE).
  *     - Set PAI_INSTALL_DIR to <install_root>.
  *     - Clear dangerous Python variables: PYTHONPATH, PYTHONHOME, PYTHONSTARTUP.
- *  5. Discover Python runtime (embedded in <install_root>\python\python.exe or system PATH).
- *  6. Invoke python.exe research\pai.py %* forwarding all arguments and exit codes.
+ *  5. Discover Python runtime:
+ *     - Production / release: requires embedded runtime at <install_root>\python\python.exe.
+ *     - Developer opt-in: system Python enabled only with PAI_ALLOW_SYSTEM_PYTHON=1 (with -E -s).
+ *  6. Inherit caller's working directory (lpCurrentDirectory = NULL, Finding BM).
+ *  7. Ignore Ctrl-C in launcher so Python child handles KeyboardInterrupt (Finding BT).
+ *  8. Set safe DLL search order (Finding BS).
+ *  9. Invoke python.exe research\pai.py %* forwarding all arguments and exit codes.
  *
  * Zero external dependencies. Uses only standard Windows APIs (kernel32, bcrypt).
  */
@@ -28,6 +33,7 @@
 
 #include <windows.h>
 #include <bcrypt.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -138,9 +144,10 @@ static void strip_last_component(wchar_t *path) {
 }
 
 /*
- * Parse manifest.json to extract the version string.
+ * Parse manifest.json to extract the tag or version string.
+ * Prefers "tag" (e.g. v1.0.0-rc1) if present, otherwise falls back to "version" (e.g. 1.0.0).
  */
-static BOOL extract_version_from_manifest(const wchar_t *manifest_path, wchar_t *version_out, size_t max_len) {
+static BOOL extract_tag_or_version_from_manifest(const wchar_t *manifest_path, wchar_t *version_out, size_t max_len) {
     HANDLE hFile = CreateFileW(manifest_path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, 0, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
@@ -169,8 +176,15 @@ static BOOL extract_version_from_manifest(const wchar_t *manifest_path, wchar_t 
     CloseHandle(hFile);
     buf[file_size] = '\0';
 
-    const char *key = "\"version\"";
+    /* First look for top-level "tag" */
+    const char *key = "\"tag\"";
     const char *pos = strstr(buf, key);
+    if (!pos) {
+        /* Fall back to "version" */
+        key = "\"version\"";
+        pos = strstr(buf, key);
+    }
+
     if (!pos) {
         free(buf);
         return FALSE;
@@ -205,7 +219,7 @@ static BOOL extract_version_from_manifest(const wchar_t *manifest_path, wchar_t 
 
 /*
  * Parse manifest.json to extract the SHA-256 for bin/pai-core.exe.
- * Simple, robust scanner that looks for "bin/pai-core.exe" and following "sha256".
+ * Defends against decoy entries by locating the "files" object boundary first (Finding BR).
  */
 static BOOL extract_core_sha256_from_manifest(const wchar_t *manifest_path, char *sha256_out) {
     HANDLE hFile = CreateFileW(manifest_path, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -236,22 +250,36 @@ static BOOL extract_core_sha256_from_manifest(const wchar_t *manifest_path, char
     CloseHandle(hFile);
     buf[file_size] = '\0';
 
-    /* Find "bin/pai-core.exe" or "bin\\pai-core.exe" */
-    const char *key = "\"bin/pai-core.exe\"";
-    const char *pos = strstr(buf, key);
+    /* Locate "files" dictionary boundary */
+    const char *files_sec = strstr(buf, "\"files\"");
+    if (!files_sec) {
+        free(buf);
+        return FALSE;
+    }
+
+    /* From files_sec, find exact key "bin/pai-core.exe" or "bin\\pai-core.exe" */
+    const char *key1 = "\"bin/pai-core.exe\"";
+    const char *pos = strstr(files_sec, key1);
     if (!pos) {
-        key = "\"bin\\\\pai-core.exe\"";
-        pos = strstr(buf, key);
+        const char *key2 = "\"bin\\\\pai-core.exe\"";
+        pos = strstr(files_sec, key2);
     }
     if (!pos) {
         free(buf);
         return FALSE;
     }
 
-    /* From key pos, find "sha256" */
+    /* From key pos, find "sha256" within the file object */
     const char *sha_key = "\"sha256\"";
     const char *sha_pos = strstr(pos, sha_key);
     if (!sha_pos) {
+        free(buf);
+        return FALSE;
+    }
+
+    /* Verify sha_pos is within the same JSON object (before the next file key or closing brace) */
+    const char *obj_close = strchr(pos, '}');
+    if (obj_close && sha_pos > obj_close) {
         free(buf);
         return FALSE;
     }
@@ -264,7 +292,7 @@ static BOOL extract_core_sha256_from_manifest(const wchar_t *manifest_path, char
     }
     val_start++; /* skip opening quote */
 
-    /* Verify 64 hex characters */
+    /* Verify 64 hex characters followed by closing quote */
     for (int i = 0; i < SHA256_HEX_LEN; i++) {
         char c = val_start[i];
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
@@ -272,6 +300,10 @@ static BOOL extract_core_sha256_from_manifest(const wchar_t *manifest_path, char
             return FALSE;
         }
         sha256_out[i] = (char)tolower((unsigned char)c);
+    }
+    if (val_start[SHA256_HEX_LEN] != '"') {
+        free(buf);
+        return FALSE;
     }
     sha256_out[SHA256_HEX_LEN] = '\0';
 
@@ -282,6 +314,12 @@ static BOOL extract_core_sha256_from_manifest(const wchar_t *manifest_path, char
 int wmain(int argc, wchar_t *argv[]) {
     (void)argc;
     (void)argv;
+
+    /* Hardening: restrict DLL search order to System32 to prevent DLL hijacking (Finding BS) */
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+    /* Ignore Ctrl-C in launcher process so child Python process handles KeyboardInterrupt (Finding BT) */
+    SetConsoleCtrlHandler(NULL, TRUE);
 
     /* 1. Locate launcher executable path */
     wchar_t exe_path[PAI_MAX_PATH];
@@ -322,10 +360,10 @@ int wmain(int argc, wchar_t *argv[]) {
         }
     }
 
-    /* Fast-path: pai --version / pai -v */
+    /* Fast-path: pai --version / pai -v (prints tag, e.g. pai v1.0.0-rc1, Finding BT & spec §13) */
     if (argc == 2 && (wcscmp(argv[1], L"--version") == 0 || wcscmp(argv[1], L"-v") == 0)) {
         wchar_t ver[64];
-        if (extract_version_from_manifest(manifest_path, ver, 64)) {
+        if (extract_tag_or_version_from_manifest(manifest_path, ver, 64)) {
             wprintf(L"pai %ls\n", ver);
             return 0;
         }
@@ -367,21 +405,43 @@ int wmain(int argc, wchar_t *argv[]) {
         return 1;
     }
 
-    /* 6. Discover Python runtime */
+    /* 6. Discover Python runtime (Finding BN: embedded required in release; opt-in for system) */
     wchar_t python_exe[PAI_MAX_PATH];
     wchar_t embedded_python[PAI_MAX_PATH];
     _snwprintf(embedded_python, PAI_MAX_PATH, L"%ls\\python\\python.exe", install_root);
 
+    BOOL is_embedded = FALSE;
+    BOOL use_system_opt_in = FALSE;
+
     if (file_exists(embedded_python)) {
         wcsncpy(python_exe, embedded_python, PAI_MAX_PATH - 1);
         python_exe[PAI_MAX_PATH - 1] = L'\0';
+        is_embedded = TRUE;
     } else {
-        /* Fallback to system Python on PATH */
-        DWORD found = SearchPathW(NULL, L"python.exe", NULL, PAI_MAX_PATH, python_exe, NULL);
-        if (found == 0 || found >= PAI_MAX_PATH) {
-            print_error(L"Python runtime not found. Neither embedded python\\python.exe exists nor is python.exe on PATH.");
+        /* Check for explicit developer opt-in */
+        wchar_t allow_sys[32];
+        DWORD allow_len = GetEnvironmentVariableW(L"PAI_ALLOW_SYSTEM_PYTHON", allow_sys, 32);
+        if (allow_len == 0 || wcscmp(allow_sys, L"1") != 0) {
+            fwprintf(stderr, L"[PAI Launcher Error] Embedded Python runtime not found at %ls.\n", embedded_python);
+            fwprintf(stderr, L"  Release installations require bundled embedded Python.\n");
+            fwprintf(stderr, L"  (Developers: set PAI_ALLOW_SYSTEM_PYTHON=1 to opt-in to system Python).\n");
+            fflush(stderr);
             return 1;
         }
+
+        /* Developer opt-in: discover system Python by absolute path on PATH */
+        DWORD found = SearchPathW(NULL, L"python.exe", NULL, PAI_MAX_PATH, python_exe, NULL);
+        if (found == 0 || found >= PAI_MAX_PATH) {
+            print_error(L"System Python not found on PATH.");
+            return 1;
+        }
+
+        /* Verify discovered python_exe is an absolute path */
+        if (python_exe[0] == L'.' || (python_exe[1] != L':' && (python_exe[0] != L'\\' || python_exe[1] != L'\\'))) {
+            print_error(L"Discovered Python path is not an absolute path; refusing for security.");
+            return 1;
+        }
+        use_system_opt_in = TRUE;
     }
 
     /* 7. Enforce security environment and set PAI variables */
@@ -422,21 +482,33 @@ int wmain(int argc, wchar_t *argv[]) {
         args_start++;
     }
 
-    /* Build command line: "<python_exe>" "<script_path>" <args> */
-    size_t cmdline_len = wcslen(python_exe) + wcslen(script_path) + wcslen(args_start) + 16;
+    /*
+     * Build command line:
+     * If developer opt-in system Python: "<python_exe>" -E -s "<script_path>" <args>
+     * If embedded Python:               "<python_exe>" "<script_path>" <args>
+     */
+    size_t cmdline_len = wcslen(python_exe) + wcslen(script_path) + wcslen(args_start) + 32;
     wchar_t *full_cmdline = (wchar_t *)malloc(cmdline_len * sizeof(wchar_t));
     if (!full_cmdline) {
         print_error(L"Out of memory allocating child process command line.");
         return 1;
     }
 
-    if (*args_start) {
-        _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" \"%ls\" %ls", python_exe, script_path, args_start);
+    if (use_system_opt_in) {
+        if (*args_start) {
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -E -s \"%ls\" %ls", python_exe, script_path, args_start);
+        } else {
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" -E -s \"%ls\"", python_exe, script_path);
+        }
     } else {
-        _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" \"%ls\"", python_exe, script_path);
+        if (*args_start) {
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" \"%ls\" %ls", python_exe, script_path, args_start);
+        } else {
+            _snwprintf(full_cmdline, cmdline_len, L"\"%ls\" \"%ls\"", python_exe, script_path);
+        }
     }
 
-    /* 9. Execute Python subprocess */
+    /* 9. Execute Python subprocess inheriting caller's working directory (lpCurrentDirectory = NULL, Finding BM) */
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
@@ -451,7 +523,7 @@ int wmain(int argc, wchar_t *argv[]) {
         TRUE,             /* Inherit handles (stdio) */
         0,                /* Creation flags */
         NULL,             /* Environment (inherits current process with our SetEnvironmentVariableW overrides) */
-        install_root,     /* Working directory */
+        NULL,             /* Working directory: NULL inherits caller's working directory! */
         &si,
         &pi
     );

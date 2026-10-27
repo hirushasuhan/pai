@@ -167,6 +167,8 @@ The installer is a delivery mechanism, so it is built alongside the core and not
 
 **Preview builds.** Installer builds made before 1.1.0 are tagged `v1.1.0-rc1`, `-rc2` and so on, labelled "preview", and tested in a sandbox or VM. They are given only to the owner and a few trusted testers, because the evaluation window and the agreement review (D8) are not finished.
 
+**Preview builds and the updater (proposal, added 2026-10-27).** The updater keeps the highest version it has seen (anti-rollback). A preview build must not be signed with the number of the final release, and preview installs must not write that state, or the real release could be rejected as "not newer". Until a scheme is agreed, preview builds are installed by hand only, `pai --version` shows the tag (for example `1.0.0-rc1`), and the manifest's `tag` field is the source of that text.
+
 **What 1.1.0 may change in `research/`.** Only new setup, catalog and model-download code and the entry point that calls it. The files that make up the evaluated core path (`pai_core_bridge.py`, `ingest.py`, `verify_loop.py`, `updater.py` and the Rust `core/`) must be byte-identical to the 1.0.0 tag. The release script prints the list of changed files between the two tags and fails if any of those files appear in it.
 
 **Release gates for 1.1.0.** The test matrix of section 9 passes on recorded machine profiles; the release manifest is signed offline (ADR-005); the installer's SHA-256 is published; an antivirus scan result is recorded; release notes state what was and was not evaluated; claims-lint and CI are green; decisions D8 to D13 are recorded.
