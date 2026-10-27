@@ -79,4 +79,4 @@ In accordance with the 7-day shadow evaluation review protocol, the following 6 
 | `PAI_CORE_SHA256` | `""` | Optional pinned SHA-256 digest; if set, `pai-core` binary must match or startup aborts. |
 | `PAI_SHADOW_COMPARE` | `1` | Enables background differential comparison against Python reference and logging of telemetry. |
 | `PAI_TELEMETRY_DRIVER` | `""` | Marks comparisons initiated by automated evaluation drivers. |
-| `PAI_TELEMETRY_SOURCE` | `"cli"` | Sets the telemetry source tag for provenance audit. |
+| `PAI_TELEMETRY_SOURCE` | `"unknown"` (CLI entry sets `"cli"`) | Sets the telemetry source tag for provenance audit. |

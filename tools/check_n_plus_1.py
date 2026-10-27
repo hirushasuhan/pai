@@ -69,17 +69,34 @@ def check_n_plus_1_progress() -> int:
                 text=True,
                 check=True,
             )
-            eval_tree_res = subprocess.run(
+            eval_core_tree_res = subprocess.run(
                 ["git", "rev-parse", f"{eval_commit}:core"],
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
             )
-            if eval_tree_res.returncode == 0:
+            res_tree_res = subprocess.run(
+                ["git", "rev-parse", "HEAD:research"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            eval_res_tree_res = subprocess.run(
+                ["git", "rev-parse", f"{eval_commit}:research"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            if eval_core_tree_res.returncode == 0 and eval_res_tree_res.returncode == 0:
                 current_core_tree = core_tree_res.stdout.strip()
-                eval_core_tree = eval_tree_res.stdout.strip()
-                tree_match = (current_core_tree == eval_core_tree)
-                tree_detail = f"core tree {'MATCH' if tree_match else 'DIFF'} ({current_core_tree[:8]} vs {eval_core_tree[:8]})"
+                eval_core_tree = eval_core_tree_res.stdout.strip()
+                current_res_tree = res_tree_res.stdout.strip()
+                eval_res_tree = eval_res_tree_res.stdout.strip()
+                core_match = (current_core_tree == eval_core_tree)
+                res_match = (current_res_tree == eval_res_tree)
+                tree_match = core_match and res_match
+                tree_detail = f"core: {'MATCH' if core_match else 'DIFF'} ({current_core_tree[:8]} vs {eval_core_tree[:8]}), research: {'MATCH' if res_match else 'DIFF'} ({current_res_tree[:8]} vs {eval_res_tree[:8]})"
             else:
                 tree_detail = f"evaluated commit {eval_commit[:8]} not reachable"
         except Exception as e:
