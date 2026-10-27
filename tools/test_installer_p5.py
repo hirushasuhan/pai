@@ -119,6 +119,17 @@ class TestInstallerP5(unittest.TestCase):
         parts = out.split("|||")
         return {"raw": parts[0] if len(parts) > 0 else "", "kind": parts[1] if len(parts) > 1 else ""}
 
+    def _inno_uninstall_key_exists(self) -> bool:
+        """Checks if the PAI Inno Setup uninstall entry exists in HKCU."""
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Test-Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8B7B61CA-C450-4E87-9F1B-4198A82711C9}_is1'",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return (res.stdout or "").strip().lower() == "true"
+
     def test_01_agreement_text_completeness_and_sha256(self) -> None:
         """
         Validates Specification §3 & Appendix A:
@@ -538,10 +549,13 @@ class TestInstallerP5(unittest.TestCase):
         # Finding DI: Verify target folder was cleanly rolled back and does not exist
         self.assertFalse(install_target.exists(), f"Target folder '{install_target}' must be deleted by rollback")
 
-        # Finding DI: Verify test registry subkey was NOT modified or corrupted
+        # Finding DI & DK: Verify test registry subkey was NOT modified or corrupted
         details = self._get_reg_path_details(sub)
         self.assertEqual(details["kind"], "ExpandString")
         self.assertEqual(details["raw"], "%USERPROFILE%\\bin")
+
+        # Finding DK: Assert Inno uninstall registry key is cleaned up after rollback
+        self.assertFalse(self._inno_uninstall_key_exists(), "Inno uninstall registry key must be deleted after rollback")
 
     def test_13_portable_install_and_uninstall_calls_update_path(self) -> None:
         """
@@ -563,6 +577,151 @@ class TestInstallerP5(unittest.TestCase):
         self.assertNotIn("OpenSubKey($subKey, $true)", uninstall_text)
         self.assertIn("update_path.ps1", install_text)
         self.assertIn("update_path.ps1", uninstall_text)
+
+    def test_14_rollback_preserves_unrelated_files_and_cleans_registry(self) -> None:
+        """
+        Validates Finding DK:
+        When rollback occurs (e.g. on post-install PATH update failure), the installer must:
+          1. Delete only files placed by PAI (manifest-listed files + generated files).
+          2. PRESERVE unrelated user files present in the installation directory.
+          3. Leave the installation directory intact if unrelated files are present.
+          4. Delete the Inno Setup uninstall entry from the registry (HKCU).
+        """
+        out_dist = Path(self.tmp_dir) / "dist_dk14"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        install_target = Path(self.tmp_dir) / "PAI_Upgrade_Fail"
+        install_target.mkdir(parents=True, exist_ok=True)
+
+        # Pre-stage manifest.json (marks as existing PAI directory for upgrade) and an unrelated user file
+        (install_target / "manifest.json").write_text('{"version": "1.0.0"}', encoding="utf-8")
+        user_file = install_target / "my_secret_notes.txt"
+        user_content = "CRITICAL_USER_DATA_DO_NOT_DELETE_VERIFICATION_STRING"
+        user_file.write_text(user_content, encoding="utf-8")
+
+        # Subdirectory with an unrelated user file
+        sub_dir = install_target / "user_documents"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        sub_user_file = sub_dir / "report.pdf"
+        sub_user_file.write_text("PDF_CONTENT_PRESERVE", encoding="utf-8")
+
+        sub = self._create_isolated_reg_subkey("Test_PAI_Rollback_DK14", "%USERPROFILE%\\bin")
+        illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
+
+        # Finding DK assertions:
+        # 1. Unrelated user files MUST survive completely intact
+        self.assertTrue(install_target.exists(), "Target directory must be preserved because it contains unrelated files")
+        self.assertTrue(user_file.exists(), "Unrelated user file must NOT be deleted by rollback")
+        self.assertEqual(user_file.read_text(encoding="utf-8"), user_content)
+        self.assertTrue(sub_user_file.exists(), "Unrelated user file in subfolder must NOT be deleted by rollback")
+        self.assertEqual(sub_user_file.read_text(encoding="utf-8"), "PDF_CONTENT_PRESERVE")
+
+        # 2. PAI installed and generated files MUST be deleted
+        self.assertFalse((install_target / "bin" / "pai.exe").exists(), "PAI binary must be rolled back")
+        self.assertFalse((install_target / "agreement_acceptance.json").exists(), "Agreement record must be rolled back")
+        self.assertFalse((install_target / "AGREEMENT.txt").exists(), "AGREEMENT.txt must be rolled back")
+
+        # 3. Inno uninstall registry key must be cleaned up
+        self.assertFalse(self._inno_uninstall_key_exists(), "Inno uninstall registry key must be removed after rollback")
+
+    def test_15_uninstall_preserves_unrelated_files(self) -> None:
+        """
+        Validates Finding DK:
+        Uninstalling PAI must delete only PAI-installed files.
+        Any user-created or unrelated files inside {app} must survive intact,
+        and {app} must NOT be removed if it still contains user files.
+        """
+        out_dist = Path(self.tmp_dir) / "dist_dk15"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        install_target = Path(self.tmp_dir) / "PAI_Uninstall_Target"
+        sub = self._create_isolated_reg_subkey("Test_PAI_Uninstall_DK15", "%USERPROFILE%\\bin")
+
+        # 1. Install successfully
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertEqual(proc.returncode, 0, f"Installer failed: {proc.stdout}\n{proc.stderr}")
+        self.assertTrue((install_target / "bin" / "pai.exe").exists(), "Installed pai.exe missing")
+
+        uninstaller_exe = install_target / "unins000.exe"
+        self.assertTrue(uninstaller_exe.exists(), "unins000.exe missing")
+
+        # 2. Place an unrelated user file in the install folder
+        user_file = install_target / "unrelated_user_data.csv"
+        user_data = "col1,col2\nval1,val2\n"
+        user_file.write_text(user_data, encoding="utf-8")
+
+        # 3. Run uninstaller silently
+        unins_cmd = f'"{uninstaller_exe}" /VERYSILENT /SUPPRESSMSGBOXES'
+        unins_proc = subprocess.run(unins_cmd, capture_output=True, text=True, timeout=60)
+        self.assertEqual(unins_proc.returncode, 0, f"Uninstaller failed: {unins_proc.stdout}\n{unins_proc.stderr}")
+
+        # 4. Finding DK assertions:
+        # User file must survive intact
+        self.assertTrue(install_target.exists(), "Install directory must survive because user file exists inside it")
+        self.assertTrue(user_file.exists(), "Unrelated user file must survive uninstallation intact")
+        self.assertEqual(user_file.read_text(encoding="utf-8"), user_data)
+
+        # PAI files must be gone
+        self.assertFalse((install_target / "bin" / "pai.exe").exists(), "pai.exe must be removed by uninstaller")
+        self.assertFalse((install_target / "bin" / "pai-core.exe").exists(), "pai-core.exe must be removed by uninstaller")
+        self.assertFalse((install_target / "agreement_acceptance.json").exists(), "agreement_acceptance.json must be removed")
+
+        # Inno uninstall registry key must be removed
+        self.assertFalse(self._inno_uninstall_key_exists(), "Inno uninstall registry key must be removed after uninstall")
+
+    def test_16_non_empty_non_pai_directory_rejected(self) -> None:
+        """
+        Validates Finding DK:
+        The installer must refuse to install into a directory that exists and is non-empty,
+        unless that directory contains manifest.json (marking it as an existing PAI install).
+        """
+        out_dist = Path(self.tmp_dir) / "dist_dk16"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        non_empty_dir = Path(self.tmp_dir) / "Existing_Personal_Folder"
+        non_empty_dir.mkdir(parents=True, exist_ok=True)
+
+        user_doc = non_empty_dir / "important_contract.docx"
+        user_doc.write_text("IMPORTANT_CONTRACT_CONTENT", encoding="utf-8")
+
+        sub = self._create_isolated_reg_subkey("Test_PAI_DirReject_DK16", "%USERPROFILE%\\bin")
+
+        # Attempt silent install into the non-empty non-PAI folder
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{non_empty_dir}" /REG_SUBKEY="{sub}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+
+        # Must exit non-zero (PrepareToInstall failure)
+        self.assertNotEqual(proc.returncode, 0, "Installer must reject non-empty non-PAI directory")
+
+        # Assert no PAI files were placed
+        self.assertTrue(user_doc.exists(), "User document must remain untouched")
+        self.assertEqual(user_doc.read_text(encoding="utf-8"), "IMPORTANT_CONTRACT_CONTENT")
+        self.assertFalse((non_empty_dir / "bin").exists(), "No PAI bin folder should be created")
+        self.assertFalse((non_empty_dir / "manifest.json").exists(), "No manifest.json should be installed")
+        self.assertFalse((non_empty_dir / "agreement_acceptance.json").exists(), "No agreement file should be installed")
 
 
 if __name__ == "__main__":

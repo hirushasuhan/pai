@@ -57,7 +57,7 @@ Filename: "{app}\bin\pai.exe"; Parameters: "doctor --skip-smoke"; Description: "
 
 [UninstallDelete]
 Type: files; Name: "{app}\agreement_acceptance.json"
-Type: filesandordirs; Name: "{app}"
+Type: filesandordirs; Name: "{app}\research\__pycache__"
 
 [Code]
 type
@@ -112,6 +112,217 @@ begin
   Result := Trim(Sub);
 end;
 
+function IsDirEmpty(const Dir: string): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := True;
+  if FindFirst(Dir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          Result := False;
+          Break;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+function IsValidInstallDir(const TargetDir: string): Boolean;
+begin
+  // A directory is valid if:
+  // 1. It does not exist yet (will be created by installer)
+  // 2. It exists and is completely empty
+  // 3. It exists and contains manifest.json (existing PAI installation / upgrade)
+  Result := True;
+  if DirExists(TargetDir) then
+  begin
+    if (not IsDirEmpty(TargetDir)) and (not FileExists(TargetDir + '\manifest.json')) then
+    begin
+      Result := False;
+    end;
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  TargetDir: string;
+begin
+  Result := True;
+  if CurPageID = wpSelectDir then
+  begin
+    TargetDir := ExpandConstant('{app}');
+    if not IsValidInstallDir(TargetDir) then
+    begin
+      if WizardSilent() then
+      begin
+        Log('CRITICAL: Non-empty target directory rejected in silent mode: ' + TargetDir);
+        ExitProcess(1);
+      end
+      else
+      begin
+        MsgBox('The selected installation directory already exists and contains files:' + #13#10#13#10 +
+               TargetDir + #13#10#13#10 +
+               'PAI requires a new directory, an empty directory, or an existing PAI installation.' + #13#10#13#10 +
+               'Please select a different folder.', mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
+    end;
+  end;
+end;
+
+procedure RemoveEmptySubdirs(const Dir: string);
+var
+  FindRec: TFindRec;
+  SubDir: string;
+begin
+  if FindFirst(Dir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          SubDir := Dir + '\' + FindRec.Name;
+          if (FindRec.Attributes and 16) <> 0 then
+          begin
+            RemoveEmptySubdirs(SubDir);
+            RemoveDir(SubDir);
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+  RemoveDir(Dir);
+end;
+
+procedure DeleteManifestAndGeneratedFiles(const AppDir: string);
+var
+  ManifestPath: string;
+  Lines: TArrayOfString;
+  I: Integer;
+  Line: string;
+  P1, P2: Integer;
+  RelPath: string;
+  FullFilePath: string;
+  InFilesSection: Boolean;
+  FindRec: TFindRec;
+begin
+  ManifestPath := AppDir + '\manifest.json';
+  if FileExists(ManifestPath) then
+  begin
+    if LoadStringsFromFile(ManifestPath, Lines) then
+    begin
+      InFilesSection := False;
+      for I := 0 to GetArrayLength(Lines) - 1 do
+      begin
+        Line := Lines[I];
+        if Pos('"files": {', Line) > 0 then
+        begin
+          InFilesSection := True;
+          Continue;
+        end;
+        if InFilesSection then
+        begin
+          // End of "files": { block in manifest.json (indented by exactly 2 spaces)
+          if (Length(Line) >= 3) and (Line[1] = ' ') and (Line[2] = ' ') and (Line[3] = '}') then
+          begin
+            InFilesSection := False;
+            Break;
+          end;
+          P1 := Pos('"', Line);
+          if P1 > 0 then
+          begin
+            P2 := Pos('": {', Line);
+            if P2 > P1 then
+            begin
+              RelPath := Copy(Line, P1 + 1, P2 - (P1 + 1));
+              StringChangeEx(RelPath, '/', '\', True);
+              FullFilePath := AppDir + '\' + RelPath;
+              if FileExists(FullFilePath) then
+              begin
+                DeleteFile(FullFilePath);
+              end;
+            end;
+          end;
+        end;
+      end;
+    end;
+  end;
+
+  // Delete generated and installer files placed during installation
+  DeleteFile(AppDir + '\agreement_acceptance.json');
+  DeleteFile(AppDir + '\AGREEMENT.txt');
+  DeleteFile(AppDir + '\manifest.sig');
+  DeleteFile(AppDir + '\manifest.json');
+
+  // Delete unins000.* files placed by Inno Setup
+  if FindFirst(AppDir + '\unins*.*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Attributes and 16) = 0 then
+        begin
+          DeleteFile(AppDir + '\' + FindRec.Name);
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+procedure ExecuteRollback(const AppDir: string; const BinDir: string; const ScriptPath: string; const SubKey: string);
+var
+  ResultCode: Integer;
+  ExtraArgs: string;
+  AppIdSubKey: string;
+begin
+  Log('INFO: Executing manifest-scoped rollback for ' + AppDir);
+
+  // 1. Revert any PATH entry added
+  if SubKey <> '' then
+    ExtraArgs := ' -RegSubKey "' + SubKey + '"'
+  else
+    ExtraArgs := '';
+
+  if FileExists(ScriptPath) and (BinDir <> '') then
+  begin
+    ExecPowerShell('-File "' + ScriptPath + '" -Action Remove -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode);
+  end;
+
+  // 2. Remove Inno Setup uninstaller registry key from HKCU (Finding DK)
+  AppIdSubKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8B7B61CA-C450-4E87-9F1B-4198A82711C9}_is1';
+  if RegKeyExists(HKCU, AppIdSubKey) then
+  begin
+    Log('INFO: Removing uninstaller registry key: HKCU\' + AppIdSubKey);
+    RegDeleteKeyIncludingSubkeys(HKCU, AppIdSubKey);
+  end;
+
+  // 3. Delete only manifest-tracked and PAI-generated files (Finding DK)
+  DeleteManifestAndGeneratedFiles(AppDir);
+
+  // 4. Remove empty subdirectories and remove AppDir only if left completely empty (Finding DK)
+  RemoveEmptySubdirs(AppDir);
+  RemoveDir(AppDir);
+
+  if DirExists(AppDir) then
+  begin
+    Log('INFO: Target directory preserved because it contains unrelated user files: ' + AppDir);
+  end
+  else
+  begin
+    Log('INFO: Target directory was empty and was cleanly removed: ' + AppDir);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   AcceptanceJson: string;
@@ -123,10 +334,32 @@ var
   SubKey: string;
   ExtraArgs: string;
 begin
-  if CurStep = ssPostInstall then
+  if CurStep = ssInstall then
+  begin
+    AppDir := ExpandConstant('{app}');
+    if not IsValidInstallDir(AppDir) then
+    begin
+      Log('CRITICAL: Target directory is non-empty and not an existing PAI installation: ' + AppDir);
+      if not WizardSilent() then
+      begin
+        MsgBox('The selected installation directory already exists and contains files:' + #13#10#13#10 +
+               AppDir + #13#10#13#10 +
+               'PAI requires a new directory, an empty directory, or an existing PAI installation.' + #13#10 +
+               'Installation aborted.', mbError, MB_OK);
+      end;
+      ExitProcess(1);
+    end;
+  end
+  else if CurStep = ssPostInstall then
   begin
     AppDir := ExpandConstant('{app}');
     BinDir := AppDir + '\bin';
+    ScriptPath := AppDir + '\tools\update_path.ps1';
+    if not FileExists(ScriptPath) then
+    begin
+      ScriptPath := AppDir + '\packaging\update_path.ps1';
+    end;
+    SubKey := GetTargetRegSubKey();
 
     // 1. Record Agreement Acceptance locally (Specification §3, Finding DE)
     AcceptanceJson := '{' + #13#10 +
@@ -136,15 +369,15 @@ begin
       '  "accepted": true' + #13#10 +
       '}';
 
-    // Abort installation and rollback if agreement record cannot be written (Findings DC, DI)
+    // Abort installation and rollback if agreement record cannot be written (Findings DC, DI, DK)
     if not SaveStringToFile(AppDir + '\agreement_acceptance.json', AcceptanceJson, False) then
     begin
       Log('CRITICAL: Failed to write agreement_acceptance.json to ' + AppDir + '. Executing rollback.');
-      DelTree(AppDir, True, True, True);
+      ExecuteRollback(AppDir, BinDir, ScriptPath, SubKey);
       if not WizardSilent() then
       begin
-        MsgBox('Fatal Error: Failed to write agreement acceptance record to ' + AppDir + '\agreement_acceptance.json.' + #13#10 +
-               'Installation has been rolled back and aborted.', mbCriticalError, MB_OK);
+        MsgBox('Fatal Error: Failed to write agreement acceptance record to ' + AppDir + '\agreement_acceptance.json.' + #13#10#13#10 +
+               'Installation has been rolled back and aborted. If this was an upgrade over an existing version, the previous installation has been removed; please re-run setup.', mbCriticalError, MB_OK);
       end;
       ExitProcess(2);
     end;
@@ -156,16 +389,9 @@ begin
       SaveStringToFile(PaiDir + '\agreement_acceptance.json', AcceptanceJson, False);
     end;
 
-    // 2. Add bin directory to User PATH using Appendix D PowerShell script (Findings DC, DD, DI)
+    // 2. Add bin directory to User PATH using Appendix D PowerShell script (Findings DC, DD, DI, DK)
     if (BinDir <> '') and (BinDir <> '\bin') and (BinDir <> '\\bin') then
     begin
-      ScriptPath := AppDir + '\tools\update_path.ps1';
-      if not FileExists(ScriptPath) then
-      begin
-        ScriptPath := AppDir + '\packaging\update_path.ps1';
-      end;
-
-      SubKey := GetTargetRegSubKey();
       if SubKey <> '' then
         ExtraArgs := ' -RegSubKey "' + SubKey + '"'
       else
@@ -174,11 +400,11 @@ begin
       if not FileExists(ScriptPath) then
       begin
         Log('CRITICAL: tools\update_path.ps1 not found in application directory: ' + ScriptPath + '. Executing rollback.');
-        DelTree(AppDir, True, True, True);
+        ExecuteRollback(AppDir, BinDir, ScriptPath, SubKey);
         if not WizardSilent() then
         begin
           MsgBox('Personal Agentic AI (PAI) installation failed: PATH update helper script is missing.' + #13#10#13#10 +
-                 'Installation has been rolled back.', mbError, MB_OK);
+                 'Installation has been rolled back. If this was an upgrade over an existing version, the previous installation has been removed; please re-run setup.', mbError, MB_OK);
         end;
         ExitProcess(3);
       end
@@ -188,13 +414,11 @@ begin
         if (not ExecPowerShell('-File "' + ScriptPath + '" -Action Add -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode)) or (ResultCode <> 0) then
         begin
           Log('ERROR: Failed to update User PATH via update_path.ps1 (ResultCode: ' + IntToStr(ResultCode) + '). Executing rollback.');
-          // Clean up any partially added PATH entry and rollback installed files
-          ExecPowerShell('-File "' + ScriptPath + '" -Action Remove -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode);
-          DelTree(AppDir, True, True, True);
+          ExecuteRollback(AppDir, BinDir, ScriptPath, SubKey);
           if not WizardSilent() then
           begin
             MsgBox('Personal Agentic AI (PAI) installation failed: unable to update User PATH environment variable (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
-                   'Installation has been rolled back.', mbError, MB_OK);
+                   'Installation has been rolled back. If this was an upgrade over an existing version, the previous installation has been removed; please re-run setup.', mbError, MB_OK);
           end;
           ExitProcess(3);
         end
@@ -264,5 +488,12 @@ begin
         DelTree(PaiDir, True, True, True);
       end;
     end;
+  end
+  else if CurUninstallStep = usPostUninstall then
+  begin
+    AppDir := ExpandConstant('{app}');
+    // Clean up empty subdirectories and remove AppDir ONLY if left completely empty (Finding DK)
+    RemoveEmptySubdirs(AppDir);
+    RemoveDir(AppDir);
   end;
 end;
