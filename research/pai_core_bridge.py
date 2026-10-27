@@ -91,6 +91,9 @@ def is_python_fallback_forced() -> bool:
 
 def is_core_binary_available() -> bool:
     """Checks whether a valid pai-core binary exists and passes handshake."""
+    global _CORE_BIN_NOT_FOUND
+    if _CORE_BIN_NOT_FOUND:
+        return False
     try:
         bin_path = find_core_binary()
         return bool(bin_path)
@@ -169,6 +172,15 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16 MiB
 
 _CORE_BIN_CACHE: Optional[str] = None
 _CORE_BIN_HASH_CACHE: Optional[Tuple[str, float, str]] = None
+_CORE_BIN_NOT_FOUND: bool = False
+
+
+def reset_core_binary_cache() -> None:
+    """Resets the core binary location cache, hash cache, and negative lookup cache."""
+    global _CORE_BIN_CACHE, _CORE_BIN_HASH_CACHE, _CORE_BIN_NOT_FOUND
+    _CORE_BIN_CACHE = None
+    _CORE_BIN_HASH_CACHE = None
+    _CORE_BIN_NOT_FOUND = False
 
 
 def get_core_binary_hash() -> Optional[str]:
@@ -403,7 +415,7 @@ def record_shadow_discrepancy(op: str, detail: str, **extra: Any) -> None:
         _DISCREPANCY_WARNING_EMITTED = True
         sys.stderr.write(
             f"WARNING: Shadow evaluation discrepancy detected in op '{op}'. "
-            "Falling back to authoritative Python reference for safety.\n"
+            "Falling back to safe authoritative outcome (Python reference / fail-closed deny).\n"
         )
         sys.stderr.flush()
 
@@ -901,32 +913,77 @@ def check_handshake(binary_path: str) -> Dict[str, Any]:
 
     # Attach verified binary SHA-256 digest to handshake result (Finding AX)
     try:
-        bin_sha = get_core_binary_hash()
-        if not bin_sha and os.path.isfile(binary_path):
+        if os.path.isfile(binary_path):
             import hashlib
             with open(binary_path, "rb") as bf:
-                bin_sha = hashlib.sha256(bf.read()).hexdigest()
-        if bin_sha:
-            result["binary_hash"] = bin_sha
+                result["binary_hash"] = hashlib.sha256(bf.read()).hexdigest()
     except Exception:
         pass
 
     return result
 
 
+def _verify_pinned_binary_hash(bin_path: str) -> None:
+    """Verifies binary SHA-256 matches PAI_CORE_SHA256 env var if set."""
+    pinned = os.environ.get("PAI_CORE_SHA256")
+    if pinned:
+        pinned = pinned.strip().lower()
+        import hashlib
+        with open(bin_path, "rb") as f:
+            actual = hashlib.sha256(f.read()).hexdigest().lower()
+        if actual != pinned:
+            raise CoreBridgeUnavailableError(
+                f"pai-core binary at '{bin_path}' failed pinned SHA-256 check: "
+                f"expected {pinned}, got {actual}"
+            )
+
+
 def find_core_binary() -> str:
     """
-    Locates the platform-compatible pai-core binary, checking release, debug, and system PATH.
-    Enforces that Windows looks for .exe and Unix looks for non-.exe ELF binaries with X_OK.
+    Locates the platform-compatible pai-core binary.
+    By default:
+      - Checks explicit PAI_CORE_BIN environment variable if set.
+      - Checks repository build locations: core/target/{release,debug}.
+    System PATH lookup (shutil.which) requires explicit opt-in via PAI_CORE_ALLOW_PATH=1.
+    Validates pinned hash if PAI_CORE_SHA256 is set.
+    Caches negative lookup in _CORE_BIN_NOT_FOUND to avoid repeated filesystem scans.
     """
-    global _CORE_BIN_CACHE
+    global _CORE_BIN_CACHE, _CORE_BIN_NOT_FOUND
+    if _CORE_BIN_NOT_FOUND:
+        raise CoreBridgeUnavailableError("pai-core binary not found (cached lookup failure)")
+
     if _CORE_BIN_CACHE and os.path.isfile(_CORE_BIN_CACHE) and os.access(_CORE_BIN_CACHE, os.X_OK):
+        _verify_pinned_binary_hash(_CORE_BIN_CACHE)
         return _CORE_BIN_CACHE
 
     root_dir = Path(__file__).resolve().parent.parent
     is_windows = sys.platform == "win32"
     bin_name = "pai-core.exe" if is_windows else "pai-core"
 
+    # 1. Explicit path override
+    explicit_bin = os.environ.get("PAI_CORE_BIN")
+    if explicit_bin:
+        p = Path(explicit_bin).resolve()
+        if p.is_file() and os.access(p, os.X_OK):
+            candidate_str = str(p)
+            try:
+                _verify_pinned_binary_hash(candidate_str)
+                check_handshake(candidate_str)
+                _CORE_BIN_CACHE = candidate_str
+                _CORE_BIN_NOT_FOUND = False
+                return _CORE_BIN_CACHE
+            except Exception as exc:
+                _CORE_BIN_NOT_FOUND = True
+                raise CoreBridgeUnavailableError(
+                    f"Explicit PAI_CORE_BIN='{explicit_bin}' failed validation: {exc}"
+                ) from exc
+        else:
+            _CORE_BIN_NOT_FOUND = True
+            raise CoreBridgeUnavailableError(
+                f"Configured PAI_CORE_BIN='{explicit_bin}' does not exist or is not executable"
+            )
+
+    # 2. Repository build locations
     candidates = [
         root_dir / "core" / "target" / "release" / bin_name,
         root_dir / "core" / "target" / "debug" / bin_name,
@@ -934,27 +991,37 @@ def find_core_binary() -> str:
     for c in candidates:
         if c.is_file() and os.access(c, os.X_OK):
             candidate_str = str(c)
+            _verify_pinned_binary_hash(candidate_str)
             try:
                 check_handshake(candidate_str)
                 _CORE_BIN_CACHE = candidate_str
+                _CORE_BIN_NOT_FOUND = False
                 return _CORE_BIN_CACHE
             except Exception as e:
                 logger.debug("Candidate %s failed handshake: %s", candidate_str, e)
                 continue
 
-    on_path = shutil.which("pai-core")
-    if on_path and os.access(on_path, os.X_OK):
-        try:
-            check_handshake(on_path)
-            _CORE_BIN_CACHE = on_path
-            return _CORE_BIN_CACHE
-        except Exception as e:
-            logger.debug("PATH candidate %s failed handshake: %s", on_path, e)
+    # 3. System PATH lookup (opt-in only via PAI_CORE_ALLOW_PATH=1)
+    allow_path = os.environ.get("PAI_CORE_ALLOW_PATH", "0").lower() in ("1", "true", "yes")
+    if allow_path:
+        on_path = shutil.which("pai-core") or (shutil.which(bin_name) if is_windows else None)
+        if on_path and os.access(on_path, os.X_OK):
+            _verify_pinned_binary_hash(on_path)
+            try:
+                check_handshake(on_path)
+                _CORE_BIN_CACHE = on_path
+                _CORE_BIN_NOT_FOUND = False
+                return _CORE_BIN_CACHE
+            except Exception as e:
+                logger.debug("PATH candidate %s failed handshake: %s", on_path, e)
 
-    raise CoreBridgeUnavailableError(
-        f"Could not find compatible '{bin_name}' binary in core/target/{{release,debug}} or on PATH. "
+    _CORE_BIN_NOT_FOUND = True
+    msg = (
+        f"Could not find compatible '{bin_name}' binary in repository core/target/{{release,debug}}"
+        f"{' or on PATH' if allow_path else ''}. "
         "Run `cargo build --release --manifest-path core/Cargo.toml` on this platform first."
     )
+    raise CoreBridgeUnavailableError(msg)
 
 
 def call_core_bridge(op: str, **kwargs: Any) -> Any:
@@ -1068,7 +1135,8 @@ def scan_secret_content(text: str, file_path: Optional[str] = None) -> Optional[
                     "scan_secret_content",
                     f"Python={py_res!r} vs Rust={res!r}",
                 )
-                return py_res
+                # Stricter outcome wins: if either implementation detected a secret, report it
+                return py_res if py_res is not None else res
         except Exception as exc:
             record_shadow_discrepancy(
                 "scan_secret_content",
@@ -1556,7 +1624,10 @@ def ingest_file(
                 py_rej=py_rej.to_dict() if py_rej else None,
                 rust_rej=rust_rej.to_dict() if rust_rej else None,
             )
-            # Release N discrepancy policy: return authoritative Python reference on mismatch
+            # Stricter outcome: if either side rejected the file, return the rejection
+            if py_rej is not None or rust_rej is not None:
+                return None, (py_rej or rust_rej)
+            # Otherwise return authoritative Python reference
             return py_item, py_rej
 
     return rust_item, rust_rej

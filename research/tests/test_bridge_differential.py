@@ -942,6 +942,219 @@ class TestBridgeDifferential(unittest.TestCase):
             pai_core_bridge.PAI_SHADOW_COMPARE = True
             pai_core_bridge.reset_shadow_discrepancies()
 
+    def test_find_core_binary_disallows_path_by_default_and_allows_with_opt_in(self):
+        """Verifies Finding BE: PATH resolution is blocked by default and allowed only with PAI_CORE_ALLOW_PATH=1."""
+        from unittest import mock
+        from pathlib import Path
+
+        pai_core_bridge.reset_core_binary_cache()
+        old_allow = os.environ.get("PAI_CORE_ALLOW_PATH")
+        old_bin = os.environ.get("PAI_CORE_BIN")
+
+        try:
+            os.environ.pop("PAI_CORE_BIN", None)
+            os.environ.pop("PAI_CORE_ALLOW_PATH", None)
+
+            # Mock repo candidates as non-existent
+            with mock.patch.object(Path, "is_file", return_value=False):
+                with mock.patch("shutil.which", return_value="/usr/local/bin/pai-core"):
+                    with mock.patch("os.access", return_value=True):
+                        # 1. Default: PATH is disallowed -> raises CoreBridgeUnavailableError
+                        with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError) as ctx:
+                            pai_core_bridge.find_core_binary()
+                        self.assertIn("Could not find compatible", str(ctx.exception))
+                        self.assertNotIn("or on PATH", str(ctx.exception))
+
+                        # 2. Opt-in with PAI_CORE_ALLOW_PATH=1 -> finds PATH binary
+                        pai_core_bridge.reset_core_binary_cache()
+                        os.environ["PAI_CORE_ALLOW_PATH"] = "1"
+                        with mock.patch("pai_core_bridge.check_handshake", return_value={"status": "ok"}):
+                            found = pai_core_bridge.find_core_binary()
+                            self.assertEqual(found, "/usr/local/bin/pai-core")
+        finally:
+            if old_allow is not None:
+                os.environ["PAI_CORE_ALLOW_PATH"] = old_allow
+            else:
+                os.environ.pop("PAI_CORE_ALLOW_PATH", None)
+            if old_bin is not None:
+                os.environ["PAI_CORE_BIN"] = old_bin
+            else:
+                os.environ.pop("PAI_CORE_BIN", None)
+            pai_core_bridge.reset_core_binary_cache()
+
+    def test_find_core_binary_pinned_sha256_verification(self):
+        """Verifies Finding BE: PAI_CORE_SHA256 pinned hash check matches or raises CoreBridgeUnavailableError."""
+        pai_core_bridge.reset_core_binary_cache()
+        old_pinned = os.environ.get("PAI_CORE_SHA256")
+        try:
+            real_bin = pai_core_bridge.find_core_binary()
+            real_hash = pai_core_bridge.get_core_binary_hash()
+            self.assertIsNotNone(real_hash)
+
+            # 1. Matching pinned hash succeeds
+            pai_core_bridge.reset_core_binary_cache()
+            os.environ["PAI_CORE_SHA256"] = real_hash
+            bin_path = pai_core_bridge.find_core_binary()
+            self.assertEqual(bin_path, real_bin)
+
+            # 2. Mismatching pinned hash raises CoreBridgeUnavailableError
+            pai_core_bridge.reset_core_binary_cache()
+            os.environ["PAI_CORE_SHA256"] = "0000000000000000000000000000000000000000000000000000000000000000"
+            with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError) as ctx:
+                pai_core_bridge.find_core_binary()
+            self.assertIn("failed pinned SHA-256 check", str(ctx.exception))
+        finally:
+            if old_pinned is not None:
+                os.environ["PAI_CORE_SHA256"] = old_pinned
+            else:
+                os.environ.pop("PAI_CORE_SHA256", None)
+            pai_core_bridge.reset_core_binary_cache()
+
+    def test_negative_binary_lookup_cached_per_process(self):
+        """Verifies Finding BE: negative lookup failures are cached in _CORE_BIN_NOT_FOUND."""
+        from unittest import mock
+        from pathlib import Path
+
+        pai_core_bridge.reset_core_binary_cache()
+        old_allow = os.environ.get("PAI_CORE_ALLOW_PATH")
+        os.environ.pop("PAI_CORE_ALLOW_PATH", None)
+
+        try:
+            with mock.patch.object(Path, "is_file", return_value=False):
+                with self.assertRaises(pai_core_bridge.CoreBridgeUnavailableError):
+                    pai_core_bridge.find_core_binary()
+
+                self.assertTrue(pai_core_bridge._CORE_BIN_NOT_FOUND)
+                # is_core_binary_available() returns False immediately via cached flag
+                self.assertFalse(pai_core_bridge.is_core_binary_available())
+
+            # reset_core_binary_cache() clears negative cache
+            pai_core_bridge.reset_core_binary_cache()
+            self.assertFalse(pai_core_bridge._CORE_BIN_NOT_FOUND)
+        finally:
+            if old_allow is not None:
+                os.environ["PAI_CORE_ALLOW_PATH"] = old_allow
+            pai_core_bridge.reset_core_binary_cache()
+
+    def test_verify_release_metadata_mismatch_fails_closed(self):
+        """Verifies Finding BF: verify_release raises UpdateRejected when metadata mismatches."""
+        from unittest import mock
+        from updater import Updater, UpdateRejected, VerifiedRelease
+
+        import ed25519_ref
+        pub_hex = ed25519_ref.secret_to_public(bytes(range(32))).hex()
+        with tempfile.TemporaryDirectory() as td:
+            trust_dir = os.path.join(td, "trust")
+            install_dir = os.path.join(td, "install")
+            os.makedirs(trust_dir)
+            os.makedirs(install_dir)
+            with open(os.path.join(trust_dir, "trust.json"), "w") as f:
+                json.dump({"keys": [{"id": "key1", "public_hex": pub_hex, "revoked": False}], "constitution_sha256": "00" * 32}, f)
+            updater = Updater(trust_dir, install_dir)
+            mock_py = VerifiedRelease(version="1.0.0", key_id="key1", files=["a.txt"], manifest={})
+            mock_rust = {
+                "version": "1.0.1",  # version mismatch!
+                "key_id": "key1",
+                "files": ["a.txt"],
+                "manifest": {},
+            }
+
+            with mock.patch("pai_core_bridge.verify_release", return_value=mock_rust):
+                with mock.patch.object(updater, "_verify_release_py", return_value=mock_py):
+                    with mock.patch("pai_core_bridge.is_rust_core_enabled", return_value=True):
+                        with mock.patch("pai_core_bridge.is_shadow_compare_enabled", return_value=True):
+                            with tempfile.TemporaryDirectory() as rel_dir:
+                                with self.assertRaises(UpdateRejected) as ctx:
+                                    updater.verify_release(rel_dir)
+                                self.assertIn("Release metadata mismatch between implementations", str(ctx.exception))
+
+    def test_scan_secret_content_mismatch_stricter_detection_wins(self):
+        """Verifies Recommended: when one implementation detects a secret, that detection wins."""
+        from unittest import mock
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = True
+
+        try:
+            # Case 1: Python detects secret, Rust does not -> Python secret returned
+            with mock.patch("pai_core_bridge.call_core_bridge", return_value=None):
+                with mock.patch("pai_core_bridge.py_scan_secret_content", return_value="AWS Secret Access Key"):
+                    res = pai_core_bridge.scan_secret_content("some content")
+                    self.assertEqual(res, "AWS Secret Access Key")
+                    self.assertGreater(pai_core_bridge.get_shadow_discrepancy_count(), 0)
+
+            # Case 2: Rust detects secret, Python does not -> Rust secret returned
+            pai_core_bridge.reset_shadow_discrepancies()
+            with mock.patch("pai_core_bridge.call_core_bridge", return_value="Private Key"):
+                with mock.patch("pai_core_bridge.py_scan_secret_content", return_value=None):
+                    res = pai_core_bridge.scan_secret_content("some content")
+                    self.assertEqual(res, "Private Key")
+                    self.assertGreater(pai_core_bridge.get_shadow_discrepancy_count(), 0)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_ingest_file_mismatch_rejection_wins(self):
+        """Verifies Recommended: when one side rejects a file and the other accepts, rejection wins."""
+        from unittest import mock
+        from ingest import IngestedItem, IngestionRejection
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = True
+
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt") as tf:
+            tf.write("Benign content\n")
+            tf_path = tf.name
+
+        try:
+            # Rust accepts, Python rejects -> rejection returned
+            mock_rust_res = {
+                "item": {
+                    "path": tf_path,
+                    "kind": "file",
+                    "text": "Benign content\n",
+                    "truncated": False,
+                    "sha256": "abc",
+                    "bytes_read": 15,
+                },
+                "rejection": None,
+            }
+            mock_py_rej = IngestionRejection(path=tf_path, reason_code="SECRET_FILE", message="Discovered secret")
+
+            with mock.patch("pai_core_bridge.call_core_bridge", return_value=mock_rust_res):
+                with mock.patch("pai_core_bridge.py_ingest_file", return_value=(None, mock_py_rej)):
+                    item, rej = pai_core_bridge.ingest_file(tf_path)
+                    self.assertIsNone(item)
+                    self.assertIsNotNone(rej)
+                    self.assertEqual(rej.reason_code, "SECRET_FILE")
+                    self.assertGreater(pai_core_bridge.get_shadow_discrepancy_count(), 0)
+        finally:
+            if os.path.exists(tf_path):
+                os.remove(tf_path)
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
+    def test_extract_example_assertions_discrepancy_returns_python(self):
+        """Verifies Recommended: extract_example_assertions returns Python reference on mismatch."""
+        from unittest import mock
+
+        pai_core_bridge.reset_shadow_discrepancies()
+        pai_core_bridge.PAI_USE_RUST_CORE = True
+        pai_core_bridge.PAI_SHADOW_COMPARE = True
+
+        prompt = "Write `solve(x)`.\nExample:\n  solve(1) -> 2\n"
+        try:
+            with mock.patch("pai_core_bridge.call_core_bridge", return_value=["assert solve(1) == 999"]):
+                with mock.patch("pai_core_bridge.py_extract_example_assertions", return_value=["assert solve(1) == 2"]):
+                    res = pai_core_bridge.extract_example_assertions(prompt, entry_point="solve")
+                    self.assertEqual(res, ["assert solve(1) == 2"])
+                    self.assertGreater(pai_core_bridge.get_shadow_discrepancy_count(), 0)
+        finally:
+            pai_core_bridge.PAI_USE_RUST_CORE = False
+            pai_core_bridge.reset_shadow_discrepancies()
+
 
 if __name__ == "__main__":
     unittest.main()

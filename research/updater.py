@@ -360,8 +360,12 @@ class Updater:
                         "verify_release",
                         f"Release metadata mismatch: py=({py_res.version}, {py_res.key_id}, {len(py_res.files)}) vs rust=({rust_res.get('version')}, {rust_res.get('key_id')}, {len(rust_res.get('files', []))})",
                     )
-                    # Release N discrepancy policy: return authoritative Python reference on metadata mismatch
-                    return py_res
+                    # Release N discrepancy policy: fail closed on signed metadata mismatch (Finding BF)
+                    raise UpdateRejected(
+                        f"Release metadata mismatch between implementations: "
+                        f"py=({py_res.version}, {py_res.key_id}, {len(py_res.files)}) vs "
+                        f"rust=({rust_res.get('version')}, {rust_res.get('key_id')}, {len(rust_res.get('files', []))})"
+                    )
 
         if rust_err is not None:
             if isinstance(rust_err, (UpdateRejected, pai_core_bridge.CoreBridgeUnavailableError)):

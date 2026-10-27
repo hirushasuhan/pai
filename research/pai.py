@@ -331,15 +331,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # Check core bridge availability & ingest limits
     core_bridge_ok = True
     core_bridge_err_msg = ""
+    bin_path = None
+    bin_sha = None
     try:
         from pai_core_bridge import (
             CoreBridgeUnavailableError,
             get_ingest_limits,
             find_core_binary,
+            get_core_binary_hash,
             is_rust_core_enabled,
             is_python_fallback_forced,
             get_bridge_mode,
         )
+        try:
+            bin_path = find_core_binary()
+            bin_sha = get_core_binary_hash()
+        except Exception:
+            bin_path = None
+            bin_sha = None
         if is_rust_core_enabled() and not is_python_fallback_forced():
             find_core_binary()
         ingest_limits = get_ingest_limits()
@@ -619,6 +628,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "smoke_tests": smoke_results,
         "checks": checks_table,
         "bridge_mode": bridge_mode,
+        "core_binary": {
+            "path": bin_path,
+            "sha256": bin_sha,
+            "pinned_sha256": os.environ.get("PAI_CORE_SHA256"),
+            "pinned_match": (bin_sha.lower() == os.environ.get("PAI_CORE_SHA256").strip().lower()) if (bin_sha and os.environ.get("PAI_CORE_SHA256")) else None,
+        },
         "shadow_discrepancies": shadow_discrepancies_list,
         "shadow_telemetry": shadow_summary,
     }
@@ -689,6 +704,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     print("\n--- Core Bridge Shadow Telemetry ---")
     print(f"Bridge Mode          : [{bridge_mode}]")
+    if bin_path:
+        print(f"Core Binary Path     : {bin_path}")
+        print(f"Core Binary SHA-256  : {bin_sha or 'unknown'}")
+        pinned = os.environ.get("PAI_CORE_SHA256")
+        if pinned:
+            pinned_clean = pinned.strip().lower()
+            match_str = "MATCH" if (bin_sha and bin_sha.lower() == pinned_clean) else "MISMATCH"
+            print(f"Pinned SHA-256 Check : [{match_str}] (target: {pinned_clean})")
+    else:
+        print("Core Binary Path     : None (binary missing or not resolved)")
     st = doc_data.get("shadow_telemetry", {})
     cli_comp = st.get("cli_comparisons", 0)
     cli_disc = st.get("cli_discrepancies", 0)
