@@ -265,6 +265,12 @@ Proposed in [ADR-013](adr/ADR-013-installer-and-distribution.md) and specified i
 
 ---
 
+## 💬 Interactive Shell and Managed Service (planned, post-N+1 window)
+
+Proposed in [ADR-014](adr/ADR-014-interactive-shell-and-managed-ollama.md), 2026-10-27: an interactive terminal REPL launched by running `pai` without arguments (when `isatty` is true) with slash commands dispatching directly to existing canonical subcommands (`/analyze`, `/code`, `/docs`, `/forecast`, `/doctor`, `/chat`, `/help`, `/exit`), coupled with managed loopback startup of the local Ollama daemon. The managed starter checks the official per-user path, enforces Authenticode signature verification, never searches PATH, binds strictly to loopback (`127.0.0.1`), prompts for user consent, and tracks child process lifetime so only PAI-initiated servers are stopped on exit. Designed as a post-N+1 window deliverable built across two separately reviewed commits (service management first, shell second) with zero changes to `research/` or `core/` during the evaluation window.
+
+---
+
 ## ⚠️ Roadmap Risks (status after the second review pass)
 
 | ID | Risk | Status | Where handled |
