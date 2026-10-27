@@ -480,25 +480,44 @@ class TestBuildPayloadP1(unittest.TestCase):
             verify_binary_format(corrupt_bin, platform="linux-x64")
 
     def test_15_embed_python_zip_extraction_and_pth(self) -> None:
-        """Validates that extract_embed_python_zip extracts safely and appends ..\\research to ._pth."""
+        """Validates that extract_embed_python_zip extracts safely and standardizes Lib/ and DLLs/ (Finding BW)."""
         import zipfile
         fake_zip = Path(self.tmp_dir) / "fake_py.zip"
         dest_py = Path(self.tmp_dir) / "extracted_py"
 
+        # Create mock stdlib zip inside fake_zip
+        inner_stdlib_bytes = b""
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as inner_zf:
+            inner_zf.writestr("os.py", b"# mock os\n")
+        inner_stdlib_bytes = buf.getvalue()
+
         with zipfile.ZipFile(fake_zip, "w") as zf:
             zf.writestr("python.exe", b"MZ_FAKE_PYTHON")
             zf.writestr("python314._pth", "python314.zip\n.\n")
+            zf.writestr("python314.zip", inner_stdlib_bytes)
+            zf.writestr("mock_ext.pyd", b"MZ_MOCK_PYD")
+            zf.writestr("mock_dep.dll", b"MZ_MOCK_DLL")
+            zf.writestr("test_dir/", b"")  # Directory entry ending in / (Finding BZ)
 
         expected_hash = sha256_file(fake_zip)
         meta = extract_embed_python_zip(fake_zip, dest_py, expected_sha256=expected_hash)
         self.assertEqual(meta["version"], PINNED_PYTHON_VERSION)
         self.assertEqual(meta["sha256"], expected_hash)
+        self.assertEqual(meta["layout"], "standardized_lib_dlls")
         self.assertTrue((dest_py / "python.exe").is_file())
+        self.assertTrue((dest_py / "Lib" / "os.py").is_file(), "stdlib must be unpacked into Lib/ (Finding BW)")
+        self.assertTrue((dest_py / "DLLs" / "mock_ext.pyd").is_file(), "*.pyd must be staged in DLLs/ (Finding BW)")
+        self.assertTrue((dest_py / "DLLs" / "mock_dep.dll").is_file(), "*.dll must be staged in DLLs/ (Finding BW)")
+        self.assertTrue((dest_py / "test_dir").is_dir(), "Directory entry must be safely created (Finding BZ)")
         pth_text = (dest_py / "python314._pth").read_text(encoding="utf-8")
+        self.assertIn(".\\Lib", pth_text)
+        self.assertIn(".\\DLLs", pth_text)
         self.assertIn("..\\research", pth_text)
 
     def test_16_embed_python_zip_hostile_hash_and_path_traversal(self) -> None:
-        """Negative controls: sha256 mismatch and path traversal in python zip fail closed."""
+        """Negative controls: sha256 mismatch, unpinned/empty hash, size limits, and path traversal fail closed (Finding BZ)."""
         import zipfile
         bad_hash_zip = Path(self.tmp_dir) / "bad_hash.zip"
         dest_py = Path(self.tmp_dir) / "bad_py"
@@ -510,7 +529,15 @@ class TestBuildPayloadP1(unittest.TestCase):
         with self.assertRaises(PayloadBuildError):
             extract_embed_python_zip(bad_hash_zip, dest_py, expected_sha256="0" * 64)
 
-        # 2. Path traversal rejection
+        # 2. Empty hash rejection (Finding BZ)
+        with self.assertRaises(PayloadBuildError):
+            extract_embed_python_zip(bad_hash_zip, dest_py, expected_sha256="")
+
+        # 3. Non-hex / malformed hash rejection (Finding BZ)
+        with self.assertRaises(PayloadBuildError):
+            extract_embed_python_zip(bad_hash_zip, dest_py, expected_sha256="not_a_valid_64_char_hex_hash")
+
+        # 4. Path traversal rejection
         traversal_zip = Path(self.tmp_dir) / "traversal.zip"
         with zipfile.ZipFile(traversal_zip, "w") as zf:
             zf.writestr("../evil.txt", b"evil")
@@ -518,6 +545,48 @@ class TestBuildPayloadP1(unittest.TestCase):
 
         with self.assertRaises(UnsafePathError):
             extract_embed_python_zip(traversal_zip, dest_py, expected_sha256=trav_hash)
+
+        # 5. Extraction size limit exceeded rejection (Finding BZ)
+        oversize_zip = Path(self.tmp_dir) / "oversize.zip"
+        with zipfile.ZipFile(oversize_zip, "w") as zf:
+            zf.writestr("large.bin", b"A" * 2048)
+        oversize_hash = sha256_file(oversize_zip)
+
+        with self.assertRaises(PayloadBuildError) as cm:
+            extract_embed_python_zip(oversize_zip, dest_py, expected_sha256=oversize_hash, max_extracted_bytes=1024)
+        self.assertIn("Extracted size limit exceeded", str(cm.exception))
+
+    def test_17_embed_python_dir_unpinned_rejection_and_developer_flag(self) -> None:
+        """Negative controls: embed_python_dir requires allow_unpinned_python=True (Finding BZ)."""
+        mock_py_dir = Path(self.tmp_dir) / "mock_local_py"
+        mock_py_dir.mkdir(parents=True, exist_ok=True)
+        (mock_py_dir / "python.exe").write_bytes(b"MZ_MOCK")
+        (mock_py_dir / "python314._pth").write_text(".\n", encoding="utf-8")
+
+        out_unpinned_fail = Path(self.tmp_dir) / "out_unpinned_fail"
+        # 1. Unpinned dir without flag must raise PayloadBuildError
+        with self.assertRaises(PayloadBuildError) as cm:
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=out_unpinned_fail,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                embed_python_dir=mock_py_dir,
+                allow_unpinned_python=False,
+            )
+        self.assertIn("allow_unpinned_python", str(cm.exception))
+
+        # 2. Unpinned dir with allow_unpinned_python=True succeeds and records dev marker
+        out_unpinned_ok = Path(self.tmp_dir) / "out_unpinned_ok"
+        res = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_unpinned_ok,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            embed_python_dir=mock_py_dir,
+            allow_unpinned_python=True,
+        )
+        self.assertTrue(res["manifest"]["python_runtime"].get("unpinned_dev"))
 
 
 if __name__ == "__main__":

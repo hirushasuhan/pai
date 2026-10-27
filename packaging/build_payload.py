@@ -327,26 +327,38 @@ def verify_extracted_integrity(
 def extract_embed_python_zip(
     zip_path: str | Path,
     dest_py_dir: str | Path,
-    expected_sha256: Optional[str] = PINNED_PYTHON_ZIP_SHA256,
+    expected_sha256: str = PINNED_PYTHON_ZIP_SHA256,
+    max_extracted_bytes: int = 150 * 1024 * 1024,
 ) -> Dict[str, Any]:
     """
-    Safely verifies and extracts the official embeddable Python zip distribution (Finding BU).
-    Enforces safe relative paths (no traversal, no colons, no symlinks).
+    Safely verifies and extracts the official embeddable Python zip distribution (Finding BU & BW).
+    Enforces pinned SHA-256 (fail-closed on empty or invalid hashes, Finding BZ).
+    Enforces safe relative paths (no traversal, no colons, no symlinks, safe directory creation, Finding BZ).
+    Guards against zip bombs via max_extracted_bytes (150 MB ceiling, Finding BZ).
+    Standardizes layout into Lib/ (unpacked stdlib) and DLLs/ (extensions) so that sandbox_win32
+    AppContainer execution succeeds without modifying research/ code (Finding BW).
     Appends '..\\research' to all *._pth files for isolated research tree loading.
     Returns python_runtime metadata dict for manifest.json.
     """
+    if not expected_sha256 or not _SHA_RE.match(expected_sha256):
+        raise PayloadBuildError(
+            f"expected_sha256 must be a valid 64-character hex SHA-256 string; unpinned or empty hashes are prohibited: {expected_sha256!r}"
+        )
+
     zp = Path(zip_path).resolve()
     if not zp.is_file():
         raise FileNotFoundError(f"Embeddable Python zip not found at '{zp}'")
 
     actual_sha = sha256_file(zp)
-    if expected_sha256 and actual_sha.lower() != expected_sha256.lower():
+    if actual_sha.lower() != expected_sha256.lower():
         raise PayloadBuildError(
             f"Python embed zip SHA-256 mismatch for '{zp}': got '{actual_sha}', expected '{expected_sha256}'"
         )
 
     dest = Path(dest_py_dir).resolve()
     dest.mkdir(parents=True, exist_ok=True)
+
+    total_extracted_bytes = 0
 
     with zipfile.ZipFile(zp, "r") as zf:
         for member in zf.infolist():
@@ -355,31 +367,83 @@ def extract_embed_python_zip(
                 rel.startswith("/")
                 or "\\" in rel
                 or ":" in rel
-                or any(part in ("..", "", ".") for part in rel.split("/"))
+                or any(part in ("..", "", ".") for part in rel.strip("/").split("/"))
             ):
                 raise UnsafePathError(f"Unsafe path in Python embed zip: {rel!r}")
             # Prevent zip symlinks
             if (member.external_attr >> 16) & 0o170000 == 0o120000:
                 raise SymlinkRejectedError(f"Symlink in Python embed zip prohibited: {rel!r}")
 
-            zf.extract(member, path=str(dest))
+            total_extracted_bytes += member.file_size
+            if total_extracted_bytes > max_extracted_bytes:
+                raise PayloadBuildError(
+                    f"Extracted size limit exceeded during Python embed extraction ({total_extracted_bytes} > {max_extracted_bytes} bytes)"
+                )
 
-    # Append ..\research to *._pth files
+            if member.is_dir() or rel.endswith("/"):
+                (dest / rel).mkdir(parents=True, exist_ok=True)
+            else:
+                zf.extract(member, path=str(dest))
+
+    # Standardize layout for sandbox runtime compatibility (Finding BW):
+    # Unpack python*.zip into Lib/
+    lib_dir = dest / "Lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    stdlib_zips = list(dest.glob("python*.zip"))
+    for sz in stdlib_zips:
+        with zipfile.ZipFile(sz, "r") as zf_stdlib:
+            for member in zf_stdlib.infolist():
+                rel_lib = member.filename.replace("\\", "/")
+                if (
+                    rel_lib.startswith("/")
+                    or "\\" in rel_lib
+                    or ":" in rel_lib
+                    or any(part in ("..", "", ".") for part in rel_lib.strip("/").split("/"))
+                ):
+                    raise UnsafePathError(f"Unsafe path in stdlib zip: {rel_lib!r}")
+                if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise SymlinkRejectedError(f"Symlink in stdlib zip prohibited: {rel_lib!r}")
+
+                total_extracted_bytes += member.file_size
+                if total_extracted_bytes > max_extracted_bytes:
+                    raise PayloadBuildError(
+                        f"Extracted size limit exceeded during stdlib unpack ({total_extracted_bytes} > {max_extracted_bytes} bytes)"
+                    )
+
+                if member.is_dir() or rel_lib.endswith("/"):
+                    (lib_dir / rel_lib).mkdir(parents=True, exist_ok=True)
+                else:
+                    zf_stdlib.extract(member, path=str(lib_dir))
+
+    # Populate DLLs/ with *.pyd extension modules and supporting non-python runtime DLLs (Finding BW)
+    dlls_dir = dest / "DLLs"
+    dlls_dir.mkdir(parents=True, exist_ok=True)
+    for pyd_file in sorted(dest.glob("*.pyd")):
+        shutil.copy2(str(pyd_file), str(dlls_dir / pyd_file.name))
+    for dll_file in sorted(dest.glob("*.dll")):
+        if not dll_file.name.lower().startswith("python"):
+            shutil.copy2(str(dll_file), str(dlls_dir / dll_file.name))
+
+    # Configure *._pth files with Lib, DLLs, ., and ..\research
     pth_files = list(dest.glob("*._pth"))
+    pth_lines = [
+        ".",
+        ".\\Lib",
+        ".\\DLLs",
+        "..\\research",
+    ]
     if not pth_files:
-        (dest / "python._pth").write_text(".\n..\\research\n", encoding="utf-8")
+        (dest / "python._pth").write_text("\n".join(pth_lines) + "\n", encoding="utf-8")
     else:
         for pf in pth_files:
-            lines = [ln.strip() for ln in pf.read_text(encoding="utf-8").splitlines() if ln.strip()]
-            if "..\\research" not in lines and "../research" not in lines:
-                lines.append("..\\research")
-                pf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            pf.write_text("\n".join(pth_lines) + "\n", encoding="utf-8")
 
     return {
         "version": PINNED_PYTHON_VERSION,
         "sha256": actual_sha,
         "source_url": PINNED_PYTHON_ZIP_URL,
         "checked_on": PINNED_PYTHON_ZIP_CHECKED_ON,
+        "layout": "standardized_lib_dlls",
     }
 
 
@@ -512,7 +576,8 @@ def build_payload(
     clean: bool = False,
     embed_python_dir: Optional[str | Path] = None,
     embed_python_zip: Optional[str | Path] = None,
-    expected_python_sha256: Optional[str] = PINNED_PYTHON_ZIP_SHA256,
+    expected_python_sha256: str = PINNED_PYTHON_ZIP_SHA256,
+    allow_unpinned_python: bool = False,
     launcher_path: Optional[str | Path] = None,
     extra_files: Optional[Dict[str, str | Path]] = None,
 ) -> Dict[str, Any]:
@@ -587,7 +652,7 @@ def build_payload(
     else:
         raise PayloadBuildError("Constitution file not found to pin constitution_sha256")
 
-    # Step 8: Optional embeddable Python distribution staging (Finding BU)
+    # Step 8: Optional embeddable Python distribution staging (Findings BU, BW, BZ)
     python_runtime_meta: Optional[Dict[str, Any]] = None
     if embed_python_zip:
         python_runtime_meta = extract_embed_python_zip(
@@ -596,23 +661,27 @@ def build_payload(
             expected_sha256=expected_python_sha256,
         )
     elif embed_python_dir:
+        if not allow_unpinned_python:
+            raise PayloadBuildError(
+                "embed_python_dir is developer-only and requires allow_unpinned_python=True (or --allow-unpinned-python). "
+                "For release payloads, use official pinned embed_python_zip (Finding BZ)."
+            )
         embed_p = Path(embed_python_dir).resolve()
         if embed_p.is_dir():
             target_py = out / "python"
             shutil.copytree(str(embed_p), str(target_py), dirs_exist_ok=True)
-            # Ensure ._pth lists ..\research for isolated imports (Finding BN)
+            # Ensure ._pth lists Lib, DLLs, ., and ..\research for isolated imports (Findings BN, BW)
             pth_files = list(target_py.glob("*._pth"))
+            pth_lines = [".", ".\\Lib", ".\\DLLs", "..\\research"]
             if not pth_files:
-                (target_py / "python._pth").write_text(".\n..\\research\n", encoding="utf-8")
+                (target_py / "python._pth").write_text("\n".join(pth_lines) + "\n", encoding="utf-8")
             else:
                 for pf in pth_files:
-                    lines = [ln.strip() for ln in pf.read_text(encoding="utf-8").splitlines() if ln.strip()]
-                    if "..\\research" not in lines and "../research" not in lines:
-                        lines.append("..\\research")
-                        pf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    pf.write_text("\n".join(pth_lines) + "\n", encoding="utf-8")
             python_runtime_meta = {
                 "version": "local",
                 "source": str(embed_p),
+                "unpinned_dev": True,
             }
 
     # Step 9: Optional launcher binary staging
@@ -696,6 +765,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--constitution", default=None, help="Path to CONSTITUTION.md")
     parser.add_argument("--embed-python-zip", default=None, help="Path to official embeddable Python zip")
     parser.add_argument("--expected-python-sha256", default=PINNED_PYTHON_ZIP_SHA256, help="Expected Python zip SHA-256")
+    parser.add_argument("--embed-python-dir", default=None, help="Path to local Python folder (dev only, requires --allow-unpinned-python)")
+    parser.add_argument("--allow-unpinned-python", action="store_true", help="Allow unpinned local Python directory (developer only)")
     parser.add_argument("--clean", action="store_true", help="Clean out directory before building")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
@@ -718,8 +789,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             platform=args.platform,
             version=args.version,
             clean=args.clean,
+            embed_python_dir=args.embed_python_dir,
             embed_python_zip=args.embed_python_zip,
             expected_python_sha256=args.expected_python_sha256,
+            allow_unpinned_python=args.allow_unpinned_python,
         )
         print(f"Payload successfully built at: {res['out_dir']}")
         print(f"Platform: {res['platform']}")

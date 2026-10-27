@@ -39,6 +39,8 @@ mkdir "%STAGING_DIR%"
 xcopy /E /I /Y /Q "%SOURCE_DIR%\*" "%STAGING_DIR%\" >nul
 if errorlevel 1 goto copy_failed
 
+:: 2. Verify staging files against manifest and perform safe atomic swap with rollback (Finding BV)
+:: Note: PAI_TEST_FAIL_SWAP_MOVE is strictly an internal test hook for rollback negative control tests (Finding BZ).
 echo Verifying staged files against manifest.json...
 set "PAI_STAGING_DIR=%STAGING_DIR%"
 set "PAI_TARGET_DIR=%TARGET_DIR%"
@@ -83,6 +85,7 @@ powershell -NoProfile -Command ^
     "$hadTarget = Test-Path -LiteralPath $target;" ^
     "if ($hadTarget) { Move-Item -LiteralPath $target -Destination $backup -Force };" ^
     "try {" ^
+    "    <# Note: PAI_TEST_FAIL_SWAP_MOVE is strictly an internal test hook for rollback negative control tests. #>" ^
     "    if ($env:PAI_TEST_FAIL_SWAP_MOVE -eq '1') { throw 'Simulated swap move failure for negative control' }" ^
     "    Move-Item -LiteralPath $stage -Destination $target -Force;" ^
     "} catch {" ^

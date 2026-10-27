@@ -43,6 +43,7 @@ from packaging.build_payload import (
     PINNED_PYTHON_ZIP_SHA256,
     PINNED_PYTHON_ZIP_URL,
     PINNED_PYTHON_ZIP_CHECKED_ON,
+    PayloadBuildError,
     build_payload,
     sha256_file,
 )
@@ -156,6 +157,7 @@ class TestLauncherAndZipP2(unittest.TestCase):
             platform="win-x64",
             launcher_path=self.ref_launcher,
             embed_python_dir=embed_dir,
+            allow_unpinned_python=True,
             extra_files={
                 "install.bat": self.repo_root / "packaging" / "install.bat",
                 "uninstall.bat": self.repo_root / "packaging" / "uninstall.bat",
@@ -726,20 +728,96 @@ class TestLauncherAndZipP2(unittest.TestCase):
         pth_content = pth_path.read_text(encoding="utf-8")
         self.assertIn("..\\research", pth_content)
 
-        # 3. Verify launcher executes pai doctor --skip-smoke --json in embedded environment
+        # 3. Verify launcher executes pai doctor --skip-smoke --json in embedded environment (Findings BU, BW, BY)
         pai_exe = out_payload / "bin" / "pai.exe"
         env = os.environ.copy()
         env["PAI_DIR"] = str(self.isolated_pai_dir)
         env.pop("PAI_ALLOW_SYSTEM_PYTHON", None)
 
         proc = subprocess.run([str(pai_exe), "doctor", "--skip-smoke", "--json"], capture_output=True, text=True, env=env)
-        # Note: pai doctor exits with code 1 if any check (e.g. sandbox probe or low RAM) flags a warning,
-        # but outputs valid structured diagnostic JSON. We assert JSON structure and python runtime identity.
+        self.assertEqual(proc.returncode, 0, f"pai doctor must exit 0 with all checks passed (Finding BY):\nstdout: {proc.stdout}\nstderr: {proc.stderr}")
         doc_json = json.loads(proc.stdout)
         self.assertIn("os", doc_json)
         self.assertEqual(doc_json["os"]["python_version"], PINNED_PYTHON_VERSION)
         self.assertIn("telemetry", doc_json)
         self.assertIn("checks", doc_json)
+        self.assertTrue(doc_json.get("all_passed"), f"All doctor checks must pass in standardized layout (Finding BW & BY): {doc_json}")
+        for chk in doc_json["checks"]:
+            self.assertTrue(chk.get("passed"), f"Doctor check {chk.get('name')} failed: {chk}")
+
+    def test_21_embedded_runtime_sandbox_execution_and_negative_controls(self) -> None:
+        """
+        Validates Findings BW, BZ:
+        1. Sandbox code execution succeeds inside official embedded runtime.
+        2. Empty/unpinned Python zip hash is rejected.
+        3. Local unpinned Python directory is rejected without explicit flag.
+        """
+        official_zip = Path(tempfile.gettempdir()) / f"python-{PINNED_PYTHON_VERSION}-embed-amd64.zip"
+        if not official_zip.is_file():
+            self.skipTest(f"Official Python embed zip not cached at {official_zip}")
+
+        out_payload = Path(self.tmp_dir) / "real_embed_sandbox_payload"
+        res = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_payload,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            platform="win-x64",
+            launcher_path=self.ref_launcher,
+            embed_python_zip=official_zip,
+        )
+
+        pai_exe = out_payload / "bin" / "pai.exe"
+        env = os.environ.copy()
+        env["PAI_DIR"] = str(self.isolated_pai_dir)
+        env.pop("PAI_ALLOW_SYSTEM_PYTHON", None)
+
+        # 1. Execute Win32Sandbox boundary probe and script in sandboxed AppContainer (Finding BW)
+        embed_py = out_payload / "python" / "python.exe"
+        proc_probe = subprocess.run(
+            [str(embed_py), "-c", "import sandbox_win32; ok, msg = sandbox_win32.probe_win32_boundary(); assert ok is True, msg; print('PROBE_SUCCESS')"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(proc_probe.returncode, 0, f"probe_win32_boundary failed:\nstdout: {proc_probe.stdout}\nstderr: {proc_probe.stderr}")
+        self.assertIn("PROBE_SUCCESS", proc_probe.stdout)
+
+        script_test = Path(self.tmp_dir) / "sandbox_test_script.py"
+        script_test.write_text("print('PAI_SANDBOX_SUCCESS_OK')\n", encoding="utf-8")
+        proc_exec = subprocess.run(
+            [str(embed_py), "-c", f"import sandbox_win32; sb = sandbox_win32.Win32Sandbox(); r = sb.execute(r'{script_test}'); print('EXIT:', r.exit_code); print('OUT:', r.stdout.strip())"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(proc_exec.returncode, 0, f"sandbox execute failed:\nstdout: {proc_exec.stdout}\nstderr: {proc_exec.stderr}")
+        self.assertIn("EXIT: 0", proc_exec.stdout)
+        self.assertIn("OUT: PAI_SANDBOX_SUCCESS_OK", proc_exec.stdout)
+
+        # 2. Hostile: empty/unpinned hash fails closed (Finding BZ)
+        with self.assertRaises(PayloadBuildError):
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=Path(self.tmp_dir) / "hostile_hash_payload",
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                embed_python_zip=official_zip,
+                expected_python_sha256="",
+            )
+
+        # 3. Hostile: unpinned python directory fails closed without allow_unpinned_python=True (Finding BZ)
+        dummy_py = Path(self.tmp_dir) / "dummy_local_py"
+        dummy_py.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(PayloadBuildError):
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=Path(self.tmp_dir) / "hostile_unpinned_dir",
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                embed_python_dir=dummy_py,
+                allow_unpinned_python=False,
+            )
 
 
 if __name__ == "__main__":
