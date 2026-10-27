@@ -509,9 +509,12 @@ class TestInstallerP5(unittest.TestCase):
 
     def test_12_silent_postinstall_failure_exits_nonzero(self) -> None:
         """
-        Validates Finding DC:
+        Validates Findings DC and DI:
         In silent mode, post-install failure (e.g. update_path.ps1 failing due to rejected
-        non-test registry subkey) must terminate the installer with a non-zero exit code.
+        non-test registry subkey) must:
+          1. Terminate the installer with non-zero exit code 3.
+          2. Execute rollback: remove all extracted files and delete target installation folder.
+          3. Leave registry subkey in its initial state without corrupting or modifying PATH.
         """
         out_dist = Path(self.tmp_dir) / "dist"
         build_res = build_inno_installer(
@@ -523,6 +526,7 @@ class TestInstallerP5(unittest.TestCase):
         )
         installer_exe = Path(build_res["installer_path"])
         install_target = Path(self.tmp_dir) / "PAI_Fail_Target"
+        sub = self._create_isolated_reg_subkey("Test_PAI_Rollback_P5", "%USERPROFILE%\\bin")
 
         # Pass an illegal subkey that update_path.ps1 explicitly rejects fail-closed
         illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -530,6 +534,14 @@ class TestInstallerP5(unittest.TestCase):
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         self.assertNotEqual(proc.returncode, 0, "Silent installer must exit non-zero when post-install PATH update fails")
         self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
+
+        # Finding DI: Verify target folder was cleanly rolled back and does not exist
+        self.assertFalse(install_target.exists(), f"Target folder '{install_target}' must be deleted by rollback")
+
+        # Finding DI: Verify test registry subkey was NOT modified or corrupted
+        details = self._get_reg_path_details(sub)
+        self.assertEqual(details["kind"], "ExpandString")
+        self.assertEqual(details["raw"], "%USERPROFILE%\\bin")
 
     def test_13_portable_install_and_uninstall_calls_update_path(self) -> None:
         """

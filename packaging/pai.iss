@@ -136,14 +136,15 @@ begin
       '  "accepted": true' + #13#10 +
       '}';
 
-    // Abort installation if agreement record cannot be written (Finding DC)
+    // Abort installation and rollback if agreement record cannot be written (Findings DC, DI)
     if not SaveStringToFile(AppDir + '\agreement_acceptance.json', AcceptanceJson, False) then
     begin
-      Log('CRITICAL: Failed to write agreement_acceptance.json to ' + AppDir);
+      Log('CRITICAL: Failed to write agreement_acceptance.json to ' + AppDir + '. Executing rollback.');
+      DelTree(AppDir, True, True, True);
       if not WizardSilent() then
       begin
         MsgBox('Fatal Error: Failed to write agreement acceptance record to ' + AppDir + '\agreement_acceptance.json.' + #13#10 +
-               'Installation has been aborted.', mbCriticalError, MB_OK);
+               'Installation has been rolled back and aborted.', mbCriticalError, MB_OK);
       end;
       ExitProcess(2);
     end;
@@ -155,7 +156,7 @@ begin
       SaveStringToFile(PaiDir + '\agreement_acceptance.json', AcceptanceJson, False);
     end;
 
-    // 2. Add bin directory to User PATH using Appendix D PowerShell script (Findings DC, DD)
+    // 2. Add bin directory to User PATH using Appendix D PowerShell script (Findings DC, DD, DI)
     if (BinDir <> '') and (BinDir <> '\bin') and (BinDir <> '\\bin') then
     begin
       ScriptPath := AppDir + '\tools\update_path.ps1';
@@ -172,36 +173,30 @@ begin
 
       if not FileExists(ScriptPath) then
       begin
-        Log('CRITICAL: tools\update_path.ps1 not found in application directory: ' + ScriptPath);
+        Log('CRITICAL: tools\update_path.ps1 not found in application directory: ' + ScriptPath + '. Executing rollback.');
+        DelTree(AppDir, True, True, True);
         if not WizardSilent() then
         begin
-          MsgBox('Personal Agentic AI (PAI) was installed, but the PATH update helper script is missing.' + #13#10#13#10 +
-                 'Please manually add the following directory to your User PATH:' + #13#10 +
-                 BinDir + #13#10#13#10 +
-                 'You can do this by searching "Environment Variables" in Windows Settings.', mbError, MB_OK);
-        end
-        else
-        begin
-          ExitProcess(3);
+          MsgBox('Personal Agentic AI (PAI) installation failed: PATH update helper script is missing.' + #13#10#13#10 +
+                 'Installation has been rolled back.', mbError, MB_OK);
         end;
+        ExitProcess(3);
       end
       else
       begin
         ResultCode := -1;
         if (not ExecPowerShell('-File "' + ScriptPath + '" -Action Add -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode)) or (ResultCode <> 0) then
         begin
-          Log('ERROR: Failed to update User PATH via update_path.ps1 (ResultCode: ' + IntToStr(ResultCode) + ').');
+          Log('ERROR: Failed to update User PATH via update_path.ps1 (ResultCode: ' + IntToStr(ResultCode) + '). Executing rollback.');
+          // Clean up any partially added PATH entry and rollback installed files
+          ExecPowerShell('-File "' + ScriptPath + '" -Action Remove -TargetDir "' + BinDir + '"' + ExtraArgs, ResultCode);
+          DelTree(AppDir, True, True, True);
           if not WizardSilent() then
           begin
-            MsgBox('Personal Agentic AI (PAI) was installed, but updating the User PATH environment variable failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
-                   'Please manually add the following directory to your User PATH:' + #13#10 +
-                   BinDir + #13#10#13#10 +
-                   'You can do this by searching "Environment Variables" in Windows Settings.', mbError, MB_OK);
-          end
-          else
-          begin
-            ExitProcess(3);
+            MsgBox('Personal Agentic AI (PAI) installation failed: unable to update User PATH environment variable (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
+                   'Installation has been rolled back.', mbError, MB_OK);
           end;
+          ExitProcess(3);
         end
         else
         begin
