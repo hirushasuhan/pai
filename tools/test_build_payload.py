@@ -61,6 +61,7 @@ from packaging.build_payload import (
 # Import research modules read-only for ADR-005 updater compatibility verification
 sys.path.insert(0, str(REPO_ROOT / "research"))
 import ed25519_ref
+import pai_core_bridge
 import updater
 
 
@@ -332,6 +333,8 @@ class TestBuildPayloadP1(unittest.TestCase):
         """
         Automated proof that updater.py accepts the payload manifest without modification,
         and rejects tampered files, tampered manifest fields, and unlisted files.
+        Verifies both public Updater.verify_release and private _verify_release_py,
+        using an ephemeral key and asserting exact rejection error messages (Finding BL).
         """
         out = Path(self.tmp_dir) / "updater_compat_test"
         res = build_payload(
@@ -345,8 +348,8 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertTrue(manifest_p.is_file())
         raw_manifest_bytes = manifest_p.read_bytes()
 
-        # Generate ephemeral Ed25519 signing key
-        priv = bytes.fromhex("a5" * 32)
+        # Generate ephemeral Ed25519 signing key (Finding BL: ephemeral, not fixed)
+        priv = os.urandom(32)
         pub = ed25519_ref.secret_to_public(priv)
 
         # Set up isolated trust root and install root
@@ -357,7 +360,7 @@ class TestBuildPayloadP1(unittest.TestCase):
 
         const_sha = res["manifest"]["constitution_sha256"]
         trust_doc = {
-            "keys": [{"id": "test-key-1", "public_hex": pub.hex(), "revoked": False}],
+            "keys": [{"id": "test-key-ephemeral", "public_hex": pub.hex(), "revoked": False}],
             "constitution_sha256": const_sha,
         }
         (trust_root / "trust.json").write_text(json.dumps(trust_doc, indent=2), encoding="utf-8")
@@ -368,12 +371,38 @@ class TestBuildPayloadP1(unittest.TestCase):
 
         u = updater.Updater(str(trust_root), str(install_root))
 
-        # Positive control: updater._verify_release_py accepts the manifest and payload without modification
+        # Positive control 1: updater._verify_release_py accepts the manifest and payload without modification
         verified = u._verify_release_py(str(out), check_rollback=False)
         self.assertEqual(verified.version, "1.0.0")
-        self.assertEqual(verified.key_id, "test-key-1")
+        self.assertEqual(verified.key_id, "test-key-ephemeral")
         self.assertEqual(verified.manifest.get("platform"), "win-x64")
         self.assertEqual(verified.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": EXPECTED_RESEARCH_TREE})
+
+        # Positive control 2: public Updater.verify_release entry point (Finding BL: covers Rust core path).
+        # Profile isolation: disable shadow compare and redirect logs to avoid touching ~/.pai.
+        orig_sc = pai_core_bridge.PAI_SHADOW_COMPARE
+        orig_env_sc = os.environ.get("PAI_SHADOW_COMPARE")
+        orig_pai_dir = os.environ.get("PAI_DIR")
+        try:
+            os.environ["PAI_SHADOW_COMPARE"] = "0"
+            os.environ["PAI_DIR"] = str(Path(self.tmp_dir) / "isolated_pai")
+            pai_core_bridge.PAI_SHADOW_COMPARE = False
+
+            verified_pub = u.verify_release(str(out), check_rollback=False)
+            self.assertEqual(verified_pub.version, "1.0.0")
+            self.assertEqual(verified_pub.key_id, "test-key-ephemeral")
+            self.assertEqual(verified_pub.manifest.get("platform"), "win-x64")
+            self.assertEqual(verified_pub.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": EXPECTED_RESEARCH_TREE})
+        finally:
+            pai_core_bridge.PAI_SHADOW_COMPARE = orig_sc
+            if orig_env_sc is not None:
+                os.environ["PAI_SHADOW_COMPARE"] = orig_env_sc
+            else:
+                os.environ.pop("PAI_SHADOW_COMPARE", None)
+            if orig_pai_dir is not None:
+                os.environ["PAI_DIR"] = orig_pai_dir
+            else:
+                os.environ.pop("PAI_DIR", None)
 
         # Negative control 1: Tampered file in payload -> UpdateRejected (SHA-256 mismatch)
         target_f = out / "bin" / "pai-core.exe"
@@ -381,7 +410,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         tampered_bytes = bytearray(orig_bytes)
         tampered_bytes[-1] ^= 0x01
         target_f.write_bytes(bytes(tampered_bytes))
-        with self.assertRaises(updater.UpdateRejected):
+        with self.assertRaisesRegex(updater.UpdateRejected, r"SHA-256 mismatch \(tampered\?\): bin/pai-core\.exe"):
             u._verify_release_py(str(out), check_rollback=False)
         target_f.write_bytes(orig_bytes)  # restore
 
@@ -389,14 +418,14 @@ class TestBuildPayloadP1(unittest.TestCase):
         tampered_doc = dict(res["manifest"])
         tampered_doc["version"] = "2.0.0"
         manifest_p.write_bytes(json.dumps(tampered_doc, indent=2).encode("utf-8"))
-        with self.assertRaises(updater.UpdateRejected):
+        with self.assertRaisesRegex(updater.UpdateRejected, r"signature invalid or signed by an unknown/revoked key"):
             u._verify_release_py(str(out), check_rollback=False)
         manifest_p.write_bytes(raw_manifest_bytes)  # restore
 
         # Negative control 3: Unlisted file in payload -> UpdateRejected (unlisted file in release)
         unlisted = out / "unlisted_backdoor.txt"
         unlisted.write_text("evil", encoding="utf-8")
-        with self.assertRaises(updater.UpdateRejected):
+        with self.assertRaisesRegex(updater.UpdateRejected, r"unlisted file in release: unlisted_backdoor\.txt"):
             u._verify_release_py(str(out), check_rollback=False)
         unlisted.unlink()
 
