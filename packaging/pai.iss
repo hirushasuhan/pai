@@ -57,6 +57,8 @@ Filename: "{app}\bin\pai.exe"; Parameters: "doctor --skip-smoke"; Description: "
 
 [UninstallDelete]
 Type: files; Name: "{app}\agreement_acceptance.json"
+Type: files; Name: "{app}\.pai-install"
+Type: files; Name: "{app}\manifest.files"
 Type: filesandordirs; Name: "{app}\research\__pycache__"
 
 [Code]
@@ -133,16 +135,83 @@ begin
   end;
 end;
 
+function HasValidPaiMarker(const Dir: string): Boolean;
+var
+  CleanDir: string;
+  MarkerPath: string;
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  CleanDir := RemoveQuotes(Trim(Dir));
+  if (Length(CleanDir) > 0) and (CleanDir[Length(CleanDir)] = '\') then
+    CleanDir := Copy(CleanDir, 1, Length(CleanDir) - 1);
+  MarkerPath := CleanDir + '\.pai-install';
+  if FileExists(MarkerPath) then
+  begin
+    if LoadStringsFromFile(MarkerPath, Lines) then
+    begin
+      for I := 0 to GetArrayLength(Lines) - 1 do
+      begin
+        if Pos('{8B7B61CA-C450-4E87-9F1B-4198A82711C9}', Lines[I]) > 0 then
+        begin
+          Result := True;
+          Break;
+        end;
+      end;
+    end;
+  end;
+end;
+
+function IsSafeRelativePath(const PathStr: string): Boolean;
+var
+  FirstChar: string;
+begin
+  Result := True;
+  if Length(PathStr) = 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
+  FirstChar := Copy(PathStr, 1, 1);
+  if FirstChar = '/' then
+    Log('MATCHED SLASH: ' + FirstChar);
+  if FirstChar = '\' then
+    Log('MATCHED BACKSLASH: ' + FirstChar);
+  if Pos(FirstChar, '/\') > 0 then
+    Log('MATCHED POS');
+  if (FirstChar = '/') or (FirstChar = '\') then
+  begin
+    Log('REJECT 2: starts with slash: [' + PathStr + ']');
+    Result := False;
+    Exit;
+  end;
+  // Reject drive letters / colon
+  if Pos(':', PathStr) > 0 then
+  begin
+    Log('REJECT 3: colon: ' + PathStr);
+    Result := False;
+    Exit;
+  end;
+  // Reject directory traversal (..)
+  if Pos('..', PathStr) > 0 then
+  begin
+    Log('REJECT 4: ..: ' + PathStr);
+    Result := False;
+    Exit;
+  end;
+end;
+
 function IsValidInstallDir(const TargetDir: string): Boolean;
 begin
   // A directory is valid if:
   // 1. It does not exist yet (will be created by installer)
   // 2. It exists and is completely empty
-  // 3. It exists and contains manifest.json (existing PAI installation / upgrade)
+  // 3. It exists and contains a valid .pai-install marker with AppId GUID (existing PAI installation / upgrade)
   Result := True;
   if DirExists(TargetDir) then
   begin
-    if (not IsDirEmpty(TargetDir)) and (not FileExists(TargetDir + '\manifest.json')) then
+    if (not IsDirEmpty(TargetDir)) and (not HasValidPaiMarker(TargetDir)) then
     begin
       Result := False;
     end;
@@ -205,76 +274,69 @@ end;
 
 procedure DeleteManifestAndGeneratedFiles(const AppDir: string);
 var
-  ManifestPath: string;
+  FilesListPath: string;
   Lines: TArrayOfString;
   I: Integer;
   Line: string;
-  P1, P2: Integer;
   RelPath: string;
   FullFilePath: string;
-  InFilesSection: Boolean;
   FindRec: TFindRec;
+  HasMarker: Boolean;
 begin
-  ManifestPath := AppDir + '\manifest.json';
-  if FileExists(ManifestPath) then
+  HasMarker := HasValidPaiMarker(AppDir);
+
+  // 1. Delete files listed in manifest.files (Finding DM)
+  FilesListPath := AppDir + '\manifest.files';
+  if FileExists(FilesListPath) then
   begin
-    if LoadStringsFromFile(ManifestPath, Lines) then
+    if LoadStringsFromFile(FilesListPath, Lines) then
     begin
-      InFilesSection := False;
       for I := 0 to GetArrayLength(Lines) - 1 do
       begin
-        Line := Lines[I];
-        if Pos('"files": {', Line) > 0 then
+        Line := Trim(Lines[I]);
+        if Line = '' then
+          Continue;
+
+        if not IsSafeRelativePath(Line) then
         begin
-          InFilesSection := True;
+          Log('WARNING: Unsafe path in manifest.files rejected: ' + Line);
           Continue;
         end;
-        if InFilesSection then
+
+        RelPath := Line;
+        StringChangeEx(RelPath, '/', '\', True);
+        FullFilePath := AppDir + '\' + RelPath;
+        if FileExists(FullFilePath) then
         begin
-          // End of "files": { block in manifest.json (indented by exactly 2 spaces)
-          if (Length(Line) >= 3) and (Line[1] = ' ') and (Line[2] = ' ') and (Line[3] = '}') then
-          begin
-            InFilesSection := False;
-            Break;
-          end;
-          P1 := Pos('"', Line);
-          if P1 > 0 then
-          begin
-            P2 := Pos('": {', Line);
-            if P2 > P1 then
-            begin
-              RelPath := Copy(Line, P1 + 1, P2 - (P1 + 1));
-              StringChangeEx(RelPath, '/', '\', True);
-              FullFilePath := AppDir + '\' + RelPath;
-              if FileExists(FullFilePath) then
-              begin
-                DeleteFile(FullFilePath);
-              end;
-            end;
-          end;
+          DeleteFile(FullFilePath);
         end;
       end;
     end;
   end;
 
-  // Delete generated and installer files placed during installation
-  DeleteFile(AppDir + '\agreement_acceptance.json');
-  DeleteFile(AppDir + '\AGREEMENT.txt');
-  DeleteFile(AppDir + '\manifest.sig');
-  DeleteFile(AppDir + '\manifest.json');
-
-  // Delete unins000.* files placed by Inno Setup
-  if FindFirst(AppDir + '\unins*.*', FindRec) then
+  // 2. Delete generated and installer files placed during installation ONLY if marker exists (Finding DL)
+  if HasMarker then
   begin
-    try
-      repeat
-        if (FindRec.Attributes and 16) = 0 then
-        begin
-          DeleteFile(AppDir + '\' + FindRec.Name);
-        end;
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
+    DeleteFile(AppDir + '\agreement_acceptance.json');
+    DeleteFile(AppDir + '\AGREEMENT.txt');
+    DeleteFile(AppDir + '\manifest.sig');
+    DeleteFile(AppDir + '\manifest.json');
+    DeleteFile(AppDir + '\manifest.files');
+    DeleteFile(AppDir + '\.pai-install');
+
+    // Delete unins000.* files placed by Inno Setup
+    if FindFirst(AppDir + '\unins*.*', FindRec) then
+    begin
+      try
+        repeat
+          if (FindRec.Attributes and 16) = 0 then
+          begin
+            DeleteFile(AppDir + '\' + FindRec.Name);
+          end;
+        until not FindNext(FindRec);
+      finally
+        FindClose(FindRec);
+      end;
     end;
   end;
 end;
@@ -349,6 +411,9 @@ begin
       end;
       ExitProcess(1);
     end;
+    // Write or ensure .pai-install marker immediately once directory is approved (Finding DL)
+    ForceDirectories(AppDir);
+    SaveStringToFile(AppDir + '\.pai-install', '{8B7B61CA-C450-4E87-9F1B-4198A82711C9}' + #13#10, False);
   end
   else if CurStep = ssPostInstall then
   begin

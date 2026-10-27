@@ -208,6 +208,19 @@ def build_inno_installer(
         resolved_payload = Path(payload_dir).resolve()
         if not (resolved_payload / "manifest.json").is_file():
             raise InstallerBuildError(f"Pre-staged payload missing manifest.json at: {resolved_payload}")
+        # Ensure marker and manifest.files are present in pre-staged payload (Findings DL, DM)
+        marker_p = resolved_payload / ".pai-install"
+        if not marker_p.is_file():
+            marker_p.write_text("{8B7B61CA-C450-4E87-9F1B-4198A82711C9}\n", encoding="utf-8")
+        files_list_p = resolved_payload / "manifest.files"
+        if not files_list_p.is_file():
+            try:
+                with open(resolved_payload / "manifest.json", "r", encoding="utf-8") as f:
+                    m = json.load(f)
+                lines = sorted(m.get("files", {}).keys())
+                files_list_p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            except Exception:
+                pass
     else:
         temp_payload_ctx = tempfile.TemporaryDirectory(prefix="pai_installer_payload_")
         resolved_payload = Path(temp_payload_ctx.name)

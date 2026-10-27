@@ -36,6 +36,9 @@ logger = logging.getLogger("build_payload")
 
 MANIFEST = "manifest.json"
 SIGNATURE = "manifest.sig"
+MANIFEST_FILES = "manifest.files"
+PAI_INSTALL_MARKER = ".pai-install"
+PAI_APP_ID_GUID = "{8B7B61CA-C450-4E87-9F1B-4198A82711C9}"
 DEFAULT_TAG = "v1.0.0-rc1"
 DEFAULT_PRODUCT = "pai-core"
 DEFAULT_VERSION = "1.0.0"
@@ -698,6 +701,24 @@ def build_payload(
             dest_path = out / rel_dest
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src_path), str(dest_path))
+
+    # Step 9b: Write .pai-install marker (Finding DL) and manifest.files (Finding DM)
+    marker_p = out / PAI_INSTALL_MARKER
+    marker_p.write_text(f"{PAI_APP_ID_GUID}\n", encoding="utf-8")
+
+    # Collect all relative files for manifest.files
+    rel_files: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(str(out)):
+        for f in filenames:
+            full_f = Path(dirpath) / f
+            rel = str(full_f.relative_to(out)).replace("\\", "/")
+            if rel not in (MANIFEST, SIGNATURE, MANIFEST_FILES):
+                rel_files.append(rel)
+    rel_files.append(MANIFEST_FILES)
+    rel_files.sort()
+
+    manifest_files_p = out / MANIFEST_FILES
+    manifest_files_p.write_text("\n".join(rel_files) + "\n", encoding="utf-8")
 
     # Step 10: Scan payload and compute hashes for manifest
     files_map = scan_and_validate_payload(out)

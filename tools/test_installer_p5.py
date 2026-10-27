@@ -312,6 +312,9 @@ class TestInstallerP5(unittest.TestCase):
         self.assertTrue((install_target / "bin" / "pai-core.exe").is_file(), "bin/pai-core.exe missing")
         self.assertTrue((install_target / "research" / "pai.py").is_file(), "research/pai.py missing")
         self.assertTrue((install_target / "manifest.json").is_file(), "manifest.json missing")
+        self.assertTrue((install_target / "manifest.files").is_file(), "manifest.files missing")
+        self.assertTrue((install_target / ".pai-install").is_file(), ".pai-install missing")
+        self.assertIn("{8B7B61CA-C450-4E87-9F1B-4198A82711C9}", (install_target / ".pai-install").read_text(encoding="utf-8"))
         self.assertTrue((install_target / "AGREEMENT.txt").is_file(), "AGREEMENT.txt missing")
         self.assertTrue((install_target / "unins000.exe").is_file(), "unins000.exe missing")
 
@@ -599,7 +602,8 @@ class TestInstallerP5(unittest.TestCase):
         install_target = Path(self.tmp_dir) / "PAI_Upgrade_Fail"
         install_target.mkdir(parents=True, exist_ok=True)
 
-        # Pre-stage manifest.json (marks as existing PAI directory for upgrade) and an unrelated user file
+        # Pre-stage .pai-install marker with AppId GUID (marks as existing PAI directory for upgrade, Finding DL)
+        (install_target / ".pai-install").write_text("{8B7B61CA-C450-4E87-9F1B-4198A82711C9}\n", encoding="utf-8")
         (install_target / "manifest.json").write_text('{"version": "1.0.0"}', encoding="utf-8")
         user_file = install_target / "my_secret_notes.txt"
         user_content = "CRITICAL_USER_DATA_DO_NOT_DELETE_VERIFICATION_STRING"
@@ -722,6 +726,165 @@ class TestInstallerP5(unittest.TestCase):
         self.assertFalse((non_empty_dir / "bin").exists(), "No PAI bin folder should be created")
         self.assertFalse((non_empty_dir / "manifest.json").exists(), "No manifest.json should be installed")
         self.assertFalse((non_empty_dir / "agreement_acceptance.json").exists(), "No agreement file should be installed")
+
+    def test_17_foreign_manifest_without_marker_rejected(self) -> None:
+        """
+        Validates Finding DL:
+        A folder of another project (such as a web application or npm package) that happens
+        to contain a 'manifest.json' must be refused if it does not contain the .pai-install marker.
+        No files in that folder must be deleted or overwritten.
+        """
+        out_dist = Path(self.tmp_dir) / "dist_dl17"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        foreign_dir = Path(self.tmp_dir) / "Foreign_Project_Folder"
+        foreign_dir.mkdir(parents=True, exist_ok=True)
+
+        foreign_manifest = foreign_dir / "manifest.json"
+        foreign_content = '{"name": "foreign-webapp", "version": "3.2.1"}'
+        foreign_manifest.write_text(foreign_content, encoding="utf-8")
+
+        foreign_code = foreign_dir / "app.js"
+        foreign_code.write_text('console.log("running web app");\n', encoding="utf-8")
+
+        sub = self._create_isolated_reg_subkey("Test_PAI_ForeignReject_DL17", "%USERPROFILE%\\bin")
+
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{foreign_dir}" /REG_SUBKEY="{sub}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+
+        # Must fail closed with non-zero exit code
+        self.assertNotEqual(proc.returncode, 0, "Installer must reject directory with foreign manifest.json lacking .pai-install")
+
+        # Must preserve foreign files completely untouched
+        self.assertTrue(foreign_manifest.exists(), "Foreign manifest.json must NOT be deleted")
+        self.assertEqual(foreign_manifest.read_text(encoding="utf-8"), foreign_content)
+        self.assertTrue(foreign_code.exists(), "Foreign code file must NOT be deleted")
+
+        # Must not install PAI artifacts
+        self.assertFalse((foreign_dir / ".pai-install").exists(), "Marker must not be created in rejected directory")
+        self.assertFalse((foreign_dir / "bin").exists(), "Bin folder must not be created")
+        self.assertFalse((foreign_dir / "agreement_acceptance.json").exists())
+
+    def test_18_hostile_manifest_files_traversal_survives(self) -> None:
+        """
+        Validates Finding DM:
+        Rollback deletes files listed in manifest.files. Any entry that is absolute,
+        contains '..', or has a drive letter must be rejected fail-closed, so that
+        hostile paths targeting files outside the install folder are never deleted.
+        """
+        # File placed outside the target directory that a hostile manifest entry tries to target
+        outside_file = Path(self.tmp_dir) / "outside.txt"
+        outside_content = "CRITICAL_OUTSIDE_SURVIVE_VERIFICATION"
+        outside_file.write_text(outside_content, encoding="utf-8")
+
+        # Create a mock payload with hostile manifest.files
+        mock_payload = Path(self.tmp_dir) / "hostile_payload"
+        mock_payload.mkdir(parents=True, exist_ok=True)
+        (mock_payload / "bin").mkdir(parents=True, exist_ok=True)
+        mock_bin = mock_payload / "bin" / "pai.exe"
+        mock_bin.write_text("MOCK_PAYLOAD_BIN", encoding="utf-8")
+        (mock_payload / "tools").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(self.update_path_script), str(mock_payload / "tools" / "update_path.ps1"))
+
+        # Manifest
+        manifest_data = {
+            "version": "1.1.0-rc1",
+            "files": {
+                "bin/pai.exe": {"size": mock_bin.stat().st_size, "sha256": sha256_file(mock_bin)},
+                "tools/update_path.ps1": {"size": 100, "sha256": "abc"},
+            },
+        }
+        (mock_payload / "manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+        (mock_payload / ".pai-install").write_text("{8B7B61CA-C450-4E87-9F1B-4198A82711C9}\n", encoding="utf-8")
+
+        # Hostile entries in manifest.files: traversal, drive letters, leading slashes
+        hostile_lines = [
+            "bin/pai.exe",
+            "..\\outside.txt",
+            "../outside.txt",
+            "..\\..\\outside.txt",
+            "C:\\secret.txt",
+            "/etc/passwd",
+        ]
+        (mock_payload / "manifest.files").write_text("\n".join(hostile_lines) + "\n", encoding="utf-8")
+
+        out_dist = Path(self.tmp_dir) / "dist_dm18"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+            payload_dir=mock_payload,
+        )
+        installer_exe = Path(build_res["installer_path"])
+        install_target = Path(self.tmp_dir) / "PAI_Hostile_DM18"
+
+        sub = self._create_isolated_reg_subkey("Test_PAI_Hostile_DM18", "%USERPROFILE%\\bin")
+        illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
+
+        # Finding DM Assertions:
+        # 1. Outside file MUST survive intact despite traversal in manifest.files
+        self.assertTrue(outside_file.exists(), "Outside file targeted by .. traversal must NOT be deleted by rollback")
+        self.assertEqual(outside_file.read_text(encoding="utf-8"), outside_content)
+
+        # 2. Legitimate relative file listed in manifest.files MUST be deleted
+        self.assertFalse((install_target / "bin" / "pai.exe").exists(), "Safe relative file must be deleted by rollback")
+
+    def test_19_failed_upgrade_removes_prior_version_per_spec(self) -> None:
+        """
+        Validates Finding DN:
+        As documented in docs/PACKAGING_SPEC.md §8.1, when an upgrade over an existing
+        PAI installation fails during post-installation and executes rollback, the
+        rollback removes all files in manifest.files, the .pai-install marker, generated
+        files, and the Inno uninstall registry key.
+        """
+        out_dist = Path(self.tmp_dir) / "dist_dn19"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        install_target = Path(self.tmp_dir) / "PAI_Upgrade_DN19"
+        install_target.mkdir(parents=True, exist_ok=True)
+
+        # Pre-stage previous PAI version
+        (install_target / ".pai-install").write_text("{8B7B61CA-C450-4E87-9F1B-4198A82711C9}\n", encoding="utf-8")
+        bin_dir = install_target / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        old_bin = bin_dir / "pai.exe"
+        old_bin.write_text("MOCK_OLD_LAUNCHER", encoding="utf-8")
+        (install_target / "manifest.json").write_text('{"version": "1.0.0"}', encoding="utf-8")
+        (install_target / "manifest.files").write_text("bin/pai.exe\n", encoding="utf-8")
+
+        sub = self._create_isolated_reg_subkey("Test_PAI_Upgrade_DN19", "%USERPROFILE%\\bin")
+        illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
+
+        # Finding DN Assertions:
+        # Prior PAI files, marker, and uninstall key are completely removed
+        self.assertFalse(old_bin.exists(), "Prior launcher must be removed by rollback")
+        self.assertFalse((install_target / ".pai-install").exists(), "Marker must be removed by rollback")
+        self.assertFalse((install_target / "manifest.json").exists(), "manifest.json must be removed by rollback")
+        self.assertFalse(self._inno_uninstall_key_exists(), "Inno uninstall registry key must be removed")
+        # Empty directory is cleanly removed
+        self.assertFalse(install_target.exists(), "Target directory left empty must be removed")
 
 
 if __name__ == "__main__":
