@@ -129,6 +129,9 @@ Run in Windows Sandbox or a clean VM, never on the development profile during th
 | P4 | Download engine and progress UI (console and installer page), resume and cancel | no |
 | P5 | Inno Setup script: agreement page, wizard pages, PATH, uninstall; test matrix of section 9 | no |
 | P6 | After the N+1 review: move the setup wizard into `pai setup` (`research/`), release 1.0.0 installer, signing decision applied | yes (separate reviewed commit) |
+| P1b | Extend `packaging/build_payload.py`: `--platform` (`win-x64`, `linux-x64`), platform field in the manifest, binary-format check (PE or ELF), `dist/` in `.gitignore` | no |
+| P2b | `packaging/install.ps1`: the PowerShell one-line bootstrap (section 14); needs D11 and the P2 portable zip | no |
+| P7 | Linux: CI build of `pai-core` for Linux, `packaging/install.sh`, Linux hardware survey and Ollama handling, Linux test matrix (section 14.3 to 14.5). Release 1.2.0, labelled preview | no (imports read-only; Linux-only fixes in `research/` only as separate reviewed commits) |
 
 ## 11. Decisions the owner must make
 
@@ -138,6 +141,9 @@ Run in Windows Sandbox or a clean VM, never on the development profile during th
 - **D11** where the catalog and installer are hosted (the repository's release assets are the simplest).
 - **D12** minimum Windows version (the Ollama requirement is Windows 10 22H2 or newer).
 - **D13** whether the installer may include a first small model for offline installs (default: no).
+- **D14** whether the PowerShell one-line install ships with 1.1.0 (default: yes, as a second front door next to `PAI-Setup`, never the only one) and whether the project page shows it as the recommended method (default: no, the installer stays recommended).
+- **D15** Linux Python runtime: A) a pinned standalone CPython build shipped in the payload (default, same behaviour on every distribution), or B) the system `python3` above a stated minimum version.
+- **D16** Linux support level for 1.2.0: labelled "preview" until a Linux evaluation is recorded (default), or full support from the first release.
 
 ## 12. Instructions for the coding agent
 
@@ -155,7 +161,8 @@ The installer is a delivery mechanism, so it is built alongside the core and not
 |---|---|---|
 | 1.0.0-rc1 | Release N (exists: tag `v1.0.0-rc1`, commit `8ce81cb`) | N+1 evaluation window runs on it |
 | 1.0.0 | After the N+1 review: Python fallback removed | Core finished; no installer work in `research/` before this |
-| 1.1.0 | First installable release: installer, agreement, `pai` on PATH, Ollama check, hardware-aware model setup, progress bar | Built from the 1.0.0 tag; core behaviour unchanged (below) |
+| 1.1.0 | First installable release: installer, agreement, `pai` on PATH, Ollama check, hardware-aware model setup, progress bar | Built from the 1.0.0 tag; core behaviour unchanged (below); includes the PowerShell one-line install (section 14.2) if D14 is accepted |
+| 1.2.0 | Linux installer (`install.sh`) and Linux `pai-core` build, labelled preview | Needs the Linux items of section 14; the Windows 1.1.0 behaviour is unchanged |
 | 1.5.0 | Automation interface and optional image generation (`docs/ROADMAP.md`) | Entry gate in the ROADMAP |
 
 **Preview builds.** Installer builds made before 1.1.0 are tagged `v1.1.0-rc1`, `-rc2` and so on, labelled "preview", and tested in a sandbox or VM. They are given only to the owner and a few trusted testers, because the evaluation window and the agreement review (D8) are not finished.
@@ -165,6 +172,90 @@ The installer is a delivery mechanism, so it is built alongside the core and not
 **Release gates for 1.1.0.** The test matrix of section 9 passes on recorded machine profiles; the release manifest is signed offline (ADR-005); the installer's SHA-256 is published; an antivirus scan result is recorded; release notes state what was and was not evaluated; claims-lint and CI are green; decisions D8 to D13 are recorded.
 
 **Where users download from.** If the repository stays private (Finding AV), release assets and the catalog are not reachable without a login, and the installer could not fetch the catalog. Public downloads need a public host (for example a separate public releases repository or a website). Decide this with D11 before building the download code.
+
+## 14. One-line install (PowerShell) and Linux (added 2026-10-27, proposal until the owner confirms)
+
+### 14.1 Position
+
+The one-line commands are extra front doors to the same payload. They do not get their own logic: `install.ps1` and `install.sh` are thin bootstraps that fetch a version-pinned payload, verify it, show the agreement, unpack it and call the same `packaging/pai_setup.py` for Ollama and model setup. `PAI-Setup-<version>-x64.exe` stays the primary, recommended path for ordinary users, because a signed (or at least inspectable) installer with a wizard is easier to trust and to support than a piped script.
+
+### 14.2 PowerShell one-line install (Windows, release 1.1.0 if D14 is accepted)
+
+Command shown on the project page (the version is part of the URL, never "latest"):
+
+```
+irm https://<host>/pai/v1.1.0/install.ps1 | iex
+```
+
+An inspect-first alternative is shown next to it: download `install.ps1`, compare its SHA-256 with the value on the release page, read it, then run it. For unattended use: `& ([scriptblock]::Create((irm <url>))) -AcceptTerms`, because arguments cannot be passed through a bare `| iex`.
+
+What `install.ps1` does, in order. Each step stops with a plain message and leaves nothing half-installed (all work happens in a staging folder, then one rename):
+
+1. Check Windows version (D12), 64-bit, PowerShell 5.1 or newer; refuse in Constrained Language Mode and point to `PAI-Setup`. Refuse to run elevated unless `-AllowElevated` is given (an elevated run would install into the administrator's profile).
+2. Use TLS 1.2 or newer, HTTPS only, one host (the project host). No redirects to other hosts.
+3. Download the portable zip of the same version. The script is generated per release and contains the expected SHA-256 of that zip; a mismatch aborts before anything is extracted. A hash fetched from the same place as the zip adds nothing, so the expected value is baked into the script, and the script's own SHA-256 is published on the release page and in the release notes.
+4. Extract with path checks (no absolute paths, no `..`, no links), then verify the per-file manifest from P1 (every file's size and SHA-256). Verification of the ADR-005 Ed25519 signature is done by the embedded Python against the key in `trust.json`. Because `trust.json` arrives in the same payload, this proves consistency with that key and not who published it; the script therefore prints the key fingerprint and tells the user to compare it with the project page.
+5. Print what will be installed, where (`%LOCALAPPDATA%\Programs\PAI`), the hosts it may contact, and the agreement summary with a link to the full text. Interactive runs require typing `YES`; non-interactive runs require `-AcceptTerms`. Acceptance is stored locally only (section 3).
+6. Install per user, update the user PATH with the pattern of Appendix D (never `setx`), write an uninstall script and a per-user (HKCU) uninstall entry, then call `pai_setup.py` for the Ollama check and model selection (sections 4 to 6).
+
+What it must never do: change the execution policy, add Defender exclusions, require administrator rights, add scheduled tasks or services, download anything that is not listed in the manifest or the signed catalog, send telemetry, or run content fetched from any other host. `iex` of a string is not subject to the execution policy, so the design does not rely on the policy as a safeguard; the safeguards are the baked-in hash and the manifest.
+
+Honest limits, to be stated in the user documentation:
+
+- A command that downloads text and pipes it into `iex` is a pattern that security tools look for; the Sigma rule "PowerShell Download and Execution Cradles" (rated high severity) flags `irm` with `iex`. Some managed or corporate machines will block or alert on it. The message printed on failure points to `PAI-Setup`.
+- If the download host is compromised, an attacker can replace both the script and the hash that it contains. The mitigations are the published hash and key fingerprint on a second place (the release notes in the repository), version-pinned URLs, and the offline signature on the payload. The risk is smaller than with an unverified script but not zero.
+- Authenticode signing of `install.ps1` is possible once a certificate exists (D9). It is not needed for `iex` to work.
+
+### 14.3 Linux installer (release 1.2.0, preview)
+
+Command:
+
+```
+curl -fsSL https://<host>/pai/v1.2.0/install.sh | sh
+```
+
+with the same download, check, read, run alternative. Design:
+
+- **Script safety.** POSIX `sh` (tested with dash and bash), `set -eu`, and the whole body inside one function that is called on the last line, so a truncated download executes nothing. The expected SHA-256 of the tarball is baked in per release, as in 14.2. `sha256sum` is required; if `curl` is missing the script says so (a `wget` fallback is allowed but must use the same checks).
+- **Never `sudo` by itself.** Everything lands under the user's home. When a step needs root (a package such as `bubblewrap`, a system-wide Ollama), the script prints the exact command for the user to run and continues or stops as the user chooses.
+- **Layout.** `${XDG_DATA_HOME:-~/.local/share}/pai/<version>/` with a `current` symlink, and `~/.local/bin/pai`, a small wrapper that sets `PAI_CORE_BIN` and `PAI_CORE_SHA256` and runs the bundled Python on the tagged `research/` tree. If `~/.local/bin` is not on `PATH`, the script shows the exact lines and appends them to the user's shell profile only after a yes, inside a marked block (`# >>> pai >>>` to `# <<< pai <<<`) so that uninstall removes exactly that block.
+- **Python runtime (D15).** Default: a pinned standalone CPython build in the payload, hash-pinned like the Windows one, so behaviour does not depend on the distribution. Alternative: system `python3` with a stated minimum version.
+- **Targets.** x86_64 with glibc, built on an old enough base (Ubuntu 22.04 container) for wide compatibility. Tested on Ubuntu 22.04 and 24.04, Debian 12, a current Fedora, and WSL2 Ubuntu. aarch64 and musl (Alpine) are out of scope for 1.2.0 and the script says so instead of guessing. Package formats (`.deb`, `.rpm`, AppImage, Flatpak) are out of scope; Flatpak's own sandbox would also conflict with the agent's sandbox (ADR-011).
+- **Sandbox prerequisites.** The Linux sandbox needs kernel and user-space features described in ADR-011. The agent must read ADR-011 and list the exact prerequisites from it, not from memory. The installer and `pai doctor` report which are present; if one is missing, the tools that need it stay disabled instead of running unsandboxed.
+- **Ollama on Linux.** According to the official Linux page, the supported routes are the install script and a manual `.tar.zst` extracted into `/usr`; both use `sudo`, and the recommended service runs as an `ollama` system user with its models under `/usr/share/ollama`. Therefore: detect an existing Ollama and reuse it; otherwise show the official method and let the user run it (never pipe the Ollama script silently). A user-level extraction into the home folder with `ollama serve` run by the user may work but is not documented as a supported route; the agent tests it in a VM and reports the result, and uses it only if it works and is described to the user as unofficial. The disk-space rule must use the real models directory (the service's directory or `OLLAMA_MODELS`), not the home folder.
+- **Hardware survey on Linux.** CPU and RAM from `/proc`, disks from `statvfs`, NVIDIA from `nvidia-smi`, AMD from the ROCm tools if present. Same fit rules and the same signed catalog; the catalog gains a `platforms` field per entry.
+- **Uninstall.** `uninstall.sh` removes the version folders, the symlinks and the marked profile block. Models, Ollama and `~/.pai` stay unless the user asks, and the script prints what stays.
+- **Evidence limit.** The Linux core was not part of the Windows shadow window. Release notes for 1.2.0 must say that Linux is covered by CI and the installer test matrix only, until a Linux evaluation (a smaller shadow run on at least two distributions, criteria agreed with the reviewer in advance) is recorded. This is why 1.2.0 is labelled preview (D16).
+
+### 14.4 Shared changes to existing pieces
+
+- `build_payload.py` (P1b): `--platform`, a `platform` key in the manifest, the expected binary format (PE for Windows, ELF for Linux), one binary hash pinned per platform. The Linux binary is built by CI from the tag on a clean runner; the reviewer checks that its hash in the manifest equals the CI output. Rust builds are not assumed to be byte-reproducible; the pin is the hash of the one built artifact, as for Windows.
+- Manifest and catalog formats stay at `format: 1` with additive fields only; the verification code rejects unknown required fields.
+- `pai_setup.py` is written cross-platform from P3 (OS-specific code in separate small modules), so Linux does not need a rewrite later.
+
+### 14.5 Test matrix additions
+
+| Case | Expected |
+|---|---|
+| Tampered zip or tarball (one byte) | Abort before extraction; nothing installed |
+| Truncated `install.sh` or `install.ps1` | Nothing executed (Linux: function not called; Windows: parse error) |
+| Archive entry with `..`, absolute path or link | Rejected; negative control with a clean archive |
+| Ctrl-C during download or unpack | No partial install; re-run works |
+| Re-run on an installed version, then upgrade | Idempotent; PATH entry or profile block not duplicated |
+| Non-ASCII user name and a path with spaces | Works (Windows); works (Linux home with spaces) |
+| Run as administrator or root | Refused unless the explicit flag is given |
+| No network | Clear message; no half state |
+| Windows Sandbox and a clean VM: PowerShell 5.1 and 7 | Works; `where pai` and `pai --version` in a new window |
+| Constrained Language Mode, AppLocker or WDAC | Clear message pointing to `PAI-Setup` |
+| Linux: Ubuntu 22.04 and 24.04, Debian 12, Fedora, WSL2; `/bin/sh` is dash and bash | Works; `pai --version` and `pai doctor` in a new shell |
+| Linux: no `~/.local/bin` on PATH, `/tmp` mounted `noexec`, SELinux enforcing (Fedora), no `curl` | Correct message or working fallback |
+| Uninstall (both) | Removes what was installed and only that |
+
+Results are recorded per machine profile and per distribution, as in section 9.
+
+### 14.6 Order and gates
+
+P1b and P7 follow the same rules as the other milestones (one report each, trust-boundary table, hostile-input tests with negative controls, claims-lint and CI green, no signing keys handled by the agent). P2b comes after P2 and after D11 (the host) is decided: while the repository is private (Finding AV), a public one-line URL needs a separate public host. Linux work (P7) starts after 1.1.0 is released, so Windows findings from real users are fixed first.
 
 ## Appendix A. Draft agreement text (for legal review; not legal advice)
 

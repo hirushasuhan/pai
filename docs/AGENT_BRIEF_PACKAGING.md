@@ -18,6 +18,9 @@ Read first: [PACKAGING_SPEC.md](PACKAGING_SPEC.md) and [ADR-013](adr/ADR-013-ins
 | P4 | Download engine on Ollama's streamed pull API: per-digest aggregation, overall bar with sizes, speed and time left, resume, cancel, retry, disk-full message, `--progress-json` events | Simulated slow, dropped and corrupt streams behave as specified |
 | P5 | Inno Setup script: agreement page (cannot continue without acceptance), wizard pages, consent page listing hosts, per-user install, PATH, uninstall; run the full test matrix (spec section 9) | Matrix report with results per machine profile; antivirus scan result recorded |
 | P6 | After the reviewer opens it: move the setup entry point into `pai setup` in `research/` as a separate commit that only adds setup, catalog and download code | Release script confirms the evaluated core files are byte-identical to the 1.0.0 tag |
+| P1b | Extend the payload builder for `--platform` (`win-x64`, `linux-x64`), binary-format check, `dist/` in `.gitignore` (spec section 14.4) | Existing P1 tests still pass; a Linux-platform build from a fixture is rejected when the binary is a PE file, and the reverse |
+| P2b | `packaging/install.ps1` one-line bootstrap (spec section 14.2); only after D11 and P2 | Tampered zip aborts before extraction; hostile-archive tests; run in Windows Sandbox with PowerShell 5.1 and 7 |
+| P7 | Linux build in CI, `packaging/install.sh`, Linux survey and Ollama handling (spec section 14.3 to 14.5); only after 1.1.0 | Matrix of section 14.5 per distribution; release labelled preview |
 
 ## What to hand back
-For each step: files changed, commit ids, how to run it, the test output, the machine profile, and a list of anything not done. If a decision (D8 to D13 in the spec) blocks you, stop and say which one.
+For each step: files changed, commit ids, how to run it, the test output, the machine profile, and a list of anything not done. If a decision (D8 to D16 in the spec) blocks you, stop and say which one.

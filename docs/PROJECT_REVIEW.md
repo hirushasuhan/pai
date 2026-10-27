@@ -3189,3 +3189,23 @@ Checked by the reviewer: `core/` tree `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`
 Two small points that do not block the tag: the checker compares only the `core/` tree, and it should compare the `research/` tree against the evaluated commit as well; the environment table in the release notes lists `PAI_TELEMETRY_SOURCE` with a default of "cli", whereas the module default is "unknown" and the command-line entry point sets "cli".
 
 The owner reports a green Actions run (three jobs) with head commit `8ce81cbf966627a7e73ca944b3aee18a1c04a627`; the reviewer could not open the run. The tag must point at exactly that commit. Finding AV remains "decision recorded, completion unconfirmed".
+
+
+## Reviewer addendum: Milestone P1 (commit 9aa23da), 2026-10-27
+
+**Verified by the reviewer.** HEAD is `9aa23da`; the `research/` tree (`506e520b...`) and `core/` tree (`14c60746...`) are unchanged; the working tree was clean; the diff since `11500e1` is only `packaging/build_payload.py` and `tools/test_build_payload.py`. The code was read: archive extraction from the tag with path and link checks, tree and binary hash verification, blob-against-git verification of the extracted `research/` files, payload scan, and an atomic sorted manifest. The test file uses temporary directories (not the repository tree) and covers reproducibility, tag and tree mismatches, a one-byte binary change, a missing binary, a tampered extracted file, unsafe paths and links, the manifest format, and the command line. The reviewer did not run the Windows test run itself.
+
+**Verdict: P1 accepted. P2 may start**, with the notes below. The milestone's stated criterion (two builds from one tag give identical manifests) is met on the owner's evidence (116 files, 5,256,272 bytes).
+
+**Notes (none blocks P2):**
+
+1. The report says +429 and +262 lines; the commit shows 568 and 323. Counts in reports should come from `git diff --stat`.
+2. The payload binary comes from the local `core/target/release` build and is checked against the pinned SHA-256, not extracted from the tag. That is the right choice (Rust output is not assumed to be byte-reproducible), but the release notes must say so, and the pin must equal the hash recorded for the evaluated binary.
+3. The manifest is unsigned. It must be signed offline under ADR-005 before any release, and the agent must check that the manifest keys match what `research/updater.py` expects (a P2 or P3 test).
+4. The payload includes `research/tests`. This is acceptable (the tree is shipped exactly as tagged), but the release notes should state it.
+5. `dist/` (or whatever output folder is used) is not in `.gitignore`; added to the P1b step in the spec.
+6. The run did not touch `~/.pai` according to the owner; the next milestones keep that rule.
+7. Decisions D8 to D13 are still open. Only the user decides them; the spec contains proposed defaults, not agreements.
+8. CI result and the head commit of the Actions run for `9aa23da` are owner-reported; the user should confirm them.
+
+**New in the specification (docs only, not committed by the reviewer):** section 14 of `docs/PACKAGING_SPEC.md` adds a PowerShell one-line install (proposed for 1.1.0, D14) and a Linux installer (proposed as 1.2.0, labelled preview, D15 and D16), with milestones P1b, P2b and P7. The Linux core was not part of the Windows shadow window, so the Linux release must say what was and was not evaluated.
