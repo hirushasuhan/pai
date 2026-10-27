@@ -43,7 +43,10 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 Compression=lzma2/max
 SolidCompression=yes
-UninstallDisplayIcon={app}\bin\pai.exe
+SetupIconFile=assets\pai.ico
+WizardImageFile=assets\wizard-large.bmp
+WizardSmallImageFile=assets\wizard-small.bmp
+UninstallDisplayIcon={app}\assets\pai.ico
 UninstallDisplayName=Personal Agentic AI (PAI)
 WizardStyle=modern
 

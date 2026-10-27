@@ -101,9 +101,11 @@ def build_launcher(
     out_path: Path,
     source_path: Optional[Path] = None,
     compiler: Optional[str] = None,
+    icon_path: Optional[Path] = None,
 ) -> Path:
     """
     Compiles launcher.c into a native Windows executable at out_path.
+    Optionally embeds an icon resource if an icon file and resource compiler are available.
     """
     src = Path(source_path) if source_path else LAUNCHER_SRC
     if not src.is_file():
@@ -126,22 +128,61 @@ def build_launcher(
 
     logger.info("Building native launcher using %s (%s)...", comp_type, comp_exec)
 
-    if comp_type in ("gcc", "clang"):
-        cmd = [comp_exec] + flags + [str(src), "-o", str(target)]
-    elif comp_type == "cl":
-        cmd = [comp_exec] + flags + [str(src), f"/Fe:{target}"]
-    else:
-        raise LauncherBuildError(f"Unsupported compiler type: {comp_type}")
+    # Resolve icon
+    if icon_path is None:
+        default_ico = Path(__file__).resolve().parent / "assets" / "pai.ico"
+        if default_ico.is_file():
+            icon_path = default_ico
 
-    # Ensure bit-for-bit reproducible binary timestamps (reproducible build standard)
-    env = os.environ.copy()
-    env["SOURCE_DATE_EPOCH"] = "1767225600"  # 2026-01-01 00:00:00 UTC
+    res_obj: Optional[Path] = None
+    temp_dir_ctx = None
+    if icon_path and Path(icon_path).is_file():
+        ico_resolved = Path(icon_path).resolve()
+        import tempfile
+        temp_dir_ctx = tempfile.TemporaryDirectory(prefix="pai_launcher_rc_")
+        tmp_rc_dir = Path(temp_dir_ctx.name)
+        rc_file = tmp_rc_dir / "launcher.rc"
+        rc_file.write_text(f'1 ICON "{ico_resolved.as_posix()}"\n', encoding="utf-8")
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    if proc.returncode != 0:
-        raise LauncherBuildError(
-            f"Launcher compilation failed with exit code {proc.returncode}:\n{proc.stderr}\n{proc.stdout}"
-        )
+        if comp_type in ("gcc", "clang"):
+            windres = shutil.which("windres")
+            if windres:
+                out_res = tmp_rc_dir / "launcher_res.o"
+                p_rc = subprocess.run([windres, "-i", str(rc_file), "-o", str(out_res)], capture_output=True, text=True)
+                if p_rc.returncode == 0 and out_res.is_file():
+                    res_obj = out_res
+        elif comp_type == "cl":
+            rc = shutil.which("rc")
+            if rc:
+                out_res = tmp_rc_dir / "launcher.res"
+                p_rc = subprocess.run([rc, f"/fo{out_res}", str(rc_file)], capture_output=True, text=True)
+                if p_rc.returncode == 0 and out_res.is_file():
+                    res_obj = out_res
+
+    try:
+        extra_objs = [str(res_obj)] if res_obj else []
+        if comp_type in ("gcc", "clang"):
+            cmd = [comp_exec] + flags + [str(src)] + extra_objs + ["-o", str(target)]
+        elif comp_type == "cl":
+            cmd = [comp_exec] + flags + [str(src)] + extra_objs + [f"/Fe:{target}"]
+        else:
+            raise LauncherBuildError(f"Unsupported compiler type: {comp_type}")
+
+        # Ensure bit-for-bit reproducible binary timestamps (reproducible build standard)
+        env = os.environ.copy()
+        env["SOURCE_DATE_EPOCH"] = "1767225600"  # 2026-01-01 00:00:00 UTC
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if proc.returncode != 0:
+            raise LauncherBuildError(
+                f"Launcher compilation failed with exit code {proc.returncode}:\n{proc.stderr}\n{proc.stdout}"
+            )
+    finally:
+        if temp_dir_ctx:
+            try:
+                temp_dir_ctx.cleanup()
+            except Exception:
+                pass
 
     verify_launcher_pe(target)
     logger.info("Native launcher successfully compiled to %s (%d bytes)", target, target.stat().st_size)

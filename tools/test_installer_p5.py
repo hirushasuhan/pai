@@ -38,6 +38,7 @@ from packaging.build_installer import (
     InstallerBuildError,
     build_inno_installer,
     find_iscc_compiler,
+    has_pe_resource_icon,
     verify_installer_pe,
 )
 from packaging.build_payload import (
@@ -885,6 +886,63 @@ class TestInstallerP5(unittest.TestCase):
         self.assertFalse(self._inno_uninstall_key_exists(), "Inno uninstall registry key must be removed")
         # Empty directory is cleanly removed
         self.assertFalse(install_target.exists(), "Target directory left empty must be removed")
+
+    def test_20_installer_and_launcher_icon_resource(self) -> None:
+        """
+        Validates Installer and Launcher Branding Assets:
+          1. packaging/assets/pai.ico exists and contains standard multi-resolution icons.
+          2. packaging/assets/wizard-large.bmp and wizard-small.bmp exist.
+          3. public/pai-logo-512.png exists, is < 200 KB, and original 4.4 MB logo is gitignored.
+          4. Compiled installer executable PAI-Setup-...-win-x64.exe carries a PE icon resource.
+          5. Compiled native launcher pai.exe carries a PE icon resource.
+          6. Staged installation contains assets/pai.ico and manifest records it.
+        """
+        assets_dir = self.packaging_dir / "assets"
+        self.assertTrue((assets_dir / "pai.ico").is_file(), "packaging/assets/pai.ico missing")
+        self.assertTrue((assets_dir / "wizard-large.bmp").is_file(), "wizard-large.bmp missing")
+        self.assertTrue((assets_dir / "wizard-small.bmp").is_file(), "wizard-small.bmp missing")
+
+        # Public web logo
+        public_logo = self.repo_root / "public" / "pai-logo-512.png"
+        self.assertTrue(public_logo.is_file(), "public/pai-logo-512.png missing")
+        self.assertLess(public_logo.stat().st_size, 200 * 1024, "public logo must be < 200 KB")
+
+        # Verify .gitignore ignores raw 4.4 MB original
+        gitignore_text = (self.repo_root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("public/PAI Logo.png", gitignore_text)
+
+        out_dist = Path(self.tmp_dir) / "dist_icon20"
+        build_res = build_inno_installer(
+            repo_root=self.repo_root,
+            out_dir=out_dist,
+            tag=DEFAULT_TAG,
+            version="1.1.0-rc1",
+            platform="win-x64",
+        )
+        installer_exe = Path(build_res["installer_path"])
+        self.assertTrue(installer_exe.is_file())
+
+        # Assert installer executable carries icon resource
+        self.assertTrue(has_pe_resource_icon(installer_exe), "Installer executable must carry an embedded icon resource")
+
+        # Install and check launcher icon resource and assets directory
+        install_target = Path(self.tmp_dir) / "PAI_Icon_Target"
+        sub = self._create_isolated_reg_subkey("Test_PAI_Icon_20", "%USERPROFILE%\\bin")
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        self.assertEqual(proc.returncode, 0, f"Installer failed: {proc.stderr}")
+
+        # Assert launcher carries embedded icon resource
+        pai_exe = install_target / "bin" / "pai.exe"
+        self.assertTrue(pai_exe.is_file(), "pai.exe missing")
+        self.assertTrue(has_pe_resource_icon(pai_exe), "Native pai.exe must carry an embedded icon resource")
+
+        # Assert assets are staged in install target
+        self.assertTrue((install_target / "assets" / "pai.ico").is_file(), "Installed assets/pai.ico missing")
+        self.assertTrue((install_target / "manifest.json").is_file())
+        with open(install_target / "manifest.json", "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+        self.assertIn("assets/pai.ico", manifest_data.get("files", {}))
 
 
 if __name__ == "__main__":

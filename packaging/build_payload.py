@@ -702,6 +702,15 @@ def build_payload(
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src_path), str(dest_path))
 
+    # Step 9a: Stage packaging assets into assets/ if present
+    assets_dir = repo / "packaging" / "assets"
+    if assets_dir.is_dir():
+        dest_assets = out / "assets"
+        dest_assets.mkdir(parents=True, exist_ok=True)
+        for asset_file in sorted(assets_dir.glob("*")):
+            if asset_file.is_file():
+                shutil.copy2(str(asset_file), str(dest_assets / asset_file.name))
+
     # Step 9b: Write .pai-install marker (Finding DL) and manifest.files (Finding DM)
     marker_p = out / PAI_INSTALL_MARKER
     marker_p.write_text(f"{PAI_APP_ID_GUID}\n", encoding="utf-8")

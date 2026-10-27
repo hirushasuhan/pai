@@ -138,6 +138,32 @@ def verify_installer_pe(installer_path: Path) -> Dict[str, Any]:
     }
 
 
+def has_pe_resource_icon(pe_path: Path | str) -> bool:
+    """Verifies that a PE executable has a populated Resource Table (for icons/manifests)."""
+    p = Path(pe_path).resolve()
+    if not p.is_file():
+        return False
+    with open(p, "rb") as f:
+        d = f.read()
+    if len(d) < 0x40 or d[:2] != b"MZ":
+        return False
+    e_lfanew = int.from_bytes(d[0x3C:0x40], "little")
+    if e_lfanew + 26 > len(d) or d[e_lfanew:e_lfanew+4] != b"PE\x00\x00":
+        return False
+    opt_magic = int.from_bytes(d[e_lfanew+24:e_lfanew+26], "little")
+    if opt_magic == 0x10B:  # PE32
+        res_offset = e_lfanew + 24 + 96 + 16
+    elif opt_magic == 0x20B:  # PE32+ (64-bit)
+        res_offset = e_lfanew + 24 + 112 + 16
+    else:
+        return False
+    if res_offset + 8 > len(d):
+        return False
+    rva = int.from_bytes(d[res_offset:res_offset+4], "little")
+    size = int.from_bytes(d[res_offset+4:res_offset+8], "little")
+    return rva > 0 and size > 0
+
+
 def build_inno_installer(
     repo_root: Path,
     out_dir: str | Path,
@@ -212,6 +238,9 @@ def build_inno_installer(
         marker_p = resolved_payload / ".pai-install"
         if not marker_p.is_file():
             marker_p.write_text("{8B7B61CA-C450-4E87-9F1B-4198A82711C9}\n", encoding="utf-8")
+        assets_src = repo_root / "packaging" / "assets"
+        if assets_src.is_dir() and not (resolved_payload / "assets").is_dir():
+            shutil.copytree(str(assets_src), str(resolved_payload / "assets"), dirs_exist_ok=True)
         files_list_p = resolved_payload / "manifest.files"
         if not files_list_p.is_file():
             try:

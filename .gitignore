@@ -56,3 +56,6 @@ tools/corpus/frozen_snapshot/
 
 # Manual external projects corpus (Finding AT - kept locally/externally, never tracked in git)
 tools/corpus/manual_projects/
+
+# Large raw branding originals (kept locally/externally, never committed to git)
+public/PAI Logo.png

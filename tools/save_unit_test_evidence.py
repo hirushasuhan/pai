@@ -91,7 +91,7 @@ def main() -> None:
     run_suite_and_save(
         "tools/test_installer_p5.py",
         evidence_dir / "test_installer_p5.txt",
-        "PAI Inno Setup Installer Tests (19 Tests, Findings DK, DL, DM, DN, Milestone P5)",
+        "PAI Inno Setup Installer Tests (20 Tests, Icon & Findings DK, DL, DM, DN, Milestone P5)",
     )
 
 
