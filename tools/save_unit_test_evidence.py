@@ -53,7 +53,7 @@ def get_working_tree_research_id() -> str:
             os.remove(tmp_index)
 
 
-def get_machine_header(suite_title: str) -> str:
+def get_machine_header(suite_title: str, is_dirty: Optional[bool] = None) -> str:
     lines = [
         "=" * 80,
         f"{suite_title.upper()} - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)",
@@ -68,9 +68,15 @@ def get_machine_header(suite_title: str) -> str:
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT).decode().strip()
         lines.append(f"Git HEAD:        {head}")
 
-        # Finding EN: Check porcelain status and record clean/DIRTY
-        porcelain = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO_ROOT).decode().strip()
-        is_dirty = bool(porcelain)
+        # Finding EN & EQ: Check porcelain status and record clean/DIRTY.
+        # Uses is_dirty snapshot taken once at start, or checks excluding docs/evidence/
+        # so evidence log writing does not dirty the working tree check for subsequent suites.
+        if is_dirty is None:
+            porcelain = subprocess.check_output(
+                ["git", "status", "--porcelain", "--", ":!docs/evidence"],
+                cwd=REPO_ROOT,
+            ).decode().strip()
+            is_dirty = bool(porcelain)
         lines.append(f"Working Tree:    {'DIRTY' if is_dirty else 'clean'}")
 
         # Finding EN: Record real working-tree research tree id
@@ -105,8 +111,8 @@ def get_machine_header(suite_title: str) -> str:
     return "\n".join(lines)
 
 
-def run_suite_and_save(suite_script: str, output_path: Path, title: str) -> None:
-    header = get_machine_header(title)
+def run_suite_and_save(suite_script: str, output_path: Path, title: str, is_dirty: Optional[bool] = None) -> None:
+    header = get_machine_header(title, is_dirty=is_dirty)
     print(f"Running {suite_script}...")
     res = subprocess.run(
         [sys.executable, suite_script],
@@ -131,9 +137,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Finding EN: Refuse to save evidence on dirty tree unless --allow-dirty is passed
-    porcelain = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO_ROOT).decode().strip()
-    if porcelain and not args.allow_dirty:
+    # Finding EN & EQ: Check working tree status at start (excluding docs/evidence/)
+    porcelain = subprocess.check_output(
+        ["git", "status", "--porcelain", "--", ":!docs/evidence"],
+        cwd=REPO_ROOT,
+    ).decode().strip()
+    is_dirty = bool(porcelain)
+
+    if is_dirty and not args.allow_dirty:
         print(
             "ERROR: Working tree is dirty. Clean or commit changes before saving evidence, "
             "or pass --allow-dirty.",
@@ -145,37 +156,44 @@ def main() -> None:
     run_suite_and_save(
         "research/tests/test_pai_setup.py",
         evidence_dir / "test_pai_setup.txt",
-        "PAI Setup Unit Tests (32 Tests, Milestone P6 & Findings DP, DQ, DR, DY, EF, EH, EM)",
+        "PAI Setup Unit Tests (32 Tests, Milestone P6 & Findings DP, DQ, DR, DY, EF, EH, EM, EP)",
+        is_dirty=is_dirty,
     )
     run_suite_and_save(
         "tools/test_sign_catalog.py",
         evidence_dir / "test_sign_catalog.txt",
-        "PAI Catalog Sign Tool Tests (8 Tests, ADR-013 & Findings EH, EK, EL)",
+        "PAI Catalog Sign Tool Tests (9 Tests, ADR-013 & Findings EH, EK, EL, ER)",
+        is_dirty=is_dirty,
     )
     run_suite_and_save(
         "research/tests/test_service_manager.py",
         evidence_dir / "test_service_manager.txt",
         "PAI Managed Ollama Service Lifecycle Tests (8 Tests, ADR-014, Findings DS, DT, DU, EA)",
+        is_dirty=is_dirty,
     )
     run_suite_and_save(
         "research/tests/test_shell.py",
         evidence_dir / "test_shell.txt",
         "PAI Interactive Terminal Shell REPL Tests (ADR-014 Commit 2)",
+        is_dirty=is_dirty,
     )
     run_suite_and_save(
         "tools/test_build_payload.py",
         evidence_dir / "test_build_payload.txt",
         "PAI Build Payload Unit Tests (17 Tests, Milestone P2/P3)",
+        is_dirty=is_dirty,
     )
     run_suite_and_save(
         "tools/test_launcher_and_zip.py",
         evidence_dir / "test_launcher_and_zip.txt",
         "PAI Launcher and Portable Zip Tests (21 Tests, Milestone P2)",
+        is_dirty=is_dirty,
     )
     run_suite_and_save(
         "tools/test_installer_p5.py",
         evidence_dir / "test_installer_p5.txt",
         "PAI Inno Setup Installer Tests (20 Tests, Icon & Findings DK, DL, DM, DN, Milestone P5)",
+        is_dirty=is_dirty,
     )
 
 

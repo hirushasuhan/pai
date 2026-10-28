@@ -116,6 +116,14 @@ def sign_catalog(
     if not catalog_path.is_file():
         raise FileNotFoundError(f"Input catalog file not found: {catalog_path}")
 
+    # Finding ER: Always print one line "Trust root: <path>" before signing.
+    # Print a warning when the trust root is not research/trust.json.
+    default_trust_path = (RESEARCH_DIR / "trust.json").resolve()
+    effective_trust_path = Path(trust_file).resolve() if trust_file else default_trust_path
+    print(f"Trust root: {effective_trust_path}")
+    if effective_trust_path != default_trust_path:
+        print(f"WARNING: Using non-default trust root file: {effective_trust_path}")
+
     private_key = load_private_key_file(key_path)
 
     cat_text = catalog_path.read_text(encoding="utf-8")

@@ -278,6 +278,59 @@ class TestSignCatalogTool(unittest.TestCase):
             real_state = isolated_localappdata / "PAI" / "catalog_state.json"
             self.assertFalse(real_state.exists(), "Real catalog_state.json must not be touched by sign_catalog")
 
+    def test_09_finding_er_trust_root_logging_and_warning(self) -> None:
+        """
+        Finding ER: The sign tool always prints 'Trust root: <path>' before signing,
+        and prints a warning line when it is not research/trust.json.
+        Key material is never printed.
+        """
+        out_file = self.tmp_path / "catalog_signed_er.json"
+
+        # Case 1: non-default trust file passed via CLI
+        old_stdout = sys.stdout
+        capture_out = io.StringIO()
+        try:
+            sys.stdout = capture_out
+            rc = main([
+                "--catalog", str(self.catalog_file),
+                "--private-key-file", str(self.key_raw_file),
+                "--trust-file", str(self.test_trust_file),
+                "--out", str(out_file),
+            ])
+        finally:
+            sys.stdout = old_stdout
+
+        self.assertEqual(rc, 0)
+        output = capture_out.getvalue()
+        self.assertIn(f"Trust root: {self.test_trust_file.resolve()}", output)
+        self.assertIn(f"WARNING: Using non-default trust root file: {self.test_trust_file.resolve()}", output)
+        self.assertNotIn(self.priv_key.private_bytes_raw().hex(), output)
+
+        # Case 2: default trust root (no --trust-file)
+        # Note: Signing with ephemeral key against default research/trust.json fails closed
+        # during production verification, but "Trust root: <research/trust.json>" is printed
+        # BEFORE signing/verification, and NO warning is printed.
+        default_trust = (RESEARCH_DIR / "trust.json").resolve()
+        out_fail = self.tmp_path / "catalog_signed_default_fail.json"
+        capture_out_default = io.StringIO()
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        try:
+            sys.stdout = capture_out_default
+            sys.stderr = io.StringIO()
+            rc_default = main([
+                "--catalog", str(self.catalog_file),
+                "--private-key-file", str(self.key_raw_file),
+                "--out", str(out_fail),
+            ])
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+
+        self.assertEqual(rc_default, 1)  # Fails verification against real trust.json
+        output_default = capture_out_default.getvalue()
+        self.assertIn(f"Trust root: {default_trust}", output_default)
+        self.assertNotIn("WARNING: Using non-default trust root file:", output_default)
+        self.assertNotIn(self.priv_key.private_bytes_raw().hex(), output_default)
+
 
 if __name__ == "__main__":
     unittest.main()

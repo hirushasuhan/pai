@@ -1855,25 +1855,55 @@ class TestPaiSetupP3(unittest.TestCase):
         fake_default_cat = Path(self.tmp_dir) / "catalog_default_branch.json"
         fake_default_cat.write_text(json.dumps(valid_cat), encoding="utf-8")
 
-        # Branch (a): no --catalog + catalog at default path -> loaded successfully
+        # Branch (a): no --catalog + catalog at default path -> loaded successfully (Finding EP)
         with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", fake_default_cat), \
              patch("pai_setup.load_trust_keys", return_value=TEST_TRUST_KEYS), \
              patch("pai_setup.get_highest_seen_catalog_version", return_value=0), \
              patch("pai_setup.record_catalog_version"), \
              patch("pai_setup.collect_hardware_survey", return_value=mock_profile), \
-             patch("pai_setup.probe_ollama_daemon", return_value={"running": True, "version": "0.1.0"}):
-            args_a = parser.parse_args([])
-            rc_a = run_setup(args_a)
-            self.assertEqual(rc_a, 0, "run_setup must succeed when valid catalog is present at default path")
+             patch("pai_setup.probe_ollama_daemon", return_value={"running": True, "version": "0.1.0"}), \
+             patch("pai_setup.load_and_verify_catalog", wraps=pai_setup.load_and_verify_catalog) as spy_load_catalog:
+            args_a = parser.parse_args(["--progress-json"])
+            capture_a = io.StringIO()
+            old_stdout = sys.stdout
+            try:
+                sys.stdout = capture_a
+                rc_a = run_setup(args_a)
+            finally:
+                sys.stdout = old_stdout
 
-        # Branch (b): --pull-preselected with no catalog anywhere -> CATALOG_REQUIRED
+            self.assertEqual(rc_a, 0, "run_setup must succeed when valid catalog is present at default path")
+            spy_load_catalog.assert_called_once()
+            called_cat_path = spy_load_catalog.call_args.kwargs.get("catalog_path")
+            self.assertEqual(called_cat_path, fake_default_cat.resolve())
+
+            # Finding EP: assert recommendations in emitted events come from default catalog
+            events_a = [json.loads(line) for line in capture_a.getvalue().splitlines() if line.strip().startswith("{")]
+            fit_events = [e for e in events_a if e.get("event") == "fit"]
+            self.assertEqual(len(fit_events), 1, "fit event must be emitted when catalog is loaded")
+            rec_models = [r.get("model_id") for r in fit_events[0].get("recommendations", [])]
+            self.assertIn("qwen2.5-coder:1.5b", rec_models)
+
+        # Branch (b): --pull-preselected with no catalog anywhere -> CATALOG_REQUIRED (Finding EP)
         nonexistent_cat = Path(self.tmp_dir) / "does_not_exist_catalog.json"
         with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", nonexistent_cat), \
              patch("pai_setup.collect_hardware_survey", return_value=mock_profile), \
              patch("pai_setup.probe_ollama_daemon", return_value={"running": True, "version": "0.1.0"}):
-            args_b = parser.parse_args(["--pull-preselected"])
-            rc_b = run_setup(args_b)
+            args_b = parser.parse_args(["--pull-preselected", "--progress-json"])
+            capture_b = io.StringIO()
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            try:
+                sys.stdout = capture_b
+                sys.stderr = io.StringIO()
+                rc_b = run_setup(args_b)
+            finally:
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+
             self.assertEqual(rc_b, 1, "run_setup --pull-preselected without catalog must fail closed with exit 1")
+            events_b = [json.loads(line) for line in capture_b.getvalue().splitlines() if line.strip().startswith("{")]
+            error_events = [e for e in events_b if e.get("event") == "error"]
+            self.assertTrue(len(error_events) >= 1, "error event must be emitted on failure")
+            self.assertEqual(error_events[-1].get("code"), "CATALOG_REQUIRED")
 
         # Branch (c): bundled catalog fails verification (bad signature) -> stops fail-closed
         corrupt_cat = dict(valid_cat)
