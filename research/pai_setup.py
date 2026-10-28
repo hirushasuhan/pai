@@ -57,6 +57,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 logger = logging.getLogger("pai_setup")
 
 MODULE_DIR = Path(__file__).resolve().parent
+DEFAULT_CATALOG_PATH = Path(__file__).parent / "catalog.json"
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
@@ -617,6 +618,46 @@ def verify_catalog_payload(
     record_catalog_version(cat_ver, state_path)
 
     return catalog_data
+
+
+def load_and_verify_catalog(
+    catalog_path: Optional[Path | str] = None,
+    min_version: Optional[int] = None,
+    state_path: Optional[Path | str] = None,
+    trust_keys: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], Path]:
+    """
+    Loads and verifies a catalog file (Milestone P6, Findings EF & EH).
+
+    Rules enforced:
+      1. Default path: DEFAULT_CATALOG_PATH = Path(__file__).parent / "catalog.json".
+         PAI_DIR or any other environment variable does NOT alter this path.
+      2. Bundled exemption: if the resolved path equals DEFAULT_CATALOG_PATH.resolve(),
+         the 90-day freshness rule is exempt (Option A).
+      3. External enforcement: if catalog_path points to any other file (even an external copy
+         of the bundled catalog), the 90-day freshness rule is strictly enforced.
+      4. Integrity & Replay: Monotonic catalog_version checks and Ed25519 signature checks
+         are strictly enforced for both bundled and external catalogs.
+    """
+    if catalog_path is not None:
+        target_path = Path(catalog_path).resolve()
+        is_bundled = (target_path == DEFAULT_CATALOG_PATH.resolve())
+    else:
+        target_path = DEFAULT_CATALOG_PATH.resolve()
+        is_bundled = True
+
+    if not target_path.is_file():
+        raise FileNotFoundError(f"Catalog file not found at {target_path}")
+
+    cat_data = json.loads(target_path.read_text(encoding="utf-8"))
+    verified = verify_catalog_payload(
+        cat_data,
+        trust_keys=trust_keys,
+        min_version=min_version,
+        state_path=state_path,
+        enforce_freshness=(not is_bundled),
+    )
+    return verified, target_path
 
 
 # -----------------------------------------------------------------------------
@@ -1541,16 +1582,22 @@ def run_setup(args: argparse.Namespace) -> int:
 
     # 3. Catalog loading and verification
     verified_cat = None
-    if args.catalog:
-        cat_path = Path(args.catalog).resolve()
-        if not cat_path.is_file():
-            emitter.emit("error", code="CATALOG_NOT_FOUND", message=f"Catalog not found at {cat_path}")
-            print(f"ERROR: Catalog not found at {cat_path}", file=sys.stderr)
+    target_catalog_path: Optional[Path] = None
+    if getattr(args, "catalog", None):
+        target_catalog_path = Path(args.catalog).resolve()
+        if not target_catalog_path.is_file():
+            emitter.emit("error", code="CATALOG_NOT_FOUND", message=f"Catalog not found at {target_catalog_path}")
+            print(f"ERROR: Catalog not found at {target_catalog_path}", file=sys.stderr)
             return 1
+    elif DEFAULT_CATALOG_PATH.is_file():
+        target_catalog_path = DEFAULT_CATALOG_PATH.resolve()
 
+    if target_catalog_path is not None:
         try:
-            cat_data = json.loads(cat_path.read_text(encoding="utf-8"))
-            verified_cat = verify_catalog_payload(cat_data, min_version=args.min_catalog_version)
+            verified_cat, _ = load_and_verify_catalog(
+                catalog_path=target_catalog_path,
+                min_version=args.min_catalog_version,
+            )
         except CatalogSecurityError as e:
             emitter.emit("error", code="CATALOG_SECURITY_ERROR", message=str(e))
             print(f"ERROR: Catalog verification failed: {e}", file=sys.stderr)
@@ -1559,9 +1606,9 @@ def run_setup(args: argparse.Namespace) -> int:
             emitter.emit("error", code="CATALOG_LOAD_ERROR", message=str(e))
             print(f"ERROR: Failed to load catalog: {e}", file=sys.stderr)
             return 1
-    elif args.pull_preselected:
-        emitter.emit("error", code="CATALOG_REQUIRED", message="--pull-preselected requires --catalog <path>.")
-        print("ERROR: Catalog required for --pull-preselected. Pass --catalog <path_to_catalog.json>", file=sys.stderr)
+    elif getattr(args, "pull_preselected", False):
+        emitter.emit("error", code="CATALOG_REQUIRED", message="--pull-preselected requires a catalog file. None found at default path or via --catalog.")
+        print(f"ERROR: Catalog required for --pull-preselected. No catalog found at {DEFAULT_CATALOG_PATH} and --catalog was not specified.", file=sys.stderr)
         return 1
 
     recommendations = []

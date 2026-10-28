@@ -1699,6 +1699,111 @@ class TestPaiSetupP3(unittest.TestCase):
         expected_tot_mb = round(snap["total_ram_gb"] * 1024.0, 1)
         self.assertAlmostEqual(tot_mb, expected_tot_mb, delta=expected_tot_mb * 0.05)
 
+    # -------------------------------------------------------------------------
+    # Finding EF & EH: Bundled Catalog Freshness Exemption and Path Isolation
+    # -------------------------------------------------------------------------
+    def test_31_finding_ef_bundled_catalog_freshness_exemption_and_path_isolation(self) -> None:
+        """
+        Finding EF & EH:
+          1. Bundled catalog older than 90 days is accepted when loaded from DEFAULT_CATALOG_PATH.
+          2. External catalog older than 90 days is rejected fail-closed with CatalogSecurityError.
+          3. A copy of the bundled catalog passed via explicit external path is treated as external
+             and rejected if older than 90 days.
+          4. PAI_DIR or other environment variables do NOT alter DEFAULT_CATALOG_PATH.
+          5. Monotonic version rollback on bundled catalog is still rejected fail-closed.
+          6. Bad Ed25519 signature on bundled catalog is still rejected fail-closed.
+        """
+        import datetime
+        from unittest.mock import patch
+        import pai_setup
+
+        # Create a catalog with issued_utc 150 days ago (> 90 days)
+        old_dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=150)
+        old_cat = create_test_catalog(version=2)
+        old_cat["issued_utc"] = old_dt.isoformat().replace("+00:00", "Z")
+        old_cat["signature"] = sign_test_catalog(old_cat)
+
+        fake_bundled_dir = Path(self.tmp_dir) / "fake_module_dir"
+        fake_bundled_dir.mkdir(parents=True, exist_ok=True)
+        fake_bundled_cat = fake_bundled_dir / "catalog.json"
+        fake_bundled_cat.write_text(json.dumps(old_cat), encoding="utf-8")
+
+        external_dir = Path(self.tmp_dir) / "external_dir"
+        external_dir.mkdir(parents=True, exist_ok=True)
+        external_cat = external_dir / "external_catalog.json"
+        external_cat.write_text(json.dumps(old_cat), encoding="utf-8")
+
+        # Patch DEFAULT_CATALOG_PATH to point to fake_bundled_cat
+        with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", fake_bundled_cat):
+            # Case 1: Bundled catalog older than 90 days is accepted
+            loaded, used_path = pai_setup.load_and_verify_catalog(
+                catalog_path=None,
+                trust_keys=TEST_TRUST_KEYS,
+                state_path=self.state_file,
+            )
+            self.assertEqual(used_path, fake_bundled_cat.resolve())
+            self.assertEqual(loaded["catalog_version"], 2)
+
+            # Case 2: External catalog older than 90 days is rejected
+            with self.assertRaises(pai_setup.CatalogSecurityError) as ctx_ext:
+                pai_setup.load_and_verify_catalog(
+                    catalog_path=external_cat,
+                    trust_keys=TEST_TRUST_KEYS,
+                    state_path=self.state_file,
+                )
+            self.assertIn("expired", str(ctx_ext.exception).lower())
+            self.assertIn("90 days", str(ctx_ext.exception).lower())
+
+            # Case 3: A copy of the bundled catalog passed via explicit external path is treated as external
+            bundled_copy = external_dir / "catalog.json"
+            shutil.copy2(fake_bundled_cat, bundled_copy)
+            with self.assertRaises(pai_setup.CatalogSecurityError) as ctx_copy:
+                pai_setup.load_and_verify_catalog(
+                    catalog_path=bundled_copy,
+                    trust_keys=TEST_TRUST_KEYS,
+                    state_path=self.state_file,
+                )
+            self.assertIn("expired", str(ctx_copy.exception).lower())
+
+            # Case 4: PAI_DIR does not alter default path
+            with patch.dict(os.environ, {"PAI_DIR": str(external_dir)}):
+                # DEFAULT_CATALOG_PATH remains module-relative
+                self.assertEqual(pai_setup.DEFAULT_CATALOG_PATH, fake_bundled_cat)
+                loaded_env, used_env = pai_setup.load_and_verify_catalog(
+                    catalog_path=None,
+                    trust_keys=TEST_TRUST_KEYS,
+                    state_path=self.state_file,
+                )
+                self.assertEqual(used_env, fake_bundled_cat.resolve())
+
+            # Case 5: Version rollback is still rejected for bundled catalog
+            rollback_cat = create_test_catalog(version=1)  # version 1 < highest_seen 2
+            rollback_cat["issued_utc"] = old_dt.isoformat().replace("+00:00", "Z")
+            rollback_cat["signature"] = sign_test_catalog(rollback_cat)
+            fake_bundled_cat.write_text(json.dumps(rollback_cat), encoding="utf-8")
+
+            with self.assertRaises(pai_setup.CatalogSecurityError) as ctx_rb:
+                pai_setup.load_and_verify_catalog(
+                    catalog_path=None,
+                    trust_keys=TEST_TRUST_KEYS,
+                    state_path=self.state_file,
+                )
+            self.assertIn("rollback", str(ctx_rb.exception).lower())
+
+            # Case 6: Bad signature is still rejected for bundled catalog
+            tampered_cat = create_test_catalog(version=3)
+            tampered_cat["issued_utc"] = old_dt.isoformat().replace("+00:00", "Z")
+            tampered_cat["signature"] = "00" * 64  # Bad signature
+            fake_bundled_cat.write_text(json.dumps(tampered_cat), encoding="utf-8")
+
+            with self.assertRaises(pai_setup.CatalogSecurityError) as ctx_sig:
+                pai_setup.load_and_verify_catalog(
+                    catalog_path=None,
+                    trust_keys=TEST_TRUST_KEYS,
+                    state_path=self.state_file,
+                )
+            self.assertIn("signature", str(ctx_sig.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
