@@ -52,6 +52,7 @@ ALLOWED_USER_CONFIG_KEYS = {
     "privacy_mode",
     "spend_caps",
     "enabled_providers",
+    "ollama_start_consent",
 }
 
 FORBIDDEN_SECRET_SUBSTRINGS = ["key", "secret", "token", "password", "credential", "auth"]
@@ -150,6 +151,12 @@ def validate_user_config(data: Dict[str, Any]) -> Tuple[bool, str]:
             return False, "'enabled_providers' must be a list of provider names"
         if not all(isinstance(p, str) for p in data["enabled_providers"]):
             return False, "All items in 'enabled_providers' must be strings"
+
+    # Validate ollama_start_consent (ADR-014)
+    if "ollama_start_consent" in data:
+        val = data["ollama_start_consent"]
+        if val not in ("ask", "always", "never"):
+            return False, f"'ollama_start_consent' must be one of 'ask', 'always', 'never' (got {val!r})"
 
     return True, "Valid"
 

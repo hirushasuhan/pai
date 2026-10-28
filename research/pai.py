@@ -1112,11 +1112,43 @@ def call_model_generate(
         data=req_data,
         headers={"Content-Type": "application/json"},
     )
-    try:
+    def _execute_req() -> str:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_json = json.loads(resp.read().decode("utf-8"))
             return str(resp_json.get("response", ""))
+
+    try:
+        return _execute_req()
     except Exception as e:
+        is_http_err = isinstance(e, urllib.error.HTTPError)
+        err_str = str(e).lower()
+        is_conn_refused = (
+            not is_http_err
+            and (
+                isinstance(e, ConnectionRefusedError)
+                or (
+                    isinstance(e, urllib.error.URLError)
+                    and (
+                        "refused" in err_str
+                        or "10061" in err_str
+                        or isinstance(getattr(e, "reason", None), ConnectionRefusedError)
+                    )
+                )
+            )
+        )
+        if is_conn_refused and hostname in ("127.0.0.1", "localhost", "::1", "[::1]"):
+            try:
+                from service_manager import OllamaServiceManager, SERVICE_OFFLINE_GUIDANCE
+                sm = OllamaServiceManager.get_instance()
+                ok, msg = sm.ensure_service_running()
+                if ok:
+                    return _execute_req()
+                raise RuntimeError(msg or SERVICE_OFFLINE_GUIDANCE)
+            except Exception as inner_e:
+                if isinstance(inner_e, RuntimeError):
+                    raise
+                from service_manager import SERVICE_OFFLINE_GUIDANCE
+                raise RuntimeError(SERVICE_OFFLINE_GUIDANCE)
         raise RuntimeError(f"Failed to generate from model '{model_name}' at {url}: {e}")
 
 

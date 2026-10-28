@@ -294,6 +294,17 @@ class TestConfigSecurity(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("Machine profile has expired", err)
 
+    def test_ollama_start_consent_validation(self) -> None:
+        """ADR-014: ollama_start_consent accepts 'ask', 'always', 'never'; rejects others."""
+        for mode in ("ask", "always", "never"):
+            valid, err = validate_user_config({"ollama_start_consent": mode})
+            self.assertTrue(valid, f"Expected {mode!r} to be valid, got error: {err}")
+
+        for bad in ("auto", "prompt", "yes", "true", 1, None):
+            valid, err = validate_user_config({"ollama_start_consent": bad})
+            self.assertFalse(valid, f"Expected {bad!r} to be invalid")
+            self.assertIn("ollama_start_consent", err)
+
 
 if __name__ == "__main__":
     unittest.main()
