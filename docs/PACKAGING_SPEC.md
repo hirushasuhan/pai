@@ -328,18 +328,17 @@ P1b and P7 follow the same rules as the other milestones (one report each, trust
     ```
   - The tool calculates SHA-256 over canonical JSON bytes and signs using the Ed25519 private key corresponding to `rel-1`.
 
-### 15.3 Proposal: Freshness Exemption for Bundled Catalog (Finding EF & Decision D20 Update)
+### 15.3 Decision: Freshness Exemption for Bundled Catalog (Finding EF, Option A & Decision D20 Update)
 
-- **Problem Analysis:** Decision D20 currently enforces a 90-day freshness window (`MAX_CATALOG_AGE_DAYS = 90`) based on `issued_utc`. If a catalog is bundled into the installer, an installation running 90+ days later will reject its own legitimate bundled catalog fail-closed, with no attacker involved, breaking `pai setup`.
-- **Security Assessment:** The bundled catalog is physically distributed with the verified installer payload. Anti-tampering and replay protection are fully guaranteed by:
+- **Problem Analysis:** Decision D20 originally enforced a 90-day freshness window (`MAX_CATALOG_AGE_DAYS = 90`) based on `issued_utc`. If a catalog is bundled into the installer, an installation running 90+ days later would reject its own legitimate bundled catalog fail-closed, with no attacker involved, breaking `pai setup`.
+- **Security Assessment & Decision (Option A):** The bundled catalog is physically distributed with the verified installer payload. Anti-tampering and replay protection are fully guaranteed by:
   1. Monotonic `catalog_version` check against local state (`catalog_state.json`).
   2. Ed25519 cryptographic signature verification against `research/trust.json` (`rel-1`).
-- **Proposed Rule:**
-  - When loading the bundled catalog from the default module-relative path (`Path(__file__).resolve().parent / "catalog.json"`), the 90-day freshness limit is **exempt** (no freshness expiration).
-  - Alternatively, if the owner chooses a time-bounded limit, an extended limit (e.g. 400 days) may be configured. (Owner decision requested).
-  - External catalogs supplied via `--catalog` continue to enforce freshness rules unless explicitly overridden.
+- **Enacted Rule:**
+  - When loading the bundled catalog from the default module-relative path (`Path(__file__).resolve().parent / "catalog.json"`), the 90-day freshness limit is **exempt** (no freshness expiration). The loader decides this exemption strictly by comparing the resolved file path against `DEFAULT_CATALOG_PATH.resolve()`.
+  - External catalogs supplied via `--catalog` continue to strictly enforce the 90-day freshness rule.
 - **Decision D20 Text Update:**
-  - *Revised D20:* "Model catalog freshness: Remote or externally-provided catalogs must have `issued_utc` within 90 days of the local clock to prevent stale catalog injection. Bundled offline catalogs installed with the application payload are exempt from the 90-day expiration window, relying on cryptographic signature verification against `research/trust.json` and monotonic `catalog_version` enforcement."
+  - *Revised D20:* "Model catalog freshness: Remote or externally-provided catalogs must have `issued_utc` within 90 days of the local clock to prevent stale catalog injection. Bundled offline catalogs installed with the application payload at `DEFAULT_CATALOG_PATH` are exempt from the 90-day expiration window, relying on cryptographic signature verification against `research/trust.json` and monotonic `catalog_version` enforcement."
 
 ### 15.4 Proposal: Strict Module-Relative Default Path (Finding EH)
 
@@ -357,7 +356,7 @@ P1b and P7 follow the same rules as the other milestones (one report each, trust
   ```
 - **Security Guardrails:**
   1. **Strict File Path Input:** The private key MUST only be read from a file path passed via `--private-key-file`. Command-line strings, environment variables, and stdin are rejected.
-  2. **Zero Leakage:** The private key bytes, hex strings, or PEM representations are NEVER logged, printed to stdout/stderr, written to debug telemetry, or included in error/exception messages.
+  2. **Key Never Written:** Key bytes, hex representations, and PEM contents are not logged, printed to stdout/stderr, written to telemetry, or included in exception messages (asserted via throwaway test key).
   3. **Deterministic Canonical Encoding:** The catalog body (excluding existing `"signature"` field) is normalized using deterministic canonical JSON formatting (`sort_keys=True`, `separators=(',', ':')`, UTF-8 encoded).
   4. **Signature Insertion:** The Ed25519 signature is computed over the canonical bytes and hex-encoded into the `"signature"` field of the output JSON.
   5. **Verification Self-Check:** Before writing the output file, `sign_catalog.py` immediately verifies the generated signature against the corresponding public key to ensure mathematical correctness.
@@ -396,7 +395,7 @@ The following files in `research/` will be modified when this proposal is approv
 > 3. *Your data.* PAI processes the files you give it on your computer. It keeps a local log of technical information in your user profile and does not send it anywhere. Downloads happen only when you approve them in the installer and are listed there.
 > 4. *Third-party software and models.* The Ollama server and each AI model have their own licences and use policies. They are shown to you before installation. You must accept them separately.
 > 5. *No warranty.* The software is provided "as is", without warranty of any kind. To the extent the law allows, the authors are not liable for loss or damage arising from its use.
-> 6. *Source-code licence.* The source code is licensed under the licence in the LICENSE file. These terms govern use of the installer and distributed binaries. [Owner and lawyer: complete after decision D8.]
+> 6. *Source-code licence.* The source code is licensed under the MIT License in the LICENSE file. These terms govern use of the installer and distributed binaries.
 > [ ] I have read and accept these terms.
 
 ## Appendix B. Catalog entry (illustrative; values must be measured and verified, not copied)
