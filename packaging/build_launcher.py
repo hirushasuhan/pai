@@ -80,6 +80,57 @@ def find_c_compiler() -> Tuple[str, str, List[str]]:
     )
 
 
+def get_toolchain_info(compiler: Optional[str] = None) -> Dict[str, str]:
+    """
+    Discovers toolchain compiler and resource compiler executables and single-line versions.
+    Used for recording compiler provenance in installer build logs (Finding DO).
+    """
+    if compiler:
+        comp_exec = shutil.which(compiler)
+        comp_type = compiler.lower()
+    else:
+        try:
+            comp_type, comp_exec, _ = find_c_compiler()
+        except CompilerNotFoundError:
+            comp_type, comp_exec = "unknown", None
+
+    comp_ver = "unknown"
+    if comp_exec:
+        try:
+            cmd = [comp_exec, "--version"] if "cl" not in comp_type else [comp_exec]
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            lines = (p.stdout or p.stderr).strip().splitlines()
+            if lines:
+                comp_ver = lines[0].strip()
+        except Exception as e:
+            comp_ver = f"unavailable ({e})"
+
+    rc_exec = None
+    if comp_type in ("gcc", "clang"):
+        rc_exec = shutil.which("windres")
+    elif comp_type == "cl":
+        rc_exec = shutil.which("rc")
+
+    rc_ver = "none"
+    if rc_exec:
+        try:
+            cmd = [rc_exec, "--version"] if "rc" not in Path(rc_exec).stem.lower() else [rc_exec, "/?"]
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            lines = (p.stdout or p.stderr).strip().splitlines()
+            if lines:
+                rc_ver = lines[0].strip()
+        except Exception as e:
+            rc_ver = f"unavailable ({e})"
+
+    return {
+        "compiler_type": comp_type,
+        "compiler_exec": comp_exec or "",
+        "compiler_version": comp_ver,
+        "windres_exec": rc_exec or "",
+        "windres_version": rc_ver,
+    }
+
+
 def verify_launcher_pe(binary_path: Path) -> None:
     """Verifies that the compiled binary is a valid Windows PE file."""
     if not binary_path.is_file():
@@ -126,7 +177,13 @@ def build_launcher(
     else:
         comp_type, comp_exec, flags = find_c_compiler()
 
+    tc_info = get_toolchain_info(compiler=comp_exec)
     logger.info("Building native launcher using %s (%s)...", comp_type, comp_exec)
+    logger.info(
+        "Launcher build toolchain (Finding DO): compiler: %s, windres: %s",
+        tc_info["compiler_version"],
+        tc_info["windres_version"],
+    )
 
     # Resolve icon
     if icon_path is None:

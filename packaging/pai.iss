@@ -173,33 +173,28 @@ begin
   Result := True;
   if Length(PathStr) = 0 then
   begin
+    Log('manifest.files validation: Rejecting empty path entry');
     Result := False;
     Exit;
   end;
   FirstChar := Copy(PathStr, 1, 1);
-  if FirstChar = '/' then
-    Log('MATCHED SLASH: ' + FirstChar);
-  if FirstChar = '\' then
-    Log('MATCHED BACKSLASH: ' + FirstChar);
-  if Pos(FirstChar, '/\') > 0 then
-    Log('MATCHED POS');
   if (FirstChar = '/') or (FirstChar = '\') then
   begin
-    Log('REJECT 2: starts with slash: [' + PathStr + ']');
+    Log('manifest.files validation: Rejecting path starting with slash (not relative): ' + PathStr);
     Result := False;
     Exit;
   end;
   // Reject drive letters / colon
   if Pos(':', PathStr) > 0 then
   begin
-    Log('REJECT 3: colon: ' + PathStr);
+    Log('manifest.files validation: Rejecting path containing colon or drive specifier: ' + PathStr);
     Result := False;
     Exit;
   end;
   // Reject directory traversal (..)
   if Pos('..', PathStr) > 0 then
   begin
-    Log('REJECT 4: ..: ' + PathStr);
+    Log('manifest.files validation: Rejecting path containing directory traversal (..): ' + PathStr);
     Result := False;
     Exit;
   end;

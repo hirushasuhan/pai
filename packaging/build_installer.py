@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from packaging.build_launcher import build_launcher
+from packaging.build_launcher import build_launcher, get_toolchain_info
 from packaging.build_payload import (
     DEFAULT_PLATFORM,
     DEFAULT_TAG,
@@ -340,6 +340,13 @@ def build_inno_installer(
     sha_file = out_dir / f"{output_base}.exe.sha256"
     sha_file.write_text(f"{pe_info['sha256']} *{installer_exe.name}\n", encoding="utf-8")
 
+    tc_info = get_toolchain_info()
+    logger.info(
+        "Launcher toolchain (Finding DO): compiler: %s, windres: %s",
+        tc_info["compiler_version"],
+        tc_info["windres_version"],
+    )
+
     result = {
         "installer_path": str(installer_exe),
         "sha256": pe_info["sha256"],
@@ -350,6 +357,8 @@ def build_inno_installer(
         "platform": platform,
         "agreement_sha256": agreement_sha256,
         "iscc_path": str(iscc_exe),
+        "gcc_version": tc_info["compiler_version"],
+        "windres_version": tc_info["windres_version"],
     }
 
     if temp_launcher_ctx:
@@ -403,6 +412,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Checksum File:    {res['sha256_file']}")
         print(f"Agreement SHA256: {res['agreement_sha256']}")
         print(f"Compiler:         {res['iscc_path']}")
+        print(f"C Compiler:       {res.get('gcc_version', 'N/A')}")
+        print(f"Windres:          {res.get('windres_version', 'N/A')}")
         print("========================================================================\n")
         return 0
     except InstallerBuildError as e:

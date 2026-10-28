@@ -48,6 +48,13 @@ def get_machine_header(suite_title: str) -> str:
         agreement = REPO_ROOT / "packaging" / "agreement.txt"
         if agreement.is_file():
             lines.append(f"agreement SHA256: {hashlib.sha256(agreement.read_bytes()).hexdigest()}")
+        try:
+            from packaging.build_launcher import get_toolchain_info
+            tc = get_toolchain_info()
+            lines.append(f"GCC Version:     {tc['compiler_version']}")
+            lines.append(f"Windres Version: {tc['windres_version']}")
+        except Exception:
+            pass
     except Exception as e:
         lines.append(f"Git Info:        Failed ({e})")
     lines.append("=" * 80)
