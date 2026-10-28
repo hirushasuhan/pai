@@ -315,23 +315,78 @@ P1b and P7 follow the same rules as the other milestones (one report each, trust
 ### 15.2 Proposal: Signed Model Catalog as a Bundled Payload File
 
 - **Core Concept:** Rather than fetching a remote catalog over the internet during setup, Release 1.1.0 bundles the verified, signed model catalog (`catalog.json` and its signature) directly in the release payload. Catalog updates accompany new release payloads.
-- **Default Path in `research/pai_setup.py`:**
-  - `pai setup` resolves its default catalog path by checking:
-    1. CLI override: `--catalog <path>` (if provided).
-    2. Local installation root: `PAI_DIR / "catalog.json"` or `Path(__file__).parent / "catalog.json"`.
-  - When `pai setup` is invoked without `--catalog`, it automatically loads and verifies the bundled catalog file fail-closed.
+- **Default Path in `research/pai_setup.py` (Finding EH):**
+  - `pai setup` resolves its default catalog path strictly next to the python module:
+    `DEFAULT_CATALOG_PATH = Path(__file__).resolve().parent / "catalog.json"`
+  - `PAI_DIR` environment variable is explicitly NOT used for default catalog resolution (avoiding user-controlled path hijacking).
+  - CLI option `--catalog <path>` remains available for explicit testing and local overrides.
 - **Offline Creation & Signing Procedure (User Offline Machine):**
   - The repository owner prepares `catalog.json` defining supported models (`qwen2.5:0.5b`, `qwen2.5-coder:7b`, etc.), exact manifest digests, licences, and measured memory profiles.
   - The owner runs an offline signing tool:
     ```powershell
-    python tools/sign_catalog.py --catalog packaging/catalog.json --private-key <path_to_offline_ed25519_key>
+    python tools/sign_catalog.py --catalog packaging/catalog.json --private-key-file <path_to_offline_ed25519_key> --out packaging/catalog.json
     ```
   - The tool calculates SHA-256 over canonical JSON bytes and signs using the Ed25519 private key corresponding to `rel-1`.
-  - The detached signature is stored alongside the catalog (e.g. `catalog.json.sig`) or within the envelope schema.
-- **Trust Root & Verification via `research/trust.json` (`rel-1`):**
-  - `research/trust.json` already contains the pinned Ed25519 public key for `rel-1`.
-  - `verify_catalog_signature()` in `pai_setup.py` reads `trust.json`, loads `rel-1` public key, and verifies the catalog signature. Any signature mismatch, unknown key, or missing signature fails closed.
-  - The agent and repository NEVER touch, store, or receive the private key; only the public key remains in `trust.json`.
+
+### 15.3 Proposal: Freshness Exemption for Bundled Catalog (Finding EF & Decision D20 Update)
+
+- **Problem Analysis:** Decision D20 currently enforces a 90-day freshness window (`MAX_CATALOG_AGE_DAYS = 90`) based on `issued_utc`. If a catalog is bundled into the installer, an installation running 90+ days later will reject its own legitimate bundled catalog fail-closed, with no attacker involved, breaking `pai setup`.
+- **Security Assessment:** The bundled catalog is physically distributed with the verified installer payload. Anti-tampering and replay protection are fully guaranteed by:
+  1. Monotonic `catalog_version` check against local state (`catalog_state.json`).
+  2. Ed25519 cryptographic signature verification against `research/trust.json` (`rel-1`).
+- **Proposed Rule:**
+  - When loading the bundled catalog from the default module-relative path (`Path(__file__).resolve().parent / "catalog.json"`), the 90-day freshness limit is **exempt** (no freshness expiration).
+  - Alternatively, if the owner chooses a time-bounded limit, an extended limit (e.g. 400 days) may be configured. (Owner decision requested).
+  - External catalogs supplied via `--catalog` continue to enforce freshness rules unless explicitly overridden.
+- **Decision D20 Text Update:**
+  - *Revised D20:* "Model catalog freshness: Remote or externally-provided catalogs must have `issued_utc` within 90 days of the local clock to prevent stale catalog injection. Bundled offline catalogs installed with the application payload are exempt from the 90-day expiration window, relying on cryptographic signature verification against `research/trust.json` and monotonic `catalog_version` enforcement."
+
+### 15.4 Proposal: Strict Module-Relative Default Path (Finding EH)
+
+- **Rule:** The default catalog file must reside strictly in the same directory as `pai_setup.py`:
+  `catalog_path = Path(__file__).resolve().parent / "catalog.json"`
+- **Trust Boundary:** Just as `research/trust.json` is loaded strictly relative to `__file__`, `catalog.json` must be loaded strictly relative to `__file__`.
+- **Rejection of `PAI_DIR`:** `PAI_DIR` is an environment variable that could be pointed to an arbitrary directory by untrusted local processes. Default catalog resolution must NOT inspect `os.environ.get("PAI_DIR")`.
+
+### 15.5 Proposal: Design of `tools/sign_catalog.py` (Finding EH)
+
+- **Purpose:** Standalone offline utility for signing model catalog JSON payloads using an Ed25519 private key.
+- **CLI Interface:**
+  ```powershell
+  python tools/sign_catalog.py --catalog <input_path> --private-key-file <key_path> --out <output_path>
+  ```
+- **Security Guardrails:**
+  1. **Strict File Path Input:** The private key MUST only be read from a file path passed via `--private-key-file`. Command-line strings, environment variables, and stdin are rejected.
+  2. **Zero Leakage:** The private key bytes, hex strings, or PEM representations are NEVER logged, printed to stdout/stderr, written to debug telemetry, or included in error/exception messages.
+  3. **Deterministic Canonical Encoding:** The catalog body (excluding existing `"signature"` field) is normalized using deterministic canonical JSON formatting (`sort_keys=True`, `separators=(',', ':')`, UTF-8 encoded).
+  4. **Signature Insertion:** The Ed25519 signature is computed over the canonical bytes and hex-encoded into the `"signature"` field of the output JSON.
+  5. **Verification Self-Check:** Before writing the output file, `sign_catalog.py` immediately verifies the generated signature against the corresponding public key to ensure mathematical correctness.
+- **Test Suite (`tools/test_sign_catalog.py`):**
+  - Generates an ephemeral throwaway Ed25519 keypair in temporary storage.
+  - Tests canonical sorting, field omission, signature generation, and verification.
+  - Asserts that missing key file, malformed key, or tampering produces fail-closed exit code 1.
+  - Asserts that private key is never leaked in command output.
+
+### 15.6 Exact Proposed Diff Description (No Code Implemented Yet)
+
+1. **`research/pai_setup.py`:**
+   - Define `DEFAULT_CATALOG_PATH = Path(__file__).resolve().parent / "catalog.json"`.
+   - In `resolve_catalog_path(override_path: Optional[str]) -> Path`:
+     If `override_path` is provided, return `Path(override_path).resolve()`. Otherwise, return `DEFAULT_CATALOG_PATH`.
+   - In `verify_catalog_payload(cat: Dict[str, Any], min_version: int = 1, is_bundled: bool = False) -> Dict[str, Any]`:
+     Add `is_bundled: bool = False` argument. If `is_bundled` is `True`, bypass the `MAX_CATALOG_AGE_DAYS` check; if `False`, enforce `MAX_CATALOG_AGE_DAYS`.
+   - In `run_setup(args)`:
+     When `args.catalog` is omitted, load from `DEFAULT_CATALOG_PATH` with `is_bundled=True`.
+2. **`research/tests/test_pai_setup.py`:**
+   - Add `test_bundled_catalog_freshness_exemption`: Asserts that a catalog with `issued_utc` older than 90 days succeeds when `is_bundled=True` but fails with `CATALOG_STALE` when `is_bundled=False`.
+   - Add `test_default_catalog_path_ignores_pai_dir`: Asserts that setting `os.environ["PAI_DIR"]` does not alter default catalog resolution.
+3. **`tools/sign_catalog.py` & `tools/test_sign_catalog.py`:**
+   - Implements offline canonical Ed25519 signing utility and unit test suite with throwaway keys.
+
+### 15.7 List of Research Files That Will Change Upon Implementation
+The following files in `research/` will be modified when this proposal is approved:
+- `research/pai_setup.py` (Default path resolution, bundled freshness exemption parameter)
+- `research/tests/test_pai_setup.py` (Unit tests for bundled freshness exemption and `PAI_DIR` isolation)
 
 ## Appendix A. Draft agreement text (for legal review; not legal advice)
 
