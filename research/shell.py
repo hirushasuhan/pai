@@ -56,7 +56,7 @@ SHELL_BANNER = (
     "Personal Agentic AI (PAI) Interactive Shell\n"
     "{developer_credit}\n"
     "Model: {model_name} | Endpoint: {endpoint}\n"
-    "Note: Local models rely on static training data and lack live clock or web access.\n"
+    "Note: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off.\n"
     "Mode: Stateless (each line is evaluated independently without prior conversation memory).\n"
     "Type /help for available commands or /exit to quit.\n"
 )
@@ -87,27 +87,67 @@ YELLOW = "\033[33m"
 CYAN = "\033[36m"
 BRIGHT_CYAN = "\033[96m"
 
+_original_console_mode: Optional[int] = None
+
 
 def enable_windows_vt() -> bool:
-    """Enables Windows Virtual Terminal Processing (ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004)."""
+    """Enables Windows Virtual Terminal Processing with explicit ctypes argtypes/restype (Finding EY)."""
+    global _original_console_mode
     if sys.platform != "win32":
         return True
     try:
         import ctypes
         from ctypes import wintypes
         kernel32 = ctypes.windll.kernel32
-        hOut = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-        if hOut == -1 or hOut == 0:
+
+        # Configure explicit ctypes argtypes and restype (Finding EY)
+        kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel32.GetStdHandle.restype = wintypes.HANDLE
+        kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetConsoleMode.restype = wintypes.BOOL
+        kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetConsoleMode.restype = wintypes.BOOL
+
+        STD_OUTPUT_HANDLE = ctypes.c_ulong(-11).value  # 0xFFFFFFF5
+        hOut = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        INVALID_HANDLE = wintypes.HANDLE(-1).value
+        if not hOut or hOut == INVALID_HANDLE:
             return False
+
         mode = wintypes.DWORD()
         if not kernel32.GetConsoleMode(hOut, ctypes.byref(mode)):
             return False
-        if (mode.value & 0x0004) == 0:
-            if not kernel32.SetConsoleMode(hOut, mode.value | 0x0004):
+
+        if _original_console_mode is None:
+            _original_console_mode = mode.value
+
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        if (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING) == 0:
+            if not kernel32.SetConsoleMode(hOut, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING):
                 return False
         return True
     except Exception:
         return False
+
+
+def restore_windows_console_mode() -> None:
+    """Restores the original Windows console mode upon shell exit (Finding EY)."""
+    global _original_console_mode
+    if sys.platform != "win32" or _original_console_mode is None:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        STD_OUTPUT_HANDLE = ctypes.c_ulong(-11).value
+        hOut = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        INVALID_HANDLE = wintypes.HANDLE(-1).value
+        if hOut and hOut != INVALID_HANDLE:
+            kernel32.SetConsoleMode(hOut, _original_console_mode)
+    except Exception:
+        pass
+    finally:
+        _original_console_mode = None
 
 
 def should_enable_color(stream=sys.stdout) -> bool:
@@ -234,7 +274,7 @@ def get_shell_banner(
         f"{title_text}\n"
         f"{dev_text}\n"
         f"Model: {model_name} | Endpoint: {endpoint}\n"
-        "Note: Local models rely on static training data and lack live clock or web access.\n"
+        "Note: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off.\n"
         "Mode: Stateless (each line is evaluated independently without prior conversation memory).\n"
         f"{hint_text}\n"
     )
@@ -328,9 +368,14 @@ def run_interactive_shell(
     if output_fn is None:
         output_fn = print
 
+    # Finding ET: Call enforce_sandbox_boundary() once at shell start (same exit code 5 on failure).
+    # "Sandbox execution boundary verified fail-closed." is printed ONLY after it returns.
+    from pai import enforce_sandbox_boundary
+    enforce_sandbox_boundary()
+    output_fn("Sandbox execution boundary verified fail-closed.")
+
     color_enabled = should_enable_color()
     output_fn(get_shell_banner(color_enabled=color_enabled))
-    output_fn("Sandbox execution boundary verified fail-closed.")
 
     styled_prompt = colorize(prompt_str, BRIGHT_CYAN, color_enabled)
 
@@ -376,3 +421,4 @@ def run_interactive_shell(
                     output_fn(colorize(f"Error: {e}", RED, color_enabled))
     finally:
         os.environ.pop("PAI_SHELL_ACTIVE", None)
+        restore_windows_console_mode()

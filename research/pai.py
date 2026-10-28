@@ -2921,41 +2921,102 @@ TIME_SENSITIVE_NOTICE = (
     "It was not checked against the internet."
 )
 
-TIME_SENSITIVE_KEYWORDS = (
-    # English keywords and phrases
-    "president", "prime minister", "who is the", "current leader", "current government",
-    "current president", "current prime minister", "today's date", "today date",
-    "current date", "what is the date", "what day is today", "current time", "what time",
-    "what's the time", "latest news", "breaking news", "current events", "headlines",
-    "weather today", "weather forecast", "temperature today", "rain today",
-    "stock price", "crypto price", "bitcoin price", "exchange rate", "dollar rate",
-    "inflation rate", "score", "match score", "election result", "election winner",
-    # Singlish keywords and phrases
-    "ada dawasa", "adha dawasa", "ada dinaya", "adha dinaya", "welawa kiyada", "welawa monawada",
-    "president kawda", "janadhipathi kawda", "agamathi kawda", "dan president", "dan agamathi",
-    "mila kiyada", "badu mila", "gas mila", "thel mila", "dollar eka", "dollar rate eka",
-    "kalagunaya", "wessa da", "aluth news", "match eka", "chande",
-    # Sinhala unicode keywords and phrases
-    "අද දිනය", "අද දවස", "වෙලාව කීයද", "වේලාව කීයද", "දිනය කුමක්ද",
-    "ජනාධිපති කවුද", "අගමැති කවුද", "වත්මන් ජනාධිපති", "වර්තමාන ජනාධිපති",
-    "කාලගුණය", "ප්‍රවෘත්ති", "අලුත් තොරතුරු", "මිල කීයද", "ඩොලර් රේට්", "මැතිවරණ",
+TIME_SENSITIVE_PATTERNS = (
+    # English word-boundary patterns (Finding EV)
+    r"\bpresident\b",
+    r"\bprime\s+minister\b",
+    r"\bcurrent\s+leader\b",
+    r"\bcurrent\s+government\b",
+    r"\bwho\s+is\s+the\s+president\b",
+    r"\bwho\s+won\b",
+    r"\bprice\s+of\s+(bitcoin|crypto|gold|stock|oil|petrol|diesel|egg|rice)\b",
+    r"\b(stock|share|crypto|bitcoin|gold|oil)\s+price\b",
+    r"\b(exchange|dollar|inflation)\s+rate\b",
+    r"\b(weather|temperature|forecast)\b",
+    r"\bis\s+it\s+raining\b",
+    r"\b(latest|newest)\s+(\w+\s+)?(version|news|release|update|model)\b",
+    r"\b(breaking\s+news|current\s+events|headlines)\b",
+    r"\b(election\s+result|election\s+winner)\b",
+    r"\bmatch\s+score\b",
+    # Singlish
+    r"\bpresident\s+kawda\b",
+    r"\bjanadhipathi\s+kawda\b",
+    r"\bagamathi\s+kawda\b",
+    r"\bdan\s+president\b",
+    r"\bdan\s+agamathi\b",
+    r"\b(badu|gas|thel|dollar)\s+mila\b",
+    r"\bmila\s+kiyada\b",
+    r"\bdollar\s+(rate|eka)\b",
+    r"\bkalagunaya\b",
+    r"\bwessa(da|\s+dan)?\b",
+    r"\baluth(ma)?\s+(\w+\s+)?(news|model|version)\b",
+    r"\bchande\b",
+    # Sinhala Unicode
+    r"ජනාධිපති\s+කවුද",
+    r"අගමැති\s+කවුද",
+    r"වත්මන්\s+ජනාධිපති",
+    r"වර්තමාන\s+ජනාධිපති",
+    r"කාලගුණය",
+    r"වැස්ස",
+    r"ප්‍රවෘත්ති",
+    r"අලුත්(ම)?\s+තොරතුරු",
+    r"මිල\s+කීයද",
+    r"ඩොලර්\s+රේට්",
+    r"මැතිවරණ",
 )
 
 
 def is_time_sensitive_prompt(prompt: str) -> bool:
     """
     Deterministic heuristic for time-sensitive prompts (Finding ES Layer 3).
-    Matches keywords and phrases in English, Singlish, and Sinhala.
+    Matches word-boundary regex patterns in English, Singlish, and Sinhala.
     Honest limitation: This keyword heuristic can miss novel temporal questions
     and may occasionally flag non-temporal inquiries that contain these keywords.
     """
     if not prompt:
         return False
-    lower = str(prompt).lower()
-    for kw in TIME_SENSITIVE_KEYWORDS:
-        if kw in lower:
-            return True
-    return False
+    clean = str(prompt).strip()
+    return any(re.search(pat, clean, re.IGNORECASE) for pat in TIME_SENSITIVE_PATTERNS)
+
+
+# Finding ES (Layer 0): Plain date/time/day queries answered directly from system clock
+PLAIN_DATETIME_PATTERNS = (
+    # English word-boundary datetime patterns
+    r"\bwhat('s|\s+is)\s+(the\s+)?(current\s+)?(date|time|day)(\s+today)?\b",
+    r"\b(current|today's?)\s+(date|time|day)\b",
+    r"\bwhat\s+day\s+is\s+(it\s+)?today\b",
+    r"\bwhat\s+time\s+is\s+it\b",
+    r"\btell\s+me\s+the\s+(current\s+)?(date|time)\b",
+    r"\btime\s+and\s+date\b",
+    r"\bdate\s+and\s+time\b",
+    # Singlish
+    r"\b(ada|adha)\s+(dawasa|dinaya)\b",
+    r"\bwelawa\s+(kiyada|monawada)\b",
+    r"\bdan\s+welawa\b",
+    # Sinhala Unicode
+    r"අද\s+දිනය",
+    r"අද\s+දවස",
+    r"වෙලාව\s+කීයද",
+    r"වේලාව\s+කීයද",
+    r"දිනය\s+කුමක්ද",
+)
+
+
+def is_plain_datetime_query(prompt: str) -> bool:
+    """
+    Deterministic recogniser for plain date/time/day questions (Finding ES Layer 0).
+    Answers directly from system clock without calling the model.
+    Guards against negative controls like 'what is a date palm' or 'due date'.
+    """
+    if not prompt:
+        return False
+    clean = str(prompt).strip()
+    # Guard against non-calendar/temporal uses of the word 'date'
+    if re.search(r"\bdate\s+(palm|fruit|tree|nut)\b", clean, re.IGNORECASE):
+        return False
+    if re.search(r"\b(blind|due|expiry|expiration|release)\s+date\b", clean, re.IGNORECASE):
+        return False
+    return any(re.search(pat, clean, re.IGNORECASE) for pat in PLAIN_DATETIME_PATTERNS)
 
 
 def cmd_chat(args) -> int:
@@ -2971,6 +3032,22 @@ def cmd_chat(args) -> int:
     if not user_prompt or not str(user_prompt).strip():
         print("Error: Chat prompt cannot be empty.", file=sys.stderr)
         return 1
+
+    # Finding ES (Layer 0): Plain date/time questions answered directly from clock without model invocation
+    if is_plain_datetime_query(user_prompt):
+        from shell import get_current_system_clock_context
+        d, t, tz = get_current_system_clock_context()
+        clock_response = f"Current local time: {d} {t} {tz}"
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "success": True,
+                "source": "system_clock",
+                "prompt": user_prompt,
+                "response": clock_response,
+            }, indent=2))
+        else:
+            print(clock_response)
+        return 0
 
     time_sensitive = is_time_sensitive_prompt(user_prompt)
 

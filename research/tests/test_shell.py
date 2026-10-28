@@ -19,6 +19,7 @@ if str(RESEARCH_DIR) not in sys.path:
     sys.path.insert(0, str(RESEARCH_DIR))
 
 from shell import (
+    DEVELOPER_CREDIT,
     SHELL_BANNER,
     SHELL_HELP,
     execute_subcommand,
@@ -314,7 +315,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertIn("Personal Agentic AI (PAI) Interactive Shell", banner)
             self.assertIn("127.0.0.1:11434", banner)
             self.assertIn("no model loaded yet", banner)
-            self.assertIn("static training data", banner)
+            self.assertIn("PAI gives the model your computer's date and time", banner)
             self.assertIn("Stateless", banner)
             self.assertIn("without prior conversation memory", banner)
 
@@ -336,26 +337,26 @@ class TestInteractiveShellADR014(unittest.TestCase):
         """
         Asserts the interactive shell startup banner:
           - Contains the large block-letter ASCII logo (max 8 lines, fits 80 cols).
-          - Contains the developer credit ('Developed by Hirusha Suhan').
-          - Preserves existing model, endpoint, offline notice, and stateless declarations.
+          - Contains the developer credit imported from DEVELOPER_CREDIT constant (Finding EW).
+          - Preserves existing model, endpoint, offline notice, and stateless declarations (Finding EU).
         """
         banner = get_shell_banner(color_enabled=False)
         self.assertIn("Personal Agentic AI (PAI) Interactive Shell", banner)
-        self.assertIn("Developed by Hirusha Suhan", banner)
+        self.assertIn(DEVELOPER_CREDIT, banner)
         self.assertIn("____   _    ___", banner)
         self.assertIn("|_| /_/   \\_\\___|", banner)
         self.assertIn("Model:", banner)
         self.assertIn("Endpoint: http://127.0.0.1:11434", banner)
-        self.assertIn("Note: Local models rely on static training data and lack live clock or web access.", banner)
+        self.assertIn("Note: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off.", banner)
         self.assertIn("Stateless", banner)
 
     def test_terminal_colors_detection_and_no_escape_bytes_when_piped(self) -> None:
         """
-        Asserts ANSI colors policy:
+        Asserts ANSI colors policy (Finding EY):
           - No escape bytes when piped / not a TTY.
           - NO_COLOR environment variable disables colors.
           - TERM='dumb' disables colors.
-          - Colors enabled when simulated TTY is active.
+          - Colors enabled when simulated TTY is active: styled prompt and yellow notice.
         """
         from shell import should_enable_color, colorize, BRIGHT_CYAN, RED, YELLOW
 
@@ -365,6 +366,8 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertFalse(should_enable_color(mock_non_tty))
         plain_banner = get_shell_banner(color_enabled=False)
         self.assertNotIn("\033[", plain_banner)
+        plain_prompt = colorize("pai> ", BRIGHT_CYAN, False)
+        self.assertEqual(plain_prompt, "pai> ")
 
         # Case B: NO_COLOR disables color even if isatty is True
         mock_tty = MagicMock()
@@ -376,7 +379,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
         with patch.dict(os.environ, {"TERM": "dumb"}):
             self.assertFalse(should_enable_color(mock_tty))
 
-        # Case D: Simulated TTY with color support enabled
+        # Case D: Simulated TTY with color support enabled (Finding EY)
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("NO_COLOR", None)
             os.environ.pop("TERM", None)
@@ -384,6 +387,46 @@ class TestInteractiveShellADR014(unittest.TestCase):
                 self.assertTrue(should_enable_color(mock_tty))
                 colored_text = colorize("PAI", BRIGHT_CYAN, True)
                 self.assertIn("\033[96mPAI\033[0m", colored_text)
+                colored_prompt = colorize("pai> ", BRIGHT_CYAN, True)
+                self.assertIn("\033[96mpai> \033[0m", colored_prompt)
+                colored_notice = colorize("Notice: time-sensitive", YELLOW, True)
+                self.assertIn("\033[33mNotice: time-sensitive\033[0m", colored_notice)
+
+    # -------------------------------------------------------------------------
+    # 10. Finding ET: Shell Startup Sandbox Boundary Verification
+    # -------------------------------------------------------------------------
+    def test_finding_et_shell_startup_sandbox_enforcement(self) -> None:
+        """
+        Finding ET: Asserts enforce_sandbox_boundary() is called at shell startup:
+          - If the check passes, 'Sandbox execution boundary verified fail-closed.' is printed once.
+          - If the check fails (SystemExit 5), shell does not start and the message is NOT printed.
+        """
+        # Case A: Probe passes -> verification message printed exactly once
+        outputs: list[str] = []
+        inputs = iter(["/exit"])
+        with patch("pai.enforce_sandbox_boundary") as mock_enforce:
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+            )
+            self.assertEqual(code, 0)
+            mock_enforce.assert_called_once()
+        self.assertIn("Sandbox execution boundary verified fail-closed.", outputs)
+        self.assertEqual(outputs.count("Sandbox execution boundary verified fail-closed."), 1)
+
+        # Case B: Probe fails closed -> raises SystemExit(5), verification line is NOT printed
+        outputs_fail: list[str] = []
+        def fail_closed():
+            raise SystemExit(5)
+
+        with patch("pai.enforce_sandbox_boundary", side_effect=fail_closed):
+            with self.assertRaises(SystemExit) as ctx:
+                run_interactive_shell(
+                    input_fn=lambda _: "/exit",
+                    output_fn=outputs_fail.append,
+                )
+            self.assertEqual(ctx.exception.code, 5)
+        self.assertNotIn("Sandbox execution boundary verified fail-closed.", outputs_fail)
 
     # -------------------------------------------------------------------------
     # 10. Finding ES (Layer 1): /time Command Answers from System Clock
@@ -470,29 +513,36 @@ class TestInteractiveShellADR014(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_time_sensitive_heuristic_and_deterministic_notice(self) -> None:
         """
-        Finding ES Layer 3: Asserts the keyword heuristic detects time-sensitive prompts
-        in English, Singlish, and Sinhala, and appends the deterministic notice:
+        Finding ES Layer 3 & Finding EV: Asserts the regex word-boundary heuristic
+        detects time-sensitive prompts in English, Singlish, and Sinhala without
+        falling prey to substring false positives (quicksort, author, underscore, scoreboard).
+        Appends the deterministic notice:
         'PAI is offline. This answer comes from the model's training data and may be outdated. It was not checked against the internet.'
-        Asserts non-time-sensitive technical questions do NOT show the notice.
         """
         import argparse
         from pai import cmd_chat, is_time_sensitive_prompt, TIME_SENSITIVE_NOTICE
 
-        # Heuristic positive controls (English, Singlish, Sinhala)
-        self.assertTrue(is_time_sensitive_prompt("who is the president"))
-        self.assertTrue(is_time_sensitive_prompt("what is today date?"))
+        # Finding EV: Positive controls across domains and languages
+        self.assertTrue(is_time_sensitive_prompt("what is the price of bitcoin"))
+        self.assertTrue(is_time_sensitive_prompt("who won the world cup"))
+        self.assertTrue(is_time_sensitive_prompt("is it raining now"))
+        self.assertTrue(is_time_sensitive_prompt("who is the president in us"))
+        self.assertTrue(is_time_sensitive_prompt("latest python version"))
         self.assertTrue(is_time_sensitive_prompt("dan president kawda?"))
-        self.assertTrue(is_time_sensitive_prompt("ada dawasa monawada"))
-        self.assertTrue(is_time_sensitive_prompt("අද දිනය කුමක්ද?"))
+        self.assertTrue(is_time_sensitive_prompt("iphone eke aluthma model eka monawada"))
         self.assertTrue(is_time_sensitive_prompt("වත්මන් ජනාධිපති කවුද?"))
 
-        # Heuristic negative control (pure programming / non-temporal)
+        # Finding EV: Negative controls (eliminated substring false alarms)
+        self.assertFalse(is_time_sensitive_prompt("what time complexity does quicksort have"))
+        self.assertFalse(is_time_sensitive_prompt("who is the author of this function"))
+        self.assertFalse(is_time_sensitive_prompt("rename my_underscore variable"))
+        self.assertFalse(is_time_sensitive_prompt("explain the scoreboard class"))
         self.assertFalse(is_time_sensitive_prompt("write a python function to compute fibonacci"))
         self.assertFalse(is_time_sensitive_prompt("explain binary search trees"))
 
         # Execution assertion 1: Time-sensitive question displays notice
         args_temporal = argparse.Namespace(
-            prompt="who is the president",
+            prompt="who is the president in us",
             model="qwen2.5:0.5b",
             json=False,
             gemma4_opt_in=False,
@@ -510,7 +560,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
 
         # Execution assertion 2: Non-temporal question does NOT display notice
         args_coding = argparse.Namespace(
-            prompt="write a python function",
+            prompt="write a python function to compute fibonacci",
             model="qwen2.5:0.5b",
             json=False,
             gemma4_opt_in=False,
@@ -527,7 +577,78 @@ class TestInteractiveShellADR014(unittest.TestCase):
                 self.assertNotIn(TIME_SENSITIVE_NOTICE, out)
 
     # -------------------------------------------------------------------------
-    # 13. Subcommand Noise Suppression in Interactive Shell
+    # 13. Finding EX (Layer 0): Deterministic System Clock Queries
+    # -------------------------------------------------------------------------
+    def test_finding_ex_layer_0_deterministic_clock_queries(self) -> None:
+        """
+        Finding EX / Layer 0: Asserts is_plain_datetime_query() recognises plain
+        date/time/day queries in English, Singlish, and Sinhala, rejects non-temporal
+        negative controls ('date palm', 'due date'), and answers directly from the
+        operating system clock without calling the model in both text and JSON modes.
+        """
+        import argparse
+        import json
+        from pai import cmd_chat, is_plain_datetime_query
+
+        # Recognizer positive controls (English, Singlish, Sinhala)
+        self.assertTrue(is_plain_datetime_query("what is the date"))
+        self.assertTrue(is_plain_datetime_query("current time and date"))
+        self.assertTrue(is_plain_datetime_query("what day is today"))
+        self.assertTrue(is_plain_datetime_query("what time is it"))
+        self.assertTrue(is_plain_datetime_query("ada dawasa"))
+        self.assertTrue(is_plain_datetime_query("welawa kiyada"))
+        self.assertTrue(is_plain_datetime_query("අද දිනය"))
+        self.assertTrue(is_plain_datetime_query("වෙලාව කීයද"))
+
+        # Recognizer negative controls
+        self.assertFalse(is_plain_datetime_query("what is a date palm"))
+        self.assertFalse(is_plain_datetime_query("what is the due date of this assignment"))
+        self.assertFalse(is_plain_datetime_query("explain date formatting in python"))
+
+        # Execution assertion 1: Text mode returns system clock without calling model
+        fake_clock = ("2026-10-28 (Wednesday)", "23:55:00", "UTC+0530")
+        args_text = argparse.Namespace(
+            prompt="what is the date",
+            model="qwen2.5:0.5b",
+            json=False,
+            gemma4_opt_in=False,
+            model_timeout=None,
+            temperature=0.0,
+            seed=42,
+        )
+        with patch("shell.get_current_system_clock_context", return_value=fake_clock), \
+             patch("pai.call_model_generate") as mock_gen, \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            rc = cmd_chat(args_text)
+            self.assertEqual(rc, 0)
+            mock_gen.assert_not_called()
+            out = mock_out.getvalue()
+            self.assertIn("Current local time: 2026-10-28 (Wednesday) 23:55:00 UTC+0530", out)
+
+        # Execution assertion 2: JSON mode returns source: system_clock without calling model
+        args_json = argparse.Namespace(
+            prompt="welawa kiyada",
+            model="qwen2.5:0.5b",
+            json=True,
+            gemma4_opt_in=False,
+            model_timeout=None,
+            temperature=0.0,
+            seed=42,
+        )
+        with patch("shell.get_current_system_clock_context", return_value=fake_clock), \
+             patch("pai.call_model_generate") as mock_gen, \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            rc = cmd_chat(args_json)
+            self.assertEqual(rc, 0)
+            mock_gen.assert_not_called()
+            data = json.loads(mock_out.getvalue())
+            self.assertTrue(data.get("success"))
+            self.assertEqual(data.get("source"), "system_clock")
+            self.assertEqual(data.get("prompt"), "welawa kiyada")
+            self.assertEqual(data.get("response"), "Current local time: 2026-10-28 (Wednesday) 23:55:00 UTC+0530")
+
+    # -------------------------------------------------------------------------
+    # 14. Subcommand Noise Suppression in Interactive Shell
     # -------------------------------------------------------------------------
     def test_subcommand_noise_suppression_when_shell_active(self) -> None:
         """
