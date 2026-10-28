@@ -104,7 +104,7 @@ Use Ollama's pull API (`POST /api/pull`, streamed). The stream sends newline-del
 - Aggregate by `digest` (a model has several layers) to show one overall bar: overall percentage, downloaded/total in MB or GB, current speed (moving average over a few seconds) and estimated time left. Show the model name and the current status text (`pulling`, `verifying sha256 digest`, `writing manifest`).
 - Before starting, read the registry manifest to know the total size, so the bar is determinate from the first second; if the size is unknown, show an indeterminate bar and the bytes so far.
 - Console: one redrawn line (carriage return), width-aware, no flicker; if the output is not a terminal, print a line every 5 per cent instead.
-- The same events feed the installer window: `packaging/pai_setup.py --progress-json` writes one JSON object per line (Appendix C) and the Inno Setup page draws the bar from them. One implementation, two displays.
+- The same events feed the installer window: `pai setup --progress-json` (or `research/pai_setup.py`) writes one JSON object per line (Appendix C) and the Inno Setup page draws the bar from them. One implementation, two displays.
 - Interrupted downloads resume (Ollama keeps partial layers). Provide Cancel, retry with back-off on network errors, and a clear message for disk-full and registry errors. A cancelled install leaves PAI usable if the core files were installed.
 
 ## 7. `pai` in every user's command prompt
@@ -113,7 +113,7 @@ Use Ollama's pull API (`POST /api/pull`, streamed). The stream sends newline-del
 - New terminal windows pick up the change; already open windows do not. Say so.
 - `where pai` and `pai --version` must work from a fresh `cmd.exe` and a fresh PowerShell after installation; this is an acceptance test.
 - Launcher environment: `PAI_CORE_BIN` and `PAI_CORE_SHA256` are set by `pai.exe` (never by a global machine setting), so the binary-trust rules of Finding BE hold; `PATH` lookup of `pai-core` stays off.
-- The portable zip's `install.bat` performs: copy payload, PATH step, then `packaging\pai_setup.py`. The `pai progress` shortcut in `pai.cmd` is a developer convenience only.
+- The portable zip's `install.bat` performs: copy payload, PATH step, then `pai setup`. The `pai progress` shortcut in `pai.cmd` is a developer convenience only.
 
 ## 8. Security and supply chain
 
@@ -155,7 +155,7 @@ Run in Windows Sandbox or a clean VM, never on the development profile during th
 | P0 | This specification, ADR-013, owner decisions D8 to D13 | no |
 | P1 | `packaging/build_payload.py`: reproducible payload from a tag, manifest, hash checks | no |
 | P2 | `pai.exe` launcher, portable zip with `install.bat` (PATH step, uninstall script) | no |
-| P3 | `packaging/pai_setup.py`: hardware survey, signed-catalog check, fit rules, Ollama detection and installation, `--progress-json` | no (imports read-only) |
+| P3 | `research/pai_setup.py` (`pai setup`): hardware survey, signed-catalog check, fit rules, Ollama detection and installation, `--progress-json` | no (imports read-only) |
 | P4 | Download engine and progress UI (console and installer page), resume and cancel | no |
 | P5 | Inno Setup script: agreement page, wizard pages, PATH, safe rollback (Finding DK), uninstall; test matrix of section 9 | no |
 | P6 | Build stage (pre-freeze): move the setup wizard into `pai setup` (`research/`) | yes (separate reviewed commit) |
@@ -214,7 +214,7 @@ The installer is a delivery mechanism, so it is built alongside the core and not
 
 ### 14.1 Position
 
-The one-line commands are extra front doors to the same payload. They do not get their own logic: `install.ps1` and `install.sh` are thin bootstraps that fetch a version-pinned payload, verify it, show the agreement, unpack it and call the same `packaging/pai_setup.py` for Ollama and model setup. `PAI-Setup-<version>-x64.exe` stays the primary, recommended path for ordinary users, because a signed (or at least inspectable) installer with a wizard is easier to trust and to support than a piped script.
+The one-line commands are extra front doors to the same payload. They do not get their own logic: `install.ps1` and `install.sh` are thin bootstraps that fetch a version-pinned payload, verify it, show the agreement, unpack it and call the same `pai setup` for Ollama and model setup. `PAI-Setup-<version>-x64.exe` stays the primary, recommended path for ordinary users, because a signed (or at least inspectable) installer with a wizard is easier to trust and to support than a piped script.
 
 ### 14.2 PowerShell one-line install (Windows, release 1.1.0 if D14 is accepted)
 

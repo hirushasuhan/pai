@@ -7,6 +7,7 @@ Subcommands:
   pai calibrate [--model]    - Empirical 5-run cold RAM & latency calibration per MEASUREMENT_PROCEDURE.md
   pai models list            - Candidate models catalog, license status, calibration, and live fit
   pai route <command>        - Adaptive Model Router CLI (--explain-route, --json)
+  pai setup                  - Hardware survey, model fit analysis, and setup engine
 
 Security & Architecture Invariants:
 1. Threat T21: Command names strictly determine task classes.
@@ -1254,6 +1255,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat.add_argument("--seed", type=int, default=42, help="Generation seed (default: 42)")
     p_chat.add_argument("--model-timeout", type=float, default=None, help="Model generation HTTP request timeout in seconds")
     p_chat.add_argument("--json", action="store_true", help="Output chat response and routing metadata in JSON format")
+
+    # setup (Milestone P6)
+    p_setup = subparsers.add_parser("setup", help="Hardware survey, model fit analysis, and setup engine")
+    p_setup.add_argument("--survey-only", action="store_true", help="Run local hardware survey and output JSON")
+    p_setup.add_argument("--catalog", default=None, help="Path to signed catalog.json")
+    p_setup.add_argument("--min-catalog-version", type=int, default=1, help="Minimum acceptable catalog version")
+    p_setup.add_argument("--progress-json", action="store_true", help="Emit Appendix C NDJSON progress events")
+    p_setup.add_argument("--probe-ollama", action="store_true", help="Check if Ollama daemon is reachable")
+    p_setup.add_argument("--model-drive", default=None, help="Custom target directory for disk space survey")
+    p_setup.add_argument("--pull-model", default=None, help="Download a specific model ID via Ollama pull API")
+    p_setup.add_argument("--pull-preselected", action="store_true", help="Download preselected models from catalog")
+    p_setup.add_argument("--allow-unverified-model", action="store_true", help="Explicit confirmation to pull models not present in signed catalog")
 
     # Deferred execution commands (M6+)
     for deferred in ("generate",):
@@ -2962,6 +2975,12 @@ def cmd_chat(args) -> int:
     return 0
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Hardware survey, model fit analysis, and setup engine (Milestone P6)."""
+    import pai_setup
+    return pai_setup.run_setup(args)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -3037,6 +3056,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         elif args.subcommand == "route":
             return cmd_route(args)
+        elif args.subcommand == "setup":
+            return cmd_setup(args)
         else:
             parser.print_help()
             return 1

@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import ctypes
 import datetime
 import hashlib
 import http.client
@@ -57,10 +56,9 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("pai_setup")
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-RESEARCH_DIR = REPO_ROOT / "research"
-if str(RESEARCH_DIR) not in sys.path:
-    sys.path.insert(0, str(RESEARCH_DIR))
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
 
 try:
     import ed25519_ref
@@ -124,26 +122,14 @@ class HardwareProfile:
 
 
 def survey_ram_windows() -> Tuple[float, float]:
-    """Queries total and available physical RAM using GlobalMemoryStatusEx."""
-    class MEMORYSTATUSEX(ctypes.Structure):
-        _fields_ = [
-            ("dwLength", ctypes.c_ulong),
-            ("dwMemoryLoad", ctypes.c_ulong),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
-
-    stat = MEMORYSTATUSEX()
-    stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-    if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-        total_mb = stat.ullTotalPhys / (1024 * 1024)
-        avail_mb = stat.ullAvailPhys / (1024 * 1024)
-        return round(total_mb, 1), round(avail_mb, 1)
+    """Queries total and available physical RAM using HardwareTelemetry."""
+    try:
+        from hardware_telemetry import HardwareTelemetry
+        snap = HardwareTelemetry().query()
+        if snap.get("total_ram_gb") is not None and snap.get("avail_ram_mb") is not None:
+            return round(snap["total_ram_gb"] * 1024.0, 1), round(snap["avail_ram_mb"], 1)
+    except Exception:
+        pass
     return 8192.0, 4096.0
 
 
@@ -390,10 +376,11 @@ def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, A
         # Findings CK & CP: Locate research\trust.json strictly relative to the running module's location.
         # Environment variables (including PAI_INSTALL_DIR and PAI_TRUST_PATH) and user-profile paths
         # are strictly IGNORED to prevent caller environment manipulation of the trust root.
+        module_dir = Path(__file__).resolve().parent
         for cand in [
-            Path(__file__).resolve().parent.parent / "research" / "trust.json",
-            Path(__file__).resolve().parent / "research" / "trust.json",
-            REPO_ROOT / "research" / "trust.json",
+            module_dir / "trust.json",
+            module_dir / "research" / "trust.json",
+            module_dir.parent / "research" / "trust.json",
         ]:
             if cand.is_file():
                 resolved_path = cand
@@ -401,7 +388,7 @@ def load_trust_keys(trust_path: Optional[Path | str] = None) -> List[Dict[str, A
 
     if resolved_path is None:
         raise CatalogSecurityError(
-            "Trust root 'research/trust.json' not found in installation; cannot verify catalog (fail-closed, Findings CB, CK, CP)"
+            "Trust root 'trust.json' not found in module directory; cannot verify catalog (fail-closed, Findings CB, CK, CP)"
         )
 
     try:
@@ -1168,7 +1155,7 @@ class ConsoleProgressBar:
             sys.stdout.flush()
         else:
             if success:
-                print(f"[{self.model_id}] 100% Download complete.", flush=True)
+                print(f"[{self.model_id}] Download complete (100%).", flush=True)
             else:
                 print(f"[{self.model_id}] Download failed: {message}", flush=True)
 
@@ -1590,20 +1577,23 @@ class ProgressEmitter:
         print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="PAI Setup Wizard and Hardware Survey Engine.")
+def build_setup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="PAI Setup Wizard and Hardware Survey Engine (Milestone P6).")
     parser.add_argument("--survey-only", action="store_true", help="Run local hardware survey and output JSON")
     parser.add_argument("--catalog", default=None, help="Path to signed catalog.json")
     parser.add_argument("--min-catalog-version", type=int, default=1, help="Minimum acceptable catalog version")
     parser.add_argument("--progress-json", action="store_true", help="Emit Appendix C NDJSON progress events")
     parser.add_argument("--probe-ollama", action="store_true", help="Check if Ollama daemon is reachable")
     parser.add_argument("--model-drive", default=None, help="Custom target directory for disk space survey")
-    parser.add_argument("--pull-model", default=None, help="Download a specific model ID via Ollama pull API (§6)")
-    parser.add_argument("--pull-preselected", action="store_true", help="Download preselected models from catalog (§6)")
+    parser.add_argument("--pull-model", default=None, help="Download a specific model ID via Ollama pull API")
+    parser.add_argument("--pull-preselected", action="store_true", help="Download preselected models from catalog")
     parser.add_argument("--allow-unverified-model", action="store_true", help="Explicit confirmation to pull models not present in signed catalog")
+    return parser
 
-    args = parser.parse_args(argv)
-    emitter = ProgressEmitter(enabled=args.progress_json)
+
+def run_setup(args: argparse.Namespace) -> int:
+    """Runs hardware survey, catalog evaluation, and model setup (Milestone P6)."""
+    emitter = ProgressEmitter(enabled=getattr(args, "progress_json", False))
 
     # 1. Hardware Survey
     try:
@@ -1682,12 +1672,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"ERROR: Model ID '{args.pull_model}' is invalid. Must match pattern '<family>:<tag>'.", file=sys.stderr)
             return 1
 
-        if not ollama_status["running"]:
-            emitter.emit("error", code="OLLAMA_NOT_RUNNING", message="Ollama daemon is not reachable on localhost")
-            print("ERROR: Ollama daemon is not running. Please start Ollama before pulling models.", file=sys.stderr)
-            return 1
-
-        # Finding CN: Check catalog membership, license terms, and manifest digest
+        # Finding CN & CW: Check catalog membership, license terms, and unverified confirmation first
         catalog_entry = None
         if verified_cat:
             catalog_entry = next((m for m in verified_cat.get("models", []) if m.get("id") == args.pull_model), None)
@@ -1715,6 +1700,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
+
+        if not ollama_status["running"]:
+            emitter.emit("error", code="OLLAMA_NOT_RUNNING", message="Ollama daemon is not reachable on localhost")
+            print("ERROR: Ollama daemon is not running. Please start Ollama before pulling models.", file=sys.stderr)
+            return 1
 
         try:
             print(f"\nStarting model pull for {args.pull_model}...")
@@ -1760,6 +1750,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 1
 
     return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_setup_parser()
+    args = parser.parse_args(argv)
+    return run_setup(args)
 
 
 if __name__ == "__main__":

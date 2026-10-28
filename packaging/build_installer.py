@@ -264,7 +264,6 @@ def build_inno_installer(
         extra_files = {
             "install.bat": packaging_dir / "install.bat",
             "uninstall.bat": packaging_dir / "uninstall.bat",
-            "packaging/pai_setup.py": packaging_dir / "pai_setup.py",
             "tools/update_path.ps1": packaging_dir / "update_path.ps1",
             "AGREEMENT.txt": agreement_file,
         }

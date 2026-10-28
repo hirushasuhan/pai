@@ -30,8 +30,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "research") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "research"))
 
-from packaging.pai_setup import (
+from pai_setup import (
     ModelPullError,
     delete_ollama_model,
     normalize_digest,
@@ -50,7 +52,7 @@ def get_machine_header() -> str:
         f"Python Version:  {sys.version.splitlines()[0]}",
         f"Processor:       {platform.processor()}",
     ]
-    setup_file = REPO_ROOT / "packaging" / "pai_setup.py"
+    setup_file = REPO_ROOT / "research" / "pai_setup.py"
     if setup_file.is_file():
         setup_sha256 = hashlib.sha256(setup_file.read_bytes()).hexdigest()
         lines.append(f"pai_setup SHA256:{setup_sha256}")

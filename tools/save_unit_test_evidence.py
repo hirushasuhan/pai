@@ -39,7 +39,7 @@ def get_machine_header(suite_title: str) -> str:
         if core_bin.is_file():
             core_sha = hashlib.sha256(core_bin.read_bytes()).hexdigest()
             lines.append(f"pai-core SHA256: {core_sha}")
-        pai_setup = REPO_ROOT / "packaging" / "pai_setup.py"
+        pai_setup = REPO_ROOT / "research" / "pai_setup.py"
         if pai_setup.is_file():
             lines.append(f"pai_setup SHA256: {hashlib.sha256(pai_setup.read_bytes()).hexdigest()}")
         pai_iss = REPO_ROOT / "packaging" / "pai.iss"
@@ -81,9 +81,9 @@ def run_suite_and_save(suite_script: str, output_path: Path, title: str) -> None
 def main() -> None:
     evidence_dir = REPO_ROOT / "docs" / "evidence" / "payload_tests"
     run_suite_and_save(
-        "tools/test_pai_setup.py",
+        "research/tests/test_pai_setup.py",
         evidence_dir / "test_pai_setup.txt",
-        "PAI Setup Unit Tests (27 Tests, Findings CT, CU, CV, CW, CX)",
+        "PAI Setup Unit Tests (28 Tests, Milestone P6 & Subcommand Parity)",
     )
     run_suite_and_save(
         "tools/test_build_payload.py",

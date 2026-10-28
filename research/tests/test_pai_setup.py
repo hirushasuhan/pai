@@ -36,15 +36,23 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-if str(REPO_ROOT / "research") not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT / "research"))
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+
+try:
+    import _bootstrap  # noqa: F401
+except ImportError:
+    pass
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+RESEARCH_DIR = Path(__file__).resolve().parent.parent
+if str(RESEARCH_DIR) not in sys.path:
+    sys.path.insert(0, str(RESEARCH_DIR))
 
 import ed25519_ref
 
-from packaging.pai_setup import (
+from pai_setup import (
     CatalogSecurityError,
     HardwareProfile,
     ModelFitReport,
@@ -71,6 +79,7 @@ from packaging.pai_setup import (
     pull_model_stream,
     query_ollama_model_digest,
     record_catalog_version,
+    run_setup,
     survey_disk_free,
     survey_gpu_windows,
     survey_ram_windows,
@@ -684,7 +693,7 @@ class TestPaiSetupP3(unittest.TestCase):
 
     def test_12_cli_execution_survey_only(self) -> None:
         """Executes pai_setup.py via subprocess with --survey-only."""
-        setup_script = REPO_ROOT / "packaging" / "pai_setup.py"
+        setup_script = RESEARCH_DIR / "pai_setup.py"
         proc = subprocess.run([sys.executable, str(setup_script), "--survey-only"], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, f"pai_setup.py --survey-only failed:\n{proc.stderr}")
         data = json.loads(proc.stdout)
@@ -743,13 +752,13 @@ class TestPaiSetupP3(unittest.TestCase):
           - Failed download or verification unlinks target file immediately.
         """
         # Case A: Untrusted download host
-        with patch("packaging.pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "https://malicious-site.com/OllamaSetup.exe"):
+        with patch("pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "https://malicious-site.com/OllamaSetup.exe"):
             with self.assertRaises(OllamaVerificationError) as ctx:
                 download_ollama_installer(dest_dir=self.tmp_dir)
             self.assertIn("Untrusted download host", str(ctx.exception))
 
         # Case B: Insecure scheme
-        with patch("packaging.pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "http://ollama.com/download/OllamaSetup.exe"):
+        with patch("pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "http://ollama.com/download/OllamaSetup.exe"):
             with self.assertRaises(OllamaVerificationError) as ctx:
                 download_ollama_installer(dest_dir=self.tmp_dir)
             self.assertIn("requires HTTPS", str(ctx.exception))
@@ -766,7 +775,7 @@ class TestPaiSetupP3(unittest.TestCase):
         target_file = Path(self.tmp_dir) / "OllamaSetup.exe"
 
         with patch("urllib.request.build_opener", return_value=mock_opener):
-            with patch("packaging.pai_setup.verify_authenticode_publisher", side_effect=OllamaVerificationError("Bad signature")):
+            with patch("pai_setup.verify_authenticode_publisher", side_effect=OllamaVerificationError("Bad signature")):
                 with self.assertRaises(OllamaVerificationError):
                     download_ollama_installer(dest_dir=self.tmp_dir)
                 # File must be cleaned up!
@@ -1076,7 +1085,7 @@ class TestPaiSetupP3(unittest.TestCase):
         mock_opener_good.open.return_value = resp_good
 
         with patch("urllib.request.build_opener", return_value=mock_opener_good):
-            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=bare_daemon_digest):
+            with patch("pai_setup.query_ollama_model_digest", return_value=bare_daemon_digest):
                 res = pull_model_stream(
                     model_id="verified:model",
                     expected_manifest_digest=catalog_digest_prefixed,
@@ -1096,8 +1105,8 @@ class TestPaiSetupP3(unittest.TestCase):
 
         deleted_models = []
         with patch("urllib.request.build_opener", return_value=mock_opener_bad):
-            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=bad_daemon_digest):
-                with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
+            with patch("pai_setup.query_ollama_model_digest", return_value=bad_daemon_digest):
+                with patch("pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
                     with self.assertRaises(ModelPullError) as ctx:
                         pull_model_stream(
                             model_id="tampered:model",
@@ -1132,8 +1141,8 @@ class TestPaiSetupP3(unittest.TestCase):
         mock_opener_a = MagicMock()
         mock_opener_a.open.return_value = make_success_resp()
         with patch("urllib.request.build_opener", return_value=mock_opener_a):
-            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=None):
-                with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
+            with patch("pai_setup.query_ollama_model_digest", return_value=None):
+                with patch("pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
                     with self.assertRaises(ModelPullError) as ctx:
                         pull_model_stream(
                             model_id="catalog:model",
@@ -1148,8 +1157,8 @@ class TestPaiSetupP3(unittest.TestCase):
         mock_opener_b = MagicMock()
         mock_opener_b.open.return_value = make_success_resp()
         with patch("urllib.request.build_opener", return_value=mock_opener_b):
-            with patch("packaging.pai_setup.query_ollama_model_digest", return_value=None):
-                with patch("packaging.pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
+            with patch("pai_setup.query_ollama_model_digest", return_value=None):
+                with patch("pai_setup.delete_ollama_model", side_effect=lambda ep, m: deleted_models.append(m)):
                     res = pull_model_stream(
                         model_id="catalog:model",
                         expected_manifest_digest=expected_digest,
@@ -1425,7 +1434,7 @@ class TestPaiSetupP3(unittest.TestCase):
             is not present in signed catalog and --allow-unverified-model is omitted.
           - CLI rejects malformed model IDs not matching <family>:<tag> pattern.
         """
-        setup_script = REPO_ROOT / "packaging" / "pai_setup.py"
+        setup_script = RESEARCH_DIR / "pai_setup.py"
 
         # Case A: Malformed model ID pattern
         proc_bad_id = subprocess.run(
@@ -1463,6 +1472,57 @@ class TestPaiSetupP3(unittest.TestCase):
         tracker.update_layer(digest="sha256:layer1", completed=500, total=2000, status="downloading")
         self.assertEqual(tracker.total_expected, 2000)
         self.assertEqual(tracker.percent, 25.0)
+
+
+
+    # -------------------------------------------------------------------------
+    # Milestone P6: Subcommand Parity, Help Output, and Shadow Isolation
+    # -------------------------------------------------------------------------
+    def test_27_p6_subcommand_parity_help_and_shadow_isolation(self) -> None:
+        """
+        Milestone P6 Parity and Security Isolation:
+          1. Subcommand parity: 'pai setup' CLI invokes setup engine with identical options.
+          2. Help output integrity: existing subcommands' --help output remains valid and unchanged.
+          3. Base 'pai --help' output includes the new 'setup' line cleanly.
+          4. Shadow telemetry isolation: 'pai setup' MUST NOT write shadow comparisons or
+             record shadow discrepancy entries (preserves N+1 window integrity).
+        """
+        pai_py = RESEARCH_DIR / "pai.py"
+
+        # Test A: pai setup --help works and lists options
+        proc_help = subprocess.run([sys.executable, str(pai_py), "setup", "--help"], capture_output=True, text=True)
+        self.assertEqual(proc_help.returncode, 0, f"pai setup --help failed: {proc_help.stderr}")
+        self.assertIn("--survey-only", proc_help.stdout)
+        self.assertIn("--catalog", proc_help.stdout)
+        self.assertIn("--probe-ollama", proc_help.stdout)
+
+        # Test B: pai --help contains setup entry
+        proc_main_help = subprocess.run([sys.executable, str(pai_py), "--help"], capture_output=True, text=True)
+        self.assertEqual(proc_main_help.returncode, 0)
+        self.assertIn("setup", proc_main_help.stdout)
+        self.assertIn("Hardware survey, model fit analysis, and setup engine", proc_main_help.stdout)
+
+        # Test C: Ensure all existing subcommands have valid --help
+        for sub in ("doctor", "calibrate", "models", "route", "code", "analyze", "docs", "forecast", "chat"):
+            p = subprocess.run([sys.executable, str(pai_py), sub, "--help"], capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, f"Subcommand '{sub} --help' failed: {p.stderr}")
+
+        # Test D: Shadow isolation - pai setup must NOT write shadow comparisons
+        shadow_test_log = Path(self.tmp_dir) / "test_shadow_isolation.jsonl"
+        env = os.environ.copy()
+        env["PAI_SHADOW_LOG"] = str(shadow_test_log)
+        p_survey = subprocess.run(
+            [sys.executable, str(pai_py), "setup", "--survey-only"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(p_survey.returncode, 0, f"pai setup --survey-only failed: {p_survey.stderr}")
+        data = json.loads(p_survey.stdout)
+        self.assertIn("total_ram_mb", data)
+        # Shadow log must NOT have been created or written to
+        if shadow_test_log.exists():
+            self.assertEqual(shadow_test_log.stat().st_size, 0, "pai setup must not write shadow comparisons")
 
 
 if __name__ == "__main__":

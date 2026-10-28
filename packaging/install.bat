@@ -138,7 +138,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%UPDATE_PATH_SCRIPT%" -Acti
 if errorlevel 1 goto path_failed
 
 :: 4. Run setup wizard if present (Milestone P3+)
-if exist "%TARGET_DIR%\packaging\pai_setup.py" (
+if exist "%TARGET_DIR%\research\pai_setup.py" (
     echo.
     echo Running setup checks...
     "%BIN_DIR%\pai.exe" setup
