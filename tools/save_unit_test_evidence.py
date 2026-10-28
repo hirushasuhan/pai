@@ -83,7 +83,12 @@ def main() -> None:
     run_suite_and_save(
         "research/tests/test_pai_setup.py",
         evidence_dir / "test_pai_setup.txt",
-        "PAI Setup Unit Tests (30 Tests, Milestone P6 & Findings DP, DQ, DR, DY)",
+        "PAI Setup Unit Tests (31 Tests, Milestone P6 & Findings DP, DQ, DR, DY, EF, EH)",
+    )
+    run_suite_and_save(
+        "tools/test_sign_catalog.py",
+        evidence_dir / "test_sign_catalog.txt",
+        "PAI Catalog Sign Tool Tests (5 Tests, ADR-013 & Finding EH)",
     )
     run_suite_and_save(
         "research/tests/test_service_manager.py",
