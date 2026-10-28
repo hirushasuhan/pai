@@ -83,7 +83,17 @@ def main() -> None:
     run_suite_and_save(
         "research/tests/test_pai_setup.py",
         evidence_dir / "test_pai_setup.txt",
-        "PAI Setup Unit Tests (28 Tests, Milestone P6 & Subcommand Parity)",
+        "PAI Setup Unit Tests (30 Tests, Milestone P6 & Findings DP, DQ, DR, DY)",
+    )
+    run_suite_and_save(
+        "research/tests/test_service_manager.py",
+        evidence_dir / "test_service_manager.txt",
+        "PAI Managed Ollama Service Lifecycle Tests (8 Tests, ADR-014, Findings DS, DT, DU, EA)",
+    )
+    run_suite_and_save(
+        "research/tests/test_shell.py",
+        evidence_dir / "test_shell.txt",
+        "PAI Interactive Terminal Shell REPL Tests (ADR-014 Commit 2)",
     )
     run_suite_and_save(
         "tools/test_build_payload.py",

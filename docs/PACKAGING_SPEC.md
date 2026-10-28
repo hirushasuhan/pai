@@ -176,7 +176,7 @@ Run in Windows Sandbox or a clean VM, never on the development profile during th
 - **D14** whether the PowerShell one-line install ships with 1.1.0 (default: yes, as a second front door next to `PAI-Setup`, never the only one) and whether the project page shows it as the recommended method (default: no, the installer stays recommended).
 - **D15** Linux Python runtime: A) a pinned standalone CPython build shipped in the payload (default, same behaviour on every distribution), or B) the system `python3` above a stated minimum version.
 - **D16** Linux support level for 1.2.0: labelled "preview" until a Linux evaluation is recorded (default), or full support from the first release.
-- **D17** default consent mode for starting Ollama (ADR-014): Ask once (recommended default), Always, or Never.
+- **D17** default consent mode for starting Ollama (ADR-014): Ask each time (recommended default; always and never are remembered in `~/.pai/config.json`), Always, or Never. Hard-kill note: If PAI is terminated forcibly (`SIGKILL` or Task Manager 'End Process'), Python `atexit` does not run and the daemon process tree remains running until closed via the Ollama tray icon.
 
 ## 12. Instructions for the coding agent
 

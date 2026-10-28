@@ -867,14 +867,21 @@ def verify_authenticode_publisher(
         "exit 0"
     )
 
-    cmd = ["powershell", "-NoProfile", "-Command", ps_code]
+    sys_root = os.environ.get("SystemRoot", r"C:\Windows")
+    ps_path = Path(sys_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    ps_bin = str(ps_path) if ps_path.is_file() else "powershell"
+
+    cmd = [ps_bin, "-NoProfile", "-Command", ps_code]
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
         if proc.returncode == 0:
             return True
         err_msg = proc.stderr.strip() or proc.stdout.strip()
         logger.error("Authenticode verification failed: %s (code %d)", err_msg, proc.returncode)
-        raise OllamaVerificationError(f"Authenticode verification failed: {err_msg}")
+        raise OllamaVerificationError(
+            "Ollama digital signature did not match the publisher certificate known to PAI. "
+            "If Ollama was recently updated or renewed its certificate, start Ollama manually from the Start Menu, or run 'pai setup'."
+        )
     except Exception as e:
         if isinstance(e, OllamaVerificationError):
             raise

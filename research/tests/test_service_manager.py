@@ -118,12 +118,13 @@ class TestServiceManagerADR014(unittest.TestCase):
                 self.assertIsNone(target, "Service manager MUST NOT resolve ollama.exe from PATH (Finding T21 / ADR-014)")
 
     # -------------------------------------------------------------------------
-    # 3. Authenticode Verification Gate (ADR-014 §2)
+    # 3. Authenticode Verification Gate (ADR-014 §2, Finding DU)
     # -------------------------------------------------------------------------
     def test_authenticode_validation_fail_closed(self) -> None:
         """
         Asserts that if the target binary fails Authenticode verification,
         execution fails closed with OllamaVerificationError and subprocess is never called.
+        Also asserts the plain-language guidance message is returned (Finding DU).
         """
         fake_bin = Path(self.tmp_dir) / "ollama.exe"
         fake_bin.write_bytes(b"UNSIGNED_BINARY")
@@ -135,15 +136,62 @@ class TestServiceManagerADR014(unittest.TestCase):
         )
         set_ollama_consent_mode("always", self.config_dir)
 
+        guidance_err = (
+            "Ollama digital signature did not match the publisher certificate known to PAI. "
+            "If Ollama was recently updated or renewed its certificate, start Ollama manually from the Start Menu, or run 'pai setup'."
+        )
         with patch.object(mgr, "is_running", return_value=False):
-            with patch("pai_setup.verify_authenticode_publisher", side_effect=OllamaVerificationError("Invalid digital signature")):
+            with patch("pai_setup.verify_authenticode_publisher", side_effect=OllamaVerificationError(guidance_err)):
                 with patch("subprocess.Popen") as mock_popen:
-                    with self.assertRaises(OllamaVerificationError):
+                    with self.assertRaises(OllamaVerificationError) as ctx:
                         mgr.start_service()
                     mock_popen.assert_not_called()
+                    self.assertIn("Ollama digital signature did not match", str(ctx.exception))
+                    self.assertIn("Start Menu", str(ctx.exception))
 
     # -------------------------------------------------------------------------
-    # 4. Process Lifecycle and Cleanup (ADR-014 §2)
+    # 3b. Child Environment Sanitized (Finding DS)
+    # -------------------------------------------------------------------------
+    def test_child_environment_sanitized_loopback_only(self) -> None:
+        """
+        Finding DS: Asserts that child process launched by start_service() receives an explicit
+        environment with OLLAMA_HOST=127.0.0.1:11434, stripping any caller-defined
+        OLLAMA_* network variables (such as OLLAMA_HOST=0.0.0.0:11434 or OLLAMA_ORIGINS=*).
+        """
+        fake_bin = Path(self.tmp_dir) / "ollama.exe"
+        fake_bin.write_bytes(b"MZ_MOCK_BINARY")
+        mgr = OllamaServiceManager(
+            config_dir=self.config_dir,
+            executable_path=fake_bin,
+            verify_authenticode=False,
+        )
+        set_ollama_consent_mode("always", self.config_dir)
+
+        caller_env = {
+            "OLLAMA_HOST": "0.0.0.0:11434",
+            "OLLAMA_ORIGINS": "*",
+            "SOME_OTHER_VAR": "keep_this",
+        }
+        with patch.dict(os.environ, caller_env):
+            with patch.object(mgr, "is_running", side_effect=[False, True]):
+                with patch("subprocess.Popen") as mock_popen:
+                    mock_proc = MagicMock()
+                    mock_proc.pid = 8888
+                    mock_proc.poll.return_value = None
+                    mock_popen.return_value = mock_proc
+
+                    ok = mgr.start_service()
+                    self.assertTrue(ok)
+                    mock_popen.assert_called_once()
+                    _, kwargs = mock_popen.call_args
+                    passed_env = kwargs.get("env")
+                    self.assertIsNotNone(passed_env, "Explicit env must be passed to child daemon")
+                    self.assertEqual(passed_env.get("OLLAMA_HOST"), "127.0.0.1:11434")
+                    self.assertNotIn("OLLAMA_ORIGINS", passed_env)
+                    self.assertEqual(passed_env.get("SOME_OTHER_VAR"), "keep_this")
+
+    # -------------------------------------------------------------------------
+    # 4. Process Lifecycle and Cleanup (ADR-014 §2, Finding DT)
     # -------------------------------------------------------------------------
     def test_lifecycle_cleanup_started_vs_external(self) -> None:
         """
@@ -173,6 +221,52 @@ class TestServiceManagerADR014(unittest.TestCase):
             # Stopping must NOT terminate any external process
             mgr_ext.stop_service()
             self.assertIsNone(mgr_ext.child_process)
+
+    @unittest.skipUnless(sys.platform == "win32", "Process tree kill test requires Windows taskkill")
+    def test_real_process_tree_termination_windows(self) -> None:
+        """
+        Finding DT: Real-process test on Windows demonstrating that stop_service() terminates
+        the entire process tree (parent and any spawned child runners).
+        """
+        parent_script = (
+            "import subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            "print(child.pid, flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", parent_script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        child_pid_line = proc.stdout.readline().strip()
+        child_pid = int(child_pid_line)
+        parent_pid = proc.pid
+        proc.stdout.close()
+        proc.stderr.close()
+
+        self.assertIsNone(proc.poll())
+
+        mgr = OllamaServiceManager(config_dir=self.config_dir)
+        mgr.child_process = proc
+        mgr.child_pid = parent_pid
+
+        mgr.stop_service()
+
+        import time
+        time.sleep(0.5)
+
+        self.assertIsNotNone(proc.poll(), "Parent process must be terminated")
+
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        h_child = kernel32.OpenProcess(0x1000, False, child_pid)
+        if h_child:
+            exit_code = ctypes.c_ulong()
+            kernel32.GetExitCodeProcess(h_child, ctypes.byref(exit_code))
+            kernel32.CloseHandle(h_child)
+            self.assertNotEqual(exit_code.value, 259, f"Child PID {child_pid} was not terminated by taskkill /T")
 
     # -------------------------------------------------------------------------
     # 5. User Consent Modes and Persistence (ADR-014 D17)
@@ -211,6 +305,16 @@ class TestServiceManagerADR014(unittest.TestCase):
                 with patch("builtins.input", return_value="always"):
                     self.assertTrue(mgr_ask.prompt_user_consent())
                     self.assertEqual(get_ollama_consent_mode(self.config_dir), "always")
+
+        # Mode 'ask' with interactive session choosing 'y' (Finding EA: starts this time, stays 'ask')
+        set_ollama_consent_mode("ask", self.config_dir)
+        with patch("sys.stdin.isatty", return_value=True):
+            with patch("sys.stdout.isatty", return_value=True):
+                with patch("builtins.input", return_value="y") as mock_input:
+                    self.assertTrue(mgr_ask.prompt_user_consent())
+                    self.assertEqual(get_ollama_consent_mode(self.config_dir), "ask", "Answering 'y' must not change mode from 'ask'")
+                    prompt_str = mock_input.call_args[0][0]
+                    self.assertIn("asks each time; always/never are remembered", prompt_str)
 
     # -------------------------------------------------------------------------
     # 6. Raw WinError 10061 Suppressed in Call Model Generate (ADR-014 §2)

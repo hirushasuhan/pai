@@ -1667,6 +1667,18 @@ class TestPaiSetupP3(unittest.TestCase):
                 self.assertIsNone(survey_json["avail_ram_mb"])
                 self.assertEqual(survey_json["ram_source"], "unavailable")
 
+    @unittest.skipUnless(sys.platform == "win32", "Real hardware telemetry survey requires Windows")
+    def test_30_real_hardware_telemetry_ram_survey_windows(self) -> None:
+        """Finding DY: runs the real survey without stubs and asserts ram_source == 'telemetry'."""
+        from hardware_telemetry import HardwareTelemetry
+        tot_mb, avail_mb, src = survey_ram_windows()
+        snap = HardwareTelemetry().get_system_snapshot()
+        self.assertEqual(src, "telemetry")
+        self.assertIsNotNone(tot_mb)
+        self.assertIsNotNone(avail_mb)
+        expected_tot_mb = round(snap["total_ram_gb"] * 1024.0, 1)
+        self.assertAlmostEqual(tot_mb, expected_tot_mb, delta=expected_tot_mb * 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

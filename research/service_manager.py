@@ -43,6 +43,18 @@ SERVICE_OFFLINE_GUIDANCE = (
 )
 
 
+def get_service_environment() -> Dict[str, str]:
+    """
+    Constructs a sanitized environment for the child Ollama daemon (Finding DS).
+    Forces OLLAMA_HOST to 127.0.0.1:11434 (loopback-only).
+    Strips any caller-defined OLLAMA_* network variables (e.g. OLLAMA_ORIGINS, OLLAMA_HOST)
+    to prevent public server exposure.
+    """
+    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("OLLAMA_")}
+    clean_env["OLLAMA_HOST"] = "127.0.0.1:11434"
+    return clean_env
+
+
 def get_official_ollama_path() -> Path:
     """
     Returns the official per-user Ollama server executable path on Windows.
@@ -169,7 +181,7 @@ class OllamaServiceManager:
         try:
             prompt_text = (
                 "\nLocal AI service (Ollama) is not running on 127.0.0.1:11434.\n"
-                "Start local Ollama service now? [y/N/always/never]: "
+                "Start local Ollama service now? [y/N/always/never] (y: start now, asks each time; always/never are remembered): "
             )
             ans = input(prompt_text).strip().lower()
             if ans == "always":
@@ -213,10 +225,14 @@ class OllamaServiceManager:
         if sys.platform == "win32":
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
+        # Explicit loopback environment stripping caller OLLAMA_* network vars (Finding DS)
+        service_env = get_service_environment()
+
         try:
             proc = subprocess.Popen(
                 cmd,
                 creationflags=flags,
+                env=service_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -253,20 +269,39 @@ class OllamaServiceManager:
 
     def stop_service(self) -> None:
         """
-        Terminates ONLY the background service started by PAI (matching child_pid).
-        Never touches pre-existing external services (Finding / ADR-014 invariant).
+        Terminates the whole process tree started by PAI (matching child_pid).
+        Never touches pre-existing external services (Finding DT / ADR-014).
+        Uses %SystemRoot%\\System32\\taskkill.exe /F /T /PID <pid> on Windows
+        to clean up any runner child processes (e.g. ollama_llama_server) holding GPU VRAM.
         """
         proc = self.child_process
         pid = self.child_pid
+        target_pid = pid if pid is not None else (proc.pid if proc else None)
+
+        if target_pid is not None and sys.platform == "win32":
+            try:
+                sys_root = os.environ.get("SystemRoot", r"C:\Windows")
+                taskkill = Path(sys_root) / "System32" / "taskkill.exe"
+                if taskkill.is_file():
+                    subprocess.run(
+                        [str(taskkill), "/F", "/T", "/PID", str(target_pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5.0,
+                    )
+            except Exception as e:
+                logger.warning("taskkill failed for PID %s: %s", target_pid, e)
+
         if proc is not None:
             try:
                 proc.terminate()
-                proc.wait(timeout=3.0)
+                proc.wait(timeout=2.0)
             except Exception:
                 try:
                     proc.kill()
                 except Exception:
                     pass
+
         self.child_process = None
         self.child_pid = None
 

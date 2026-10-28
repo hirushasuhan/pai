@@ -70,10 +70,10 @@ The interactive shell and managed service features share a common service-detect
   - Before launching the server for the first time, prompt the user for explicit consent.
   - Record user choice locally in `~/.pai/config.json`.
   - Open Decision (proposed as **D17**): Default consent mode for starting Ollama:
-    - Option A: *Ask once* (recommended default: prompt once, remember preference in config).
+    - Option A: *Ask each time* (prompt each time Ollama is offline; answering 'always' or 'never' remembers the choice in `~/.pai/config.json`; answering 'y' starts for this session only without persisting).
     - Option B: *Always auto-start* (start automatically whenever installed but offline).
     - Option C: *Never auto-start* (strictly manual start by user).
-  - **Child Process Tracking:** Launch the daemon via `subprocess.Popen([str(ollama_exe), "serve"], creationflags=subprocess.CREATE_NO_WINDOW)` and retain the child process handle and PID. On PAI exit (via `atexit` and signal handlers), terminate only the specific child process PID that PAI initiated. If Ollama was already running when PAI started (detected via step 1), no child PID is tracked and the existing service is left running.
+  - **Child Process Tracking & Tree Termination:** Launch the daemon via `subprocess.Popen([str(ollama_exe), "serve"], creationflags=subprocess.CREATE_NO_WINDOW, env=clean_loopback_env)` with an explicit loopback environment (`OLLAMA_HOST=127.0.0.1:11434`, stripping any caller-defined `OLLAMA_*` network settings) and retain the child PID. On clean PAI exit (via `atexit` and signal handlers), terminate the whole process tree started by PAI via `%SystemRoot%\System32\taskkill.exe /F /T /PID <pid>` to clean up any runner child processes (e.g. `ollama_llama_server`) holding GPU VRAM. Pre-existing external Ollama services are never touched. Hard-kill note: If PAI is terminated forcibly (`SIGKILL` or Task Manager 'End Process'), Python `atexit` handlers do not execute; the daemon process tree continues running undisturbed and can be closed manually via the Ollama tray icon or Task Manager.
 - **Error Simplification:**
   - Replace raw low-level connection errors (`[WinError 10061] No connection could be made because the target machine actively refused it`) with a single informative sentence:
     `"Local AI service (Ollama) is not running on 127.0.0.1:11434. Run 'pai setup' or start Ollama from the Start Menu."`
