@@ -1,0 +1,24 @@
+usage: pai analyze [-h] [--question QUESTION] [--include-junk]
+                   [--max-files MAX_FILES] [--max-bytes MAX_BYTES]
+                   [--model MODEL] [--temperature TEMPERATURE] [--seed SEED]
+                   [--model-timeout MODEL_TIMEOUT] [--json]
+                   folder
+
+positional arguments:
+  folder                Target codebase folder path
+
+options:
+  -h, --help            show this help message and exit
+  --question QUESTION   Targeted question about the codebase
+  --include-junk        Include junk/build directories (default: False)
+  --max-files MAX_FILES
+                        Maximum number of files to ingest
+  --max-bytes MAX_BYTES
+                        Maximum total bytes to ingest
+  --model MODEL         Candidate model name override
+  --temperature TEMPERATURE
+                        Generation temperature (default: 0.0)
+  --seed SEED           Generation seed (default: 42)
+  --model-timeout MODEL_TIMEOUT
+                        Model generation HTTP request timeout in seconds
+  --json                Output analysis in JSON format

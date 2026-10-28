@@ -1,0 +1,6 @@
+usage: pai clear-shadow [-h] [-y]
+
+options:
+  -h, --help  show this help message and exit
+  -y, --yes   Confirm archiving shadow log (invalidates active evaluation
+              window)

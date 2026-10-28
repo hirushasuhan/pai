@@ -66,7 +66,6 @@ from pai_setup import (
     canonical_json_bytes,
     collect_hardware_survey,
     delete_ollama_model,
-    download_ollama_installer,
     evaluate_model_fit,
     format_bytes_human,
     format_eta_human,
@@ -741,45 +740,57 @@ class TestPaiSetupP3(unittest.TestCase):
             verify_catalog_payload(cat_bad_tprints, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
 
     # -------------------------------------------------------------------------
-    # Finding CL: Download Safety Guardrails for Ollama Installer
+    # Finding DQ: Loopback-Only Network Enforcement (Zero External Traffic)
     # -------------------------------------------------------------------------
-    def test_14_finding_cl_download_ollama_installer_safety_controls(self) -> None:
+    def test_14_finding_dq_loopback_only_network_enforcement(self) -> None:
         """
-        Finding CL:
-          - Insecure (non-HTTPS) download rejected.
-          - Untrusted host rejected.
-          - Exceeding size limit (500 MB) rejected.
-          - Failed download or verification unlinks target file immediately.
+        Finding DQ:
+          - download_ollama_installer removed until D10 decision.
+          - pai setup enforces loopback-only connections (127.0.0.1, localhost, ::1).
+          - No external hosts are ever contacted across survey, probe, catalog verify, and model pull.
+          - socket.create_connection is intercepted to guarantee fail-closed enforcement.
         """
-        # Case A: Untrusted download host
-        with patch("pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "https://malicious-site.com/OllamaSetup.exe"):
-            with self.assertRaises(OllamaVerificationError) as ctx:
-                download_ollama_installer(dest_dir=self.tmp_dir)
-            self.assertIn("Untrusted download host", str(ctx.exception))
+        import socket
+        import pai_setup
 
-        # Case B: Insecure scheme
-        with patch("pai_setup.OLLAMA_OFFICIAL_INSTALLER_URL", "http://ollama.com/download/OllamaSetup.exe"):
-            with self.assertRaises(OllamaVerificationError) as ctx:
-                download_ollama_installer(dest_dir=self.tmp_dir)
-            self.assertIn("requires HTTPS", str(ctx.exception))
+        # Case A: External installer downloader removed completely
+        self.assertFalse(hasattr(pai_setup, "download_ollama_installer"), "download_ollama_installer must be deleted per Finding DQ")
+        self.assertFalse(hasattr(pai_setup, "StrictRedirectHandler"), "StrictRedirectHandler must be deleted per Finding DQ")
+        self.assertFalse(hasattr(pai_setup, "OLLAMA_OFFICIAL_INSTALLER_URL"), "OLLAMA_OFFICIAL_INSTALLER_URL must be deleted per Finding DQ")
 
-        # Case C: Verification failure cleans up downloaded file
-        mock_resp = MagicMock()
-        mock_resp.headers = {"Content-Length": "1024"}
-        mock_resp.read.side_effect = [b"dummy bytes", b""]
-        mock_resp.__enter__.return_value = mock_resp
+        # Case B: Loopback-only network policy enforcement
+        loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+        recorded_connections = []
+        real_create_connection = socket.create_connection
 
-        mock_opener = MagicMock()
-        mock_opener.open.return_value = mock_resp
+        def guarded_create_connection(address, *args, **kwargs):
+            host = address[0]
+            recorded_connections.append(host)
+            if host not in loopback_hosts:
+                raise AssertionError(f"Finding DQ Violation: non-loopback connection attempted to {host}:{address[1]}")
+            # Simulate offline loopback daemon (fail-closed without real socket)
+            raise ConnectionRefusedError(f"Simulated offline daemon for {host}:{address[1]}")
 
-        target_file = Path(self.tmp_dir) / "OllamaSetup.exe"
+        with patch("socket.create_connection", side_effect=guarded_create_connection):
+            # 1. Survey path: zero network calls
+            survey_prof = collect_hardware_survey(allow_mock=True)
+            self.assertIsNotNone(survey_prof)
+            self.assertEqual(len(recorded_connections), 0, "Hardware survey must make 0 network connections")
 
-        with patch("urllib.request.build_opener", return_value=mock_opener):
-            with patch("pai_setup.verify_authenticode_publisher", side_effect=OllamaVerificationError("Bad signature")):
-                with self.assertRaises(OllamaVerificationError):
-                    download_ollama_installer(dest_dir=self.tmp_dir)
-                # File must be cleaned up!
-                self.assertFalse(target_file.exists(), "Target file must be unlinked when verification fails (Finding CL)")
+            # 2. Probe Ollama path: strictly loopback
+            probe_result = probe_ollama_daemon()
+            self.assertFalse(probe_result["running"])
+            self.assertTrue(all(h in loopback_hosts for h in recorded_connections), "Ollama probe must only contact loopback")
+
+            # 3. Catalog verify path: zero network calls (pure cryptographic verification)
+            recorded_connections.clear()
+            verify_catalog_payload(self.catalog, trust_keys=TEST_TRUST_KEYS, state_path=self.state_file)
+            self.assertEqual(len(recorded_connections), 0, "Catalog verification must make 0 network connections")
+
+            # 4. Negative control: non-loopback connection attempt fails closed via AssertionError
+            with self.assertRaises(AssertionError) as ctx:
+                socket.create_connection(("external.ollama.com", 443))
+            self.assertIn("Finding DQ Violation", str(ctx.exception))
 
     # -------------------------------------------------------------------------
     # Finding CM: Catalog Expiration Guidance and State Degradation
@@ -1476,56 +1487,186 @@ class TestPaiSetupP3(unittest.TestCase):
 
 
     # -------------------------------------------------------------------------
-    # Milestone P6: Subcommand Parity, Help Output, and Shadow Isolation
+    # Milestone P6 & Finding DP: Subcommand Parity, Golden Help Comparison, and Shadow Isolation
     # -------------------------------------------------------------------------
-    def test_27_p6_subcommand_parity_help_and_shadow_isolation(self) -> None:
+    def test_27_p6_subcommand_parity_golden_help_and_shadow_isolation(self) -> None:
         """
-        Milestone P6 Parity and Security Isolation:
+        Milestone P6 Parity and Finding DP:
           1. Subcommand parity: 'pai setup' CLI invokes setup engine with identical options.
-          2. Help output integrity: existing subcommands' --help output remains valid and unchanged.
-          3. Base 'pai --help' output includes the new 'setup' line cleanly.
+          2. Help output integrity: every baseline subcommand's --help output is byte-identical
+             to its tag 8ce81cb golden copy.
+          3. Top-level 'pai --help' output differs from tag 8ce81cb golden copy by exactly the
+             one added 'setup' line in subcommands list and 'setup' in the choices list.
           4. Shadow telemetry isolation: 'pai setup' MUST NOT write shadow comparisons or
              record shadow discrepancy entries (preserves N+1 window integrity).
         """
+        import difflib
         pai_py = RESEARCH_DIR / "pai.py"
+        golden_dir = Path(__file__).resolve().parent / "golden"
+        self.assertTrue(golden_dir.is_dir(), f"Golden directory not found: {golden_dir}")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(RESEARCH_DIR)
 
         # Test A: pai setup --help works and lists options
-        proc_help = subprocess.run([sys.executable, str(pai_py), "setup", "--help"], capture_output=True, text=True)
+        proc_help = subprocess.run([sys.executable, str(pai_py), "setup", "--help"], capture_output=True, text=True, env=env)
         self.assertEqual(proc_help.returncode, 0, f"pai setup --help failed: {proc_help.stderr}")
         self.assertIn("--survey-only", proc_help.stdout)
         self.assertIn("--catalog", proc_help.stdout)
         self.assertIn("--probe-ollama", proc_help.stdout)
 
-        # Test B: pai --help contains setup entry
-        proc_main_help = subprocess.run([sys.executable, str(pai_py), "--help"], capture_output=True, text=True)
-        self.assertEqual(proc_main_help.returncode, 0)
-        self.assertIn("setup", proc_main_help.stdout)
-        self.assertIn("Hardware survey, model fit analysis, and setup engine", proc_main_help.stdout)
-
-        # Test C: Ensure all existing subcommands have valid --help
-        for sub in ("doctor", "calibrate", "models", "route", "code", "analyze", "docs", "forecast", "chat"):
-            p = subprocess.run([sys.executable, str(pai_py), sub, "--help"], capture_output=True, text=True)
+        # Test B: Every existing subcommand --help matches tag 8ce81cb golden output byte-for-byte (Finding DP)
+        baseline_subcommands = (
+            "doctor", "clear-shadow", "calibrate", "models", "route",
+            "code", "analyze", "docs", "forecast", "chat", "generate"
+        )
+        for sub in baseline_subcommands:
+            p = subprocess.run([sys.executable, str(pai_py), sub, "--help"], capture_output=True, text=True, env=env)
             self.assertEqual(p.returncode, 0, f"Subcommand '{sub} --help' failed: {p.stderr}")
+            golden_file = golden_dir / f"help_{sub.replace('-', '_')}.txt"
+            self.assertTrue(golden_file.is_file(), f"Missing golden file for subcommand {sub}: {golden_file}")
+            golden_text = golden_file.read_text(encoding="utf-8")
+            self.assertEqual(
+                p.stdout,
+                golden_text,
+                f"Subcommand '{sub} --help' diverged from tag 8ce81cb golden baseline"
+            )
+
+        # Test C: Top-level pai --help differs from tag 8ce81cb golden copy by exactly the 'setup' addition (Finding DP)
+        proc_main_help = subprocess.run([sys.executable, str(pai_py), "--help"], capture_output=True, text=True, env=env)
+        self.assertEqual(proc_main_help.returncode, 0)
+        golden_main = (golden_dir / "help_pai.txt").read_text(encoding="utf-8")
+
+        # Verify that removing ',setup' from choices and the one 'setup' line reproduces the golden baseline byte-for-byte
+        normalized_help = proc_main_help.stdout.replace(",setup,", ",")
+        setup_line = "    setup               Hardware survey, model fit analysis, and setup engine\n"
+        self.assertIn(setup_line, proc_main_help.stdout, "Top-level help must include 'setup' subcommand description")
+        normalized_help = normalized_help.replace(setup_line, "")
+        self.assertEqual(
+            normalized_help,
+            golden_main,
+            "Top-level help text diverged from 8ce81cb baseline beyond the single 'setup' subcommand addition"
+        )
+
+        # Verify unified diff between baseline and current consists solely of the expected setup additions
+        diff = list(difflib.unified_diff(
+            golden_main.splitlines(keepends=True),
+            proc_main_help.stdout.splitlines(keepends=True),
+            fromfile="golden_8ce81cb",
+            tofile="current_pai",
+        ))
+        added_lines = [l for l in diff if l.startswith("+") and not l.startswith("+++")]
+        for l in added_lines:
+            self.assertIn("setup", l, f"Unexpected added line in help diff: {l}")
 
         # Test D: Shadow isolation - pai setup must NOT write shadow comparisons
         shadow_test_log = Path(self.tmp_dir) / "test_shadow_isolation.jsonl"
-        env = os.environ.copy()
-        env["PAI_SHADOW_LOG"] = str(shadow_test_log)
+        env_shadow = env.copy()
+        env_shadow["PAI_SHADOW_LOG"] = str(shadow_test_log)
         p_survey = subprocess.run(
             [sys.executable, str(pai_py), "setup", "--survey-only"],
             capture_output=True,
             text=True,
-            env=env,
+            env=env_shadow,
         )
         self.assertEqual(p_survey.returncode, 0, f"pai setup --survey-only failed: {p_survey.stderr}")
         data = json.loads(p_survey.stdout)
-        self.assertIn("total_ram_mb", data)
-        # Shadow log must NOT have been created or written to
+        self.assertIn("free_disk_bytes", data)
         if shadow_test_log.exists():
             self.assertEqual(shadow_test_log.stat().st_size, 0, "pai setup must not write shadow comparisons")
 
+    # -------------------------------------------------------------------------
+    # Milestone P6 & Finding DR: RAM Survey Failure Safety and Preselection Guard
+    # -------------------------------------------------------------------------
+    def test_29_finding_dr_ram_survey_failure_handling_and_preselection_safety(self) -> None:
+        """
+        Finding DR:
+          - When telemetry fails or returns None, survey_ram_windows returns (None, None, 'unavailable').
+          - HardwareProfile marks ram_source as 'unavailable'.
+          - Unknown RAM prevents model preselection (is_preselected = False) with clear rejection reason.
+          - CLI --survey-only emits total_ram_mb: null, avail_ram_mb: null, ram_source: 'unavailable'.
+        """
+        # Case A: HardwareTelemetry returns empty or None fields
+        with patch("hardware_telemetry.HardwareTelemetry.get_system_snapshot", return_value={"total_ram_gb": None, "avail_ram_mb": None}):
+            tot, avail, src = survey_ram_windows()
+            self.assertIsNone(tot, "Total RAM must be None when telemetry returns None")
+            self.assertIsNone(avail, "Available RAM must be None when telemetry returns None")
+            self.assertEqual(src, "unavailable", "ram_source must be 'unavailable'")
+
+        # Case B: HardwareTelemetry raises exception
+        with patch("hardware_telemetry.HardwareTelemetry.get_system_snapshot", side_effect=RuntimeError("Simulated WMI failure")):
+            tot, avail, src = survey_ram_windows()
+            self.assertIsNone(tot)
+            self.assertIsNone(avail)
+            self.assertEqual(src, "unavailable")
+
+        # Case C: Unknown RAM disables model preselection with clear rejection message
+        profile_no_ram = HardwareProfile(
+            total_ram_mb=None,
+            avail_ram_mb=None,
+            ram_source="unavailable",
+            free_disk_bytes=100 * 1024 * 1024 * 1024,
+            total_disk_bytes=250 * 1024 * 1024 * 1024,
+            model_drive="C:",
+            gpu_name="NVIDIA GeForce RTX 4090",
+            dedicated_vram_mb=24576.0,
+            gpu_driver_version="550.0",
+            cpu_cores=8,
+            cpu_logical=16,
+            cpu_name="AMD Ryzen 7",
+            npu_detected=False,
+            npu_name=None,
+        )
+
+        candidate_model = {
+            "id": "qwen2.5-coder:7b",
+            "family": "qwen",
+            "tasks": ["code"],
+            "download_bytes": 4 * 1024 * 1024 * 1024,
+            "disk_bytes": 4 * 1024 * 1024 * 1024,
+            "min_ram_mb": 4096,
+            "license": {"license_status": "verified"},
+        }
+
+        report = evaluate_model_fit(candidate_model, profile_no_ram)
+        self.assertFalse(report.fits_ram, "fits_ram must be False when available RAM is unknown")
+        self.assertFalse(report.is_preselected, "Model must NEVER be preselected when RAM is unknown (Finding DR)")
+        self.assertTrue(
+            any("RAM_UNKNOWN" in r for r in report.rejection_reasons),
+            f"Expected RAM_UNKNOWN rejection reason, got: {report.rejection_reasons}"
+        )
+        self.assertTrue(
+            any("model preselection disabled" in r for r in report.rejection_reasons),
+            f"Expected informative message, got: {report.rejection_reasons}"
+        )
+
+        # Case D: Catalog planning with unknown RAM preselects 0 models
+        catalog = {"models": [candidate_model]}
+        plan = plan_model_selection(catalog, profile_no_ram)
+        preselected = [r for r in plan if r.is_preselected]
+        self.assertEqual(len(preselected), 0, "Zero models may be preselected when RAM survey is unavailable")
+
+        # Case E: CLI --survey-only emits null RAM and ram_source 'unavailable'
+        pai_py = RESEARCH_DIR / "pai.py"
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(RESEARCH_DIR)
+        with patch("pai_setup.survey_ram_windows", return_value=(None, None, "unavailable")):
+            import pai_setup
+            parser = pai_setup.build_setup_parser()
+            args = parser.parse_args(["--survey-only"])
+            import io
+            from contextlib import redirect_stdout
+            f = io.StringIO()
+            with patch("pai_setup.collect_hardware_survey") as mock_survey:
+                mock_survey.return_value = profile_no_ram
+                with redirect_stdout(f):
+                    rc = pai_setup.run_setup(args)
+                self.assertEqual(rc, 0)
+                survey_json = json.loads(f.getvalue())
+                self.assertIsNone(survey_json["total_ram_mb"])
+                self.assertIsNone(survey_json["avail_ram_mb"])
+                self.assertEqual(survey_json["ram_source"], "unavailable")
+
 
 if __name__ == "__main__":
-    unittest.main()
-
     unittest.main()

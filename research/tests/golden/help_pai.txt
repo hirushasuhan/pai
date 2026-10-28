@@ -1,0 +1,29 @@
+usage: pai [-h]
+           {doctor,clear-shadow,calibrate,models,route,code,analyze,docs,forecast,chat,generate} ...
+
+Personal Agentic AI (PAI) - Privacy-First Local Assistant CLI
+
+positional arguments:
+  {doctor,clear-shadow,calibrate,models,route,code,analyze,docs,forecast,chat,generate}
+                        Available subcommands
+    doctor              Hardware diagnostics, safety boundaries, and command
+                        smoke tests
+    clear-shadow        Archive and reset persistent shadow discrepancy
+                        telemetry log
+    calibrate           Empirical 5-run cold RAM & latency calibration
+    models              Model catalog management
+    route               Adaptive Model Router CLI
+    code                Sandbox-gated code generation against model-written
+                        tests and spec examples (M2b)
+    analyze             Safe codebase folder structure, dependency and risk
+                        analysis (M3)
+    docs                Safe document analysis and extraction for txt, md, and
+                        csv files (M4)
+    forecast            Deterministic time-series forecasting with backtesting
+                        and uncertainty intervals (M5)
+    chat                General and bilingual (Singlish/Sinhala/English)
+                        assistant chat (M7)
+    generate            Direct generate execution (deferred to M6+)
+
+options:
+  -h, --help            show this help message and exit

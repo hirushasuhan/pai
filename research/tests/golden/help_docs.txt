@@ -1,0 +1,30 @@
+usage: pai docs [-h] [--question QUESTION] [--extract-table] [--export EXPORT]
+                [--overwrite] [--sample-size SAMPLE_SIZE]
+                [--sampling-method {head,random_seed}] [--model MODEL]
+                [--temperature TEMPERATURE] [--seed SEED]
+                [--model-timeout MODEL_TIMEOUT] [--json]
+                file
+
+positional arguments:
+  file                  Target document file path (.txt, .md, .csv)
+
+options:
+  -h, --help            show this help message and exit
+  --question QUESTION   Targeted question about the document
+  --extract-table       Extract tabular data from document
+  --export EXPORT       Export extracted table to file (formula-escaped if
+                        CSV)
+  --overwrite           Permit overwriting existing file in --export (cannot
+                        overwrite input document)
+  --sample-size SAMPLE_SIZE
+                        Maximum rows to sample for large CSV files (default:
+                        100)
+  --sampling-method {head,random_seed}
+                        Sampling method for large CSV (head or random_seed)
+  --model MODEL         Candidate model name override
+  --temperature TEMPERATURE
+                        Generation temperature (default: 0.0)
+  --seed SEED           Generation seed (default: 42)
+  --model-timeout MODEL_TIMEOUT
+                        Model generation HTTP request timeout in seconds
+  --json                Output analysis in JSON format

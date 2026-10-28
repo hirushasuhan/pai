@@ -1,0 +1,14 @@
+usage: pai route [-h] [--prompt PROMPT] [--explain-route] [--json]
+                 [--gemma4-opt-in]
+                 command_name
+
+positional arguments:
+  command_name     Command name (code, analyze, docs, forecast, web, chat)
+
+options:
+  -h, --help       show this help message and exit
+  --prompt PROMPT  Optional user prompt text to evaluate Singlish/Sinhala
+                   quality gate (M7)
+  --explain-route  Print full routing explanation report
+  --json           Output route decision in JSON format
+  --gemma4-opt-in  Explicit owner opt-in for Gemma 4B

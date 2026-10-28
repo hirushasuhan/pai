@@ -1,0 +1,7 @@
+usage: pai calibrate [-h] [--model MODEL] [--runs RUNS]
+
+options:
+  -h, --help     show this help message and exit
+  --model MODEL  Specific model to calibrate (default: all installed
+                 candidates)
+  --runs RUNS    Number of cold runs (default: 5)

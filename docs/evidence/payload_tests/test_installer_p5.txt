@@ -1,16 +1,16 @@
 ================================================================================
 PAI INNO SETUP INSTALLER TESTS (20 TESTS, ICON & FINDINGS DK, DL, DM, DN, MILESTONE P5) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
 ================================================================================
-Timestamp (UTC): 2026-10-28T11:05:53.705798+00:00
+Timestamp (UTC): 2026-10-28T11:35:48.796721+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        ecd0e8d45101f3dcbd663256eb226ecc69e23421
-Research Tree:   506e520b33a0af8c3f0276114483ce26b9bd3787
+Git HEAD:        f42118f85f8fb6d1f5292fafcd744d75d1823fa3
+Research Tree:   c2b0fa07611861e7f8438ca9e25466e33b340d2b
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
-pai_setup SHA256: a5342e151100a3249f617e4a5db8ee4c13e3eca3bb7dcbb6ce0d2689ac41f044
+pai_setup SHA256: a3018952532e3fafe9f47729156fd01d98bf58ebb4ab954c9da9504484d7a829
 pai.iss SHA256:   62a520749fe4dac601a91650c0221186896cdffcc7bba15dc7402e50650bb6ca
 agreement SHA256: 426463d87e23414a1686d131f79da68572cb2c9850af7de4a76a9ce3b06772be
 ================================================================================
@@ -23,6 +23,6 @@ STDOUT:
 STDERR:
 ....................
 ----------------------------------------------------------------------
-Ran 20 tests in 267.183s
+Ran 20 tests in 247.105s
 
 OK

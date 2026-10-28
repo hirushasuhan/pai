@@ -99,12 +99,12 @@ class ModelPullError(SetupError):
 
 
 # -----------------------------------------------------------------------------
-# Hardware Survey (§4, §5, ADR-012, Finding CE)
+# Hardware Survey (§4, §5, ADR-012, Finding CE, Finding DR)
 # -----------------------------------------------------------------------------
 @dataclass
 class HardwareProfile:
-    total_ram_mb: float
-    avail_ram_mb: float
+    total_ram_mb: Optional[float]
+    avail_ram_mb: Optional[float]
     free_disk_bytes: int
     total_disk_bytes: int
     model_drive: str
@@ -116,21 +116,24 @@ class HardwareProfile:
     cpu_name: Optional[str]
     npu_detected: bool
     npu_name: Optional[str]
+    ram_source: str = "telemetry"
     npu_note: str = "detected, not used in this version (ADR-012)"
     windows_version: Optional[str] = None
     all_gpus: List[Dict[str, Any]] = field(default_factory=list)
 
 
-def survey_ram_windows() -> Tuple[float, float]:
-    """Queries total and available physical RAM using HardwareTelemetry."""
+def survey_ram_windows() -> Tuple[Optional[float], Optional[float], str]:
+    """Queries total and available physical RAM using HardwareTelemetry (Finding DR)."""
     try:
         from hardware_telemetry import HardwareTelemetry
-        snap = HardwareTelemetry().query()
-        if snap.get("total_ram_gb") is not None and snap.get("avail_ram_mb") is not None:
-            return round(snap["total_ram_gb"] * 1024.0, 1), round(snap["avail_ram_mb"], 1)
+        snap = HardwareTelemetry().get_system_snapshot()
+        tot = snap.get("total_ram_gb")
+        avail = snap.get("avail_ram_mb")
+        if tot is not None and avail is not None:
+            return round(tot * 1024.0, 1), round(avail, 1), "telemetry"
     except Exception:
         pass
-    return 8192.0, 4096.0
+    return None, None, "unavailable"
 
 
 def survey_disk_free(target_path: Optional[str | Path] = None) -> Tuple[int, int, str]:
@@ -311,13 +314,13 @@ def collect_hardware_survey(
     if sys.platform != "win32":
         if not allow_mock:
             raise NotImplementedError("Hardware survey is only supported on Windows in v1.1.0 (ADR-012)")
-        total_ram, avail_ram = 16384.0, 8192.0
+        total_ram, avail_ram, ram_source = 16384.0, 8192.0, "telemetry"
         gpu_name, vram_mb, driver_ver, all_gpus = None, 0.0, None, []
         cpu_cores, cpu_logical, cpu_name = 4, 8, "Mock-CPU"
         npu_detected, npu_name = False, None
         win_ver = None
     else:
-        total_ram, avail_ram = survey_ram_windows()
+        total_ram, avail_ram, ram_source = survey_ram_windows()
         gpu_name, vram_mb, driver_ver, all_gpus = survey_gpu_windows()
         cpu_cores, cpu_logical, cpu_name = survey_cpu_windows()
         npu_detected, npu_name = survey_npu_windows()
@@ -329,6 +332,7 @@ def collect_hardware_survey(
     return HardwareProfile(
         total_ram_mb=total_ram,
         avail_ram_mb=avail_ram,
+        ram_source=ram_source,
         free_disk_bytes=free_disk,
         total_disk_bytes=total_disk,
         model_drive=drive,
@@ -688,21 +692,32 @@ def evaluate_model_fit(
     else:
         gpu_tier = "cpu"
 
-    # 3. RAM rule: Evaluated using available RAM at survey time with 2048 MB reserve (Finding CE)
-    system_reserve_mb = 2048.0
-    usable_avail_ram_mb = survey.avail_ram_mb - system_reserve_mb
-    fits_ram = usable_avail_ram_mb >= min_ram_mb
-
-    if not fits_ram and gpu_tier != "full":
-        rejections.append(
-            f"INSUFFICIENT_RAM: Available RAM ({survey.avail_ram_mb:.1f} MB) with 2048 MB reserve "
-            f"below model requirement ({min_ram_mb:.1f} MB)"
-        )
+    # 3. RAM rule: Evaluated using available RAM at survey time with 2048 MB reserve (Finding CE, Finding DR)
+    if survey.avail_ram_mb is None:
+        fits_ram = False
+        rejections.append("RAM_UNKNOWN: Available RAM could not be surveyed; model preselection disabled")
+    else:
+        system_reserve_mb = 2048.0
+        usable_avail_ram_mb = survey.avail_ram_mb - system_reserve_mb
+        fits_ram = usable_avail_ram_mb >= min_ram_mb
+        if not fits_ram and gpu_tier != "full":
+            rejections.append(
+                f"INSUFFICIENT_RAM: Available RAM ({survey.avail_ram_mb:.1f} MB) with 2048 MB reserve "
+                f"below model requirement ({min_ram_mb:.1f} MB)"
+            )
 
     # 4. Pre-selection rule:
-    # Must fit disk, must fit RAM, must be 'full' GPU offload (never 'partial' until measured),
+    # Must fit disk, must fit RAM, must have known RAM (Finding DR),
+    # must be 'full' GPU offload (never 'partial' until measured),
     # must have verified license, and 0 rejection reasons.
-    preselect = fits_disk and fits_ram and (gpu_tier == "full") and (lic_status == "verified") and (len(rejections) == 0)
+    preselect = (
+        fits_disk
+        and fits_ram
+        and (survey.avail_ram_mb is not None)
+        and (gpu_tier == "full")
+        and (lic_status == "verified")
+        and (len(rejections) == 0)
+    )
 
     return ModelFitReport(
         model_id=model_id,
@@ -754,10 +769,9 @@ def plan_model_selection(
 
 
 # -----------------------------------------------------------------------------
-# Ollama Detection and Official Installer Download (§4, Findings CC, CH)
+# Ollama Detection and Local Verification (§4, Findings CC, CH, DQ)
 # -----------------------------------------------------------------------------
 OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
-OLLAMA_OFFICIAL_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
 
 # Verified Publisher Certificate Attributes (Finding CC):
 OLLAMA_EXPECTED_SUBJECT = (
@@ -806,25 +820,6 @@ def probe_ollama_daemon(
         pass
 
     return {"running": False, "version": None, "endpoint": endpoint}
-
-
-class StrictRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """
-    Finding CL: Prevents redirects to different or untrusted hosts during installer download.
-    Only allows redirects within official allowed hosts and requires HTTPS.
-    """
-
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
-        parsed = urllib.parse.urlparse(newurl)
-        if parsed.scheme.lower() != "https":
-            raise OllamaVerificationError(f"Insecure redirect scheme rejected: {newurl}")
-        host = (parsed.hostname or "").lower()
-        if host not in ("ollama.com", "github.com", "objects.githubusercontent.com"):
-            raise OllamaVerificationError(f"Redirect to untrusted host rejected: {host}")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-MAX_INSTALLER_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB max safety limit
 
 
 def verify_authenticode_publisher(
@@ -885,81 +880,6 @@ def verify_authenticode_publisher(
             raise
         raise OllamaVerificationError(f"Failed to execute Authenticode verification: {e}")
 
-
-def download_ollama_installer(
-    dest_dir: Optional[Path | str] = None,
-    timeout: float = 60.0,
-    expected_subject: Optional[str] = None,
-    expected_thumbprints: Optional[List[str]] = None,
-) -> Path:
-    """
-    Downloads official Ollama installer into a private user-only destination folder
-    and verifies Authenticode publisher in-place before returning (Findings CC & CL).
-
-    Hardening Rules (Finding CL):
-      1. HTTPS only; official hosts only (ollama.com / github.com).
-      2. No redirection to different untrusted hosts.
-      3. Size limit strictly enforced (500 MB max).
-      4. If Authenticode verification fails, target file is immediately deleted.
-      5. Security Note: A narrow TOCTOU window exists between verification and child execution
-         where a concurrent process running under the same user could alter the file; writing to
-         a user-private directory (%LOCALAPPDATA%\\PAI\\downloads) prevents cross-user tampering.
-    """
-    if dest_dir:
-        target_dir = Path(dest_dir).resolve()
-    else:
-        target_dir = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "PAI" / "downloads"
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / "OllamaSetup.exe"
-
-    parsed_url = urllib.parse.urlparse(OLLAMA_OFFICIAL_INSTALLER_URL)
-    if parsed_url.scheme.lower() != "https":
-        raise OllamaVerificationError("Installer download requires HTTPS (Finding CL)")
-    if (parsed_url.hostname or "").lower() not in ("ollama.com", "github.com"):
-        raise OllamaVerificationError(f"Untrusted download host: {parsed_url.hostname}")
-
-    opener = urllib.request.build_opener(StrictRedirectHandler())
-    req = urllib.request.Request(
-        OLLAMA_OFFICIAL_INSTALLER_URL,
-        headers={"User-Agent": "PAI-Setup/1.0"},
-    )
-
-    downloaded_bytes = 0
-    try:
-        with opener.open(req, timeout=timeout) as resp, open(target_path, "wb") as out_f:
-            clength = resp.headers.get("Content-Length")
-            if clength and int(clength) > MAX_INSTALLER_SIZE_BYTES:
-                raise OllamaVerificationError(f"Installer size ({clength} bytes) exceeds safety limit ({MAX_INSTALLER_SIZE_BYTES})")
-
-            chunk_size = 64 * 1024
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                downloaded_bytes += len(chunk)
-                if downloaded_bytes > MAX_INSTALLER_SIZE_BYTES:
-                    raise OllamaVerificationError(f"Downloaded stream exceeded safety limit of {MAX_INSTALLER_SIZE_BYTES} bytes")
-                out_f.write(chunk)
-
-        # In-place Authenticode verification
-        verify_authenticode_publisher(
-            target_path,
-            expected_subject=expected_subject or OLLAMA_EXPECTED_SUBJECT,
-            expected_thumbprints=expected_thumbprints,
-        )
-    except Exception as e:
-        # Finding CL: If verification or download fails, delete partial or untrusted file immediately
-        if target_path.exists():
-            try:
-                target_path.unlink()
-            except Exception:
-                pass
-        if isinstance(e, OllamaVerificationError):
-            raise
-        raise OllamaVerificationError(f"Failed to download or verify Ollama installer: {e}")
-
-    return target_path
 
 
 # -----------------------------------------------------------------------------
@@ -1645,7 +1565,10 @@ def run_setup(args: argparse.Namespace) -> int:
         emitter.emit("fit", recommendations=recs_dicts)
 
         print("\n================ PAI Setup Hardware Survey & Recommendations ================")
-        print(f"RAM:   {survey.avail_ram_mb:.1f} MB available / {survey.total_ram_mb:.1f} MB total")
+        if survey.avail_ram_mb is not None and survey.total_ram_mb is not None:
+            print(f"RAM:   {survey.avail_ram_mb:.1f} MB available / {survey.total_ram_mb:.1f} MB total ({survey.ram_source})")
+        else:
+            print(f"RAM:   Unknown / Unavailable ({survey.ram_source}); model preselection disabled")
         print(f"Disk:  {round(survey.free_disk_bytes / (1024**3), 2)} GB free on {survey.model_drive}")
         print(f"GPU:   {survey.gpu_name or 'None'} ({survey.dedicated_vram_mb:.1f} MB VRAM)")
         if survey.npu_detected:

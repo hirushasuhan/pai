@@ -1,0 +1,8 @@
+usage: pai models [-h] {list} ...
+
+positional arguments:
+  {list}      Models action
+    list      List candidate models
+
+options:
+  -h, --help  show this help message and exit

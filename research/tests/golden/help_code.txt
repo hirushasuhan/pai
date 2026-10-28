@@ -1,0 +1,34 @@
+usage: pai code [-h] [--tests TESTS] [--allow-weak-tests] [--allow-unverified]
+                [--out OUT] [--model MODEL] [--max-repairs MAX_REPAIRS]
+                [--timeout TIMEOUT] [--memory-mb MEMORY_MB] [--overwrite]
+                [--temperature TEMPERATURE] [--seed SEED]
+                [--model-timeout MODEL_TIMEOUT] [--json]
+                [task]
+
+positional arguments:
+  task                  Coding task prompt
+
+options:
+  -h, --help            show this help message and exit
+  --tests TESTS         User-supplied test file (takes priority over model-
+                        written tests)
+  --allow-weak-tests    Permit user-supplied tests that pass one or more stubs
+                        in the stub family
+  --allow-unverified    Stage rejected candidate code to
+                        solution.unverified.py with explicit UNVERIFIED label
+                        (default: False)
+  --out OUT             Output staging directory (required for artifact
+                        generation)
+  --model MODEL         Explicit candidate model override
+  --max-repairs MAX_REPAIRS
+                        Maximum repair iterations (1..5, default: 3)
+  --timeout TIMEOUT     Timeout in seconds per execution (default: 10.0)
+  --memory-mb MEMORY_MB
+                        Memory ceiling in MB (default: 512.0)
+  --overwrite           Permit overwriting existing files in --out
+  --temperature TEMPERATURE
+                        Generation temperature (e.g. 0.0)
+  --seed SEED           Generation seed for determinism (e.g. 42)
+  --model-timeout MODEL_TIMEOUT
+                        Model generation HTTP request timeout in seconds
+  --json                Output execution diagnostics in JSON format

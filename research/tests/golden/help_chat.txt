@@ -1,0 +1,20 @@
+usage: pai chat [-h] [--model MODEL] [--gemma4-opt-in]
+                [--temperature TEMPERATURE] [--seed SEED]
+                [--model-timeout MODEL_TIMEOUT] [--json]
+                prompt
+
+positional arguments:
+  prompt                User message or question (English, Singlish, or
+                        Sinhala)
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         Candidate model name override
+  --gemma4-opt-in       Explicit owner opt-in for Gemma 4B
+  --temperature TEMPERATURE
+                        Generation temperature (default: 0.0)
+  --seed SEED           Generation seed (default: 42)
+  --model-timeout MODEL_TIMEOUT
+                        Model generation HTTP request timeout in seconds
+  --json                Output chat response and routing metadata in JSON
+                        format

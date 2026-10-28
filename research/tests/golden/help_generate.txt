@@ -1,0 +1,7 @@
+usage: pai generate [-h] [args ...]
+
+positional arguments:
+  args        Arguments
+
+options:
+  -h, --help  show this help message and exit

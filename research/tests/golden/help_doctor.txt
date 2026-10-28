@@ -1,0 +1,11 @@
+usage: pai doctor [-h] [--json] [--skip-smoke] [--clear-shadow] [-y]
+
+options:
+  -h, --help            show this help message and exit
+  --json                Output diagnostics in JSON format
+  --skip-smoke          Skip command smoke tests during diagnostics
+  --clear-shadow, --reset-shadow
+                        Archive and reset persistent shadow discrepancy
+                        telemetry log
+  -y, --yes             Confirm archiving shadow log (invalidates active
+                        evaluation window)

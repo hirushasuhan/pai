@@ -1,0 +1,27 @@
+usage: pai forecast [-h] [--horizon HORIZON] [--date-col DATE_COL]
+                    [--value-col VALUE_COL] [--question QUESTION]
+                    [--model MODEL] [--temperature TEMPERATURE] [--seed SEED]
+                    [--model-timeout MODEL_TIMEOUT] [--json]
+                    file
+
+positional arguments:
+  file                  Target time-series CSV file path
+
+options:
+  -h, --help            show this help message and exit
+  --horizon HORIZON     Forecast horizon steps (default: 5)
+  --date-col DATE_COL   Name of date/timestamp column (optional, auto-
+                        detected)
+  --value-col VALUE_COL
+                        Name of numeric target column (optional, auto-
+                        detected)
+  --question QUESTION   Optional question about the forecast (answered in the
+                        user's language)
+  --model MODEL         Candidate model name override for optional forecast
+                        question
+  --temperature TEMPERATURE
+                        Generation temperature (default: 0.0)
+  --seed SEED           Generation seed (default: 42)
+  --model-timeout MODEL_TIMEOUT
+                        Model generation HTTP request timeout in seconds
+  --json                Output forecast report in JSON format
