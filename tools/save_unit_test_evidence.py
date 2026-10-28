@@ -174,7 +174,7 @@ def main() -> None:
     run_suite_and_save(
         "research/tests/test_shell.py",
         evidence_dir / "test_shell.txt",
-        "PAI Interactive Terminal Shell REPL Tests (15 Tests, ADR-014 & Finding ES)",
+        "PAI Interactive Terminal Shell REPL Tests (17 Tests, ADR-014, Findings ES, ET, EX)",
         is_dirty=is_dirty,
     )
     run_suite_and_save(
