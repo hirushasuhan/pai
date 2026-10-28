@@ -1,26 +1,62 @@
 #!/usr/bin/env python3
 """
-Executes unit test suites and saves evidence logs with automated machine headers (Finding DA).
+Executes unit test suites and saves evidence logs with automated machine headers (Findings DA, EN).
 Outputs:
   - docs/evidence/payload_tests/test_pai_setup.txt
+  - docs/evidence/payload_tests/test_sign_catalog.txt
+  - docs/evidence/payload_tests/test_service_manager.txt
+  - docs/evidence/payload_tests/test_shell.txt
   - docs/evidence/payload_tests/test_build_payload.txt
+  - docs/evidence/payload_tests/test_launcher_and_zip.txt
+  - docs/evidence/payload_tests/test_installer_p5.txt
+
+Finding EN rules:
+  - Checks git status --porcelain and records "Working Tree: clean" or "Working Tree: DIRTY".
+  - Calculates and records the real working-tree research tree id.
+  - Refuses to run if working tree is dirty unless --allow-dirty is explicitly passed.
 """
 
+from __future__ import annotations
+
+import argparse
 import datetime
 import hashlib
 import os
 import platform
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def get_working_tree_research_id() -> str:
+    """Calculates the exact git tree SHA of the working tree research/ directory."""
+    tmp_index = tempfile.mktemp(prefix="git_idx_")
+    env = os.environ.copy()
+    env["GIT_INDEX_FILE"] = tmp_index
+    try:
+        subprocess.check_call(
+            ["git", "add", "-A", "research"],
+            cwd=REPO_ROOT,
+            env=env,
+            stderr=subprocess.DEVNULL,
+        )
+        return subprocess.check_output(
+            ["git", "write-tree", "--prefix=research/"],
+            cwd=REPO_ROOT,
+            env=env,
+        ).decode().strip()
+    finally:
+        if os.path.exists(tmp_index):
+            os.remove(tmp_index)
+
+
 def get_machine_header(suite_title: str) -> str:
     lines = [
         "=" * 80,
-        f"{suite_title.upper()} - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)",
+        f"{suite_title.upper()} - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)",
         "=" * 80,
         f"Timestamp (UTC): {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
         f"Platform:        {platform.platform()}",
@@ -31,8 +67,16 @@ def get_machine_header(suite_title: str) -> str:
     try:
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT).decode().strip()
         lines.append(f"Git HEAD:        {head}")
-        res_tree = subprocess.check_output(["git", "rev-parse", "HEAD:research"], cwd=REPO_ROOT).decode().strip()
+
+        # Finding EN: Check porcelain status and record clean/DIRTY
+        porcelain = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO_ROOT).decode().strip()
+        is_dirty = bool(porcelain)
+        lines.append(f"Working Tree:    {'DIRTY' if is_dirty else 'clean'}")
+
+        # Finding EN: Record real working-tree research tree id
+        res_tree = get_working_tree_research_id()
         lines.append(f"Research Tree:   {res_tree}")
+
         core_tree = subprocess.check_output(["git", "rev-parse", "HEAD:core"], cwd=REPO_ROOT).decode().strip()
         lines.append(f"Core Tree:       {core_tree}")
         core_bin = REPO_ROOT / "core" / "target" / "release" / ("pai-core.exe" if sys.platform == "win32" else "pai-core")
@@ -79,16 +123,34 @@ def run_suite_and_save(suite_script: str, output_path: Path, title: str) -> None
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Save unit test evidence logs with verified machine headers.")
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow running on a dirty working tree (header will record DIRTY)",
+    )
+    args = parser.parse_args()
+
+    # Finding EN: Refuse to save evidence on dirty tree unless --allow-dirty is passed
+    porcelain = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO_ROOT).decode().strip()
+    if porcelain and not args.allow_dirty:
+        print(
+            "ERROR: Working tree is dirty. Clean or commit changes before saving evidence, "
+            "or pass --allow-dirty.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     evidence_dir = REPO_ROOT / "docs" / "evidence" / "payload_tests"
     run_suite_and_save(
         "research/tests/test_pai_setup.py",
         evidence_dir / "test_pai_setup.txt",
-        "PAI Setup Unit Tests (31 Tests, Milestone P6 & Findings DP, DQ, DR, DY, EF, EH)",
+        "PAI Setup Unit Tests (32 Tests, Milestone P6 & Findings DP, DQ, DR, DY, EF, EH, EM)",
     )
     run_suite_and_save(
         "tools/test_sign_catalog.py",
         evidence_dir / "test_sign_catalog.txt",
-        "PAI Catalog Sign Tool Tests (5 Tests, ADR-013 & Finding EH)",
+        "PAI Catalog Sign Tool Tests (8 Tests, ADR-013 & Findings EH, EK, EL)",
     )
     run_suite_and_save(
         "research/tests/test_service_manager.py",

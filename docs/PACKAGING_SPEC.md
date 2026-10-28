@@ -339,6 +339,7 @@ P1b and P7 follow the same rules as the other milestones (one report each, trust
   - External catalogs supplied via `--catalog` continue to strictly enforce the 90-day freshness rule.
 - **Decision D20 Text Update:**
   - *Revised D20:* "Model catalog freshness: Remote or externally-provided catalogs must have `issued_utc` within 90 days of the local clock to prevent stale catalog injection. Bundled offline catalogs installed with the application payload at `DEFAULT_CATALOG_PATH` are exempt from the 90-day expiration window, relying on cryptographic signature verification against `research/trust.json` and monotonic `catalog_version` enforcement."
+- **Fail-Closed Verification on Bundled Catalog (Finding EM):** If the bundled catalog located at `DEFAULT_CATALOG_PATH` fails cryptographic verification (such as a version rollback or signature mismatch), `pai setup` halts immediately fail-closed with exit code 1. It does not fall back to unverified defaults or proceed with model planning or downloads. This fail-closed behavior is by design to ensure damaged or tampered installations are caught immediately.
 
 ### 15.4 Proposal: Strict Module-Relative Default Path (Finding EH)
 

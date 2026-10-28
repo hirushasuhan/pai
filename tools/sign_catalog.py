@@ -3,23 +3,35 @@
 Personal Agentic AI (PAI) - Model Catalog Signing Tool.
 
 Specification: docs/PACKAGING_SPEC.md (Section 15.5)
-ADR-013, Finding EH
+ADR-013, Findings EH & EK
 
 Rules enforced:
   1. Private key is strictly read from the path given via --private-key-file.
   2. Private key bytes, hex, or PEM are NEVER printed, logged, or included in exceptions.
   3. Uses deterministic canonical JSON serialization omitting the signature field.
-  4. Self-verifies the Ed25519 signature before writing the output file.
-  5. Fails closed with exit code 1 if arguments are invalid, file is missing, or signing fails.
+  4. Self-verifies the Ed25519 signature before running the production verifier.
+  5. Finding EK: Runs the production verifier verify_catalog_payload on the signed result
+     against active trust keys (default research/trust.json, or --trust-file for tests)
+     with an isolated temporary state_path and freshness enforced. If verification fails,
+     fails closed with exit 1 and writes NO output file.
+  6. Refuses --out equal to --catalog.
+  7. Writes output atomically via temporary file and rename (os.replace).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RESEARCH_DIR = REPO_ROOT / "research"
+if str(RESEARCH_DIR) not in sys.path:
+    sys.path.insert(0, str(RESEARCH_DIR))
 
 try:
     from cryptography.hazmat.primitives import serialization
@@ -27,6 +39,8 @@ try:
 except ImportError:
     ed25519 = None  # type: ignore
     serialization = None  # type: ignore
+
+from pai_setup import CatalogSecurityError, load_trust_keys, verify_catalog_payload
 
 
 def load_private_key_file(key_path: Path) -> ed25519.Ed25519PrivateKey:
@@ -84,8 +98,21 @@ def canonical_catalog_bytes(catalog_data: Dict[str, Any]) -> bytes:
     return json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def sign_catalog(catalog_path: Path, key_path: Path, out_path: Path) -> Path:
-    """Signs catalog JSON payload with Ed25519 key and writes signed JSON to out_path."""
+def sign_catalog(
+    catalog_path: Path,
+    key_path: Path,
+    out_path: Path,
+    trust_file: Optional[Path] = None,
+) -> Path:
+    """
+    Signs catalog JSON payload with Ed25519 key, validates against production trust root,
+    and atomically writes signed JSON to out_path.
+    """
+    cat_resolved = catalog_path.resolve()
+    out_resolved = out_path.resolve()
+    if cat_resolved == out_resolved:
+        raise ValueError(f"Output path cannot be identical to input catalog path: {out_path}")
+
     if not catalog_path.is_file():
         raise FileNotFoundError(f"Input catalog file not found: {catalog_path}")
 
@@ -99,7 +126,7 @@ def sign_catalog(catalog_path: Path, key_path: Path, out_path: Path) -> Path:
     canonical_bytes = canonical_catalog_bytes(cat_data)
     sig_bytes = private_key.sign(canonical_bytes)
 
-    # Self-verification check before writing output
+    # 1. Self-verification check before writing output
     public_key = private_key.public_key()
     try:
         public_key.verify(sig_bytes, canonical_bytes)
@@ -108,14 +135,53 @@ def sign_catalog(catalog_path: Path, key_path: Path, out_path: Path) -> Path:
 
     cat_data["signature"] = sig_bytes.hex()
 
+    # 2. Production Trust Root Verification (Finding EK)
+    # Verifies the signed catalog against the active trust root (or test trust file)
+    # with freshness enforced at signing time and an isolated temporary state file.
+    trust_keys = load_trust_keys(trust_file)
+    with tempfile.TemporaryDirectory(prefix="pai_sign_state_") as tmp_state_dir:
+        tmp_state_file = Path(tmp_state_dir) / "catalog_state.json"
+        try:
+            verify_catalog_payload(
+                cat_data,
+                trust_keys=trust_keys,
+                state_path=tmp_state_file,
+                enforce_freshness=True,
+            )
+        except Exception as e:
+            raise CatalogSecurityError(
+                f"Production trust root verification failed against "
+                f"{'default trust root' if trust_file is None else str(trust_file)}: {e}"
+            )
+
+    # 3. Write output atomically via temporary file + rename
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(cat_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=out_path.parent,
+        prefix="tmp_catalog_",
+        suffix=".json",
+        delete=False,
+    )
+    try:
+        temp_file.write(json.dumps(cat_data, indent=2, ensure_ascii=False) + "\n")
+        temp_file.close()
+        os.replace(temp_file.name, out_path)
+    except Exception:
+        if os.path.exists(temp_file.name):
+            try:
+                os.unlink(temp_file.name)
+            except OSError:
+                pass
+        raise
+
     return out_path
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Offline Deterministic Ed25519 Model Catalog Signing Tool (ADR-013, Finding EH)."
+        description="Offline Deterministic Ed25519 Model Catalog Signing Tool (ADR-013, Findings EH & EK)."
     )
     parser.add_argument("--catalog", required=True, help="Path to unsigned or updated input catalog JSON")
     parser.add_argument(
@@ -124,10 +190,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Path to file containing offline Ed25519 private key (never logged or printed)",
     )
     parser.add_argument("--out", required=True, help="Path where signed catalog JSON will be written")
+    parser.add_argument(
+        "--trust-file",
+        default=None,
+        help="Optional path to explicit trust.json file (default: research/trust.json, intended for tests)",
+    )
     args = parser.parse_args(argv)
 
     try:
-        out_p = sign_catalog(Path(args.catalog), Path(args.private_key_file), Path(args.out))
+        trust_p = Path(args.trust_file) if args.trust_file else None
+        out_p = sign_catalog(
+            Path(args.catalog),
+            Path(args.private_key_file),
+            Path(args.out),
+            trust_file=trust_p,
+        )
         print(f"Successfully signed catalog and wrote to: {out_p}")
         return 0
     except Exception as e:

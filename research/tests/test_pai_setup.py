@@ -1765,16 +1765,30 @@ class TestPaiSetupP3(unittest.TestCase):
                 )
             self.assertIn("expired", str(ctx_copy.exception).lower())
 
-            # Case 4: PAI_DIR does not alter default path
-            with patch.dict(os.environ, {"PAI_DIR": str(external_dir)}):
-                # DEFAULT_CATALOG_PATH remains module-relative
-                self.assertEqual(pai_setup.DEFAULT_CATALOG_PATH, fake_bundled_cat)
-                loaded_env, used_env = pai_setup.load_and_verify_catalog(
-                    catalog_path=None,
-                    trust_keys=TEST_TRUST_KEYS,
-                    state_path=self.state_file,
-                )
-                self.assertEqual(used_env, fake_bundled_cat.resolve())
+            # Case 4: Non-vacuous check in clean child process (Finding EM)
+            # Asserts that PAI_DIR and LOCALAPPDATA set to other directories do NOT alter
+            # the unpatched DEFAULT_CATALOG_PATH, which remains strictly module-relative.
+            code = (
+                "import os, sys\n"
+                "from pathlib import Path\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import pai_setup\n"
+                "expected = (Path(pai_setup.__file__).resolve().parent / 'catalog.json')\n"
+                "actual = pai_setup.DEFAULT_CATALOG_PATH.resolve()\n"
+                "assert actual == expected, f'Mismatch: {actual} != {expected}'\n"
+                "print('OK')\n"
+            )
+            env_hostile = os.environ.copy()
+            env_hostile["PAI_DIR"] = str(external_dir)
+            env_hostile["LOCALAPPDATA"] = str(external_dir)
+            p = subprocess.run(
+                [sys.executable, "-c", code, str(RESEARCH_DIR)],
+                capture_output=True,
+                text=True,
+                env=env_hostile,
+            )
+            self.assertEqual(p.returncode, 0, f"Hostile env altered DEFAULT_CATALOG_PATH: {p.stderr}")
+            self.assertEqual(p.stdout.strip(), "OK")
 
             # Case 5: Version rollback is still rejected for bundled catalog
             rollback_cat = create_test_catalog(version=1)  # version 1 < highest_seen 2
@@ -1803,6 +1817,77 @@ class TestPaiSetupP3(unittest.TestCase):
                     state_path=self.state_file,
                 )
             self.assertIn("signature", str(ctx_sig.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Finding EM: run_setup Bundled Default, Fallback, and Fail-Closed Branches
+    # -------------------------------------------------------------------------
+    def test_32_run_setup_bundled_and_fallback_branches(self) -> None:
+        """
+        Finding EM: Tests the new run_setup branches:
+          (a) no --catalog + valid catalog at default path -> loaded and recommendations planned;
+          (b) --pull-preselected with no catalog anywhere -> halts with CATALOG_REQUIRED (exit 1);
+          (c) bundled catalog fails verification (bad signature) -> pai setup stops fail-closed (exit 1).
+        """
+        from unittest.mock import patch
+        import pai_setup
+        from pai_setup import build_setup_parser, run_setup, HardwareProfile
+
+        parser = build_setup_parser()
+        mock_profile = HardwareProfile(
+            total_ram_mb=16384.0,
+            avail_ram_mb=8192.0,
+            free_disk_bytes=50 * 1024**3,
+            total_disk_bytes=100 * 1024**3,
+            model_drive="C:",
+            gpu_name="GPU",
+            dedicated_vram_mb=4096.0,
+            gpu_driver_version="1.0",
+            cpu_cores=4,
+            cpu_logical=8,
+            cpu_name="CPU",
+            npu_detected=False,
+            npu_name=None,
+        )
+
+        valid_cat = create_test_catalog(version=1)
+        valid_cat["signature"] = sign_test_catalog(valid_cat)
+
+        fake_default_cat = Path(self.tmp_dir) / "catalog_default_branch.json"
+        fake_default_cat.write_text(json.dumps(valid_cat), encoding="utf-8")
+
+        # Branch (a): no --catalog + catalog at default path -> loaded successfully
+        with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", fake_default_cat), \
+             patch("pai_setup.load_trust_keys", return_value=TEST_TRUST_KEYS), \
+             patch("pai_setup.get_highest_seen_catalog_version", return_value=0), \
+             patch("pai_setup.record_catalog_version"), \
+             patch("pai_setup.collect_hardware_survey", return_value=mock_profile), \
+             patch("pai_setup.probe_ollama_daemon", return_value={"running": True, "version": "0.1.0"}):
+            args_a = parser.parse_args([])
+            rc_a = run_setup(args_a)
+            self.assertEqual(rc_a, 0, "run_setup must succeed when valid catalog is present at default path")
+
+        # Branch (b): --pull-preselected with no catalog anywhere -> CATALOG_REQUIRED
+        nonexistent_cat = Path(self.tmp_dir) / "does_not_exist_catalog.json"
+        with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", nonexistent_cat), \
+             patch("pai_setup.collect_hardware_survey", return_value=mock_profile), \
+             patch("pai_setup.probe_ollama_daemon", return_value={"running": True, "version": "0.1.0"}):
+            args_b = parser.parse_args(["--pull-preselected"])
+            rc_b = run_setup(args_b)
+            self.assertEqual(rc_b, 1, "run_setup --pull-preselected without catalog must fail closed with exit 1")
+
+        # Branch (c): bundled catalog fails verification (bad signature) -> stops fail-closed
+        corrupt_cat = dict(valid_cat)
+        corrupt_cat["signature"] = "00" * 64
+        fake_corrupt_cat = Path(self.tmp_dir) / "catalog_corrupt.json"
+        fake_corrupt_cat.write_text(json.dumps(corrupt_cat), encoding="utf-8")
+
+        with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", fake_corrupt_cat), \
+             patch("pai_setup.load_trust_keys", return_value=TEST_TRUST_KEYS), \
+             patch("pai_setup.collect_hardware_survey", return_value=mock_profile), \
+             patch("pai_setup.probe_ollama_daemon", return_value={"running": True, "version": "0.1.0"}):
+            args_c = parser.parse_args([])
+            rc_c = run_setup(args_c)
+            self.assertEqual(rc_c, 1, "run_setup with corrupt bundled catalog must halt fail-closed with exit 1")
 
 
 if __name__ == "__main__":
