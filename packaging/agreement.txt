@@ -5,4 +5,4 @@ Personal Agentic AI (PAI) - Terms of use and notices
 3. Your data. PAI processes the files you give it on your computer. It keeps a local log of technical information in your user profile and does not send it anywhere. Downloads happen only when you approve them in the installer and are listed there.
 4. Third-party software and models. The Ollama server and each AI model have their own licences and use policies. They are shown to you before installation. You must accept them separately.
 5. No warranty. The software is provided "as is", without warranty of any kind. To the extent the law allows, the authors are not liable for loss or damage arising from its use.
-6. Source-code licence. The source code is licensed under the licence in the LICENSE file. These terms govern use of the installer and distributed binaries.
+6. Source-code licence. The source code is licensed under the MIT License in the LICENSE file. These terms govern use of the installer and distributed binaries.

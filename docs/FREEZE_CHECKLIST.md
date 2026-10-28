@@ -19,7 +19,7 @@ All preconditions must be verified and formally accepted before tagging the free
   - Formal confirmation of Decision D10: PAI never downloads Ollama directly; the installer's finished page provides direct guidance/link to the official installer.
 - [ ] **Precondition 4 (Signed Model Catalog Distribution & Freshness Decided - Finding EF & EH):**
   - Signed catalog is bundled as a payload file (`catalog.json` and signature) read by default from installation root (`Path(__file__).parent / "catalog.json"`).
-  - Freshness rule (Decision D20) for bundled offline catalog settled (no freshness expiration or extended period).
+  - Option A accepted: Bundled catalog has no freshness limit; version and signature protect it. External `--catalog` keeps the 90-day rule.
 - [ ] **Precondition 5 (Trust Root & Catalog Key Custody - Finding EH):**
   - Offline Ed25519 private key for `rel-1` is held exclusively by repository owner (never committed or logged).
   - First canonical signed catalog is generated via `tools/sign_catalog.py` and verified against `research/trust.json`.
