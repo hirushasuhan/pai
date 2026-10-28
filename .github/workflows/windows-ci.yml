@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'  # Pinned CI Python runtime (Finding DZ)
 
       - name: Install dependencies
         working-directory: research
@@ -200,7 +200,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12'  # Pinned CI Python runtime (Finding DZ)
 
       - name: Install dependencies
         working-directory: research

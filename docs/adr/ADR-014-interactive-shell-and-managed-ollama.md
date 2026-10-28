@@ -39,19 +39,23 @@ The interactive shell and managed service features share a common service-detect
   - Running `pai` with no arguments opens the interactive shell **only** when standard input and standard output are attached to an interactive terminal (`sys.stdin.isatty() and sys.stdout.isatty()`).
   - In a script, pipeline, or redirected environment (e.g. `pai < input.txt` or `echo "..." | pai`), `pai` without arguments preserves exact existing behaviour: displays the standard CLI help message and exits with the current status code.
 - **Slash-Command Dispatcher:**
-  - Slash commands map directly to existing, reviewed subcommand handler functions (`cmd_analyze`, `cmd_code`, `cmd_docs`, `cmd_forecast`, `cmd_doctor`, `cmd_chat`).
+  - Slash commands map directly to existing, reviewed subcommand handler functions (`cmd_analyze`, `cmd_code`, `cmd_docs`, `cmd_forecast`, `cmd_doctor`, `cmd_chat`, `cmd_setup`, `cmd_models_list`, `cmd_route`).
+  - **Excluded Maintenance Commands (Finding DV):** `/clear-shadow` and `/calibrate` are intentionally excluded from the shell to prevent accidental erasure of shadow comparison telemetry during evaluation windows; they remain accessible exclusively via explicit CLI invocation.
+  - **Setup Download Guard (Finding DV):** `/setup` inside the shell prompts interactively for user confirmation before initiating any model weight downloads.
   - No duplicate command implementations are created; the capability broker, taint tracking, AST guard, and restricted execution boundaries hold identically.
-  - Arguments to slash commands support paths containing spaces and non-ASCII characters (e.g. Sinhala Unicode `නාමය`).
-  - Unrecognized slash commands (e.g. `/unknown`) are rejected locally with a clear error and are **never** forwarded to the language model.
-- **Text Routing:**
-  - Any input line not prefixed with a slash (`/`) is treated as conversational input routed to `chat`.
+  - **Windows Path Tokenizer (Finding DW):** Arguments to slash commands support unquoted and quoted Windows backslash paths (e.g. `C:\Users\hp\project`), UNC network shares (e.g. `\\server\share\file`), paths with spaces, and non-ASCII characters (e.g. Sinhala Unicode `නාමය`).
+  - Unrecognized slash commands (e.g. `/unknown`, `/clear-shadow`) are rejected locally with a clear error and are **never** forwarded to the language model.
+- **Text Routing & Dash Protection (Finding DX):**
+  - Any input line not prefixed with a slash (`/`) is treated as conversational input routed to `chat` using a `--` sentinel, ensuring prompts beginning with a dash (e.g. `-5 is negative, why?`) are never misinterpreted by argparse as CLI option flags.
 - **Session Control & Signal Handling:**
   - `Ctrl+C` (SIGINT) cancels the currently generating model response and safely returns to the interactive prompt without killing the shell session.
   - `Ctrl+D` (EOF), `Ctrl+Z` (Windows EOF), or `/exit` cleanly terminates the shell.
-- **User Banner:**
+- **User Banner & Stateless Chat Mode (Finding DX):**
   - On launch, the shell displays an honest banner stating:
-    - Active model name and inference endpoint.
+    - Active resident model name, or "no model loaded yet" if uninitialized.
+    - Inference endpoint (`127.0.0.1:11434`).
     - Honest capability disclaimer: local models rely on static training data and lack live clock/web access; answers regarding current events may be outdated.
+    - Stateless mode declaration: chat operates statelessly where each line is evaluated independently without cross-turn memory.
 - **History & Privacy:**
   - Command line editing and session history (Up/Down arrow navigation) are supported natively by standard terminal line editing (`input()` / `readline`).
   - No persistent cross-session history file is written to disk by default, maintaining the zero-unnecessary-storage privacy posture of ADR-002.

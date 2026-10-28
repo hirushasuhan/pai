@@ -5,22 +5,26 @@ Part of ADR-014 (Commit 2: Interactive Shell).
 Invariants Enforced:
 1. Terminal guard: Invoked only when sys.stdin.isatty() and sys.stdout.isatty() are True.
    Non-interactive or piped invocation preserves exact CLI help and exit code parity.
-2. Canonical slash dispatch: Slash commands (/analyze, /code, /docs, /forecast, /doctor, /chat, etc.)
-   dispatch directly to reviewed subcommand handlers in pai.py with zero duplicated logic.
-3. Fail-safe unknown slash rejection: Unrecognized slash commands are rejected locally and
+2. Canonical slash dispatch: Slash commands (/analyze, /code, /docs, /forecast, /doctor, /chat,
+   /setup, /models, /route) dispatch directly to reviewed subcommand handlers in pai.py with zero duplicated logic.
+   Administrative maintenance commands (/clear-shadow, /calibrate) are excluded to protect evaluation window invariants (Finding DV).
+3. Windows-aware tokenizer: Preserves backslashes in Windows paths (C:\\Users\\...), UNC paths (\\\\server\\share),
+   quoted paths with spaces, and Sinhala/Unicode identifiers (Finding DW).
+4. Fail-safe unknown slash rejection: Unrecognized slash commands are rejected locally and
    are never forwarded to the reasoning model.
-4. Conversational routing: Non-slash input lines route to canonical 'pai chat'.
-5. Signal and EOF handling: Ctrl+C (SIGINT) cancels the active command/generation without
+5. Conversational routing: Non-slash input lines route to canonical 'pai chat' with '--' sentinel
+   so prompts beginning with a dash are never treated as CLI option flags (Finding DX).
+6. Signal and EOF handling: Ctrl+C (SIGINT) cancels the active command/generation without
    terminating the shell; Ctrl+D/Ctrl+Z (EOF) or /exit cleanly exits the session.
-6. Honest banner: Accurately declares model, endpoint, and explicit disclaimer that local
-   models operate on static training data without live web or clock access.
-7. Privacy: No persistent cross-session transcript is written to disk (ADR-002).
+7. Honest banner: Accurately declares model ("no model loaded yet" if uninitialized), endpoint,
+   and explicit disclaimers: local models rely on static training data without live web or clock access,
+   and conversational chat operates in stateless mode without cross-turn memory (Finding DX).
+8. Privacy: No persistent cross-session transcript is written to disk (ADR-002).
 """
 
 from __future__ import annotations
 
 import os
-import shlex
 import sys
 from typing import Callable, List, Optional, Tuple
 
@@ -34,14 +38,13 @@ CANONICAL_SLASH_COMMANDS = {
     "setup",
     "models",
     "route",
-    "calibrate",
-    "clear-shadow",
 }
 
 SHELL_BANNER = (
     "Personal Agentic AI (PAI) Interactive Shell\n"
     "Model: {model_name} | Endpoint: {endpoint}\n"
     "Note: Local models rely on static training data and lack live clock or web access.\n"
+    "Mode: Stateless (each line is evaluated independently without prior conversation memory).\n"
     "Type /help for available commands or /exit to quit.\n"
 )
 
@@ -56,10 +59,9 @@ SHELL_HELP = (
     "  /setup              Run setup, hardware survey, and model configuration\n"
     "  /models             List verified local and catalog models\n"
     "  /route <prompt>     Evaluate routing decision for given task\n"
-    "  /clear-shadow       Archive and reset shadow discrepancy telemetry log\n"
-    "  /calibrate          Run empirical RAM & latency calibration\n"
     "  /help               Show this help message\n"
     "  /exit, /quit        Exit the interactive shell\n"
+    "Note: Chat is stateless; each query is evaluated independently without prior conversation memory.\n"
 )
 
 
@@ -71,25 +73,66 @@ def is_interactive_terminal() -> bool:
         return False
 
 
+def tokenize_windows_line(line: str) -> List[str]:
+    """
+    Tokenizes a Windows command line without stripping backslashes (Finding DW).
+    Supports:
+      - Normal unquoted arguments with backslashes (C:\\Users\\hp\\project, \\\\server\\share)
+      - Quoted arguments with spaces ("C:\\Program Files\\app", 'D:\\my notes')
+      - Sinhala and multilingual Unicode characters
+      - Strip enclosing quotes around quoted tokens
+    Raises ValueError on unclosed quotes.
+    """
+    tokens: List[str] = []
+    current: List[str] = []
+    in_quote: Optional[str] = None
+    i = 0
+    n = len(line)
+
+    while i < n:
+        ch = line[i]
+        if in_quote is not None:
+            if ch == in_quote:
+                in_quote = None
+            else:
+                current.append(ch)
+        else:
+            if ch in ('"', "'"):
+                in_quote = ch
+            elif ch.isspace():
+                if current:
+                    tokens.append("".join(current))
+                    current = []
+            else:
+                current.append(ch)
+        i += 1
+
+    if in_quote is not None:
+        raise ValueError("No closing quotation")
+
+    if current:
+        tokens.append("".join(current))
+
+    return tokens
+
+
 def get_shell_banner(endpoint: str = "http://127.0.0.1:11434") -> str:
     """Constructs the interactive shell startup banner stating active model and honest limitations."""
-    model_name = "auto-routed"
+    model_name = "no model loaded yet"
     try:
         from router import ModelRouter
         router = ModelRouter(load_system_profile=True)
         resident = router.get_live_resident_model()
         if resident:
             model_name = resident
-        else:
-            model_name = "auto-routed (default: qwen2.5:0.5b)"
     except Exception:
-        model_name = "auto-routed"
+        model_name = "no model loaded yet"
     return SHELL_BANNER.format(model_name=model_name, endpoint=endpoint)
 
 
 def parse_shell_line(line: str) -> Tuple[str, List[str]]:
     """
-    Parses a single shell input line.
+    Parses a single shell input line using Windows-aware tokenizer (Finding DW).
     Returns (action: str, argv: List[str]).
     Actions:
       - 'empty': Blank line, no-op.
@@ -105,9 +148,8 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         return "empty", []
 
     if stripped.startswith("/"):
-        # Split using shlex for robust quote and whitespace handling
         try:
-            tokens = shlex.split(stripped)
+            tokens = tokenize_windows_line(stripped)
         except ValueError as e:
             return "error", [f"Error: {e}"]
 
@@ -123,13 +165,12 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
             return "help", []
 
         if raw_cmd in CANONICAL_SLASH_COMMANDS:
-            # Special ergonomics for /chat: if multiple tokens provided without quotes,
-            # join remainder as a single prompt argument.
+            # Ergonomics for /chat: pass prompt after '--' sentinel so leading dashes are preserved (Finding DX)
             if raw_cmd == "chat":
                 chat_prompt = stripped[len(tokens[0]):].strip()
                 if not chat_prompt:
                     return "error", ["Error: /chat requires a prompt message."]
-                return "canonical", ["chat", chat_prompt]
+                return "canonical", ["chat", "--", chat_prompt]
 
             argv = [raw_cmd] + tokens[1:]
             return "canonical", argv
@@ -138,7 +179,9 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         return "unknown_slash", [tokens[0]]
 
     # Conversational text without leading slash routes to canonical 'pai chat'
-    return "chat", ["chat", stripped]
+    # Use '--' sentinel so prompts beginning with a dash (e.g. '-5 is negative')
+    # are never mistaken for CLI option flags (Finding DX)
+    return "chat", ["chat", "--", stripped]
 
 
 def execute_subcommand(argv: List[str]) -> int:
