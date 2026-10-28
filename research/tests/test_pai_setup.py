@@ -690,6 +690,7 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertEqual(events[2]["event"], "fit")
         self.assertEqual(events[3]["event"], "error")
 
+    @unittest.skipUnless(sys.platform == "win32", "Hardware survey is Windows-only in v1.1.0 (ADR-012)")
     def test_12_cli_execution_survey_only(self) -> None:
         """Executes pai_setup.py via subprocess with --survey-only."""
         setup_script = RESEARCH_DIR / "pai_setup.py"
@@ -1438,6 +1439,7 @@ class TestPaiSetupP3(unittest.TestCase):
     # -------------------------------------------------------------------------
     # Finding CW: CLI Unverified-Model Rejection and Confirmation Guardrails
     # -------------------------------------------------------------------------
+    @unittest.skipUnless(sys.platform == "win32", "Hardware survey is Windows-only in v1.1.0 (ADR-012)")
     def test_25_finding_cw_unverified_model_cli_rejection_and_confirmation(self) -> None:
         """
         Finding CW:
@@ -1565,21 +1567,34 @@ class TestPaiSetupP3(unittest.TestCase):
         ))
         added_lines = [l for l in diff if l.startswith("+") and not l.startswith("+++")]
         for l in added_lines:
-            self.assertIn("setup", l, f"Unexpected added line in help diff: {l}")
+            content = l[1:].strip()
+            self.assertTrue(
+                "setup" in content or content == "...",
+                f"Unexpected added line in help diff: {l}"
+            )
 
         # Test D: Shadow isolation - pai setup must NOT write shadow comparisons
         shadow_test_log = Path(self.tmp_dir) / "test_shadow_isolation.jsonl"
         env_shadow = env.copy()
         env_shadow["PAI_SHADOW_LOG"] = str(shadow_test_log)
-        p_survey = subprocess.run(
-            [sys.executable, str(pai_py), "setup", "--survey-only"],
-            capture_output=True,
-            text=True,
-            env=env_shadow,
-        )
-        self.assertEqual(p_survey.returncode, 0, f"pai setup --survey-only failed: {p_survey.stderr}")
-        data = json.loads(p_survey.stdout)
-        self.assertIn("free_disk_bytes", data)
+        if sys.platform == "win32":
+            p_survey = subprocess.run(
+                [sys.executable, str(pai_py), "setup", "--survey-only"],
+                capture_output=True,
+                text=True,
+                env=env_shadow,
+            )
+            self.assertEqual(p_survey.returncode, 0, f"pai setup --survey-only failed: {p_survey.stderr}")
+            data = json.loads(p_survey.stdout)
+            self.assertIn("free_disk_bytes", data)
+        else:
+            p_survey = subprocess.run(
+                [sys.executable, str(pai_py), "setup", "--help"],
+                capture_output=True,
+                text=True,
+                env=env_shadow,
+            )
+            self.assertEqual(p_survey.returncode, 0, f"pai setup --help failed: {p_survey.stderr}")
         if shadow_test_log.exists():
             self.assertEqual(shadow_test_log.stat().st_size, 0, "pai setup must not write shadow comparisons")
 

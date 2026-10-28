@@ -91,6 +91,7 @@ class TestServiceManagerADR014(unittest.TestCase):
     # -------------------------------------------------------------------------
     # 2. Hostile PATH Hijacking Rejected (ADR-014 §2)
     # -------------------------------------------------------------------------
+    @unittest.skipUnless(sys.platform == "win32", "Windows %LOCALAPPDATA% official path check requires Windows")
     def test_hostile_path_hijack_rejected(self) -> None:
         """
         Places a rogue 'ollama.exe' earlier on PATH.

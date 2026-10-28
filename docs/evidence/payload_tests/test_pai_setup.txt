@@ -1,20 +1,18 @@
 ================================================================================
 PAI SETUP UNIT TESTS (30 TESTS, MILESTONE P6 & FINDINGS DP, DQ, DR, DY) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
 ================================================================================
-Timestamp (UTC): 2026-10-28T15:17:18.077384+00:00
+Timestamp (UTC): 2026-10-28T15:49:29.239359+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        01bfc9cc62281d10eea824c5f7c681236a7e6b4e
-Research Tree:   6f872234a0a73ce931347cad9ca93cca63585650
+Git HEAD:        2e587e27100dd887ebcdcfadfc015755a2ad79d5
+Research Tree:   8640b885dd55551eed57601d9a59e79a06d6569d
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aea0a1329e7f2011b87e9a69ade366c34d5fbbc5fb20f7fbbbb4a0426aee3a1b
 pai.iss SHA256:   62a520749fe4dac601a91650c0221186896cdffcc7bba15dc7402e50650bb6ca
 agreement SHA256: 426463d87e23414a1686d131f79da68572cb2c9850af7de4a76a9ce3b06772be
-GCC Version:     clang version 22.1.8 (https://github.com/llvm/llvm-project.git ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
-Windres Version: llvm-windres, compatible with GNU windres
 ================================================================================
 
 Command: python research/tests/test_pai_setup.py
@@ -48,6 +46,6 @@ WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-di
 WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-digest:7b' via /api/tags. Verification skipped because --allow-unverified-model was specified.
 ......
 ----------------------------------------------------------------------
-Ran 30 tests in 27.717s
+Ran 30 tests in 26.257s
 
 OK
