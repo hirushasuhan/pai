@@ -109,3 +109,30 @@ When implemented in Build Stage:
 5. `test_hostile_path_hijack_rejected`: Places a rogue `ollama.exe` earlier on `PATH` and asserts PAI ignores it and only inspects the pinned install root.
 6. `test_authenticode_validation`: Rejects unsigned or improperly signed mock binaries.
 7. `test_lifecycle_cleanup`: Confirms server started by PAI is cleanly shut down on exit, while external servers remain running.
+
+---
+
+## Addendum (2026-10-28): Shell Presentation, ANSI Colours, and Finding ES Temporal Guardrails
+
+### 1. Presentation & Developer Credit
+The interactive shell banner features:
+- A compact ASCII block-letter PAI logo (5 lines, fitting comfortably within 80-column terminals).
+- Developer credit declaring provenance: `Developed by Hirusha Suhan`.
+- Explicit capability disclaimers stating that local models operate on static training data without live web or clock access, and that conversation chat operates in stateless mode without cross-turn memory.
+
+### 2. ANSI Terminal Colours & Virtual Terminal Processing
+- ANSI styling is activated only when standard output is an interactive TTY, the `NO_COLOR` environment variable is not set, `TERM` is not set to `dumb`, and on Windows, after successfully enabling Virtual Terminal processing via `SetConsoleMode` with `ENABLE_VIRTUAL_TERMINAL_PROCESSING` (0x0004).
+- Safe fallback to unstyled plain text occurs when piped to a file, redirected, or in non-TTY environments.
+- Styling scheme: Accent color (Bright Cyan) for logo and `pai>` prompt, Red for errors, Yellow for notices/warnings, Dim for hints.
+- Output from models continues to be sanitized via `sanitize_terminal_output` to prevent model-generated escape code injection.
+
+### 3. Noise Suppression
+Repeated execution boundary notices (`Sandbox execution boundary verified fail-closed.`) are printed once at shell startup and suppressed during interactive subcommand turns via `PAI_SHELL_ACTIVE`. Non-interactive CLI commands retain the message on each execution, preserving CLI parity.
+
+### 4. Finding ES: 3-Layer Offline Temporal & Fact Guardrails (Decision D21 Option A)
+To prevent local models from stating obsolete or confabulated facts regarding live events as if they were current, PAI adopts a 3-layer offline guardrail mechanism without external network lookups:
+1. **Host Clock Context (Layer 1):** The current local date, time, and timezone are retrieved from the host system clock and supplied in the chat system prompt. A dedicated `/time` shell command answers directly from the system clock without invoking the model or Ollama daemon.
+2. **Offline Prompt Boundaries (Layer 2):** System prompts state that the assistant operates fully offline, that knowledge ends at the model's training cut-off, and that for live or time-sensitive topics (office holders, news, market prices, weather, scores), it must state that it works offline and cannot verify current facts.
+3. **Deterministic Heuristic Notice (Layer 3):** Prompts matching time-sensitive keywords across English, Singlish, and Sinhala trigger a deterministic post-response notice:
+   > "PAI is offline. This answer comes from the model's training data and may be outdated. It was not checked against the internet."
+   *Honest Limitation:* The keyword matching heuristic can miss novel temporal queries and may flag certain non-temporal questions that contain temporal keywords. Live web verification is deferred to future opt-in ADRs to preserve PAI's local execution boundaries.

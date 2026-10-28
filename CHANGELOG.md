@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0-rc2] — 2026-10-28 — Build Stage: Interactive Shell Polish, Managed Ollama Service & Temporal Guardrails (ADR-014, Finding ES)
+
+### Interactive Terminal Shell & Presentation (`research/shell.py`, `research/pai.py`, `research/tests/test_shell.py`)
+- **Block-Letter ASCII Banner & Provenance**: Added compact 5-line PAI ASCII block-letter logo and developer credit (`Developed by Hirusha Suhan`) in the interactive startup banner.
+- **ANSI Terminal Colours**: Implemented terminal color styling (Bright Cyan for logo and `pai>` prompt, Red for errors, Yellow for notices, Dim for hints) supported when stdout is an interactive TTY, `NO_COLOR` is unset, `TERM != 'dumb'`, and on Windows via Win32 Virtual Terminal Processing (`ENABLE_VIRTUAL_TERMINAL_PROCESSING` 0x0004). Plain text fallback is preserved when piped or redirected.
+- **Execution Noise Suppression**: Suppressed per-command repeated boundary notice (`Sandbox execution boundary verified fail-closed.`) during interactive shell sessions via `PAI_SHELL_ACTIVE`, printing it once at shell startup while preserving CLI parity.
+- **Direct System Clock Command**: Added `/time` shell command answering with host local date, time, and timezone directly from the system clock without model invocation.
+
+### Finding ES: 3-Layer Offline Temporal & Fact Guardrails (`research/pai.py`, `research/shell.py`, `research/tests/test_shell.py`)
+- **Layer 1 (Prompt Clock Injection)**: Host system date, time, and timezone context are injected into the chat system prompt so models are anchored in real time without external clock calls.
+- **Layer 2 (Offline & Cut-off Boundaries)**: Chat system prompt specifies offline execution mode, training cut-off boundaries, and instructs the model to state when it cannot verify live facts (office holders, news, market prices, weather, scores).
+- **Layer 3 (Deterministic Heuristic Notice)**: Added multi-lingual keyword heuristic matching temporal queries across English, Singlish, and Sinhala, deterministically appending a notice under answers:
+  > `Notice: PAI is offline. This answer comes from the model's training data and may be outdated. It was not checked against the internet.`
+
 ## [0.8.3] — 2026-10-13 — Phase 2 Slice 2 Revisions (Reviewer Findings 1–6 Parity Hardening)
 
 ### Phase 2 Slice 2 Revisions (`core/src/verify_loop.rs`, `research/verify_loop.py`, `research/conformance.py`)

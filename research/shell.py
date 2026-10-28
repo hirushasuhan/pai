@@ -24,6 +24,7 @@ Invariants Enforced:
 
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 from typing import Callable, List, Optional, Tuple
@@ -40,8 +41,20 @@ CANONICAL_SLASH_COMMANDS = {
     "route",
 }
 
+PAI_ASCII_LOGO = (
+    r"  ____   _    ___ " + "\n"
+    r" |  _ \ / \  |_ _|" + "\n"
+    r" | |_) / _ \  | | " + "\n"
+    r" |  __/ ___ \ | | " + "\n"
+    r" |_| /_/   \_\___|"
+)
+
+DEVELOPER_CREDIT = "Developed by Hirusha Suhan"
+
 SHELL_BANNER = (
+    "{logo}\n"
     "Personal Agentic AI (PAI) Interactive Shell\n"
+    "{developer_credit}\n"
     "Model: {model_name} | Endpoint: {endpoint}\n"
     "Note: Local models rely on static training data and lack live clock or web access.\n"
     "Mode: Stateless (each line is evaluated independently without prior conversation memory).\n"
@@ -59,10 +72,84 @@ SHELL_HELP = (
     "  /setup              Run setup, hardware survey, and model configuration\n"
     "  /models             List verified local and catalog models\n"
     "  /route <prompt>     Evaluate routing decision for given task\n"
+    "  /time               Show current system date, time, and time zone\n"
     "  /help               Show this help message\n"
     "  /exit, /quit        Exit the interactive shell\n"
     "Note: Chat is stateless; each query is evaluated independently without prior conversation memory.\n"
 )
+
+# ANSI terminal formatting (Milestone Step 2)
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+BRIGHT_CYAN = "\033[96m"
+
+
+def enable_windows_vt() -> bool:
+    """Enables Windows Virtual Terminal Processing (ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004)."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        hOut = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        if hOut == -1 or hOut == 0:
+            return False
+        mode = wintypes.DWORD()
+        if not kernel32.GetConsoleMode(hOut, ctypes.byref(mode)):
+            return False
+        if (mode.value & 0x0004) == 0:
+            if not kernel32.SetConsoleMode(hOut, mode.value | 0x0004):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def should_enable_color(stream=sys.stdout) -> bool:
+    """
+    Returns True if ANSI color output is supported and not disabled by user.
+    Disabled when:
+      - NO_COLOR environment variable is set (https://no-color.org)
+      - TERM == 'dumb'
+      - Stream is not a TTY (piped, redirected, captured)
+      - On Windows, if Virtual Terminal processing cannot be enabled
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("TERM") == "dumb":
+        return False
+    try:
+        if not stream.isatty():
+            return False
+    except Exception:
+        return False
+    if sys.platform == "win32":
+        return enable_windows_vt()
+    return True
+
+
+def colorize(text: str, color_code: str, enabled: bool) -> str:
+    """Wraps text in ANSI color escape codes when enabled is True."""
+    if not enabled:
+        return text
+    return f"{color_code}{text}{RESET}"
+
+
+def get_current_system_clock_context() -> Tuple[str, str, str]:
+    """
+    Returns current local date, time, and timezone from system clock.
+    Format: ('2026-10-28 (Wednesday)', '23:30:00', 'Sri Lanka Standard Time (UTC+0530)')
+    """
+    now = datetime.datetime.now().astimezone()
+    date_str = now.strftime("%Y-%m-%d (%A)")
+    time_str = now.strftime("%H:%M:%S")
+    tz_str = now.strftime("%Z (UTC%z)")
+    return date_str, time_str, tz_str
 
 
 def is_interactive_terminal() -> bool:
@@ -119,8 +206,14 @@ def tokenize_windows_line(line: str) -> List[str]:
     return tokens
 
 
-def get_shell_banner(endpoint: str = "http://127.0.0.1:11434") -> str:
-    """Constructs the interactive shell startup banner stating active model and honest limitations."""
+def get_shell_banner(
+    endpoint: str = "http://127.0.0.1:11434",
+    color_enabled: Optional[bool] = None,
+) -> str:
+    """Constructs the interactive shell startup banner stating active model, developer credit, and honest limitations."""
+    if color_enabled is None:
+        color_enabled = should_enable_color()
+
     model_name = "no model loaded yet"
     try:
         from router import ModelRouter
@@ -130,7 +223,21 @@ def get_shell_banner(endpoint: str = "http://127.0.0.1:11434") -> str:
             model_name = resident
     except Exception:
         model_name = "no model loaded yet"
-    return SHELL_BANNER.format(model_name=model_name, endpoint=endpoint)
+
+    logo_text = colorize(PAI_ASCII_LOGO, BRIGHT_CYAN, color_enabled)
+    dev_text = colorize(DEVELOPER_CREDIT, DIM, color_enabled)
+    title_text = colorize("Personal Agentic AI (PAI) Interactive Shell", BOLD, color_enabled)
+    hint_text = colorize("Type /help for available commands or /exit to quit.", DIM, color_enabled)
+
+    return (
+        f"{logo_text}\n"
+        f"{title_text}\n"
+        f"{dev_text}\n"
+        f"Model: {model_name} | Endpoint: {endpoint}\n"
+        "Note: Local models rely on static training data and lack live clock or web access.\n"
+        "Mode: Stateless (each line is evaluated independently without prior conversation memory).\n"
+        f"{hint_text}\n"
+    )
 
 
 def parse_shell_line(line: str) -> Tuple[str, List[str]]:
@@ -141,6 +248,7 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
       - 'empty': Blank line, no-op.
       - 'exit': Clean exit request (/exit, /quit).
       - 'help': Display shell command reference (/help, /?).
+      - 'time': Current system clock context (/time).
       - 'unknown_slash': Unrecognized slash command.
       - 'canonical': Recognized slash command mapped to canonical CLI argv.
       - 'chat': Non-slash text routed to canonical 'pai chat'.
@@ -166,6 +274,9 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("help", "?"):
             return "help", []
+
+        if raw_cmd in ("time", "clock"):
+            return "time", []
 
         if raw_cmd in CANONICAL_SLASH_COMMANDS:
             # Ergonomics for /chat: pass prompt after '--' sentinel so leading dashes are preserved (Finding DX)
@@ -217,38 +328,51 @@ def run_interactive_shell(
     if output_fn is None:
         output_fn = print
 
-    output_fn(get_shell_banner())
+    color_enabled = should_enable_color()
+    output_fn(get_shell_banner(color_enabled=color_enabled))
+    output_fn("Sandbox execution boundary verified fail-closed.")
 
-    while True:
-        try:
-            line = input_fn(prompt_str)
-        except EOFError:
-            output_fn("\nGoodbye.")
-            return 0
-        except KeyboardInterrupt:
-            output_fn("\nType /exit to quit.")
-            continue
+    styled_prompt = colorize(prompt_str, BRIGHT_CYAN, color_enabled)
 
-        action, argv = parse_shell_line(line)
-
-        if action == "empty":
-            continue
-        elif action == "exit":
-            output_fn("Goodbye.")
-            return 0
-        elif action == "help":
-            output_fn(SHELL_HELP)
-            continue
-        elif action == "unknown_slash":
-            output_fn(f"Unknown command '{argv[0]}'. Type /help for available commands or /exit to quit.")
-            continue
-        elif action == "error":
-            output_fn(argv[0])
-            continue
-        elif action in ("canonical", "chat"):
+    os.environ["PAI_SHELL_ACTIVE"] = "1"
+    try:
+        while True:
             try:
-                execute_subcommand(argv)
+                line = input_fn(styled_prompt)
+            except EOFError:
+                output_fn("\nGoodbye.")
+                return 0
             except KeyboardInterrupt:
-                output_fn("\n[Operation cancelled by user]")
-            except Exception as e:
-                output_fn(f"Error: {e}")
+                output_fn("\nType /exit to quit.")
+                continue
+
+            action, argv = parse_shell_line(line)
+
+            if action == "empty":
+                continue
+            elif action == "exit":
+                output_fn("Goodbye.")
+                return 0
+            elif action == "help":
+                output_fn(SHELL_HELP)
+                continue
+            elif action == "time":
+                d, t, tz = get_current_system_clock_context()
+                output_fn(f"Current local time: {d} {t} {tz}")
+                continue
+            elif action == "unknown_slash":
+                msg = f"Unknown command '{argv[0]}'. Type /help for available commands or /exit to quit."
+                output_fn(colorize(msg, RED, color_enabled))
+                continue
+            elif action == "error":
+                output_fn(colorize(argv[0], RED, color_enabled))
+                continue
+            elif action in ("canonical", "chat"):
+                try:
+                    execute_subcommand(argv)
+                except KeyboardInterrupt:
+                    output_fn("\n[Operation cancelled by user]")
+                except Exception as e:
+                    output_fn(colorize(f"Error: {e}", RED, color_enabled))
+    finally:
+        os.environ.pop("PAI_SHELL_ACTIVE", None)

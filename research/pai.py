@@ -1316,7 +1316,7 @@ _GATE_PASSED_MEANING = (
 
 def cmd_code(args) -> int:
     enforce_sandbox_boundary()
-    if not getattr(args, "json", False):
+    if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
         print("Sandbox execution boundary probe passed fail-closed.")
 
     from ast_guard import check_source
@@ -1774,7 +1774,7 @@ def cmd_code(args) -> int:
 
 def cmd_analyze(args) -> int:
     enforce_sandbox_boundary()
-    if not getattr(args, "json", False):
+    if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
         print("Sandbox execution boundary verified fail-closed.")
 
     from pai_core_bridge import (
@@ -2212,7 +2212,7 @@ def format_column_profiles_summary(profiles: List[Dict[str, Any]]) -> str:
 
 def cmd_docs(args) -> int:
     enforce_sandbox_boundary()
-    if not getattr(args, "json", False):
+    if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
         print("Sandbox execution boundary verified fail-closed.")
 
     import csv
@@ -2722,7 +2722,7 @@ def verify_forecast_explanation_numbers(
 
 def cmd_forecast(args) -> int:
     enforce_sandbox_boundary()
-    if not getattr(args, "json", False):
+    if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
         print("Sandbox execution boundary verified fail-closed.")
 
     from forecast_engine import (
@@ -2915,10 +2915,53 @@ def cmd_forecast(args) -> int:
     return 0
 
 
+# Finding ES (Layer 3): Deterministic time-sensitive notice and keyword heuristic
+TIME_SENSITIVE_NOTICE = (
+    "PAI is offline. This answer comes from the model's training data and may be outdated. "
+    "It was not checked against the internet."
+)
+
+TIME_SENSITIVE_KEYWORDS = (
+    # English keywords and phrases
+    "president", "prime minister", "who is the", "current leader", "current government",
+    "current president", "current prime minister", "today's date", "today date",
+    "current date", "what is the date", "what day is today", "current time", "what time",
+    "what's the time", "latest news", "breaking news", "current events", "headlines",
+    "weather today", "weather forecast", "temperature today", "rain today",
+    "stock price", "crypto price", "bitcoin price", "exchange rate", "dollar rate",
+    "inflation rate", "score", "match score", "election result", "election winner",
+    # Singlish keywords and phrases
+    "ada dawasa", "adha dawasa", "ada dinaya", "adha dinaya", "welawa kiyada", "welawa monawada",
+    "president kawda", "janadhipathi kawda", "agamathi kawda", "dan president", "dan agamathi",
+    "mila kiyada", "badu mila", "gas mila", "thel mila", "dollar eka", "dollar rate eka",
+    "kalagunaya", "wessa da", "aluth news", "match eka", "chande",
+    # Sinhala unicode keywords and phrases
+    "අද දිනය", "අද දවස", "වෙලාව කීයද", "වේලාව කීයද", "දිනය කුමක්ද",
+    "ජනාධිපති කවුද", "අගමැති කවුද", "වත්මන් ජනාධිපති", "වර්තමාන ජනාධිපති",
+    "කාලගුණය", "ප්‍රවෘත්ති", "අලුත් තොරතුරු", "මිල කීයද", "ඩොලර් රේට්", "මැතිවරණ",
+)
+
+
+def is_time_sensitive_prompt(prompt: str) -> bool:
+    """
+    Deterministic heuristic for time-sensitive prompts (Finding ES Layer 3).
+    Matches keywords and phrases in English, Singlish, and Sinhala.
+    Honest limitation: This keyword heuristic can miss novel temporal questions
+    and may occasionally flag non-temporal inquiries that contain these keywords.
+    """
+    if not prompt:
+        return False
+    lower = str(prompt).lower()
+    for kw in TIME_SENSITIVE_KEYWORDS:
+        if kw in lower:
+            return True
+    return False
+
+
 def cmd_chat(args) -> int:
     """Executes general and bilingual (Singlish/Sinhala/English) assistant chat (M7)."""
     enforce_sandbox_boundary()
-    if not getattr(args, "json", False):
+    if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
         print("Sandbox execution boundary verified fail-closed.")
 
     from ingest import sanitize_terminal_output
@@ -2928,6 +2971,8 @@ def cmd_chat(args) -> int:
     if not user_prompt or not str(user_prompt).strip():
         print("Error: Chat prompt cannot be empty.", file=sys.stderr)
         return 1
+
+    time_sensitive = is_time_sensitive_prompt(user_prompt)
 
     model_name = getattr(args, "model", None)
     gemma_opt = getattr(args, "gemma4_opt_in", False)
@@ -2962,8 +3007,19 @@ def cmd_chat(args) -> int:
         if "SINGLISH_NOT_RECOMMENDED" in decision.reason_codes and not getattr(args, "json", False):
             print(f"Warning: {decision.explanation}", file=sys.stderr)
 
+    # Finding ES (Layers 1 & 2): Local clock context and offline boundaries
+    import datetime
+    now = datetime.datetime.now().astimezone()
+    clock_ctx = f"{now.strftime('%Y-%m-%d (%A)')}, {now.strftime('%H:%M:%S')} {now.strftime('%Z (UTC%z)')}"
+
     chat_prompt = (
         "You are Personal Agentic AI (PAI), a helpful, accurate, privacy-first local assistant.\n"
+        f"System Clock: Current local date and time is {clock_ctx}.\n"
+        "Operating Mode: Fully offline local execution without internet access.\n"
+        "Knowledge and Temporal Boundaries:\n"
+        "- Your knowledge ends at your model training cut-off.\n"
+        "- You do NOT have live web access, real-time news, or external search capabilities.\n"
+        "- For live or time-sensitive facts (such as current events, office holders, market prices, news, weather, or sports scores), you must state clearly that you work offline, cannot verify live facts, and that your knowledge may be outdated.\n"
         "Instructions:\n"
         "- Reply in the same language and style as the user's message (if the user writes in Singlish, reply in natural Singlish; if Sinhala, reply in Sinhala; if English, reply in English).\n"
         "- Keep all code snippets, CLI commands, file paths, and technical identifiers in English.\n"
@@ -2993,17 +3049,25 @@ def cmd_chat(args) -> int:
         return 2
 
     if getattr(args, "json", False):
-        print(json.dumps({
+        payload = {
             "success": True,
             "selected_model": model_name,
             "singlish_detected": singlish_detected,
+            "time_sensitive_detected": time_sensitive,
             "route_reason_codes": route_reason_codes,
             "route_explanation": route_explanation,
             "prompt": user_prompt,
             "response": raw_reply.strip(),
-        }, indent=2))
+        }
+        if time_sensitive:
+            payload["notice"] = TIME_SENSITIVE_NOTICE
+        print(json.dumps(payload, indent=2))
     else:
         print(sanitize_terminal_output(raw_reply.strip()))
+        if time_sensitive:
+            from shell import colorize, should_enable_color, YELLOW
+            colored_notice = colorize(f"\nNotice: {TIME_SENSITIVE_NOTICE}", YELLOW, should_enable_color())
+            print(colored_notice)
     return 0
 
 
