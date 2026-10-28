@@ -280,7 +280,19 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertEqual(act5, "canonical")
         self.assertEqual(argv5, ["docs", r"D:\ලේඛන\නාමය_පරීක්ෂණ.csv"])
 
-        # 6. Syntax error on unclosed quote handled gracefully without crashing
+        # 6. Finding EC: Unquoted path with apostrophe/single quote
+        line6 = r"/docs C:\Users\O'Brien\notes.txt"
+        act6, argv6 = parse_shell_line(line6)
+        self.assertEqual(act6, "canonical")
+        self.assertEqual(argv6, ["docs", r"C:\Users\O'Brien\notes.txt"])
+
+        # 7. Finding EC: /code prompt containing single quotes inside double quotes
+        line7 = '/code "def get_greeting(): return \'hello world\'"'
+        act7, argv7 = parse_shell_line(line7)
+        self.assertEqual(act7, "canonical")
+        self.assertEqual(argv7, ["code", "def get_greeting(): return 'hello world'"])
+
+        # 8. Syntax error on unclosed double quote handled gracefully without crashing
         err_act, err_argv = parse_shell_line('/analyze "unclosed quote')
         self.assertEqual(err_act, "error")
         self.assertIn("Error:", err_argv[0])

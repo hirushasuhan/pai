@@ -43,14 +43,24 @@ SERVICE_OFFLINE_GUIDANCE = (
 )
 
 
+OLLAMA_NETWORK_VARS = {
+    "OLLAMA_HOST",
+    "OLLAMA_ORIGINS",
+}
+
+
 def get_service_environment() -> Dict[str, str]:
     """
-    Constructs a sanitized environment for the child Ollama daemon (Finding DS).
+    Constructs a sanitized environment for the child Ollama daemon (Findings DS & EB).
     Forces OLLAMA_HOST to 127.0.0.1:11434 (loopback-only).
-    Strips any caller-defined OLLAMA_* network variables (e.g. OLLAMA_ORIGINS, OLLAMA_HOST)
-    to prevent public server exposure.
+    Strips network/exposure variables (OLLAMA_HOST, OLLAMA_ORIGINS) to prevent public server exposure.
+    CRITICALLY: Preserves operational and performance configuration variables such as
+    OLLAMA_MODELS, OLLAMA_KEEP_ALIVE, OLLAMA_MAX_LOADED_MODELS, OLLAMA_FLASH_ATTENTION,
+    and OLLAMA_NUM_PARALLEL (Finding EB).
     """
-    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("OLLAMA_")}
+    clean_env = os.environ.copy()
+    for var in OLLAMA_NETWORK_VARS:
+        clean_env.pop(var, None)
     clean_env["OLLAMA_HOST"] = "127.0.0.1:11434"
     return clean_env
 

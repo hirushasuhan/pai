@@ -1,13 +1,13 @@
 ================================================================================
-PAI MANAGED OLLAMA SERVICE LIFECYCLE TESTS (8 TESTS, ADR-014, FINDINGS DS, DT, DU, EA) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
+PAI MANAGED OLLAMA SERVICE LIFECYCLE TESTS (8 TESTS, ADR-014, FINDINGS DS, DT, DU, EA, EB) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
 ================================================================================
-Timestamp (UTC): 2026-10-28T15:16:49.832605+00:00
+Timestamp (UTC): 2026-10-28T15:30:49.656264+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        01bfc9cc62281d10eea824c5f7c681236a7e6b4e
-Research Tree:   6f872234a0a73ce931347cad9ca93cca63585650
+Git HEAD:        3a38c80b9e6451cef9791b842518d51bbe435b1e
+Research Tree:   9d83e2af324b0197bc78bc98dcee2eb49a58b201
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aea0a1329e7f2011b87e9a69ade366c34d5fbbc5fb20f7fbbbb4a0426aee3a1b
@@ -25,6 +25,6 @@ STDOUT:
 STDERR:
 ........
 ----------------------------------------------------------------------
-Ran 8 tests in 0.886s
+Ran 8 tests in 0.861s
 
 OK

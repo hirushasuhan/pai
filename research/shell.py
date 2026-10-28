@@ -75,30 +75,33 @@ def is_interactive_terminal() -> bool:
 
 def tokenize_windows_line(line: str) -> List[str]:
     """
-    Tokenizes a Windows command line without stripping backslashes (Finding DW).
+    Tokenizes a Windows command line without stripping backslashes (Findings DW & EC).
+    Only double quotes (") are treated as quote delimiters on Windows (Finding EC).
+    Single quotes / apostrophes (') are treated as literal characters (e.g. C:\\Users\\O'Brien\\notes.txt).
     Supports:
       - Normal unquoted arguments with backslashes (C:\\Users\\hp\\project, \\\\server\\share)
-      - Quoted arguments with spaces ("C:\\Program Files\\app", 'D:\\my notes')
+      - Quoted arguments with spaces ("C:\\Program Files\\app", "D:\\my notes")
+      - Apostrophes in paths (C:\\Users\\O'Brien\\notes.txt) and code prompts (/code "def foo(): return 'bar'")
       - Sinhala and multilingual Unicode characters
-      - Strip enclosing quotes around quoted tokens
-    Raises ValueError on unclosed quotes.
+      - Enclosing double quote removal for quoted tokens
+    Raises ValueError on unclosed double quote.
     """
     tokens: List[str] = []
     current: List[str] = []
-    in_quote: Optional[str] = None
+    in_quote = False
     i = 0
     n = len(line)
 
     while i < n:
         ch = line[i]
-        if in_quote is not None:
-            if ch == in_quote:
-                in_quote = None
+        if in_quote:
+            if ch == '"':
+                in_quote = False
             else:
                 current.append(ch)
         else:
-            if ch in ('"', "'"):
-                in_quote = ch
+            if ch == '"':
+                in_quote = True
             elif ch.isspace():
                 if current:
                     tokens.append("".join(current))
@@ -107,7 +110,7 @@ def tokenize_windows_line(line: str) -> List[str]:
                 current.append(ch)
         i += 1
 
-    if in_quote is not None:
+    if in_quote:
         raise ValueError("No closing quotation")
 
     if current:

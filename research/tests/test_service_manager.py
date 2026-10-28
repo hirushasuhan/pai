@@ -170,6 +170,8 @@ class TestServiceManagerADR014(unittest.TestCase):
         caller_env = {
             "OLLAMA_HOST": "0.0.0.0:11434",
             "OLLAMA_ORIGINS": "*",
+            "OLLAMA_MODELS": r"D:\custom\ollama\models",
+            "OLLAMA_KEEP_ALIVE": "30m",
             "SOME_OTHER_VAR": "keep_this",
         }
         with patch.dict(os.environ, caller_env):
@@ -188,6 +190,8 @@ class TestServiceManagerADR014(unittest.TestCase):
                     self.assertIsNotNone(passed_env, "Explicit env must be passed to child daemon")
                     self.assertEqual(passed_env.get("OLLAMA_HOST"), "127.0.0.1:11434")
                     self.assertNotIn("OLLAMA_ORIGINS", passed_env)
+                    self.assertEqual(passed_env.get("OLLAMA_MODELS"), r"D:\custom\ollama\models")
+                    self.assertEqual(passed_env.get("OLLAMA_KEEP_ALIVE"), "30m")
                     self.assertEqual(passed_env.get("SOME_OTHER_VAR"), "keep_this")
 
     # -------------------------------------------------------------------------
