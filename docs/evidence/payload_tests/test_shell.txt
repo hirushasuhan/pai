@@ -1,14 +1,14 @@
 ================================================================================
 PAI INTERACTIVE TERMINAL SHELL REPL TESTS (ADR-014 COMMIT 2) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-10-28T17:18:16.358289+00:00
+Timestamp (UTC): 2026-10-28T17:40:09.450501+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        c3c654cbdefa51283fc728f837f5360127645c77
-Working Tree:    DIRTY
-Research Tree:   c2ea3de2bbaab224d3e23cf2f680e5357b3cda9a
+Git HEAD:        5548296899642cb4c3888295e62621a4f484f089
+Working Tree:    clean
+Research Tree:   b0cc90e79807b679b9f4df81f9e7b057abe8bfde
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: 4abedfd00addf3970d4ff211385d45dd40744305c16aa0a00391959941411fa4
@@ -24,6 +24,6 @@ STDOUT:
 STDERR:
 .........
 ----------------------------------------------------------------------
-Ran 9 tests in 1.207s
+Ran 9 tests in 9.722s
 
 OK

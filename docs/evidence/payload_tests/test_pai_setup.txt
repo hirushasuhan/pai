@@ -1,14 +1,14 @@
 ================================================================================
-PAI SETUP UNIT TESTS (32 TESTS, MILESTONE P6 & FINDINGS DP, DQ, DR, DY, EF, EH, EM) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
+PAI SETUP UNIT TESTS (32 TESTS, MILESTONE P6 & FINDINGS DP, DQ, DR, DY, EF, EH, EM, EP) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-10-28T17:17:46.393599+00:00
+Timestamp (UTC): 2026-10-28T17:39:38.722984+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        c3c654cbdefa51283fc728f837f5360127645c77
+Git HEAD:        5548296899642cb4c3888295e62621a4f484f089
 Working Tree:    clean
-Research Tree:   c2ea3de2bbaab224d3e23cf2f680e5357b3cda9a
+Research Tree:   b0cc90e79807b679b9f4df81f9e7b057abe8bfde
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: 4abedfd00addf3970d4ff211385d45dd40744305c16aa0a00391959941411fa4
@@ -24,18 +24,6 @@ STDOUT:
 {"event": "error", "model": "disk-model:7b", "code": "DISK_FULL", "message": "write /root/.ollama: no space left on device"}
 {"event": "download_start", "model": "unknown-model:7b", "total_bytes": 1}
 {"event": "error", "model": "unknown-model:7b", "code": "REGISTRY_ERROR", "message": "pull model manifest: file does not exist"}
-
-================ PAI Setup Hardware Survey & Recommendations ================
-RAM:   8192.0 MB available / 16384.0 MB total (telemetry)
-Disk:  50.0 GB free on C:
-GPU:   GPU (4096.0 MB VRAM)
-Ollama: Running (0.1.0)
-
-Model Catalog Candidates:
-  [PRESELECTED] qwen2.5-coder:1.5b (qwen2.5-coder) - GPU: FULL, Disk: OK
-  [PRESELECTED] llama3.2:1b (llama3.2) - GPU: FULL, Disk: OK
-  [AVAILABLE] unverified-experimental:7b (experimental) - GPU: CPU, Disk: OK
-      * INSUFFICIENT_RAM: Available RAM (8192.0 MB) with 2048 MB reserve below model requirement (8192.0 MB)
 
 STDERR:
 ..........Non-loopback OLLAMA_HOST 'http://192.168.1.100:11434' ignored for security; falling back to 127.0.0.1
@@ -59,10 +47,9 @@ WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-di
 WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-digest:7b' via /api/tags. Verification skipped because --allow-unverified-model was specified.
 .......C:\Python314\Lib\tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 404: 'Not Found'>
   _warnings.warn(self.warn_message, ResourceWarning)
-ERROR: Catalog required for --pull-preselected. No catalog found at C:\Users\hp\AppData\Local\Temp\pai_p3_test_anyvs92w\does_not_exist_catalog.json and --catalog was not specified.
 ERROR: Catalog verification failed: Catalog version rollback or below minimum (1 < 2)
 .
 ----------------------------------------------------------------------
-Ran 32 tests in 26.537s
+Ran 32 tests in 27.245s
 
 OK
