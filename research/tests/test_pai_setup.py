@@ -1539,26 +1539,27 @@ class TestPaiSetupP3(unittest.TestCase):
             else:
                 self.assertIn(sub, p.stdout)
 
-        # Test C: Top-level pai --help differs from tag 8ce81cb golden copy by exactly the 'setup' addition (Finding DP & DZ)
+        # Test C: Top-level pai --help differs from tag 8ce81cb golden copy by exactly the 'setup' addition (Finding DP, DZ, EE)
         proc_main_help = subprocess.run([sys.executable, str(pai_py), "--help"], capture_output=True, text=True, env=env)
         self.assertEqual(proc_main_help.returncode, 0)
         golden_main = (golden_dir / "help_pai.txt").read_text(encoding="utf-8")
 
-        # Verify that removing ',setup' from choices and the one 'setup' line reproduces the golden baseline byte-for-byte
-        normalized_help = proc_main_help.stdout.replace(",setup,", ",")
+        # Verify that removing ',setup' from choices and the one 'setup' line reproduces the golden baseline
+        # after whitespace normalization (Finding EE: line joining and space collapsing)
         setup_line = "    setup               Hardware survey, model fit analysis, and setup engine\n"
         self.assertIn(setup_line, proc_main_help.stdout, "Top-level help must include 'setup' subcommand description")
-        normalized_help = normalized_help.replace(setup_line, "")
-        if is_generator_py:
-            self.assertEqual(
-                normalized_help,
-                golden_main,
-                "Top-level help text diverged from 8ce81cb baseline beyond the single 'setup' subcommand addition"
-            )
-        else:
-            self.assertIn("setup", proc_main_help.stdout)
+        normalized_help = proc_main_help.stdout.replace(",setup,", ",").replace(setup_line, "")
 
-        # Verify unified diff between baseline and current consists solely of the expected setup additions
+        def normalize_ws(s: str) -> str:
+            return " ".join(s.split())
+
+        self.assertEqual(
+            normalize_ws(normalized_help),
+            normalize_ws(golden_main),
+            "Top-level help text diverged from 8ce81cb baseline after removing setup additions"
+        )
+
+        # Verify unified diff between baseline and current consists solely of lines containing 'setup' (Finding EE)
         diff = list(difflib.unified_diff(
             golden_main.splitlines(keepends=True),
             proc_main_help.stdout.splitlines(keepends=True),
@@ -1567,11 +1568,7 @@ class TestPaiSetupP3(unittest.TestCase):
         ))
         added_lines = [l for l in diff if l.startswith("+") and not l.startswith("+++")]
         for l in added_lines:
-            content = l[1:].strip()
-            self.assertTrue(
-                "setup" in content or content == "...",
-                f"Unexpected added line in help diff: {l}"
-            )
+            self.assertIn("setup", l, f"Unexpected added line in help diff: {l}")
 
         # Test D: Shadow isolation - pai setup must NOT write shadow comparisons
         shadow_test_log = Path(self.tmp_dir) / "test_shadow_isolation.jsonl"

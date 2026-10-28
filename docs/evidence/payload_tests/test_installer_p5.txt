@@ -1,13 +1,13 @@
 ================================================================================
 PAI INNO SETUP INSTALLER TESTS (20 TESTS, ICON & FINDINGS DK, DL, DM, DN, MILESTONE P5) - VERIFIED MACHINE & REPOSITORY HEADER (Finding DA)
 ================================================================================
-Timestamp (UTC): 2026-10-28T15:51:59.607431+00:00
+Timestamp (UTC): 2026-10-28T16:17:22.120498+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        2e587e27100dd887ebcdcfadfc015755a2ad79d5
-Research Tree:   8640b885dd55551eed57601d9a59e79a06d6569d
+Git HEAD:        341d27f6cb1859021444efdb3b6624fab499fd00
+Research Tree:   f027495715f4f3f2a5f17c6af5209f9721a269d1
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aea0a1329e7f2011b87e9a69ade366c34d5fbbc5fb20f7fbbbb4a0426aee3a1b
@@ -23,6 +23,6 @@ STDOUT:
 STDERR:
 ....................
 ----------------------------------------------------------------------
-Ran 20 tests in 257.824s
+Ran 20 tests in 240.561s
 
 OK
