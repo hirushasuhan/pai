@@ -3018,6 +3018,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.subcommand:
+        # ADR-014: Interactive shell REPL when connected to terminal
+        from shell import is_interactive_terminal, run_interactive_shell
+        if is_interactive_terminal():
+            return run_interactive_shell()
         parser.print_help()
         return 0
 
