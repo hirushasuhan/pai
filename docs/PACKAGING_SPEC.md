@@ -294,6 +294,45 @@ Results are recorded per machine profile and per distribution, as in section 9.
 
 P1b and P7 follow the same rules as the other milestones (one report each, trust-boundary table, hostile-input tests with negative controls, claims-lint and CI green, no signing keys handled by the agent). P2b comes after P2 and after D11 (the host) is decided: while the repository is private (Finding AV), a public one-line URL needs a separate public host. Linux work (P7) starts after 1.1.0 is released, so Windows findings from real users are fixed first.
 
+## 15. Pre-Freeze Proposals: Decision D10 and Offline Signed Model Catalog
+
+### 15.1 Proposal: Decision D10 — PAI Never Downloads Ollama (External Installer Guidance)
+
+- **Core Concept:** PAI (`research/`, CLI launcher, and setup engine) completely avoids downloading or executing the third-party Ollama setup executable over the network. The responsibility of acquiring and installing Ollama is left entirely to the user via official distribution channels.
+- **Installer Changes (`packaging/pai.iss` only):**
+  - On the final wizard page (`wpFinished`), the installer checks if `%LOCALAPPDATA%\Programs\Ollama\ollama.exe` exists.
+  - If missing, the finished page displays an informative checkbox (default checked):
+    `"Open official Ollama download page (https://ollama.com/download)"`
+  - On wizard completion with the box checked, Inno Setup invokes Windows default browser via `ShellExec('open', 'https://ollama.com/download', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode)`.
+- **Runtime Changes in PAI CLI / Setup:**
+  - When `pai setup` or `pai chat` detects that Ollama is uninstalled or offline, it prints concise guidance:
+    `"Local AI service (Ollama) is not running on 127.0.0.1:11434. Run 'pai setup' or start Ollama from the Start Menu."`
+  - If uninstalled, `pai setup` directs the user to `https://ollama.com/download`.
+- **Benefits for Frozen Tree:**
+  - Zero binary downloading, network handling, or installer spawning code needed in `research/` or launcher.
+  - Eliminates untrusted binary download vectors, proxy interception hazards, and UAC elevation requirements from PAI.
+
+### 15.2 Proposal: Signed Model Catalog as a Bundled Payload File
+
+- **Core Concept:** Rather than fetching a remote catalog over the internet during setup, Release 1.1.0 bundles the verified, signed model catalog (`catalog.json` and its signature) directly in the release payload. Catalog updates accompany new release payloads.
+- **Default Path in `research/pai_setup.py`:**
+  - `pai setup` resolves its default catalog path by checking:
+    1. CLI override: `--catalog <path>` (if provided).
+    2. Local installation root: `PAI_DIR / "catalog.json"` or `Path(__file__).parent / "catalog.json"`.
+  - When `pai setup` is invoked without `--catalog`, it automatically loads and verifies the bundled catalog file fail-closed.
+- **Offline Creation & Signing Procedure (User Offline Machine):**
+  - The repository owner prepares `catalog.json` defining supported models (`qwen2.5:0.5b`, `qwen2.5-coder:7b`, etc.), exact manifest digests, licences, and measured memory profiles.
+  - The owner runs an offline signing tool:
+    ```powershell
+    python tools/sign_catalog.py --catalog packaging/catalog.json --private-key <path_to_offline_ed25519_key>
+    ```
+  - The tool calculates SHA-256 over canonical JSON bytes and signs using the Ed25519 private key corresponding to `rel-1`.
+  - The detached signature is stored alongside the catalog (e.g. `catalog.json.sig`) or within the envelope schema.
+- **Trust Root & Verification via `research/trust.json` (`rel-1`):**
+  - `research/trust.json` already contains the pinned Ed25519 public key for `rel-1`.
+  - `verify_catalog_signature()` in `pai_setup.py` reads `trust.json`, loads `rel-1` public key, and verifies the catalog signature. Any signature mismatch, unknown key, or missing signature fails closed.
+  - The agent and repository NEVER touch, store, or receive the private key; only the public key remains in `trust.json`.
+
 ## Appendix A. Draft agreement text (for legal review; not legal advice)
 
 > **Personal Agentic AI (PAI) - Terms of use and notices**
