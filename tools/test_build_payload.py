@@ -626,16 +626,19 @@ class TestBuildPayloadP1(unittest.TestCase):
         )
         self.assertTrue(res["manifest"]["python_runtime"].get("unpinned_dev"))
 
-    def test_18_finding_eo_bundled_catalog_staging_and_verification(self) -> None:
+    def test_18_finding_eo_and_fd_bundled_catalog_verification(self) -> None:
         """
-        Finding EO:
+        Findings EO & FD:
           1. Bundled catalog is staged next to pai_setup.py at out/research/catalog.json.
-          2. manifest.json records bundled_catalog: True and includes research/catalog.json in files.
-          3. manifest.files includes research/catalog.json.
-          4. Staged copy verifies against throwaway trust root using production verifier load_and_verify_catalog.
-          5. Bundled catalog exemption: catalog older than 90 days is accepted from DEFAULT_CATALOG_PATH.
-          6. One-byte tamper in staged copy fails closed with CatalogSecurityError.
-          7. External copy loaded via explicit path enforces 90-day expiration and fails closed.
+          2. Finding FD: build_payload runs production verifier against trust file.
+          3. When catalog is signed with key in trust file: build succeeds.
+          4. When catalog is signed with key NOT in trust file: build fails closed with PayloadBuildError,
+             and leaves no finished payload directory on disk.
+          5. manifest.json records bundled_catalog: True and includes research/catalog.json in files.
+          6. manifest.files includes research/catalog.json.
+          7. Bundled catalog exemption: catalog older than 90 days is accepted from DEFAULT_CATALOG_PATH.
+          8. One-byte tamper in staged copy fails closed with CatalogSecurityError.
+          9. External copy loaded via explicit path enforces 90-day expiration and fails closed.
         """
         # Generate throwaway keypair in test temp storage (never touching research/trust.json)
         priv_key = ed25519.Ed25519PrivateKey.generate()
@@ -663,7 +666,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         test_cat_path = Path(self.tmp_dir) / "test_catalog.json"
         test_cat_path.write_text(json.dumps(cat_data, indent=2), encoding="utf-8")
 
-        # Build payload with bundled catalog
+        # Positive build: valid key in trust file -> build succeeds
         out_payload = Path(self.tmp_dir) / "out_payload_bundled"
         res = build_payload(
             repo_root=self.repo_root,
@@ -671,6 +674,7 @@ class TestBuildPayloadP1(unittest.TestCase):
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
             catalog_path=test_cat_path,
+            trust_file=throwaway_trust_file,
         )
 
         # 1. Verify manifest records bundled_catalog: True and lists catalog in files
@@ -725,34 +729,131 @@ class TestBuildPayloadP1(unittest.TestCase):
             self.assertIn("expired", str(ctx_ext.exception).lower())
             self.assertIn("90 days", str(ctx_ext.exception).lower())
 
-    def test_19_finding_eo_manifest_files_and_final_version_enforcement(self) -> None:
+        # Finding FD: Negative control - catalog signed with key NOT in trust file
+        untrusted_priv = ed25519.Ed25519PrivateKey.generate()
+        bad_cat_data = create_sample_catalog(version=2)
+        sig_bad = untrusted_priv.sign(pai_setup.canonical_json_bytes(bad_cat_data))
+        bad_cat_data["signature"] = sig_bad.hex()
+        bad_cat_file = Path(self.tmp_dir) / "bad_sig_catalog.json"
+        bad_cat_file.write_text(json.dumps(bad_cat_data), encoding="utf-8")
+
+        out_bad = Path(self.tmp_dir) / "out_payload_bad_key"
+        with self.assertRaises(PayloadBuildError) as ctx_bad:
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=out_bad,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                catalog_path=bad_cat_file,
+                trust_file=throwaway_trust_file,
+            )
+        self.assertIn("Bundled catalog verification failed", str(ctx_bad.exception))
+        self.assertFalse(out_bad.exists(), "Payload directory must be removed on catalog verification failure (Finding FD)")
+
+    def test_19_finding_fe_catalog_source_and_final_version_enforcement(self) -> None:
         """
-        Finding EO:
-          1. Pre-release without catalog proceeds with warning, bundled_catalog: False,
-             and research/catalog.json is NOT in manifest.files or manifest.json.
-          2. Final release (no -rc or -dev) without catalog fails closed with PayloadBuildError.
-          3. An unlisted catalog.json dropped into the payload directory is rejected by updater.
+        Findings EO & FE:
+          1. Finding FE Case 1: Final version (no -rc/-dev) with --catalog is refused (PayloadBuildError, no payload left).
+          2. Finding FE Case 2: Pre-release with --catalog is allowed, warns, records catalog_source: external and catalog_sha256.
+          3. Finding FE Case 3: Default source records catalog_source: research-tree and no external catalog_sha256.
+          4. Pre-release without catalog proceeds with warning, bundled_catalog: False.
+          5. Final release without catalog raises PayloadBuildError.
+          6. Unlisted catalog.json dropped into payload directory causes UpdateRejected in updater.
         """
-        # 1. Pre-release without catalog
-        out_prerelease = Path(self.tmp_dir) / "out_prerelease"
+        # Set up valid throwaway key and trust file
+        priv_key = ed25519.Ed25519PrivateKey.generate()
+        pub_key = priv_key.public_key()
+        pub_hex = pub_key.public_bytes_raw().hex()
+
+        throwaway_trust_file = Path(self.tmp_dir) / "throwaway_trust_fe.json"
+        throwaway_trust_file.write_text(json.dumps({
+            "version": 1,
+            "keys": [{
+                "id": "rel-test-fe",
+                "public_hex": pub_hex,
+                "revoked": False,
+            }],
+        }), encoding="utf-8")
+
+        cat_data = create_sample_catalog(version=2)
+        sig = priv_key.sign(pai_setup.canonical_json_bytes(cat_data))
+        cat_data["signature"] = sig.hex()
+        test_cat_path = Path(self.tmp_dir) / "test_cat_fe.json"
+        test_cat_path.write_text(json.dumps(cat_data), encoding="utf-8")
+
+        # 1. Finding FE Case 1: Final version with --catalog is refused
+        out_final_refused = Path(self.tmp_dir) / "out_final_refused"
+        with self.assertRaises(PayloadBuildError) as ctx_ref:
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=out_final_refused,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                version="1.1.0",
+                catalog_path=test_cat_path,
+                trust_file=throwaway_trust_file,
+            )
+        self.assertIn("--catalog is refused for final release build", str(ctx_ref.exception))
+        self.assertFalse(out_final_refused.exists(), "Payload directory must not exist when --catalog is refused")
+
+        # 2. Finding FE Case 2: Pre-release with --catalog records catalog_source: external and catalog_sha256
+        out_prerelease = Path(self.tmp_dir) / "out_prerelease_ext"
         res_pre = build_payload(
             repo_root=self.repo_root,
             out_dir=out_prerelease,
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
             version="1.1.0-rc2",
+            catalog_path=test_cat_path,
+            trust_file=throwaway_trust_file,
         )
-        self.assertFalse(res_pre["manifest"].get("bundled_catalog"))
-        self.assertNotIn("research/catalog.json", res_pre["manifest"]["files"])
-        manifest_files_pre = (out_prerelease / "manifest.files").read_text(encoding="utf-8").splitlines()
-        self.assertNotIn("research/catalog.json", manifest_files_pre)
+        self.assertTrue(res_pre["manifest"].get("bundled_catalog"))
+        self.assertEqual(res_pre["manifest"].get("catalog_source"), "external")
+        self.assertEqual(res_pre["manifest"].get("catalog_sha256"), sha256_file(test_cat_path))
+        self.assertIn("research/catalog.json", res_pre["manifest"]["files"])
 
-        # 2. Final release without catalog raises PayloadBuildError
-        out_final = Path(self.tmp_dir) / "out_final"
+        # 3. Finding FE Case 3: Default source records catalog_source: research-tree
+        out_default_source = Path(self.tmp_dir) / "out_default_source"
+        orig_extract = extract_tag_archive
+
+        def fake_extract(r, t, o, archive_paths=None):
+            orig_extract(r, t, o, archive_paths=archive_paths)
+            (Path(o) / "research" / "catalog.json").write_text(json.dumps(cat_data), encoding="utf-8")
+
+        with patch("packaging.build_payload.extract_tag_archive", side_effect=fake_extract):
+            res_default = build_payload(
+                repo_root=self.repo_root,
+                out_dir=out_default_source,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                catalog_path=None,
+                trust_file=throwaway_trust_file,
+            )
+        self.assertTrue(res_default["manifest"].get("bundled_catalog"))
+        self.assertEqual(res_default["manifest"].get("catalog_source"), "research-tree")
+        self.assertNotIn("catalog_sha256", res_default["manifest"])
+        self.assertIn("research/catalog.json", res_default["manifest"]["files"])
+
+        # 4. Pre-release without catalog proceeds with warning, bundled_catalog: False
+        out_no_catalog = Path(self.tmp_dir) / "out_no_catalog"
+        res_none = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_no_catalog,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            version="1.1.0-rc2",
+        )
+        self.assertFalse(res_none["manifest"].get("bundled_catalog"))
+        self.assertNotIn("research/catalog.json", res_none["manifest"]["files"])
+        manifest_files_none = (out_no_catalog / "manifest.files").read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("research/catalog.json", manifest_files_none)
+
+        # 5. Final release without catalog raises PayloadBuildError
+        out_final_missing = Path(self.tmp_dir) / "out_final_missing"
         with self.assertRaises(PayloadBuildError) as ctx_final:
             build_payload(
                 repo_root=self.repo_root,
-                out_dir=out_final,
+                out_dir=out_final_missing,
                 tag=DEFAULT_TAG,
                 binary_path=self.binary_path,
                 version="1.1.0",
@@ -760,8 +861,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertIn("Final release build", str(ctx_final.exception))
         self.assertIn("requires a bundled research/catalog.json", str(ctx_final.exception))
 
-        # 3. An unlisted catalog.json dropped into payload directory causes UpdateRejected
-        # (updater requires all disk files to be listed in manifest.files / manifest.json)
+        # 6. An unlisted catalog.json dropped into payload directory causes UpdateRejected
         out_unlisted = Path(self.tmp_dir) / "out_unlisted"
         res_unlisted = build_payload(
             repo_root=self.repo_root,

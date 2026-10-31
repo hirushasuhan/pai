@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -517,6 +518,8 @@ def write_manifest(
     platform: str = "win-x64",
     python_runtime: Optional[Dict[str, Any]] = None,
     bundled_catalog: bool = False,
+    catalog_source: Optional[str] = None,
+    catalog_sha256: Optional[str] = None,
 ) -> Tuple[Path, bytes, Dict[str, Any]]:
     """
     Serializes and atomically writes manifest.json.
@@ -542,6 +545,10 @@ def write_manifest(
         "bundled_catalog": bundled_catalog,
         "files": {k: files_map[k] for k in sorted(files_map.keys())},
     }
+    if bundled_catalog and catalog_source:
+        doc["catalog_source"] = catalog_source
+        if catalog_source == "external" and catalog_sha256:
+            doc["catalog_sha256"] = catalog_sha256
     if python_runtime:
         doc["python_runtime"] = python_runtime
 
@@ -586,6 +593,7 @@ def build_payload(
     launcher_path: Optional[str | Path] = None,
     extra_files: Optional[Dict[str, str | Path]] = None,
     catalog_path: Optional[str | Path] = None,
+    trust_file: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
     End-to-end payload assembly pipeline for Milestones P1 and P1b.
@@ -714,31 +722,92 @@ def build_payload(
             if asset_file.is_file():
                 shutil.copy2(str(asset_file), str(dest_assets / asset_file.name))
 
-    # Step 9b: Stage bundled catalog if present (Finding EO)
+    # Step 9b: Stage bundled catalog if present (Findings EO, FD, FE)
+    raw_ver = version if version is not None else tag
+    if version is not None:
+        is_prerelease = bool(re.search(r"-(rc|dev)", version, re.IGNORECASE))
+    else:
+        is_prerelease = bool(re.search(r"-(rc|dev)", tag, re.IGNORECASE))
+
     repo_catalog = repo / "research" / "catalog.json"
     dest_catalog = out / "research" / "catalog.json"
+    catalog_source: Optional[str] = None
+    catalog_sha256: Optional[str] = None
+
     if catalog_path:
         cat_src = Path(catalog_path).resolve()
         if not cat_src.is_file():
+            shutil.rmtree(out, ignore_errors=True)
             raise FileNotFoundError(f"Specified catalog file not found: {cat_src}")
+
+        # Finding FE: for final version (no -rc/-dev) --catalog is refused
+        if not is_prerelease:
+            shutil.rmtree(out, ignore_errors=True)
+            raise PayloadBuildError(
+                f"--catalog is refused for final release build ({raw_ver}); "
+                "only the committed research/catalog.json from the research tree is permitted"
+            )
+
+        # Pre-release with --catalog: allowed, warn and record external source
+        catalog_source = "external"
+        catalog_sha256 = sha256_file(cat_src)
+        msg_ext = f"WARNING: bundling external catalog from '{catalog_path}' into pre-release payload (catalog_source: external)"
+        print(msg_ext)
+        logger.warning(msg_ext)
+
         dest_catalog.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(cat_src), str(dest_catalog))
     elif repo_catalog.is_file() and not dest_catalog.is_file():
         dest_catalog.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(repo_catalog), str(dest_catalog))
+        catalog_source = "research-tree"
+    elif dest_catalog.is_file():
+        catalog_source = "research-tree"
 
     bundled_catalog = dest_catalog.is_file()
     if not bundled_catalog:
-        raw_ver = version if version is not None else tag
-        if version is not None:
-            is_prerelease = bool(re.search(r"-(rc|dev)", version, re.IGNORECASE))
-        else:
-            is_prerelease = bool(re.search(r"-(rc|dev)", tag, re.IGNORECASE))
         msg = "WARNING: no bundled catalog found in research/catalog.json"
         print(msg)
         logger.warning(msg)
         if not is_prerelease:
+            shutil.rmtree(out, ignore_errors=True)
             raise PayloadBuildError(f"Final release build ({raw_ver}) requires a bundled research/catalog.json")
+    else:
+        # Finding FD: when a catalog is bundled, run pai_setup.load_and_verify_catalog on the staged copy
+        # with the payload trust file (research/trust.json; a --trust-file argument for tests only),
+        # a TEMPORARY state file, and the bundled rule. If rejected, fail with clear message and leave no payload.
+        default_trust_path = (repo / "research" / "trust.json").resolve()
+        effective_trust_path = Path(trust_file).resolve() if trust_file else default_trust_path
+        print(f"Trust root: {effective_trust_path}")
+        if effective_trust_path != default_trust_path:
+            print(f"WARNING: Using non-default trust root file: {effective_trust_path}")
+
+        if str(repo / "research") not in sys.path:
+            sys.path.insert(0, str(repo / "research"))
+        import pai_setup
+        from unittest.mock import patch
+
+        try:
+            trust_keys = pai_setup.load_trust_keys(effective_trust_path)
+        except Exception as e:
+            shutil.rmtree(out, ignore_errors=True)
+            raise PayloadBuildError(f"Failed to load trust root '{effective_trust_path}': {e}") from e
+
+        with tempfile.TemporaryDirectory(prefix="pai_build_cat_state_") as tmp_state_dir:
+            tmp_state_file = Path(tmp_state_dir) / "catalog_state.json"
+            try:
+                with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", dest_catalog.resolve()):
+                    pai_setup.load_and_verify_catalog(
+                        catalog_path=dest_catalog,
+                        trust_keys=trust_keys,
+                        state_path=tmp_state_file,
+                    )
+            except Exception as e:
+                msg_err = f"Bundled catalog verification failed: {e}"
+                print(f"ERROR: {msg_err}")
+                logger.error(msg_err)
+                shutil.rmtree(out, ignore_errors=True)
+                raise PayloadBuildError(msg_err) from e
 
     # Step 9c: Write .pai-install marker (Finding DL) and manifest.files (Finding DM)
     marker_p = out / PAI_INSTALL_MARKER
@@ -782,6 +851,8 @@ def build_payload(
         files_map=files_map,
         python_runtime=python_runtime_meta,
         bundled_catalog=bundled_catalog,
+        catalog_source=catalog_source,
+        catalog_sha256=catalog_sha256,
     )
 
     total_bytes = sum(meta["size"] for meta in files_map.values())
@@ -798,6 +869,9 @@ def build_payload(
         "manifest_path": str(manifest_p),
         "manifest": doc,
         "manifest_bytes": manifest_bytes,
+        "bundled_catalog": bundled_catalog,
+        "catalog_source": catalog_source,
+        "catalog_sha256": catalog_sha256,
         "file_count": len(files_map),
         "total_bytes": total_bytes,
         "out_dir": str(out),
@@ -822,6 +896,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--expected-research-tree", default=EXPECTED_RESEARCH_TREE, help="Expected research/ tree SHA-1")
     parser.add_argument("--version", default=None, help="Release version (e.g. 1.0.0)")
     parser.add_argument("--catalog", default=None, help="Path to catalog.json to bundle into payload (default: research/catalog.json)")
+    parser.add_argument("--trust-file", default=None, help="Path to trust root JSON file for catalog verification (default: research/trust.json, test only)")
     parser.add_argument("--product", default=DEFAULT_PRODUCT, help="Product identifier in manifest")
     parser.add_argument("--constitution", default=None, help="Path to CONSTITUTION.md")
     parser.add_argument("--embed-python-zip", default=None, help="Path to official embeddable Python zip")
@@ -855,6 +930,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             expected_python_sha256=args.expected_python_sha256,
             allow_unpinned_python=args.allow_unpinned_python,
             catalog_path=args.catalog,
+            trust_file=args.trust_file,
         )
         print(f"Payload successfully built at: {res['out_dir']}")
         print(f"Platform: {res['platform']}")

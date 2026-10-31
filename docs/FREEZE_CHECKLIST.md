@@ -27,7 +27,8 @@ All preconditions must be verified and formally accepted before tagging the free
     2. Sign: `python tools/sign_catalog.py --catalog <input_path> --private-key-file <offline_key_path> --out research/catalog.json`. Verify the printed `Trust root:` line matches `research/trust.json`.
     3. Commit `research/catalog.json` to git.
     4. Regenerate evidence logs on the new clean tree via `python tools/save_unit_test_evidence.py`.
-    5. Record new research tree ID and update pins.
+    5. Record new research tree ID and update pins:
+       *Note: `EXPECTED_RESEARCH_TREE` in `packaging/build_payload.py` (and `--expected-research-tree`) currently holds the `v1.0.0-rc1` baseline tree and must be updated to match the new pinned research tree once `research/catalog.json` is committed.*
     *(The private key path is never written to any file, log, or commit message).*
 - [ ] **Precondition 6 (Branding Touch-up & Icons Rebuilt):**
   - Minor stray mark on logo touched up; `tools/make_icons.py` re-run to regenerate final `.ico` and wizard BMPs.
@@ -50,6 +51,8 @@ git rev-parse HEAD:core
 
 # 2. Record Research Tree ID to be pinned
 git rev-parse HEAD:research
+# Verify that EXPECTED_RESEARCH_TREE in packaging/build_payload.py (or --expected-research-tree)
+# matches this exact research tree ID.
 
 # 3. Verify evaluated binary SHA-256 (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
 CertUtil -hashfile core/target/release/pai-core.exe SHA256
