@@ -10,10 +10,10 @@
 
 ### Finding ES: Offline Temporal & Fact Guardrails (`research/pai.py`, `research/shell.py`, `research/tests/test_shell.py`)
 - **D21 Statement**: D21: Layer 0-3 offline guardrails adopted for 1.1.0-rc2; web lookup is a separate future decision.
-- **Layer 0 (Deterministic Clock Inquiries)**: Added deterministic recognizer for plain date/time questions in English, Singlish, and Sinhala, answering directly from host clock without model invocation.
+- **Layer 0 (Deterministic Clock Inquiries)**: Added deterministic template-anchored recognizer (Finding EZ) for short complete date/time questions in English, Singlish, and Sinhala (<= 8 words), answering directly from host clock without model invocation while routing complex queries, timezones, and tasks to the model.
 - **Layer 1 (Prompt Clock Injection)**: Host system date, time, and timezone context are injected into the chat system prompt so models are anchored in real time without external clock calls.
 - **Layer 2 (Offline & Cut-off Boundaries)**: Chat system prompt specifies offline execution mode, training cut-off boundaries, and instructs the model to state when it cannot verify live facts (office holders, news, market prices, weather, scores).
-- **Layer 3 (Deterministic Heuristic Notice)**: Added word-boundary keyword heuristic matching temporal queries across English, Singlish, and Sinhala, deterministically appending a notice under answers:
+- **Layer 3 (Deterministic Heuristic Notice)**: Added word-boundary keyword heuristic with live-sense weather/temperature patterns (Finding FA) matching temporal queries across English, Singlish, and Sinhala, deterministically appending a notice under answers:
   > `Notice: PAI is offline. This answer comes from the model's training data and may be outdated. It was not checked against the internet.`
 
 ## [0.8.3] — 2026-10-13 — Phase 2 Slice 2 Revisions (Reviewer Findings 1–6 Parity Hardening)

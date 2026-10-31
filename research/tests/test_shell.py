@@ -513,16 +513,17 @@ class TestInteractiveShellADR014(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_time_sensitive_heuristic_and_deterministic_notice(self) -> None:
         """
-        Finding ES Layer 3 & Finding EV: Asserts the regex word-boundary heuristic
+        Finding ES Layer 3, Finding EV & Finding FA: Asserts the regex word-boundary heuristic
         detects time-sensitive prompts in English, Singlish, and Sinhala without
-        falling prey to substring false positives (quicksort, author, underscore, scoreboard).
+        falling prey to substring false positives (quicksort, author, underscore, scoreboard)
+        or technical tool/command parameters (Finding FA: temperature parameter, forecast command, weather api).
         Appends the deterministic notice:
         'PAI is offline. This answer comes from the model's training data and may be outdated. It was not checked against the internet.'
         """
         import argparse
         from pai import cmd_chat, is_time_sensitive_prompt, TIME_SENSITIVE_NOTICE
 
-        # Finding EV: Positive controls across domains and languages
+        # Finding EV & FA: Positive controls across domains and languages
         self.assertTrue(is_time_sensitive_prompt("what is the price of bitcoin"))
         self.assertTrue(is_time_sensitive_prompt("who won the world cup"))
         self.assertTrue(is_time_sensitive_prompt("is it raining now"))
@@ -531,14 +532,22 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertTrue(is_time_sensitive_prompt("dan president kawda?"))
         self.assertTrue(is_time_sensitive_prompt("iphone eke aluthma model eka monawada"))
         self.assertTrue(is_time_sensitive_prompt("වත්මන් ජනාධිපති කවුද?"))
+        self.assertTrue(is_time_sensitive_prompt("what is the weather today"))
+        self.assertTrue(is_time_sensitive_prompt("weather forecast"))
+        self.assertTrue(is_time_sensitive_prompt("what is the temperature outside"))
+        self.assertTrue(is_time_sensitive_prompt("what is the current temperature"))
+        self.assertTrue(is_time_sensitive_prompt("weather in colombo"))
 
-        # Finding EV: Negative controls (eliminated substring false alarms)
+        # Finding EV & FA: Negative controls (eliminated substring and parameter false alarms)
         self.assertFalse(is_time_sensitive_prompt("what time complexity does quicksort have"))
         self.assertFalse(is_time_sensitive_prompt("who is the author of this function"))
         self.assertFalse(is_time_sensitive_prompt("rename my_underscore variable"))
         self.assertFalse(is_time_sensitive_prompt("explain the scoreboard class"))
         self.assertFalse(is_time_sensitive_prompt("write a python function to compute fibonacci"))
         self.assertFalse(is_time_sensitive_prompt("explain binary search trees"))
+        self.assertFalse(is_time_sensitive_prompt("set the temperature parameter of the llm to 0"))
+        self.assertFalse(is_time_sensitive_prompt("how do I use the forecast command"))
+        self.assertFalse(is_time_sensitive_prompt("explain weather api design"))
 
         # Execution assertion 1: Time-sensitive question displays notice
         args_temporal = argparse.Namespace(
@@ -577,55 +586,97 @@ class TestInteractiveShellADR014(unittest.TestCase):
                 self.assertNotIn(TIME_SENSITIVE_NOTICE, out)
 
     # -------------------------------------------------------------------------
-    # 13. Finding EX (Layer 0): Deterministic System Clock Queries
+    # 13. Finding EX & EZ (Layer 0): Deterministic System Clock Queries
     # -------------------------------------------------------------------------
     def test_finding_ex_layer_0_deterministic_clock_queries(self) -> None:
         """
-        Finding EX / Layer 0: Asserts is_plain_datetime_query() recognises plain
-        date/time/day queries in English, Singlish, and Sinhala, rejects non-temporal
-        negative controls ('date palm', 'due date'), and answers directly from the
-        operating system clock without calling the model in both text and JSON modes.
+        Finding EX / EZ / Layer 0: Asserts is_plain_datetime_query() recognises only short
+        complete date/time/day questions in English, Singlish, and Sinhala (<= 8 words)
+        via full template matching.
+        Asserts negative controls (places, time zones, formats, code tasks, extra words)
+        are rejected (return False) and routed to the model path (call_model_generate IS called).
+        Asserts positive controls return True and answer directly from clock without calling model.
         """
         import argparse
         import json
         from pai import cmd_chat, is_plain_datetime_query
 
-        # Recognizer positive controls (English, Singlish, Sinhala)
-        self.assertTrue(is_plain_datetime_query("what is the date"))
-        self.assertTrue(is_plain_datetime_query("current time and date"))
-        self.assertTrue(is_plain_datetime_query("what day is today"))
-        self.assertTrue(is_plain_datetime_query("what time is it"))
-        self.assertTrue(is_plain_datetime_query("ada dawasa"))
-        self.assertTrue(is_plain_datetime_query("welawa kiyada"))
-        self.assertTrue(is_plain_datetime_query("අද දිනය"))
-        self.assertTrue(is_plain_datetime_query("වෙලාව කීයද"))
+        # Recognizer positive controls (English, Singlish, Sinhala) - must be True
+        positives = [
+            "what is the date",
+            "what time is it",
+            "can you give me current time and date",
+            "what day is today",
+            "tell me the time",
+            "please tell me the date and time?",
+            "ada dawasa monawada",
+            "welawa kiyada",
+            "අද දිනය කුමක්ද?",
+            "වෙලාව කීයද",
+        ]
+        for query in positives:
+            self.assertTrue(is_plain_datetime_query(query), f"Expected True for plain query: {query}")
 
-        # Recognizer negative controls
-        self.assertFalse(is_plain_datetime_query("what is a date palm"))
-        self.assertFalse(is_plain_datetime_query("what is the due date of this assignment"))
-        self.assertFalse(is_plain_datetime_query("explain date formatting in python"))
+        # Recognizer negative controls (Finding EZ) - must be False
+        negatives = [
+            "what is the time complexity of quicksort",
+            "what is the date of independence day in sri lanka",
+            "what is the date format used in ISO 8601",
+            "what is the day length on mars",
+            "explain how time and date functions work in python",
+            "write a python function that prints the current date and time",
+            "what is the time in tokyo",
+            "what is the current time zone abbreviation for colombo",
+            "what is a date palm",
+            "what is the due date of this assignment",
+            "explain date formatting in python",
+        ]
+        for query in negatives:
+            self.assertFalse(is_plain_datetime_query(query), f"Expected False for complex query: {query}")
 
-        # Execution assertion 1: Text mode returns system clock without calling model
         fake_clock = ("2026-10-28 (Wednesday)", "23:55:00", "UTC+0530")
-        args_text = argparse.Namespace(
-            prompt="what is the date",
-            model="qwen2.5:0.5b",
-            json=False,
-            gemma4_opt_in=False,
-            model_timeout=None,
-            temperature=0.0,
-            seed=42,
-        )
-        with patch("shell.get_current_system_clock_context", return_value=fake_clock), \
-             patch("pai.call_model_generate") as mock_gen, \
-             patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            rc = cmd_chat(args_text)
-            self.assertEqual(rc, 0)
-            mock_gen.assert_not_called()
-            out = mock_out.getvalue()
-            self.assertIn("Current local time: 2026-10-28 (Wednesday) 23:55:00 UTC+0530", out)
 
-        # Execution assertion 2: JSON mode returns source: system_clock without calling model
+        # Execution assertion 1: Positive controls MUST NOT call model (answered from system clock)
+        for query in positives:
+            args = argparse.Namespace(
+                prompt=query,
+                model="qwen2.5:0.5b",
+                json=False,
+                gemma4_opt_in=False,
+                model_timeout=None,
+                temperature=0.0,
+                seed=42,
+            )
+            with patch("shell.get_current_system_clock_context", return_value=fake_clock), \
+                 patch("pai.call_model_generate") as mock_gen, \
+                 patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+                rc = cmd_chat(args)
+                self.assertEqual(rc, 0)
+                mock_gen.assert_not_called()
+                out = mock_out.getvalue()
+                self.assertIn("Current local time: 2026-10-28 (Wednesday) 23:55:00 UTC+0530", out)
+
+        # Execution assertion 2: Negative controls MUST CALL the model
+        for query in negatives:
+            args = argparse.Namespace(
+                prompt=query,
+                model="qwen2.5:0.5b",
+                json=False,
+                gemma4_opt_in=False,
+                model_timeout=None,
+                temperature=0.0,
+                seed=42,
+            )
+            with patch("shell.get_current_system_clock_context", return_value=fake_clock), \
+                 patch("pai.call_model_generate", return_value="Model answer for query") as mock_gen, \
+                 patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+                rc = cmd_chat(args)
+                self.assertEqual(rc, 0)
+                mock_gen.assert_called_once()
+                out = mock_out.getvalue()
+                self.assertIn("Model answer for query", out)
+
+        # Execution assertion 3: JSON mode returns source: system_clock without calling model
         args_json = argparse.Namespace(
             prompt="welawa kiyada",
             model="qwen2.5:0.5b",

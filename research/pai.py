@@ -2932,7 +2932,12 @@ TIME_SENSITIVE_PATTERNS = (
     r"\bprice\s+of\s+(bitcoin|crypto|gold|stock|oil|petrol|diesel|egg|rice)\b",
     r"\b(stock|share|crypto|bitcoin|gold|oil)\s+price\b",
     r"\b(exchange|dollar|inflation)\s+rate\b",
-    r"\b(weather|temperature|forecast)\b",
+    # Live weather & temperature patterns (Finding FA: live-sense only, not bare flags/parameters)
+    r"\bweather\s+forecast\b",
+    r"\bweather\s+(today|now|tonight|tomorrow|in\s+\w+)\b",
+    r"\b(today('s)?|tomorrow('s)?|current)\s+weather\b",
+    r"\btemperature\s+(today|now|tonight|tomorrow|outside|in\s+\w+)\b",
+    r"\b(current|today('s)?|tomorrow('s)?|outside)\s+temperature\b",
     r"\bis\s+it\s+raining\b",
     r"\b(latest|newest)\s+(\w+\s+)?(version|news|release|update|model)\b",
     r"\b(breaking\s+news|current\s+events|headlines)\b",
@@ -2968,7 +2973,7 @@ TIME_SENSITIVE_PATTERNS = (
 
 def is_time_sensitive_prompt(prompt: str) -> bool:
     """
-    Deterministic heuristic for time-sensitive prompts (Finding ES Layer 3).
+    Deterministic heuristic for time-sensitive prompts (Finding ES Layer 3 & Finding FA).
     Matches word-boundary regex patterns in English, Singlish, and Sinhala.
     Honest limitation: This keyword heuristic can miss novel temporal questions
     and may occasionally flag non-temporal inquiries that contain these keywords.
@@ -2979,44 +2984,87 @@ def is_time_sensitive_prompt(prompt: str) -> bool:
     return any(re.search(pat, clean, re.IGNORECASE) for pat in TIME_SENSITIVE_PATTERNS)
 
 
-# Finding ES (Layer 0): Plain date/time/day queries answered directly from system clock
-PLAIN_DATETIME_PATTERNS = (
-    # English word-boundary datetime patterns
-    r"\bwhat('s|\s+is)\s+(the\s+)?(current\s+)?(date|time|day)(\s+today)?\b",
-    r"\b(current|today's?)\s+(date|time|day)\b",
-    r"\bwhat\s+day\s+is\s+(it\s+)?today\b",
-    r"\bwhat\s+time\s+is\s+it\b",
-    r"\btell\s+me\s+the\s+(current\s+)?(date|time)\b",
-    r"\btime\s+and\s+date\b",
-    r"\bdate\s+and\s+time\b",
+# Finding ES (Layer 0) & Finding EZ: Closed list of templates for plain date/time/day queries.
+# Layer 0 recognises only short complete questions (<= 8 words) matched against this closed set.
+FILLER_PREFIX_PATTERNS = (
+    r"^(please|pls|hey|hi|hello|sir)\b\s*",
+    r"^(can|could|will|would)\s+you\s+(please\s+)?(tell|give)\s+(me\s+)?\b\s*",
+    r"^(can|could|will|would)\s+you\s+(please\s+)?\b\s*",
+    r"^(tell|give)\s+me\s+\b\s*",
+    r"^(karunakara|aneka)\s+\b\s*",
+)
+FILLER_SUFFIX_PATTERNS = (
+    r"\s*\b(please|pls|sir|kiyanna|balanna)\s*$",
+)
+
+PLAIN_DATETIME_TEMPLATES = (
+    # English templates (full sentence matches)
+    r"what is (the )?(current )?date",
+    r"what is (the )?(current )?time",
+    r"what time is it",
+    r"what day is (it )?today",
+    r"what is (the )?day today",
+    r"what is today date",
+    r"(the )?(current )?date and time",
+    r"(the )?(current )?time and date",
+    r"(the )?(current )?date",
+    r"(the )?(current )?time",
+    r"today date",
+    r"(the )?current day",
     # Singlish
-    r"\b(ada|adha)\s+(dawasa|dinaya)\b",
-    r"\bwelawa\s+(kiyada|monawada)\b",
-    r"\bdan\s+welawa\b",
+    r"(ada|adha) dawasa( monawada)?",
+    r"(ada|adha) dinaya( monawada)?",
+    r"welawa kiyada",
+    r"welawa monawada",
+    r"dan welawa( kiyada)?",
+    r"dan time eka( kiyada)?",
+    r"time eka kiyada",
     # Sinhala Unicode
-    r"අද\s+දිනය",
-    r"අද\s+දවස",
-    r"වෙලාව\s+කීයද",
-    r"වේලාව\s+කීයද",
-    r"දිනය\s+කුමක්ද",
+    r"අද දිනය( කුමක්ද)?",
+    r"අද දවස( කුමක්ද)?",
+    r"වෙලාව කීයද",
+    r"වේලාව කීයද",
+    r"දිනය කුමක්ද",
+    r"දැන් වෙලාව( කීයද)?",
+    r"දැන් වේලාව( කීයද)?",
 )
 
 
 def is_plain_datetime_query(prompt: str) -> bool:
     """
-    Deterministic recogniser for plain date/time/day questions (Finding ES Layer 0).
-    Answers directly from system clock without calling the model.
-    Guards against negative controls like 'what is a date palm' or 'due date'.
+    Deterministic recogniser for plain date/time/day questions (Finding ES Layer 0 & Finding EZ).
+    Recognises only short, complete questions (limit of 8 words) that fully match
+    a closed list of templates in English, Singlish, and Sinhala.
+    Anything else (tasks, time zones, places, formats, extra words) is rejected
+    and routed to the model path, which already carries the clock in the prompt.
     """
     if not prompt:
         return False
-    clean = str(prompt).strip()
-    # Guard against non-calendar/temporal uses of the word 'date'
-    if re.search(r"\bdate\s+(palm|fruit|tree|nut)\b", clean, re.IGNORECASE):
+    words = str(prompt).strip().split()
+    if len(words) > 8:
         return False
-    if re.search(r"\b(blind|due|expiry|expiration|release)\s+date\b", clean, re.IGNORECASE):
-        return False
-    return any(re.search(pat, clean, re.IGNORECASE) for pat in PLAIN_DATETIME_PATTERNS)
+
+    clean = str(prompt).strip().lower()
+    clean = clean.replace("what's", "what is").replace("whats", "what is")
+    clean = clean.replace("today's", "today").replace("todays", "today")
+    clean = re.sub(r"[?!.,:;\"'()_\-]", " ", clean)
+    clean = " ".join(clean.split())
+
+    stripped = True
+    while stripped:
+        stripped = False
+        for pat in FILLER_PREFIX_PATTERNS:
+            new_clean = re.sub(pat, "", clean, flags=re.IGNORECASE)
+            if new_clean != clean:
+                clean = new_clean.strip()
+                stripped = True
+        for pat in FILLER_SUFFIX_PATTERNS:
+            new_clean = re.sub(pat, "", clean, flags=re.IGNORECASE)
+            if new_clean != clean:
+                clean = new_clean.strip()
+                stripped = True
+
+    return any(re.fullmatch(pat, clean, re.IGNORECASE) for pat in PLAIN_DATETIME_TEMPLATES)
 
 
 def cmd_chat(args) -> int:
