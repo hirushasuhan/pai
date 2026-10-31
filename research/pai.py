@@ -2921,6 +2921,19 @@ TIME_SENSITIVE_NOTICE = (
     "It was not checked against the internet."
 )
 
+# Finding FC: Keywords indicating model/sampling parameter or code context (skips temperature heuristic)
+LLM_PARAM_KEYWORDS = re.compile(
+    r"\b(model|llm|parameter|sampling|top_p|top-k|top_k|code)\b",
+    re.IGNORECASE,
+)
+
+# Finding FC: Temperature patterns evaluated only when prompt does not mention model parameters or code
+TEMPERATURE_PATTERNS = (
+    r"\btemperature\s+(today|now|tonight|tomorrow|outside)\b",
+    r"\btemperature\s+in\s+(?!(the|a|an|this|that|my|your)\b)\w+\b",
+    r"\b(current|today('s)?|tomorrow('s)?|outside)\s+temperature\b",
+)
+
 TIME_SENSITIVE_PATTERNS = (
     # English word-boundary patterns (Finding EV)
     r"\bpresident\b",
@@ -2932,12 +2945,11 @@ TIME_SENSITIVE_PATTERNS = (
     r"\bprice\s+of\s+(bitcoin|crypto|gold|stock|oil|petrol|diesel|egg|rice)\b",
     r"\b(stock|share|crypto|bitcoin|gold|oil)\s+price\b",
     r"\b(exchange|dollar|inflation)\s+rate\b",
-    # Live weather & temperature patterns (Finding FA: live-sense only, not bare flags/parameters)
+    # Live weather patterns (Finding FA & Finding FC: live-sense only, not bare flags/parameters)
     r"\bweather\s+forecast\b",
-    r"\bweather\s+(today|now|tonight|tomorrow|in\s+\w+)\b",
+    r"\bweather\s+(today|now|tonight|tomorrow)\b",
+    r"\bweather\s+in\s+(?!(the|a|an|this|that|my|your)\b)\w+\b",
     r"\b(today('s)?|tomorrow('s)?|current)\s+weather\b",
-    r"\btemperature\s+(today|now|tonight|tomorrow|outside|in\s+\w+)\b",
-    r"\b(current|today('s)?|tomorrow('s)?|outside)\s+temperature\b",
     r"\bis\s+it\s+raining\b",
     r"\b(latest|newest)\s+(\w+\s+)?(version|news|release|update|model)\b",
     r"\b(breaking\s+news|current\s+events|headlines)\b",
@@ -2973,7 +2985,7 @@ TIME_SENSITIVE_PATTERNS = (
 
 def is_time_sensitive_prompt(prompt: str) -> bool:
     """
-    Deterministic heuristic for time-sensitive prompts (Finding ES Layer 3 & Finding FA).
+    Deterministic heuristic for time-sensitive prompts (Finding ES Layer 3, Finding FA, Finding FC).
     Matches word-boundary regex patterns in English, Singlish, and Sinhala.
     Honest limitation: This keyword heuristic can miss novel temporal questions
     and may occasionally flag non-temporal inquiries that contain these keywords.
@@ -2981,7 +2993,12 @@ def is_time_sensitive_prompt(prompt: str) -> bool:
     if not prompt:
         return False
     clean = str(prompt).strip()
-    return any(re.search(pat, clean, re.IGNORECASE) for pat in TIME_SENSITIVE_PATTERNS)
+    if any(re.search(pat, clean, re.IGNORECASE) for pat in TIME_SENSITIVE_PATTERNS):
+        return True
+    if not LLM_PARAM_KEYWORDS.search(clean):
+        if any(re.search(pat, clean, re.IGNORECASE) for pat in TEMPERATURE_PATTERNS):
+            return True
+    return False
 
 
 # Finding ES (Layer 0) & Finding EZ: Closed list of templates for plain date/time/day queries.

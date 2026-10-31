@@ -63,9 +63,47 @@ from packaging.build_payload import (
 
 # Import research modules read-only for ADR-005 updater compatibility verification
 sys.path.insert(0, str(REPO_ROOT / "research"))
+import datetime
+from unittest.mock import patch
+from cryptography.hazmat.primitives.asymmetric import ed25519
 import ed25519_ref
 import pai_core_bridge
+import pai_setup
 import updater
+
+
+def create_sample_catalog(version: int = 2) -> dict:
+    now_str = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "kind": "catalog",
+        "catalog_version": version,
+        "issued_utc": now_str,
+        "models": [
+            {
+                "id": "qwen2.5:0.5b",
+                "family": "qwen",
+                "parameters_b": 0.5,
+                "quantization": "q4_k_m",
+                "download_bytes": 397000000,
+                "disk_bytes": 800000000,
+                "min_ram_mb": 1024.0,
+                "min_vram_mb": 0.0,
+                "tasks": ["chat"],
+                "license": {
+                    "name": "Apache-2.0",
+                    "url": "https://example.com/license",
+                    "license_status": "verified",
+                    "read_on": "2026-10-28",
+                },
+                "registry_manifest_digest": "sha256:" + "a" * 64,
+                "measured": {
+                    "machine": "test-box",
+                    "tokens_per_sec": 42.0,
+                    "host_delta_mb": 512.0,
+                },
+            }
+        ],
+    }
 
 
 class TestBuildPayloadP1(unittest.TestCase):
@@ -587,6 +625,171 @@ class TestBuildPayloadP1(unittest.TestCase):
             allow_unpinned_python=True,
         )
         self.assertTrue(res["manifest"]["python_runtime"].get("unpinned_dev"))
+
+    def test_18_finding_eo_bundled_catalog_staging_and_verification(self) -> None:
+        """
+        Finding EO:
+          1. Bundled catalog is staged next to pai_setup.py at out/research/catalog.json.
+          2. manifest.json records bundled_catalog: True and includes research/catalog.json in files.
+          3. manifest.files includes research/catalog.json.
+          4. Staged copy verifies against throwaway trust root using production verifier load_and_verify_catalog.
+          5. Bundled catalog exemption: catalog older than 90 days is accepted from DEFAULT_CATALOG_PATH.
+          6. One-byte tamper in staged copy fails closed with CatalogSecurityError.
+          7. External copy loaded via explicit path enforces 90-day expiration and fails closed.
+        """
+        # Generate throwaway keypair in test temp storage (never touching research/trust.json)
+        priv_key = ed25519.Ed25519PrivateKey.generate()
+        pub_key = priv_key.public_key()
+        pub_hex = pub_key.public_bytes_raw().hex()
+
+        throwaway_trust_file = Path(self.tmp_dir) / "throwaway_trust.json"
+        throwaway_trust_file.write_text(json.dumps({
+            "version": 1,
+            "keys": [{
+                "id": "rel-test-ephemeral",
+                "public_hex": pub_hex,
+                "revoked": False,
+            }],
+        }), encoding="utf-8")
+
+        # Create test catalog older than 90 days (120 days ago) to verify bundled freshness exemption
+        cat_data = create_sample_catalog(version=2)
+        old_dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=120)
+        cat_data["issued_utc"] = old_dt.isoformat().replace("+00:00", "Z")
+        canonical_bytes = pai_setup.canonical_json_bytes(cat_data)
+        sig = priv_key.sign(canonical_bytes)
+        cat_data["signature"] = sig.hex()
+
+        test_cat_path = Path(self.tmp_dir) / "test_catalog.json"
+        test_cat_path.write_text(json.dumps(cat_data, indent=2), encoding="utf-8")
+
+        # Build payload with bundled catalog
+        out_payload = Path(self.tmp_dir) / "out_payload_bundled"
+        res = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_payload,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            catalog_path=test_cat_path,
+        )
+
+        # 1. Verify manifest records bundled_catalog: True and lists catalog in files
+        self.assertTrue(res["manifest"].get("bundled_catalog"), "manifest.json must record bundled_catalog: True")
+        self.assertIn("research/catalog.json", res["manifest"]["files"])
+
+        # 2. Verify manifest.files lists research/catalog.json
+        manifest_files = (out_payload / "manifest.files").read_text(encoding="utf-8").splitlines()
+        self.assertIn("research/catalog.json", manifest_files)
+
+        # 3. Verify staged copy on disk
+        staged_cat = out_payload / "research" / "catalog.json"
+        self.assertTrue(staged_cat.is_file())
+
+        # 4. Production verifier accepts staged copy with bundled exemption
+        state_file = Path(self.tmp_dir) / "test_catalog_state.json"
+        trust_keys = pai_setup.load_trust_keys(throwaway_trust_file)
+        with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", staged_cat):
+            verified, used_p = pai_setup.load_and_verify_catalog(
+                catalog_path=None,  # default / bundled path
+                trust_keys=trust_keys,
+                state_path=state_file,
+            )
+            self.assertEqual(used_p, staged_cat.resolve())
+            self.assertEqual(verified["catalog_version"], 2)
+
+            # 5. One-byte tamper in staged copy fails closed with CatalogSecurityError
+            raw_text = staged_cat.read_text(encoding="utf-8")
+            tampered_text = raw_text.replace('"catalog_version": 2', '"catalog_version": 3')
+            staged_cat.write_text(tampered_text, encoding="utf-8")
+            with self.assertRaises(pai_setup.CatalogSecurityError):
+                pai_setup.load_and_verify_catalog(
+                    catalog_path=None,
+                    trust_keys=trust_keys,
+                    state_path=state_file,
+                )
+            # Restore staged copy
+            staged_cat.write_text(raw_text, encoding="utf-8")
+
+            # 6. External copy loaded via explicit path enforces 90-day expiration and fails closed
+            external_dir = Path(self.tmp_dir) / "external_copy"
+            external_dir.mkdir(parents=True, exist_ok=True)
+            ext_cat = external_dir / "catalog.json"
+            shutil.copy2(staged_cat, ext_cat)
+
+            with self.assertRaises(pai_setup.CatalogSecurityError) as ctx_ext:
+                pai_setup.load_and_verify_catalog(
+                    catalog_path=ext_cat,
+                    trust_keys=trust_keys,
+                    state_path=state_file,
+                )
+            self.assertIn("expired", str(ctx_ext.exception).lower())
+            self.assertIn("90 days", str(ctx_ext.exception).lower())
+
+    def test_19_finding_eo_manifest_files_and_final_version_enforcement(self) -> None:
+        """
+        Finding EO:
+          1. Pre-release without catalog proceeds with warning, bundled_catalog: False,
+             and research/catalog.json is NOT in manifest.files or manifest.json.
+          2. Final release (no -rc or -dev) without catalog fails closed with PayloadBuildError.
+          3. An unlisted catalog.json dropped into the payload directory is rejected by updater.
+        """
+        # 1. Pre-release without catalog
+        out_prerelease = Path(self.tmp_dir) / "out_prerelease"
+        res_pre = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_prerelease,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            version="1.1.0-rc2",
+        )
+        self.assertFalse(res_pre["manifest"].get("bundled_catalog"))
+        self.assertNotIn("research/catalog.json", res_pre["manifest"]["files"])
+        manifest_files_pre = (out_prerelease / "manifest.files").read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("research/catalog.json", manifest_files_pre)
+
+        # 2. Final release without catalog raises PayloadBuildError
+        out_final = Path(self.tmp_dir) / "out_final"
+        with self.assertRaises(PayloadBuildError) as ctx_final:
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=out_final,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                version="1.1.0",
+            )
+        self.assertIn("Final release build", str(ctx_final.exception))
+        self.assertIn("requires a bundled research/catalog.json", str(ctx_final.exception))
+
+        # 3. An unlisted catalog.json dropped into payload directory causes UpdateRejected
+        # (updater requires all disk files to be listed in manifest.files / manifest.json)
+        out_unlisted = Path(self.tmp_dir) / "out_unlisted"
+        res_unlisted = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_unlisted,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+        )
+        trust_root = Path(self.tmp_dir) / "test_19_trust_root"
+        trust_root.mkdir(parents=True, exist_ok=True)
+        priv = os.urandom(32)
+        pub = ed25519_ref.secret_to_public(priv)
+        trust_doc = {
+            "keys": [{"id": "test-key-ephemeral", "public_hex": pub.hex(), "revoked": False}],
+            "constitution_sha256": res_unlisted["manifest"]["constitution_sha256"],
+        }
+        (trust_root / "trust.json").write_text(json.dumps(trust_doc, indent=2), encoding="utf-8")
+        manifest_bytes = (out_unlisted / "manifest.json").read_bytes()
+        sig = ed25519_ref.sign(priv, manifest_bytes)
+        (out_unlisted / updater.SIGNATURE).write_bytes(sig)
+
+        unlisted_cat = out_unlisted / "research" / "catalog.json"
+        unlisted_cat.parent.mkdir(parents=True, exist_ok=True)
+        unlisted_cat.write_text("{}", encoding="utf-8")
+
+        u = updater.Updater(str(trust_root), str(self.tmp_dir))
+        with self.assertRaises(updater.UpdateRejected) as ctx_unlisted:
+            u._verify_release_py(str(out_unlisted), check_rollback=False)
+        self.assertIn("unlisted file", str(ctx_unlisted.exception))
 
 
 if __name__ == "__main__":

@@ -180,7 +180,7 @@ def main() -> None:
     run_suite_and_save(
         "tools/test_build_payload.py",
         evidence_dir / "test_build_payload.txt",
-        "PAI Build Payload Unit Tests (17 Tests, Milestone P2/P3)",
+        "PAI Build Payload Unit Tests (19 Tests, Milestone P2/P3, Finding EO)",
         is_dirty=is_dirty,
     )
     run_suite_and_save(

@@ -538,7 +538,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertTrue(is_time_sensitive_prompt("what is the current temperature"))
         self.assertTrue(is_time_sensitive_prompt("weather in colombo"))
 
-        # Finding EV & FA: Negative controls (eliminated substring and parameter false alarms)
+        # Finding EV, FA & FC: Negative controls (eliminated substring, live-sense lookahead, and parameter false alarms)
         self.assertFalse(is_time_sensitive_prompt("what time complexity does quicksort have"))
         self.assertFalse(is_time_sensitive_prompt("who is the author of this function"))
         self.assertFalse(is_time_sensitive_prompt("rename my_underscore variable"))
@@ -548,6 +548,12 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertFalse(is_time_sensitive_prompt("set the temperature parameter of the llm to 0"))
         self.assertFalse(is_time_sensitive_prompt("how do I use the forecast command"))
         self.assertFalse(is_time_sensitive_prompt("explain weather api design"))
+        # Finding FC: Parameter, code, and non-location lookahead controls
+        self.assertFalse(is_time_sensitive_prompt("what is the current temperature parameter"))
+        self.assertFalse(is_time_sensitive_prompt("set current temperature of the model to 0.7"))
+        self.assertFalse(is_time_sensitive_prompt("use the temperature in the sampling code"))
+        self.assertFalse(is_time_sensitive_prompt("weather in the room"))
+        self.assertFalse(is_time_sensitive_prompt("temperature in this test"))
 
         # Execution assertion 1: Time-sensitive question displays notice
         args_temporal = argparse.Namespace(

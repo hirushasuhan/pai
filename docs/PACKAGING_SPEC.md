@@ -320,13 +320,18 @@ P1b and P7 follow the same rules as the other milestones (one report each, trust
     `DEFAULT_CATALOG_PATH = Path(__file__).resolve().parent / "catalog.json"`
   - `PAI_DIR` environment variable is explicitly NOT used for default catalog resolution (avoiding user-controlled path hijacking).
   - CLI option `--catalog <path>` remains available for explicit testing and local overrides.
-- **Offline Creation & Signing Procedure (User Offline Machine):**
-  - The repository owner prepares `catalog.json` defining supported models (`qwen2.5:0.5b`, `qwen2.5-coder:7b`, etc.), exact manifest digests, licences, and measured memory profiles.
-  - The owner runs an offline signing tool:
-    ```powershell
-    python tools/sign_catalog.py --catalog packaging/catalog.json --private-key-file <path_to_offline_ed25519_key> --out packaging/catalog.json
-    ```
-  - The tool calculates SHA-256 over canonical JSON bytes and signs using the Ed25519 private key corresponding to `rel-1`.
+- **Offline Creation & Signing Procedure (User Offline Machine, Finding EO):**
+  The first canonical model catalog must be signed and committed to `research/catalog.json` before declaring the freeze. The exact user steps:
+  1. **Prepare `catalog_input.json`:** Define supported models (`qwen2.5:0.5b`, `qwen2.5-coder:7b`, etc.), exact manifest digests, licences, and measured memory profiles.
+  2. **Sign with Offline Private Key:** Run `tools/sign_catalog.py`:
+     ```powershell
+     python tools/sign_catalog.py --catalog <path_to_catalog_input.json> --private-key-file <offline_key_path> --out research/catalog.json
+     ```
+     Verify that the console output prints `Trust root: ...\research\trust.json` (and no WARNING about non-default trust root).
+  3. **Commit `research/catalog.json`:** Add and commit `research/catalog.json` to git.
+  4. **Regenerate Evidence Logs:** Run `python tools/save_unit_test_evidence.py` on the clean tree.
+  5. **Record Research Tree ID & Pins:** Record the new `research/` tree ID and update pins.
+  *Operational Security Rule:* The private key path is never committed, logged, or printed in commit messages or repository files.
 
 ### 15.3 Decision: Freshness Exemption for Bundled Catalog (Finding EF, Option A & Decision D20 Update)
 

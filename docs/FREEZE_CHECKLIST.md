@@ -20,9 +20,15 @@ All preconditions must be verified and formally accepted before tagging the free
 - [ ] **Precondition 4 (Signed Model Catalog Distribution & Freshness Decided - Finding EF & EH):**
   - Signed catalog is bundled as a payload file (`catalog.json` and signature) read by default from installation root (`Path(__file__).parent / "catalog.json"`).
   - Option A accepted: Bundled catalog has no freshness limit; version and signature protect it. External `--catalog` keeps the 90-day rule.
-- [ ] **Precondition 5 (Trust Root & Catalog Key Custody - Finding EH):**
+- [ ] **Precondition 5 (Trust Root & Catalog Key Custody - Finding EH & EO):**
   - Offline Ed25519 private key for `rel-1` is held exclusively by repository owner (never committed or logged).
-  - First canonical signed catalog is generated via `tools/sign_catalog.py` and verified against `research/trust.json`.
+  - First canonical signed catalog is generated and committed to `research/catalog.json` via the 5-step procedure:
+    1. Prepare `catalog_input.json` with model definitions, digests, and measured profiles.
+    2. Sign: `python tools/sign_catalog.py --catalog <input_path> --private-key-file <offline_key_path> --out research/catalog.json`. Verify the printed `Trust root:` line matches `research/trust.json`.
+    3. Commit `research/catalog.json` to git.
+    4. Regenerate evidence logs on the new clean tree via `python tools/save_unit_test_evidence.py`.
+    5. Record new research tree ID and update pins.
+    *(The private key path is never written to any file, log, or commit message).*
 - [ ] **Precondition 6 (Branding Touch-up & Icons Rebuilt):**
   - Minor stray mark on logo touched up; `tools/make_icons.py` re-run to regenerate final `.ico` and wizard BMPs.
 - [ ] **Precondition 7 (Licence Clarification - Finding EH & D8):**
