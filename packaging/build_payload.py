@@ -51,6 +51,7 @@ DEFAULT_PLATFORM = "win-x64" if sys.platform == "win32" else "linux-x64"
 EXPECTED_CORE_TREE = "14c60746ca9a41d91aafd88cc0c7d98719cfe3a9"
 EXPECTED_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
 EXPECTED_BINARY_SHA256 = "6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe"
+DEFAULT_REPO_CATALOG = Path("research") / "catalog.json"
 
 # Pinned official embeddable Python distribution for Windows x64 (Finding BU)
 PINNED_PYTHON_VERSION = "3.14.0"
@@ -547,7 +548,7 @@ def write_manifest(
     }
     if bundled_catalog and catalog_source:
         doc["catalog_source"] = catalog_source
-        if catalog_source == "external" and catalog_sha256:
+        if catalog_source in ("external", "working-tree") and catalog_sha256:
             doc["catalog_sha256"] = catalog_sha256
     if python_runtime:
         doc["python_runtime"] = python_runtime
@@ -594,6 +595,7 @@ def build_payload(
     extra_files: Optional[Dict[str, str | Path]] = None,
     catalog_path: Optional[str | Path] = None,
     trust_file: Optional[str | Path] = None,
+    working_tree_catalog: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
     End-to-end payload assembly pipeline for Milestones P1 and P1b.
@@ -722,14 +724,14 @@ def build_payload(
             if asset_file.is_file():
                 shutil.copy2(str(asset_file), str(dest_assets / asset_file.name))
 
-    # Step 9b: Stage bundled catalog if present (Findings EO, FD, FE)
+    # Step 9b: Stage bundled catalog if present (Findings EO, FD, FE, FG, FH)
     raw_ver = version if version is not None else tag
     if version is not None:
         is_prerelease = bool(re.search(r"-(rc|dev)", version, re.IGNORECASE))
     else:
         is_prerelease = bool(re.search(r"-(rc|dev)", tag, re.IGNORECASE))
 
-    repo_catalog = repo / "research" / "catalog.json"
+    repo_catalog = Path(working_tree_catalog).resolve() if working_tree_catalog else (repo / DEFAULT_REPO_CATALOG)
     dest_catalog = out / "research" / "catalog.json"
     catalog_source: Optional[str] = None
     catalog_sha256: Optional[str] = None
@@ -757,25 +759,36 @@ def build_payload(
 
         dest_catalog.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(cat_src), str(dest_catalog))
-    elif repo_catalog.is_file() and not dest_catalog.is_file():
+    elif dest_catalog.is_file():
+        # Catalog was extracted directly from the tagged git archive (Step 3)
+        catalog_source = "research-tree"
+    elif repo_catalog.is_file():
+        # Catalog present in working directory but NOT in git tag archive (Finding FG)
+        if not is_prerelease:
+            shutil.rmtree(out, ignore_errors=True)
+            raise PayloadBuildError(
+                f"research/catalog.json is not in tag {tag}; working-tree fallback is refused for final release build ({raw_ver})"
+            )
         dest_catalog.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(repo_catalog), str(dest_catalog))
-        catalog_source = "research-tree"
-    elif dest_catalog.is_file():
-        catalog_source = "research-tree"
+        catalog_source = "working-tree"
+        catalog_sha256 = sha256_file(repo_catalog)
+        msg_wt = f"WARNING: bundling working-tree catalog from '{repo_catalog}' into pre-release payload (catalog_source: working-tree)"
+        print(msg_wt)
+        logger.warning(msg_wt)
 
     bundled_catalog = dest_catalog.is_file()
     if not bundled_catalog:
-        msg = "WARNING: no bundled catalog found in research/catalog.json"
+        msg = f"WARNING: no bundled catalog found in tag {tag}"
         print(msg)
         logger.warning(msg)
         if not is_prerelease:
             shutil.rmtree(out, ignore_errors=True)
-            raise PayloadBuildError(f"Final release build ({raw_ver}) requires a bundled research/catalog.json")
+            raise PayloadBuildError(
+                f"Final release build ({raw_ver}) requires a bundled research/catalog.json; research/catalog.json is not in tag {tag}"
+            )
     else:
-        # Finding FD: when a catalog is bundled, run pai_setup.load_and_verify_catalog on the staged copy
-        # with the payload trust file (research/trust.json; a --trust-file argument for tests only),
-        # a TEMPORARY state file, and the bundled rule. If rejected, fail with clear message and leave no payload.
+        # Findings FD & FH: verify catalog using production verifier with direct verify_catalog_payload call
         default_trust_path = (repo / "research" / "trust.json").resolve()
         effective_trust_path = Path(trust_file).resolve() if trust_file else default_trust_path
         print(f"Trust root: {effective_trust_path}")
@@ -785,7 +798,6 @@ def build_payload(
         if str(repo / "research") not in sys.path:
             sys.path.insert(0, str(repo / "research"))
         import pai_setup
-        from unittest.mock import patch
 
         try:
             trust_keys = pai_setup.load_trust_keys(effective_trust_path)
@@ -796,12 +808,13 @@ def build_payload(
         with tempfile.TemporaryDirectory(prefix="pai_build_cat_state_") as tmp_state_dir:
             tmp_state_file = Path(tmp_state_dir) / "catalog_state.json"
             try:
-                with patch.object(pai_setup, "DEFAULT_CATALOG_PATH", dest_catalog.resolve()):
-                    pai_setup.load_and_verify_catalog(
-                        catalog_path=dest_catalog,
-                        trust_keys=trust_keys,
-                        state_path=tmp_state_file,
-                    )
+                cat_data = json.loads(dest_catalog.read_text(encoding="utf-8"))
+                pai_setup.verify_catalog_payload(
+                    cat_data,
+                    trust_keys=trust_keys,
+                    state_path=tmp_state_file,
+                    enforce_freshness=False,
+                )
             except Exception as e:
                 msg_err = f"Bundled catalog verification failed: {e}"
                 print(f"ERROR: {msg_err}")

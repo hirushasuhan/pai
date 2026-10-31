@@ -750,15 +750,17 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertIn("Bundled catalog verification failed", str(ctx_bad.exception))
         self.assertFalse(out_bad.exists(), "Payload directory must be removed on catalog verification failure (Finding FD)")
 
-    def test_19_finding_fe_catalog_source_and_final_version_enforcement(self) -> None:
+    def test_19_finding_fe_and_fg_catalog_source_and_final_version_enforcement(self) -> None:
         """
-        Findings EO & FE:
+        Findings EO, FE & FG:
           1. Finding FE Case 1: Final version (no -rc/-dev) with --catalog is refused (PayloadBuildError, no payload left).
           2. Finding FE Case 2: Pre-release with --catalog is allowed, warns, records catalog_source: external and catalog_sha256.
           3. Finding FE Case 3: Default source records catalog_source: research-tree and no external catalog_sha256.
-          4. Pre-release without catalog proceeds with warning, bundled_catalog: False.
-          5. Final release without catalog raises PayloadBuildError.
-          6. Unlisted catalog.json dropped into payload directory causes UpdateRejected in updater.
+          4. Finding FG Case 1: Pre-release with working-tree catalog fallback records catalog_source: working-tree and catalog_sha256.
+          5. Finding FG Case 2: Final release with working-tree catalog fallback is refused fail-closed (no payload left).
+          6. Pre-release without catalog proceeds with warning, bundled_catalog: False.
+          7. Final release without catalog raises PayloadBuildError.
+          8. Unlisted catalog.json dropped into payload directory causes UpdateRejected in updater.
         """
         # Set up valid throwaway key and trust file
         priv_key = ed25519.Ed25519PrivateKey.generate()
@@ -834,7 +836,41 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertNotIn("catalog_sha256", res_default["manifest"])
         self.assertIn("research/catalog.json", res_default["manifest"]["files"])
 
-        # 4. Pre-release without catalog proceeds with warning, bundled_catalog: False
+        # 4. Finding FG Case 1: Pre-release with working-tree catalog fallback (tag has no catalog)
+        out_prerelease_wt = Path(self.tmp_dir) / "out_prerelease_wt"
+        res_wt = build_payload(
+            repo_root=self.repo_root,
+            out_dir=out_prerelease_wt,
+            tag=DEFAULT_TAG,
+            binary_path=self.binary_path,
+            version="1.1.0-rc2",
+            catalog_path=None,
+            working_tree_catalog=test_cat_path,
+            trust_file=throwaway_trust_file,
+        )
+        self.assertTrue(res_wt["manifest"].get("bundled_catalog"))
+        self.assertEqual(res_wt["manifest"].get("catalog_source"), "working-tree")
+        self.assertEqual(res_wt["manifest"].get("catalog_sha256"), sha256_file(test_cat_path))
+        self.assertIn("research/catalog.json", res_wt["manifest"]["files"])
+
+        # 5. Finding FG Case 2: Final release with working-tree catalog fallback is refused fail-closed (no payload left)
+        out_final_wt = Path(self.tmp_dir) / "out_final_wt"
+        with self.assertRaises(PayloadBuildError) as ctx_wt:
+            build_payload(
+                repo_root=self.repo_root,
+                out_dir=out_final_wt,
+                tag=DEFAULT_TAG,
+                binary_path=self.binary_path,
+                version="1.1.0",
+                catalog_path=None,
+                working_tree_catalog=test_cat_path,
+                trust_file=throwaway_trust_file,
+            )
+        self.assertIn("research/catalog.json is not in tag", str(ctx_wt.exception))
+        self.assertIn("working-tree fallback is refused", str(ctx_wt.exception))
+        self.assertFalse(out_final_wt.exists(), "Payload directory must not exist when working-tree fallback is refused on final build")
+
+        # 6. Pre-release without catalog proceeds with warning, bundled_catalog: False
         out_no_catalog = Path(self.tmp_dir) / "out_no_catalog"
         res_none = build_payload(
             repo_root=self.repo_root,
@@ -848,7 +884,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         manifest_files_none = (out_no_catalog / "manifest.files").read_text(encoding="utf-8").splitlines()
         self.assertNotIn("research/catalog.json", manifest_files_none)
 
-        # 5. Final release without catalog raises PayloadBuildError
+        # 7. Final release without catalog raises PayloadBuildError
         out_final_missing = Path(self.tmp_dir) / "out_final_missing"
         with self.assertRaises(PayloadBuildError) as ctx_final:
             build_payload(
@@ -861,7 +897,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertIn("Final release build", str(ctx_final.exception))
         self.assertIn("requires a bundled research/catalog.json", str(ctx_final.exception))
 
-        # 6. An unlisted catalog.json dropped into payload directory causes UpdateRejected
+        # 8. An unlisted catalog.json dropped into payload directory causes UpdateRejected
         out_unlisted = Path(self.tmp_dir) / "out_unlisted"
         res_unlisted = build_payload(
             repo_root=self.repo_root,
