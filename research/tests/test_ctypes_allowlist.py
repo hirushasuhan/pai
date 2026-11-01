@@ -10,6 +10,7 @@ Approved production modules:
 2. memory_probe.py        (Win32 VirtualQueryEx, ProcessMemoryCounters)
 3. secure_buffer.py       (C-runtime memset memory zeroization)
 4. sandbox_win32.py       (Win32 AppContainer & Job Object restricted runner)
+5. shell.py               (Win32 console mode query and Virtual Terminal Processing enablement/restoration per Finding EY, ADR-014)
 """
 
 import ast
@@ -23,6 +24,7 @@ APPROVED_CTYPES_MODULES = {
     "memory_probe.py",
     "secure_buffer.py",
     "sandbox_win32.py",
+    "shell.py",
 }
 
 
