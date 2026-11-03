@@ -1,12 +1,12 @@
 ================================================================================
 PAI LAUNCHER AND PORTABLE ZIP TESTS (21 TESTS, MILESTONE P2) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-03T13:35:01.952093+00:00
+Timestamp (UTC): 2026-11-03T14:56:04.863016+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        391067467653a92ea9e47e62697e49d419509162
+Git HEAD:        c276c10c4aefa81e0a935d4db8abd3e2049fda18
 Working Tree:    clean
 Research Tree:   3a6c73016227dbd878b739e34cb251609116f132
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
@@ -20,64 +20,64 @@ Command: python tools/test_launcher_and_zip.py
 Exit Code: 0
 
 STDOUT:
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
 
 STDERR:
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-...WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling working-tree catalog from 'C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+...WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+.WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 .
 ----------------------------------------------------------------------
-Ran 21 tests in 85.462s
+Ran 21 tests in 92.745s
 
 OK
