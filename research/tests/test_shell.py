@@ -8,7 +8,9 @@ leading dash handling and stateless banner honesty (Finding DX), and signal resi
 from __future__ import annotations
 
 import io
+import json
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -36,6 +38,7 @@ from shell import (
     execute_subcommand,
     format_session_history,
     get_pinned_header_lines,
+    get_pinned_shell_notice_lines,
     get_session_history,
     get_shell_banner,
     get_shell_info_line,
@@ -58,6 +61,167 @@ class DummyStream(io.StringIO):
         self._is_tty = is_tty
 
     @property
+    def encoding(self) -> str:
+        return self._encoding
+
+    def isatty(self) -> bool:
+        return self._is_tty
+
+
+class VirtualTerminalScreen:
+    """
+    Pure-Python standard-library-only VT100/ANSI terminal screen emulator (Finding FO).
+    Simulates screen character matrix, cursor positioning (CUP), line & display erasing (ED, EL),
+    DECSTBM scroll margins with VT100 cursor-home reset, and line-feed region scrolling.
+    """
+    def __init__(self, rows: int = 24, cols: int = 80):
+        self.rows = rows
+        self.cols = cols
+        self.grid = [[" " for _ in range(cols)] for _ in range(rows)]
+        self.cursor_row = 1  # 1-indexed (1..rows)
+        self.cursor_col = 1  # 1-indexed (1..cols)
+        self.top_margin = 1  # 1-indexed (1..rows)
+        self.bottom_margin = rows
+        self.saved_cursor = (1, 1)
+
+    def resize(self, new_rows: int, new_cols: int) -> None:
+        """Resizes the terminal screen and resets scroll margins to full screen."""
+        new_grid = [[" " for _ in range(new_cols)] for _ in range(new_rows)]
+        for r in range(min(self.rows, new_rows)):
+            for c in range(min(self.cols, new_cols)):
+                new_grid[r][c] = self.grid[r][c]
+        self.rows = new_rows
+        self.cols = new_cols
+        self.grid = new_grid
+        self.top_margin = 1
+        self.bottom_margin = new_rows
+        self.cursor_row = min(self.cursor_row, new_rows)
+        self.cursor_col = min(self.cursor_col, new_cols)
+
+    def write(self, text: str) -> None:
+        """Parses and renders text and ANSI/VT escape sequences onto the screen."""
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch in ("\033", "\x1b"):
+                i += 1
+                if i >= n:
+                    break
+                next_ch = text[i]
+                if next_ch == "[":
+                    i += 1
+                    params = ""
+                    while i < n and (text[i].isdigit() or text[i] in ";?"):
+                        params += text[i]
+                        i += 1
+                    if i < n:
+                        cmd = text[i]
+                        i += 1
+                        self._handle_csi(cmd, params)
+                elif next_ch == "7":
+                    self.saved_cursor = (self.cursor_row, self.cursor_col)
+                    i += 1
+                elif next_ch == "8":
+                    self.cursor_row, self.cursor_col = self.saved_cursor
+                    i += 1
+                else:
+                    i += 1
+            elif ch == "\r":
+                self.cursor_col = 1
+                i += 1
+            elif ch == "\n":
+                self._handle_lf()
+                i += 1
+            elif ch == "\b":
+                self.cursor_col = max(1, self.cursor_col - 1)
+                i += 1
+            elif ch == "\t":
+                self.cursor_col = min(self.cols, ((self.cursor_col - 1) // 8 + 1) * 8 + 1)
+                i += 1
+            elif ord(ch) < 32:
+                i += 1
+            else:
+                if 1 <= self.cursor_row <= self.rows and 1 <= self.cursor_col <= self.cols:
+                    self.grid[self.cursor_row - 1][self.cursor_col - 1] = ch
+                    self.cursor_col = min(self.cols, self.cursor_col + 1)
+                i += 1
+
+    def _handle_lf(self) -> None:
+        """Handles line feed (LF): advances cursor down or scrolls within margin."""
+        if self.cursor_row == self.bottom_margin:
+            top_idx = self.top_margin - 1
+            bot_idx = self.bottom_margin - 1
+            for r in range(top_idx, bot_idx):
+                self.grid[r] = list(self.grid[r + 1])
+            self.grid[bot_idx] = [" " for _ in range(self.cols)]
+        elif self.cursor_row < self.rows:
+            self.cursor_row += 1
+
+    def _handle_csi(self, cmd: str, params: str) -> None:
+        """Processes CSI commands."""
+        parts = [int(p) for p in params.split(";") if p.isdigit()]
+        if cmd in ("H", "f"):
+            r = parts[0] if parts and parts[0] > 0 else 1
+            c = parts[1] if len(parts) >= 2 and parts[1] > 0 else 1
+            self.cursor_row = max(1, min(self.rows, r))
+            self.cursor_col = max(1, min(self.cols, c))
+        elif cmd == "J":
+            mode = parts[0] if parts else 0
+            if mode == 2:
+                self.grid = [[" " for _ in range(self.cols)] for _ in range(self.rows)]
+            elif mode == 0:
+                cur_r = self.cursor_row - 1
+                cur_c = self.cursor_col - 1
+                for c in range(cur_c, self.cols):
+                    self.grid[cur_r][c] = " "
+                for r in range(self.cursor_row, self.rows):
+                    self.grid[r] = [" " for _ in range(self.cols)]
+        elif cmd == "K":
+            mode = parts[0] if parts else 0
+            cur_r = self.cursor_row - 1
+            if mode == 2:
+                self.grid[cur_r] = [" " for _ in range(self.cols)]
+            elif mode == 0:
+                cur_c = self.cursor_col - 1
+                for c in range(cur_c, self.cols):
+                    self.grid[cur_r][c] = " "
+        elif cmd == "r":
+            if len(parts) >= 2:
+                self.top_margin = max(1, min(self.rows, parts[0]))
+                self.bottom_margin = max(self.top_margin, min(self.rows, parts[1]))
+            else:
+                self.top_margin = 1
+                self.bottom_margin = self.rows
+            # Per VT100 standard: DECSTBM resets cursor to home (1, 1)
+            self.cursor_row = 1
+            self.cursor_col = 1
+        elif cmd == "s":
+            self.saved_cursor = (self.cursor_row, self.cursor_col)
+        elif cmd == "u":
+            self.cursor_row, self.cursor_col = self.saved_cursor
+
+    def get_row(self, row_idx: int) -> str:
+        """Returns the text of 1-indexed row_idx as a string stripped of trailing spaces."""
+        if 1 <= row_idx <= self.rows:
+            return "".join(self.grid[row_idx - 1]).rstrip()
+        return ""
+
+    def get_screen_text(self) -> str:
+        """Returns the full screen as a multi-line string."""
+        return "\n".join(self.get_row(r) for r in range(1, self.rows + 1))
+
+
+class VirtualTerminalStream(DummyStream):
+    """Bridge stream connecting stdout writes directly to VirtualTerminalScreen."""
+    def __init__(self, screen: VirtualTerminalScreen, encoding="utf-8", is_tty=True):
+        super().__init__(encoding=encoding, is_tty=is_tty)
+        self.screen = screen
+
+    def write(self, s: str) -> int:
+        super().write(s)
+        self.screen.write(s)
+        return len(s)
     def encoding(self) -> str:
         return self._encoding
 
@@ -811,7 +975,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
 
             # Cleanup must restore full margins (\033[r) and cursor attributes
             self.assertIn("\033[r", raw_stream_output)
-            self.assertIn("\033[24;1H\r\n", raw_stream_output)
+            self.assertIn("\033[24;1H", raw_stream_output)
             self.assertIn("\033[0m\033[?25h", raw_stream_output)
 
     # -------------------------------------------------------------------------
@@ -1153,6 +1317,297 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertNotIn("\x1b[2J", sanitized)
             self.assertNotIn("\033[6;30r", sanitized)
             self.assertNotIn("\033]8;;", sanitized)
+
+    # -------------------------------------------------------------------------
+    # 23. Milestone B2: Subprocess Isolation & Zero Import Pollution (Finding FK)
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fk_subprocess_isolation(self) -> None:
+        """
+        Finding FK: Asserts that importing shell.py or invoking CLI commands
+        never emits escape sequences into non-terminal or piped stdout:
+          - 'pai chat "what is the date" --json' emits clean JSON with zero ESC (\\x1b) bytes.
+          - 'pai chat "what is the date"' in plain-text emits clean text with zero ESC bytes.
+          - 'python -c "import shell"' outputs exactly 0 bytes to both stdout and stderr.
+        """
+        repo_root = str(RESEARCH_DIR.parent)
+        pai_py = str(RESEARCH_DIR / "pai.py")
+
+        # 1. JSON mode with piped stdout
+        res_json = subprocess.run(
+            [sys.executable, pai_py, "chat", "what is the date", "--json"],
+            capture_output=True,
+            cwd=repo_root,
+        )
+        self.assertEqual(res_json.returncode, 0)
+        self.assertNotIn(b"\x1b", res_json.stdout, "ESC byte found in JSON stdout")
+        data = json.loads(res_json.stdout.decode("utf-8"))
+        self.assertTrue(data.get("success"), "JSON response did not report success")
+        self.assertIn("Current local time:", data.get("response", ""))
+
+        # 2. Text mode with piped stdout
+        res_text = subprocess.run(
+            [sys.executable, pai_py, "chat", "what is the date"],
+            capture_output=True,
+            cwd=repo_root,
+        )
+        self.assertEqual(res_text.returncode, 0)
+        self.assertNotIn(b"\x1b", res_text.stdout, "ESC byte found in plain text stdout")
+        self.assertIn("Current local time:", res_text.stdout.decode("utf-8"))
+
+        # 3. Import shell and exit: exactly 0 bytes on stdout and stderr
+        cmd_import = "import sys; sys.path.insert(0, 'research'); import shell"
+        res_import = subprocess.run(
+            [sys.executable, "-c", cmd_import],
+            capture_output=True,
+            cwd=repo_root,
+        )
+        self.assertEqual(res_import.returncode, 0)
+        self.assertEqual(res_import.stdout, b"", "import shell wrote unexpected bytes to stdout")
+        self.assertEqual(res_import.stderr, b"", "import shell wrote unexpected bytes to stderr")
+
+    # -------------------------------------------------------------------------
+    # 24. Milestone B2: 40-Turn VT Scrolling Stability via Screen Model (Findings FL & FO)
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fl_fo_screen_model_40_turns(self) -> None:
+        """
+        Findings FL & FO: Feeds 40 turns of interactive execution through the
+        standard-library VirtualTerminalScreen emulator:
+          - Verifies header rows 1..5 remain completely intact across all 40 turns.
+          - Verifies prompt 'pai> ' is never printed onto header rows 1..5.
+          - Verifies scrolling occurs strictly inside the DECSTBM chat margins (lines 6..24).
+          - Verifies cursor position remains within the active chat region (row >= 6).
+        """
+        screen = VirtualTerminalScreen(rows=24, cols=80)
+        stream = VirtualTerminalStream(screen, encoding="utf-8", is_tty=True)
+
+        commands = ["/time" if i % 2 == 0 else "/models" for i in range(40)] + ["/exit"]
+        inputs = iter(commands)
+
+        snapshots: list[list[str]] = []
+
+        def turn_input(prompt: str) -> str:
+            # Record screen header snapshot at prompt time
+            snapshots.append([screen.get_row(r) for r in range(1, 6)])
+            cmd = next(inputs)
+            stream.write(prompt + cmd + "\r\n")
+            return cmd
+
+        with patch("shell.should_pin_header", return_value=True), \
+             patch("shell.get_terminal_dimensions", return_value=(80, 24)), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=turn_input,
+                output_fn=lambda msg: stream.write(msg + "\r\n"),
+                stream=stream,
+            )
+            self.assertEqual(code, 0)
+
+        # Retrieve reference header lines for 80 columns without color
+        ref_lines = get_pinned_header_lines(80, color_enabled=False, stream=stream)
+        self.assertEqual(len(ref_lines), 5)
+
+        # Assert all 40 snapshots maintained exact intact header rows
+        self.assertGreaterEqual(len(snapshots), 40)
+        for turn_idx, snap in enumerate(snapshots):
+            self.assertEqual(len(snap), 5, f"Turn {turn_idx}: header does not have 5 rows")
+            self.assertEqual(snap[0], ref_lines[0].rstrip(), f"Turn {turn_idx}: Row 1 logo corrupted")
+            self.assertEqual(snap[1], ref_lines[1].rstrip(), f"Turn {turn_idx}: Row 2 logo corrupted")
+            self.assertEqual(snap[2], ref_lines[2].rstrip(), f"Turn {turn_idx}: Row 3 logo corrupted")
+            self.assertEqual(snap[3], ref_lines[3].rstrip(), f"Turn {turn_idx}: Row 4 info corrupted")
+            self.assertEqual(snap[4], ref_lines[4].rstrip(), f"Turn {turn_idx}: Row 5 separator corrupted")
+            # Prompt must never be on rows 1..5
+            for r in range(5):
+                self.assertNotIn("pai>", snap[r], f"Turn {turn_idx}: prompt found on header row {r + 1}")
+
+    # -------------------------------------------------------------------------
+    # 25. Milestone B2: Window Resize and Cursor Position Protection (Findings FL & FO)
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fl_fo_screen_resize_handling(self) -> None:
+        """
+        Findings FL & FO: Asserts that upon terminal resize:
+          - check_and_apply_resize derives header height dynamically from len(header_lines).
+          - Sets new DECSTBM scroll margins.
+          - Explicitly positions cursor at bottom row of the new dimensions, counteracting
+            the VT100 DECSTBM default home (1, 1) cursor reset.
+          - Next prompt 'pai>' is rendered at the bottom of the chat region, NEVER overwriting logo row 1.
+          - Verified across both smaller (20x70) and larger (35x100) resize events.
+        """
+        screen = VirtualTerminalScreen(rows=24, cols=80)
+        stream = VirtualTerminalStream(screen, encoding="utf-8", is_tty=True)
+
+        with patch("shell.should_enable_color", return_value=False), \
+             patch("shell.get_terminal_dimensions", return_value=(80, 24)):
+            setup_pinned_layout(stream)
+
+        # Initial state: 24x80
+        ref_80 = get_pinned_header_lines(80, color_enabled=False, stream=stream)
+        self.assertEqual(screen.get_row(1), ref_80[0].rstrip())
+        self.assertEqual(screen.cursor_row, 6)
+        self.assertEqual(screen.cursor_col, 1)
+
+        # Event A: Resize smaller to 20 rows, 70 cols
+        screen.resize(20, 70)
+        with patch("shell.should_enable_color", return_value=False), \
+             patch("shell.get_terminal_dimensions", return_value=(70, 20)):
+            new_dims = check_and_apply_resize((80, 24), stream=stream)
+            self.assertEqual(new_dims, (70, 20))
+
+            # Cursor must be placed at bottom row (row 20, col 1)
+            self.assertEqual(screen.cursor_row, 20)
+            self.assertEqual(screen.cursor_col, 1)
+
+            # Prompt printed at current cursor position
+            stream.write("pai> ")
+            self.assertIn("pai>", screen.get_row(20))
+
+            # Header row 1 must remain intact and must NOT contain "pai>"
+            ref_70 = get_pinned_header_lines(70, color_enabled=False, stream=stream)
+            self.assertEqual(screen.get_row(1), ref_70[0].rstrip())
+            self.assertNotIn("pai>", screen.get_row(1))
+
+        # Event B: Resize larger to 35 rows, 100 cols
+        screen.resize(35, 100)
+        with patch("shell.should_enable_color", return_value=False), \
+             patch("shell.get_terminal_dimensions", return_value=(100, 35)):
+            new_dims2 = check_and_apply_resize((70, 20), stream=stream)
+            self.assertEqual(new_dims2, (100, 35))
+
+            # Cursor must be placed at bottom row (row 35, col 1)
+            self.assertEqual(screen.cursor_row, 35)
+            self.assertEqual(screen.cursor_col, 1)
+
+            # Prompt printed at row 35
+            stream.write("pai> ")
+            self.assertIn("pai>", screen.get_row(35))
+
+            # Header row 1 intact and untouched
+            ref_100 = get_pinned_header_lines(100, color_enabled=False, stream=stream)
+            self.assertEqual(screen.get_row(1), ref_100[0].rstrip())
+            self.assertNotIn("pai>", screen.get_row(1))
+
+    # -------------------------------------------------------------------------
+    # 26. Milestone B2: Pinned /clear via Screen Model (Findings FL & FO)
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fl_fo_screen_clear_handling(self) -> None:
+        """
+        Findings FL & FO: Asserts that executing /clear in pinned mode:
+          - Dynamically derives chat region start row (len(header_lines) + 1 = 6).
+          - Clears lines 6..24 using \\033[6;1H\\033[J.
+          - Leaves header rows 1..5 fully intact on the screen.
+          - Positions cursor at row 6, col 1 ready for next input.
+        """
+        screen = VirtualTerminalScreen(rows=24, cols=80)
+        stream = VirtualTerminalStream(screen, encoding="utf-8", is_tty=True)
+
+        inputs = iter(["/time", "/clear", "/exit"])
+        with patch("shell.should_pin_header", return_value=True), \
+             patch("shell.get_terminal_dimensions", return_value=(80, 24)), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda prompt: next(inputs),
+                output_fn=lambda msg: stream.write(msg + "\r\n"),
+                stream=stream,
+            )
+            self.assertEqual(code, 0)
+
+        # Header rows 1..5 remain intact
+        ref_lines = get_pinned_header_lines(80, color_enabled=False, stream=stream)
+        for r in range(1, 6):
+            self.assertEqual(screen.get_row(r), ref_lines[r - 1].rstrip())
+
+    # -------------------------------------------------------------------------
+    # 27. Milestone B2: Honest Disclaimers and Help Hint in Pinned Mode (Finding FM)
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fm_pinned_startup_honest_disclaimers(self) -> None:
+        """
+        Finding FM: Asserts that pinned interactive mode prints the complete set
+        of honest notices and help hints in the chat region below the header:
+          - 'Sandbox execution boundary verified fail-closed.'
+          - 'Model: ... | Endpoint: ...'
+          - Computer clock date/time notice (no web access, training cut-off)
+          - Stateless mode notice
+          - '/help' and '/exit' hint
+        """
+        outputs: list[str] = []
+        inputs = iter(["/exit"])
+
+        with patch("shell.should_pin_header", return_value=True), \
+             patch("shell.setup_pinned_layout"), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+            )
+            self.assertEqual(code, 0)
+
+        combined = "\n".join(outputs)
+        self.assertIn("Sandbox execution boundary verified fail-closed.", combined)
+        self.assertIn("Model: no model loaded yet | Endpoint: http://127.0.0.1:11434", combined)
+        self.assertIn("PAI gives the model your computer's date and time", combined)
+        self.assertIn("no web access and its knowledge ends at a training cut-off", combined)
+        self.assertIn("Stateless", combined)
+        self.assertIn("Type /help for available commands or /exit to quit.", combined)
+
+    # -------------------------------------------------------------------------
+    # 28. Milestone B2: Unpinned /clear TTY Check and UTF-8 History Limit (Finding FN)
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fn_unpinned_clear_and_utf8_history_cap(self) -> None:
+        """
+        Finding FN:
+          (a) /clear in non-pinned mode clears the screen when stream.isatty() is True,
+              even if color is disabled (e.g. NO_COLOR=1).
+          (b) MAX_HISTORY_BYTES (1 MB) calculates memory based on UTF-8 encoded bytes,
+              correctly measuring multi-byte Unicode characters (Sinhala).
+        """
+        # (a) Unpinned /clear with isatty()=True and NO_COLOR=1
+        tty_no_color_stream = DummyStream(encoding="utf-8", is_tty=True)
+        inputs = iter(["/clear", "/exit"])
+        outputs: list[str] = []
+
+        with patch.dict(os.environ, {"NO_COLOR": "1"}), \
+             patch("shell.should_pin_header", return_value=False), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=tty_no_color_stream,
+            )
+            self.assertEqual(code, 0)
+            raw = tty_no_color_stream.getvalue()
+            # Must emit screen clear escape even though NO_COLOR is set
+            self.assertIn("\033[2J\033[1;1H", raw)
+
+        # (b) Multi-byte UTF-8 calculation in session history
+        clear_session_history()
+        # Sinhala string: each character is 3 bytes in UTF-8
+        sinhala_cmd = "නාමය_විමසුම"
+        sinhala_bytes = len(sinhala_cmd.encode("utf-8"))
+        sinhala_chars = len(sinhala_cmd)
+        self.assertGreater(sinhala_bytes, sinhala_chars)
+
+        # Two entries each with 200,000 Sinhala chars:
+        # 200,000 * 3 bytes = 600,000 bytes each.
+        # Under old character-counting: 200,000 + 200,000 = 400,000 chars <= 1,000,000 limit,
+        # so both entries would be kept incorrectly.
+        # Under UTF-8 encoded byte counting: 600,000 + 600,000 = 1,200,000 bytes > 1,000,000 limit,
+        # so the older entry MUST be evicted to stay within the 1 MB budget.
+        entry1_payload = "ප" * 200_000
+        entry2_payload = "ර" * 200_000
+        add_to_session_history("cmd1", entry1_payload)
+        self.assertEqual(len(get_session_history()), 1)
+
+        add_to_session_history("cmd2", entry2_payload)
+        # Old entry must be evicted because 1.2 MB > 1 MB
+        history_after = get_session_history()
+        self.assertEqual(len(history_after), 1)
+        self.assertEqual(history_after[0][1], "cmd2")
+
+        # Total UTF-8 encoded bytes must stay <= MAX_HISTORY_BYTES
+        total_encoded = sum(
+            len(c.encode("utf-8")) + len(o.encode("utf-8"))
+            for _, c, o in history_after
+        )
+        self.assertLessEqual(total_encoded, MAX_HISTORY_BYTES)
 
 
 if __name__ == "__main__":

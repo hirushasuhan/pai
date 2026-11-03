@@ -329,12 +329,22 @@ def should_pin_header(stream=sys.stdout) -> bool:
     return True
 
 
+_pinned_active: bool = False
+_atexit_registered: bool = False
+
+
 def setup_pinned_layout(stream=sys.stdout) -> None:
     """
     Initializes DECSTBM pinned scroll region layout.
-    Clears visible screen (\\033[2J), writes header on lines 1..5, sets scroll region
-    to lines 6..rows (\\033[6;{rows}r), and positions cursor at \\033[6;1H.
+    Clears visible screen (\\033[2J), writes header on lines 1..n_header, sets scroll region
+    to lines (n_header + 1)..rows (\\033[{n_header + 1};{rows}r), and positions cursor at \\033[{n_header + 1};1H.
     """
+    global _pinned_active, _atexit_registered
+    _pinned_active = True
+    if not _atexit_registered:
+        atexit.register(cleanup_pinned_layout)
+        _atexit_registered = True
+
     cols, rows = get_terminal_dimensions()
     color_enabled = should_enable_color(stream)
     header_lines = get_pinned_header_lines(cols, color_enabled, stream)
@@ -360,6 +370,9 @@ def check_and_apply_resize(current_dims: Tuple[int, int], stream=sys.stdout) -> 
     for i, line in enumerate(header_lines, start=1):
         stream.write(f"\033[{i};1H\033[2K{line}\r\n")
     stream.write(f"\033[{n_header + 1};{rows}r")
+    # Per VT100 standard, DECSTBM margin command resets cursor to home (1, 1).
+    # Position cursor at the bottom row of the new scrolling region to avoid overwriting header (Finding FL).
+    stream.write(f"\033[{rows};1H")
     stream.flush()
     return new_dims
 
@@ -368,20 +381,28 @@ def cleanup_pinned_layout(stream=sys.stdout) -> None:
     """
     Idempotent cleanup for pinned layout: resets scroll margins (\\033[r),
     moves cursor to bottom row, resets attributes, and restores Windows console mode.
+    Only writes VT escape sequences if a pinned layout was active and stream is a TTY (Finding FK).
     """
+    global _pinned_active
+    was_active = _pinned_active
+    _pinned_active = False
     try:
-        _, rows = get_terminal_dimensions()
-        stream.write("\033[r")
-        stream.write(f"\033[{rows};1H\r\n")
-        stream.write("\033[0m\033[?25h")
-        stream.flush()
+        if was_active:
+            is_tty = False
+            try:
+                is_tty = bool(stream.isatty())
+            except Exception:
+                is_tty = False
+            if is_tty:
+                _, rows = get_terminal_dimensions()
+                stream.write("\033[r")
+                stream.write(f"\033[{rows};1H")
+                stream.write("\033[0m\033[?25h")
+                stream.flush()
     except Exception:
         pass
     finally:
         restore_windows_console_mode()
-
-
-atexit.register(cleanup_pinned_layout)
 
 # Thinking Spinner for /chat
 BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -451,22 +472,29 @@ class ThinkingSpinner:
 MAX_HISTORY_ITEMS = 200
 MAX_HISTORY_BYTES = 1_000_000  # 1 MB
 
+
+def _entry_encoded_bytes(cmd: str, out: str) -> int:
+    """Calculates UTF-8 encoded byte length of a history entry (Finding FN)."""
+    return len(cmd.encode("utf-8", errors="replace")) + len(out.encode("utf-8", errors="replace"))
+
+
 _session_history: Deque[Tuple[str, str, str]] = collections.deque(maxlen=MAX_HISTORY_ITEMS)
 
 
 def add_to_session_history(command: str, output: str) -> None:
     """
     Adds a command line and its execution output to in-memory session history.
-    Enforces max 200 items and 1 MB memory cap. Never writes to disk.
+    Enforces max 200 items and 1 MB memory cap based on UTF-8 encoded bytes (Finding FN).
+    Never writes to disk.
     """
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     cleaned_out = output.strip()
     _session_history.append((now_str, command.strip(), cleaned_out))
 
-    total_bytes = sum(len(c) + len(o) for _, c, o in _session_history)
+    total_bytes = sum(_entry_encoded_bytes(c, o) for _, c, o in _session_history)
     while total_bytes > MAX_HISTORY_BYTES and len(_session_history) > 1:
         popped = _session_history.popleft()
-        total_bytes -= (len(popped[1]) + len(popped[2]))
+        total_bytes -= _entry_encoded_bytes(popped[1], popped[2])
 
 
 def get_session_history(limit: Optional[int] = None) -> List[Tuple[str, str, str]]:
@@ -639,6 +667,28 @@ def get_shell_banner(
     )
 
 
+def get_pinned_shell_notice_lines(
+    endpoint: str = "http://127.0.0.1:11434",
+    color_enabled: Optional[bool] = None,
+) -> List[str]:
+    """
+    Constructs the honest disclaimer, model info, and help hint lines to display
+    in the scrolling chat region upon pinned shell startup (Finding FM).
+    """
+    if color_enabled is None:
+        color_enabled = should_enable_color()
+
+    model_name = get_resident_model_name()
+    hint_text = colorize("Type /help for available commands or /exit to quit.", DIM, color_enabled)
+
+    return [
+        f"Model: {model_name} | Endpoint: {endpoint}",
+        "Note: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off.",
+        "Mode: Stateless (each line is evaluated independently without prior conversation memory).",
+        hint_text,
+    ]
+
+
 def parse_shell_line(line: str) -> Tuple[str, List[str]]:
     """
     Parses a single shell input line using Windows-aware tokenizer (Finding DW).
@@ -755,6 +805,8 @@ def run_interactive_shell(
     if pinned:
         setup_pinned_layout(stream)
         output_fn("Sandbox execution boundary verified fail-closed.")
+        for notice_line in get_pinned_shell_notice_lines(color_enabled=color_enabled):
+            output_fn(notice_line)
     else:
         output_fn("Sandbox execution boundary verified fail-closed.")
         output_fn(get_shell_banner(color_enabled=color_enabled))
@@ -789,10 +841,19 @@ def run_interactive_shell(
                 continue
             elif action == "clear":
                 if pinned:
-                    stream.write("\033[6;1H\033[J")
+                    cols, _ = get_terminal_dimensions()
+                    color_enabled = should_enable_color(stream)
+                    header_lines = get_pinned_header_lines(cols, color_enabled, stream)
+                    chat_top = len(header_lines) + 1
+                    stream.write(f"\033[{chat_top};1H\033[J")
                     stream.flush()
                 else:
-                    if color_enabled:
+                    is_tty = False
+                    try:
+                        is_tty = bool(stream.isatty())
+                    except Exception:
+                        is_tty = False
+                    if is_tty:
                         stream.write("\033[2J\033[1;1H")
                         stream.flush()
                     output_fn(get_shell_banner(color_enabled=color_enabled))

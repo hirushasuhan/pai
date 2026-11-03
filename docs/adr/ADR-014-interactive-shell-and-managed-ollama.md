@@ -178,3 +178,33 @@ To provide a clean, modern terminal interface while maintaining low screen footp
 
 ### 5. Model Output Hygiene & Terminal Margin Protection
 - All model output passes through `sanitize_terminal_output` before printing, ensuring CSI margin escape codes (`\033[r`), cursor repositioning codes (`\033[H`), and screen clear codes are defanged, preventing untrusted model responses from altering terminal margins or corrupting the pinned header.
+
+## Addendum (Milestone B2): Terminal Layout Polish & Piped Process Isolation (Findings FK, FL, FM, FN, FO)
+
+### 1. Piped Process Isolation and Exit Cleanup Gating (Finding FK)
+- Exit cleanup (`cleanup_pinned_layout`) registration is strictly deferred until `setup_pinned_layout` has successfully executed during an interactive session.
+- Module-level `atexit.register` is eliminated.
+- VT margin reset escape sequences (`\033[r`, `\033[{rows};1H`, `\033[0m\033[?25h`) are emitted strictly when `_pinned_active` is True and `sys.stdout.isatty()` is True.
+- Zero escape bytes are output on module import (`import shell`) or during non-interactive, piped runs (e.g. `pai chat --json`).
+
+### 2. Cursor Positioning and Header Height Derivation on Resize (Finding FL)
+- In compliance with the VT100 standard, where DECSTBM margin commands (`\033[{top};{bottom}r`) reset the terminal cursor to home position `(1, 1)`, `check_and_apply_resize` explicitly positions the cursor at the bottom row of the updated dimensions (`\033[{rows};1H`). This guarantees that subsequent prompts or outputs never overwrite row 1 of the header logo.
+- Header height is dynamically derived via `len(header_lines)` across all layout routines rather than hardcoded.
+
+### 3. Honest Disclaimer Parity in Pinned Mode (Finding FM)
+- Upon pinned shell startup, the chat scrolling area directly below the header displays the full capability and limitation disclaimers:
+  - Fail-closed sandbox execution verification.
+  - Resident model profile and endpoint address.
+  - Computer clock date/time provisioning with training cut-off and zero live web access disclaimer.
+  - Stateless turn isolation notice.
+  - `/help` and `/exit` command hints.
+
+### 4. Non-Pinned Clear and Multi-byte History Byte-Cap (Finding FN)
+- `/clear` in non-pinned mode triggers screen erase (`\033[2J\033[1;1H`) based on stream TTY capability (`stream.isatty()`), functioning properly even when color styling is disabled via `NO_COLOR=1`.
+- `NO_COLOR=1` suppresses ANSI styling colors only; it does not disable DECSTBM layout or block characters.
+- In-memory session history cap (`MAX_HISTORY_BYTES = 1_000_000`) is computed from UTF-8 encoded bytes (`len(s.encode('utf-8'))`), ensuring multi-byte Unicode strings (such as Sinhala) do not exceed the memory budget.
+
+### 5. Stdlib Virtual Terminal Screen Model & Test Protocol (Finding FO)
+- Automated verification includes `VirtualTerminalScreen`, a pure-Python standard-library screen emulator simulating CUP, ED, EL, DECSTBM margin resets, and region scrolling.
+- Automated tests verify screen integrity across 40 turns of chat, window resizes (smaller and larger), and `/clear` executions.
+- In accordance with Finding FO, documentation explicitly records that the automated coding agent executed the stdlib emulator in unit tests without running a real physical terminal, leaving physical visual proof to the user.
