@@ -17,18 +17,19 @@ All preconditions must be verified and formally accepted before tagging the free
   - GitHub Actions CI runs on branch `build-stage` and reports green on all 3 jobs (`python-research`, `rust-core`, `linux-portability`).
 - [ ] **Precondition 3 (Decision D10 Decided):**
   - Formal confirmation of Decision D10: PAI never downloads Ollama directly; the installer's finished page provides direct guidance/link to the official installer.
-- [ ] **Precondition 4 (Signed Model Catalog Distribution & Freshness Decided - Finding EF & EH):**
+- [x] **Precondition 4 (Signed Model Catalog Distribution & Freshness Decided - Finding EF & EH):**
   - Signed catalog is bundled as a payload file (`catalog.json` and signature) read by default from installation root (`Path(__file__).parent / "catalog.json"`).
   - Option A accepted: Bundled catalog has no freshness limit; version and signature protect it. External `--catalog` keeps the 90-day rule.
-- [ ] **Precondition 5 (Trust Root & Catalog Key Custody - Finding EH & EO):**
+- [x] **Precondition 5 (Trust Root & Catalog Key Custody - Finding EH & EO):**
   - Offline Ed25519 private key for `rel-1` is held exclusively by repository owner (never committed or logged).
   - First canonical signed catalog is generated and committed to `research/catalog.json` via the 5-step procedure:
-    1. Prepare `catalog_input.json` with model definitions, digests, and measured profiles.
-    2. Sign: `python tools/sign_catalog.py --catalog <input_path> --private-key-file <offline_key_path> --out research/catalog.json`. Verify the printed `Trust root:` line matches `research/trust.json`.
-    3. Commit `research/catalog.json` to git.
+    1. Prepare `catalog_input.json` with model definitions, digests, and measured profiles. [Completed in commit `9734457`]
+    2. Sign: `python tools/sign_catalog.py --catalog docs/catalog/catalog_input_2026-11-03.json --private-key-file <offline_key_path> --out research/catalog.json`. Verify the printed `Trust root:` line matches `research/trust.json`. [Completed]
+    3. Commit `research/catalog.json` to git. [Completed in commit `e618920`]
     4. Regenerate evidence logs on the new clean tree via `python tools/save_unit_test_evidence.py`.
     5. Record new research tree ID and update pins:
-       *Note: `EXPECTED_RESEARCH_TREE` in `packaging/build_payload.py` (and `--expected-research-tree`) currently holds the `v1.0.0-rc1` baseline tree and must be updated to match the new pinned research tree once `research/catalog.json` is committed.*
+       - **New Pinned Research Tree ID:** `3a6c73016227dbd878b739e34cb251609116f132`
+       - Baseline `v1.0.0-rc1` research tree ID: `506e520b33a0af8c3f0276114483ce26b9bd3787`
     *(The private key path is never written to any file, log, or commit message).*
 - [ ] **Precondition 6 (Branding Touch-up & Icons Rebuilt):**
   - Minor stray mark on logo touched up; `tools/make_icons.py` re-run to regenerate final `.ico` and wizard BMPs.
@@ -98,7 +99,7 @@ CertUtil -hashfile dist/PAI-Setup-1.1.0-rc2-x64.exe SHA256
    - Installer SHA-256 hash (`dist/PAI-Setup-1.1.0-rc2-x64.exe`)
    - Three Evaluated Pins:
      - `core/` tree ID: `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`
-     - `research/` tree ID: `<recorded from Step 2.1>`
+     - `research/` tree ID: `3a6c73016227dbd878b739e34cb251609116f132`
      - `pai-core.exe` SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`
 
 ---

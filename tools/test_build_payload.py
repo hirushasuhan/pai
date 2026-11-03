@@ -872,12 +872,14 @@ class TestBuildPayloadP1(unittest.TestCase):
 
         # 6. Pre-release without catalog proceeds with warning, bundled_catalog: False
         out_no_catalog = Path(self.tmp_dir) / "out_no_catalog"
+        nonexistent_cat = Path(self.tmp_dir) / "no_catalog.json"
         res_none = build_payload(
             repo_root=self.repo_root,
             out_dir=out_no_catalog,
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
             version="1.1.0-rc2",
+            working_tree_catalog=nonexistent_cat,
         )
         self.assertFalse(res_none["manifest"].get("bundled_catalog"))
         self.assertNotIn("research/catalog.json", res_none["manifest"]["files"])
@@ -893,6 +895,7 @@ class TestBuildPayloadP1(unittest.TestCase):
                 tag=DEFAULT_TAG,
                 binary_path=self.binary_path,
                 version="1.1.0",
+                working_tree_catalog=nonexistent_cat,
             )
         self.assertIn("Final release build", str(ctx_final.exception))
         self.assertIn("requires a bundled research/catalog.json", str(ctx_final.exception))
@@ -904,6 +907,7 @@ class TestBuildPayloadP1(unittest.TestCase):
             out_dir=out_unlisted,
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
+            working_tree_catalog=nonexistent_cat,
         )
         trust_root = Path(self.tmp_dir) / "test_19_trust_root"
         trust_root.mkdir(parents=True, exist_ok=True)
