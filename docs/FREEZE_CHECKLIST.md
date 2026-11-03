@@ -53,7 +53,10 @@ git rev-parse HEAD:core
 # 2. Record Research Tree ID to be pinned
 git rev-parse HEAD:research
 # Verify that EXPECTED_RESEARCH_TREE in packaging/build_payload.py (or --expected-research-tree)
-# matches this exact research tree ID.
+# matches this exact research tree ID (3a6c73016227dbd878b739e34cb251609116f132).
+
+# 4. Verify pin consistency across build code, N+1 checker, checklist, and git ref:
+python tools/check_pins.py
 
 # 3. Verify evaluated binary SHA-256 (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
 CertUtil -hashfile core/target/release/pai-core.exe SHA256

@@ -49,7 +49,10 @@ DEFAULT_PLATFORM = "win-x64" if sys.platform == "win32" else "linux-x64"
 
 # Evaluated tree invariants established in Release N (v1.0.0-rc1, commit 8ce81cb)
 EXPECTED_CORE_TREE = "14c60746ca9a41d91aafd88cc0c7d98719cfe3a9"
-EXPECTED_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
+# Pre-freeze pinned research tree for v1.1.0-rc2 (Milestone D1, commit e618920)
+EXPECTED_RESEARCH_TREE = "3a6c73016227dbd878b739e34cb251609116f132"
+# Historical baseline research tree for v1.0.0-rc1 tag
+RC1_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
 EXPECTED_BINARY_SHA256 = "6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe"
 DEFAULT_REPO_CATALOG = Path("research") / "catalog.json"
 
@@ -128,7 +131,7 @@ def verify_tag_and_trees(
     repo_root: Path,
     tag: str = DEFAULT_TAG,
     expected_core_tree: Optional[str] = EXPECTED_CORE_TREE,
-    expected_research_tree: Optional[str] = EXPECTED_RESEARCH_TREE,
+    expected_research_tree: Optional[str] = None,
 ) -> Tuple[str, str, str]:
     """
     Verifies that the git tag exists and its core/ and research/ tree hashes match
@@ -137,6 +140,8 @@ def verify_tag_and_trees(
     Returns:
         (commit_sha, core_tree_sha, research_tree_sha)
     """
+    if expected_research_tree is None:
+        expected_research_tree = RC1_RESEARCH_TREE if tag == DEFAULT_TAG else EXPECTED_RESEARCH_TREE
     # 1. Verify tag exists and get commit hash
     try:
         proc_commit = _run_git(["rev-parse", "--verify", f"{tag}^{{commit}}"], repo_root)
@@ -581,7 +586,7 @@ def build_payload(
     binary_path: Optional[str | Path] = None,
     expected_binary_sha256: Optional[str] = EXPECTED_BINARY_SHA256,
     expected_core_tree: Optional[str] = EXPECTED_CORE_TREE,
-    expected_research_tree: Optional[str] = EXPECTED_RESEARCH_TREE,
+    expected_research_tree: Optional[str] = None,
     constitution_path: Optional[str | Path] = None,
     product: str = DEFAULT_PRODUCT,
     platform: str = DEFAULT_PLATFORM,
@@ -609,6 +614,9 @@ def build_payload(
     out = Path(out_dir).resolve()
 
     # Step 1: Pre-flight tag and tree invariant verification
+    if expected_research_tree is None:
+        expected_research_tree = RC1_RESEARCH_TREE if tag == DEFAULT_TAG else EXPECTED_RESEARCH_TREE
+
     commit_sha, core_tree_sha, res_tree_sha = verify_tag_and_trees(
         repo,
         tag=tag,
@@ -773,7 +781,11 @@ def build_payload(
         shutil.copy2(str(repo_catalog), str(dest_catalog))
         catalog_source = "working-tree"
         catalog_sha256 = sha256_file(repo_catalog)
-        msg_wt = f"WARNING: bundling working-tree catalog from '{repo_catalog}' into pre-release payload (catalog_source: working-tree)"
+        try:
+            display_repo_cat = repo_catalog.relative_to(repo)
+        except ValueError:
+            display_repo_cat = repo_catalog.name
+        msg_wt = f"WARNING: bundling working-tree catalog from '{display_repo_cat}' into pre-release payload (catalog_source: working-tree)"
         print(msg_wt)
         logger.warning(msg_wt)
 

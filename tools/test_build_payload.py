@@ -38,6 +38,7 @@ from packaging.build_payload import (
     EXPECTED_BINARY_SHA256,
     EXPECTED_CORE_TREE,
     EXPECTED_RESEARCH_TREE,
+    RC1_RESEARCH_TREE,
     PINNED_PYTHON_VERSION,
     PINNED_PYTHON_ZIP_SHA256,
     SUPPORTED_PLATFORMS,
@@ -70,6 +71,19 @@ import ed25519_ref
 import pai_core_bridge
 import pai_setup
 import updater
+
+
+# ==============================================================================
+# Finding FZ Note: Catalog Bundling & Test Isolation Rules
+# ==============================================================================
+# In pre-release payload builds (e.g. version="1.1.0-rc2" or default tag),
+# test cases that do NOT specify an explicit catalog_path or working_tree_catalog
+# (e.g. test_01, test_17, test_18, and test_19 case 1) bundle the committed
+# production catalog (research/catalog.json) from the working tree.
+# Test cases that verify payload behavior in the absence of a catalog (e.g.
+# test_19 cases 6, 7, and 8) explicitly isolate by passing a non-existent path
+# to working_tree_catalog, ensuring deterministic assertions.
+# ==============================================================================
 
 
 def create_sample_catalog(version: int = 2) -> dict:
@@ -148,10 +162,10 @@ class TestBuildPayloadP1(unittest.TestCase):
 
     def test_02_tag_verification_and_negative_control(self) -> None:
         """Control: v1.0.0-rc1 succeeds. Hostile: non-existent tag fails closed."""
-        # Negative control (valid tag)
-        commit, core_tree, res_tree = verify_tag_and_trees(self.repo_root, tag=DEFAULT_TAG)
+        # Negative control (valid tag v1.0.0-rc1)
+        commit, core_tree, res_tree = verify_tag_and_trees(self.repo_root, tag=DEFAULT_TAG, expected_research_tree=RC1_RESEARCH_TREE)
         self.assertEqual(core_tree, EXPECTED_CORE_TREE)
-        self.assertEqual(res_tree, EXPECTED_RESEARCH_TREE)
+        self.assertEqual(res_tree, RC1_RESEARCH_TREE)
 
         # Hostile input: fake tag
         with self.assertRaises(TagNotFoundError):
@@ -189,13 +203,20 @@ class TestBuildPayloadP1(unittest.TestCase):
 
     def test_04_research_tree_invariant_and_hostile_mismatch(self) -> None:
         """Control: correct research tree succeeds. Hostile: tampered research tree fails closed."""
-        # Negative control
+        # Negative control (historical baseline rc1 tag)
         commit, core_tree, res_tree = verify_tag_and_trees(
             self.repo_root,
             tag=DEFAULT_TAG,
-            expected_research_tree=EXPECTED_RESEARCH_TREE,
+            expected_research_tree=RC1_RESEARCH_TREE,
         )
-        self.assertEqual(res_tree, EXPECTED_RESEARCH_TREE)
+        self.assertEqual(res_tree, RC1_RESEARCH_TREE)
+
+        # Invariant check for the current pre-freeze pinned research tree (Milestone D1)
+        current_res_tree = subprocess.check_output(
+            ["git", "rev-parse", "HEAD:research"],
+            cwd=self.repo_root,
+        ).decode("ascii").strip()
+        self.assertEqual(current_res_tree, EXPECTED_RESEARCH_TREE)
 
         # Hostile input: tampered expected research tree
         tampered_res = "ffffffffffffffffffffffffffffffffffffffff"
@@ -323,7 +344,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertEqual(manifest["version"], "1.0.0")
         self.assertTrue(len(manifest["constitution_sha256"]) == 64)
         self.assertEqual(manifest["trees"]["core"], EXPECTED_CORE_TREE)
-        self.assertEqual(manifest["trees"]["research"], EXPECTED_RESEARCH_TREE)
+        self.assertEqual(manifest["trees"]["research"], RC1_RESEARCH_TREE)
 
         files = manifest["files"]
         self.assertGreaterEqual(len(files), 100)
@@ -348,6 +369,8 @@ class TestBuildPayloadP1(unittest.TestCase):
             str(out_clean),
             "--tag",
             DEFAULT_TAG,
+            "--expected-research-tree",
+            RC1_RESEARCH_TREE,
         ]
         proc = subprocess.run(cmd_clean, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, f"CLI build failed: {proc.stderr}")
@@ -417,7 +440,7 @@ class TestBuildPayloadP1(unittest.TestCase):
         self.assertEqual(verified.version, "1.0.0")
         self.assertEqual(verified.key_id, "test-key-ephemeral")
         self.assertEqual(verified.manifest.get("platform"), "win-x64")
-        self.assertEqual(verified.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": EXPECTED_RESEARCH_TREE})
+        self.assertEqual(verified.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": RC1_RESEARCH_TREE})
 
         # Positive control 2: public Updater.verify_release entry point (Finding BL: covers Rust core path).
         # Profile isolation: disable shadow compare and redirect logs to avoid touching ~/.pai.
@@ -433,7 +456,7 @@ class TestBuildPayloadP1(unittest.TestCase):
             self.assertEqual(verified_pub.version, "1.0.0")
             self.assertEqual(verified_pub.key_id, "test-key-ephemeral")
             self.assertEqual(verified_pub.manifest.get("platform"), "win-x64")
-            self.assertEqual(verified_pub.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": EXPECTED_RESEARCH_TREE})
+            self.assertEqual(verified_pub.manifest.get("trees"), {"core": EXPECTED_CORE_TREE, "research": RC1_RESEARCH_TREE})
         finally:
             pai_core_bridge.PAI_SHADOW_COMPARE = orig_sc
             if orig_env_sc is not None:

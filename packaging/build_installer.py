@@ -8,7 +8,7 @@ ADR-005, ADR-013
 Hard rules enforced:
   1. Shipped payload is built strictly from evaluated git tag via build_payload().
   2. Fails closed if git trees differ from evaluated constants:
-     - research/ tree: 506e520b33a0af8c3f0276114483ce26b9bd3787
+     - research/ tree: 3a6c73016227dbd878b739e34cb251609116f132
      - core/ tree:     14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
   3. Verifies pai-core.exe SHA-256 matches pinned hash (6f13d494...).
   4. Bundles official agreement text (Appendix A) with verified SHA-256.
@@ -175,6 +175,7 @@ def build_inno_installer(
     embed_python_zip: Optional[str | Path] = None,
     clean: bool = False,
     verbose: bool = False,
+    expected_research_tree: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     End-to-end builder for PAI Inno Setup Windows installer.
@@ -274,7 +275,7 @@ def build_inno_installer(
             tag=tag,
             expected_binary_sha256=EXPECTED_BINARY_SHA256,
             expected_core_tree=EXPECTED_CORE_TREE,
-            expected_research_tree=EXPECTED_RESEARCH_TREE,
+            expected_research_tree=expected_research_tree,
             platform=platform,
             version=version,
             launcher_path=built_launcher,
