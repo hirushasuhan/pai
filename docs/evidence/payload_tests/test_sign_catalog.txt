@@ -1,17 +1,17 @@
 ================================================================================
 PAI CATALOG SIGN TOOL TESTS (9 TESTS, ADR-013 & FINDINGS EH, EK, EL, ER) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-03T09:01:27.372613+00:00
+Timestamp (UTC): 2026-11-03T09:34:55.343308+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        856b952ba79f9eb8206d32e04abe3b5e9b680043
+Git HEAD:        0ad47168d88d3842519cdd36179d13e0c8cfa484
 Working Tree:    clean
-Research Tree:   c5c5b199f7ce19a22edafd020a20ba677cecdb0d
+Research Tree:   93e0668dc5813cc33b056e7e850dcc1c8d59c32d
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
-pai_setup SHA256: 4abedfd00addf3970d4ff211385d45dd40744305c16aa0a00391959941411fa4
+pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
 pai.iss SHA256:   62a520749fe4dac601a91650c0221186896cdffcc7bba15dc7402e50650bb6ca
 agreement SHA256: e0e477178d61dedc41f182cc1839ed75418b360f77d6a0617fb031da5f31c0e9
 ================================================================================
@@ -20,28 +20,28 @@ Command: python tools/test_sign_catalog.py
 Exit Code: 0
 
 STDOUT:
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_4y57a97c\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_4y57a97c\test_trust.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_4y57a97c\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_4y57a97c\test_trust.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_4y57a97c\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_4y57a97c\test_trust.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_ttkohk3t\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_ttkohk3t\test_trust.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_1idiwvi3\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_1idiwvi3\test_trust.json
-Successfully signed catalog and wrote to: C:\Users\hp\AppData\Local\Temp\pai_sign_test_1idiwvi3\cli_signed.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_1idiwvi3\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_1idiwvi3\test_trust.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_fz4uecl6\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_fz4uecl6\test_trust.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_rq0sbh8d\test_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_rq0sbh8d\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test__1w71osn\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test__1w71osn\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test__1w71osn\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test__1w71osn\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test__1w71osn\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test__1w71osn\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_0chgqavq\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_0chgqavq\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_y75zqiim\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_y75zqiim\test_trust.json
+Successfully signed catalog and wrote to: C:\Users\hp\AppData\Local\Temp\pai_sign_test_y75zqiim\cli_signed.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_y75zqiim\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_y75zqiim\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_7ovbsctd\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_7ovbsctd\test_trust.json
+Trust root: C:\Users\hp\AppData\Local\Temp\pai_sign_test_u8at6153\test_trust.json
+WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_sign_test_u8at6153\test_trust.json
 
 STDERR:
-...ERROR: Catalog signing failed: Private key file not found: C:\Users\hp\AppData\Local\Temp\pai_sign_test_1idiwvi3\nonexistent.key
+...ERROR: Catalog signing failed: Private key file not found: C:\Users\hp\AppData\Local\Temp\pai_sign_test_y75zqiim\nonexistent.key
 ......
 ----------------------------------------------------------------------
-Ran 9 tests in 0.419s
+Ran 9 tests in 0.394s
 
 OK
