@@ -113,8 +113,12 @@ class TestMakeCatalogInput(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_dir = tempfile.TemporaryDirectory(prefix="pai_cat_test_")
         self.tmp_path = Path(self.tmp_dir.name)
+        self._stdout_capture = io.StringIO()
+        self._old_stdout = sys.stdout
+        sys.stdout = self._stdout_capture
 
     def tearDown(self) -> None:
+        sys.stdout = self._old_stdout
         self.tmp_dir.cleanup()
 
     def test_01_sum_of_layer_sizes(self) -> None:

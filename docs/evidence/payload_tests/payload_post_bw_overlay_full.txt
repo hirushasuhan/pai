@@ -6,13 +6,13 @@ Git HEAD:        8c1e860a7b90b0202995b072b7178d9bfb917287
 Research Tree:   506e520b33a0af8c3f0276114483ce26b9bd3787
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
-Python Runtime:  C:\Users\hp\AppData\Local\Temp\pai_payload_overlay_eval\python\python.exe
+Python Runtime:  <TMP>\pai_payload_overlay_eval\python\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD Ryzen 5 8645HS w/ Radeon 760M Graphics (6C / 12T)
 Video Controller:NVIDIA GeForce RTX 4050 Laptop GPU, AMD Radeon(TM) Graphics
 System Model:    HP Victus by HP Gaming Laptop 15-fb2xxx (15.23 GB physical RAM)
 Operating System:Microsoft Windows 11 Pro [Version 10.0.26300.9711] 64bit
-Payload Dir:     C:\Users\hp\AppData\Local\Temp\pai_payload_overlay_eval
+Payload Dir:     <TMP>\pai_payload_overlay_eval
 ================================================================================
 
 test_end_to_end_source_trust_spoof_blocked_by_agent_core (test_agent.AgentCycle.test_end_to_end_source_trust_spoof_blocked_by_agent_core)
@@ -659,7 +659,7 @@ test_high (test_telemetry.TierPolicy.test_high) ... ok
 test_low_battery_downgrades_and_disables_speculation (test_telemetry.TierPolicy.test_low_battery_downgrades_and_disables_speculation) ... ok
 test_saturated_cpu_halves_threads (test_telemetry.TierPolicy.test_saturated_cpu_halves_threads) ... ok
 test_unknown_memory_is_conservative_not_invented (test_telemetry.TierPolicy.test_unknown_memory_is_conservative_not_invented) ... ok
-test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at C:\\Users\\hp\\AppData\\Local\\Temp\\pai_payload_overlay_eval\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
+test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at <TMP>\\pai_payload_overlay_eval\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
 test_telemetry_parity_live (test_telemetry_parity.TestTelemetryParity.test_telemetry_parity_live) ... skipped 'pai-core binary not built'
 test_constitution_drift_rejected (test_updater.Attacks.test_constitution_drift_rejected) ... ok
 test_garbage_signature (test_updater.Attacks.test_garbage_signature) ... ok

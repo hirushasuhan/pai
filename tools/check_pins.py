@@ -91,7 +91,7 @@ def parse_freeze_checklist_pins(checklist_path: Path) -> Dict[str, str]:
     return pins
 
 
-def check_pin_consistency(ref: str = "HEAD") -> Tuple[bool, List[str]]:
+def check_pin_consistency(ref: str = "HEAD", require_binary: bool = False) -> Tuple[bool, List[str]]:
     """
     Performs full cross-validation of core tree, research tree, and binary SHA-256.
     Returns (all_passed, report_lines).
@@ -100,7 +100,7 @@ def check_pin_consistency(ref: str = "HEAD") -> Tuple[bool, List[str]]:
     all_ok = True
 
     lines.append("=" * 80)
-    lines.append(f"PAI PRE-FREEZE PIN CONSISTENCY AUDIT (Milestone D1, ref: {ref})")
+    lines.append(f"PAI PRE-FREEZE PIN CONSISTENCY AUDIT (Milestone D1/D2, ref: {ref})")
     lines.append("=" * 80)
 
     # 1. Core Tree
@@ -156,18 +156,37 @@ def check_pin_consistency(ref: str = "HEAD") -> Tuple[bool, List[str]]:
         "tools/check_n_plus_1.py": PINNED_BINARY_SHA256.lower(),
         "docs/FREEZE_CHECKLIST.md": fc_bin,
     }
-    if actual_bin_sha:
-        bin_sources[f"file ({bin_file.name})"] = actual_bin_sha
 
-    bin_values = set(bin_sources.values())
-    bin_ok = (len(bin_values) == 1 and None not in bin_values)
+    recorded_vals = {
+        EXPECTED_BINARY_SHA256.lower(),
+        PINNED_BINARY_SHA256.lower(),
+        fc_bin,
+    }
+    recorded_match = (len(recorded_vals) == 1 and None not in recorded_vals)
+
+    file_label = f"file ({bin_file.name})"
+    if actual_bin_sha:
+        bin_sources[file_label] = actual_bin_sha
+        file_match = (actual_bin_sha == EXPECTED_BINARY_SHA256.lower())
+        bin_ok = recorded_match and file_match
+    else:
+        bin_sources[file_label] = "binary file not found, file hash not checked"
+        if require_binary:
+            bin_ok = False
+        else:
+            bin_ok = recorded_match
+
     if not bin_ok:
         all_ok = False
 
     lines.append(f"3. CORE BINARY SHA-256 INVARIANT: {'PASS' if bin_ok else 'FAIL'}")
     for src, val in bin_sources.items():
-        match_str = "MATCH" if (val and val == EXPECTED_BINARY_SHA256.lower()) else "MISMATCH"
-        lines.append(f"   [{match_str:8}] {src:30}: {val}")
+        if val == "binary file not found, file hash not checked":
+            status_tag = "FAIL" if require_binary else "NOTE"
+            lines.append(f"   [{status_tag:8}] {src:30}: {val}")
+        else:
+            match_str = "MATCH" if (val and val == EXPECTED_BINARY_SHA256.lower()) else "MISMATCH"
+            lines.append(f"   [{match_str:8}] {src:30}: {val}")
     lines.append("")
 
     lines.append("=" * 80)
@@ -186,10 +205,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="HEAD",
         help="Git commit reference to audit against (default: HEAD)",
     )
+    parser.add_argument(
+        "--require-binary",
+        action="store_true",
+        help="Require pai-core binary to be present on disk; fails if binary is missing (Finding GB).",
+    )
     args = parser.parse_args(argv)
 
     try:
-        passed, report_lines = check_pin_consistency(args.ref)
+        passed, report_lines = check_pin_consistency(ref=args.ref, require_binary=args.require_binary)
         print("\n".join(report_lines))
         return 0 if passed else 1
     except Exception as e:

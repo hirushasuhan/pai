@@ -117,7 +117,12 @@ class TestSignCatalogTool(unittest.TestCase):
         self.catalog_file = self.tmp_path / "catalog_input.json"
         self.catalog_file.write_text(json.dumps(create_sample_catalog(1)), encoding="utf-8")
 
+        self._stdout_capture = io.StringIO()
+        self._old_stdout = sys.stdout
+        sys.stdout = self._stdout_capture
+
     def tearDown(self) -> None:
+        sys.stdout = self._old_stdout
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_01_sign_and_verify_with_all_key_formats(self) -> None:
@@ -302,15 +307,15 @@ class TestSignCatalogTool(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         output = capture_out.getvalue()
-        self.assertIn(f"Trust root: {self.test_trust_file.resolve()}", output)
-        self.assertIn(f"WARNING: Using non-default trust root file: {self.test_trust_file.resolve()}", output)
+        self.assertIn(f"Trust root: {self.test_trust_file.name}", output)
+        self.assertIn(f"WARNING: Using non-default trust root file: {self.test_trust_file.name}", output)
         self.assertNotIn(self.priv_key.private_bytes_raw().hex(), output)
 
         # Case 2: default trust root (no --trust-file)
         # Note: Signing with ephemeral key against default research/trust.json fails closed
         # during production verification, but "Trust root: <research/trust.json>" is printed
         # BEFORE signing/verification, and NO warning is printed.
-        default_trust = (RESEARCH_DIR / "trust.json").resolve()
+        default_trust = str(Path("research") / "trust.json")
         out_fail = self.tmp_path / "catalog_signed_default_fail.json"
         capture_out_default = io.StringIO()
         old_stdout, old_stderr = sys.stdout, sys.stderr

@@ -645,7 +645,7 @@ test_high (test_telemetry.TierPolicy.test_high) ... ok
 test_low_battery_downgrades_and_disables_speculation (test_telemetry.TierPolicy.test_low_battery_downgrades_and_disables_speculation) ... ok
 test_saturated_cpu_halves_threads (test_telemetry.TierPolicy.test_saturated_cpu_halves_threads) ... ok
 test_unknown_memory_is_conservative_not_invented (test_telemetry.TierPolicy.test_unknown_memory_is_conservative_not_invented) ... ok
-test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at C:\\Users\\hp\\AppData\\Local\\Temp\\pai_pre_bw_hk6yuwg2\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
+test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at <TMP>\\pai_pre_bw_hk6yuwg2\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
 test_telemetry_parity_live (test_telemetry_parity.TestTelemetryParity.test_telemetry_parity_live) ... skipped 'pai-core binary not built'
 test_constitution_drift_rejected (test_updater.Attacks.test_constitution_drift_rejected) ... ok
 test_garbage_signature (test_updater.Attacks.test_garbage_signature) ... ok
@@ -802,7 +802,7 @@ ERROR: test_eval_harness_end_to_end_with_repeats (test_eval_harness.TestEvalHarn
 Runs mock evaluation across 2 repeats and verifies explicit temperature, seed, and digest.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 373, in test_eval_harness_end_to_end_with_repeats
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 373, in test_eval_harness_end_to_end_with_repeats
     records, metrics = eval_harness.run_eval_suite(
                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
         tasks_file=tasks_file,
@@ -812,19 +812,19 @@ Traceback (most recent call last):
         ^^^^^^^^^^^^^^
     )
     ^
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 1330, in run_eval_suite
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 1330, in run_eval_suite
     verify_eval_set_hashes()
     ~~~~~~~~~~~~~~~~~~~~~~^^
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
     raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
-eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: <TMP>\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
 
 ======================================================================
 ERROR: test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks (test_eval_harness.TestEvalHarness.test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks)
 Invariant: Hidden reference tests must never appear in any prompt sent to the model.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 227, in test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 227, in test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks
     eval_harness.run_eval_suite(
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
         tasks_file=sample_file,
@@ -834,40 +834,40 @@ Traceback (most recent call last):
         ^^^^^^^^^^^^^^
     )
     ^
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 1330, in run_eval_suite
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 1330, in run_eval_suite
     verify_eval_set_hashes()
     ~~~~~~~~~~~~~~~~~~~~~~^^
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
     raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
-eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: <TMP>\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
 
 ======================================================================
 ERROR: test_verify_eval_set_hashes_clean (test_eval_harness.TestEvalHarness.test_verify_eval_set_hashes_clean)
 Standard check: All registered frozen eval sets match their recorded hashes.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 126, in test_verify_eval_set_hashes_clean
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_eval_harness.py", line 126, in test_verify_eval_set_hashes_clean
     verified = eval_harness.verify_eval_set_hashes()
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\eval_harness.py", line 220, in verify_eval_set_hashes
     raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
-eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: <TMP>\pai_pre_bw_hk6yuwg2\docs\evidence\eval_sets_hashes.json
 
 ======================================================================
 ERROR: test_evidence_json_schema_and_platform_fields (test_sandbox_evidence.TestSandboxEvidenceSchema.test_evidence_json_schema_and_platform_fields)
 Verifies that all recorded platforms in the evidence JSON follow the runner schema.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 67, in test_evidence_json_schema_and_platform_fields
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 67, in test_evidence_json_schema_and_platform_fields
     with open(self.evidence_path, "r", encoding="utf-8") as f:
          ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\hp\\AppData\\Local\\Temp\\pai_pre_bw_hk6yuwg2\\docs\\evidence\\m2a_sandbox_results.json'
+FileNotFoundError: [Errno 2] No such file or directory: '<TMP>\\pai_pre_bw_hk6yuwg2\\docs\\evidence\\m2a_sandbox_results.json'
 
 ======================================================================
 ERROR: test_evaluation_manifest_lifecycle (test_shadow_isolation_guard.TestShadowIsolationGuard.test_evaluation_manifest_lifecycle)
 Finding AX: Verifies that evaluation_manifest.json is created, verified,
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 851, in test_evaluation_manifest_lifecycle
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 851, in test_evaluation_manifest_lifecycle
     import run_shadow_workload
 ModuleNotFoundError: No module named 'run_shadow_workload'
 
@@ -876,7 +876,7 @@ ERROR: test_shadow_evaluation_gate_environment_isolation (test_shadow_isolation_
 Finding AZ: Verifies that verify_shadow_evaluation_gate strictly fails closed
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 893, in test_shadow_evaluation_gate_environment_isolation
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 893, in test_shadow_evaluation_gate_environment_isolation
     import run_shadow_workload
 ModuleNotFoundError: No module named 'run_shadow_workload'
 
@@ -885,27 +885,27 @@ FAIL: test_evidence_file_exists_and_parses (test_sandbox_evidence.TestSandboxEvi
 Verifies that m2a_sandbox_results.json exists and contains valid JSON.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 35, in test_evidence_file_exists_and_parses
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 35, in test_evidence_file_exists_and_parses
     self.assertTrue(os.path.exists(self.evidence_path), f"Evidence JSON not found at: {self.evidence_path}")
     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: False is not true : Evidence JSON not found at: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\m2a_sandbox_results.json
+AssertionError: False is not true : Evidence JSON not found at: <TMP>\pai_pre_bw_hk6yuwg2\docs\evidence\m2a_sandbox_results.json
 
 ======================================================================
 FAIL: test_raw_log_exists_and_contains_header (test_sandbox_evidence.TestSandboxEvidenceSchema.test_raw_log_exists_and_contains_header)
 Verifies that m2a_sandbox_raw.log exists and contains a valid harness banner.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 125, in test_raw_log_exists_and_contains_header
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_evidence.py", line 125, in test_raw_log_exists_and_contains_header
     self.assertTrue(os.path.exists(self.raw_log_path), f"Raw log not found at: {self.raw_log_path}")
     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: False is not true : Raw log not found at: C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\docs\evidence\m2a_sandbox_raw.log
+AssertionError: False is not true : Raw log not found at: <TMP>\pai_pre_bw_hk6yuwg2\docs\evidence\m2a_sandbox_raw.log
 
 ======================================================================
 FAIL: test_a1_infinite_loop_timeout (test_sandbox_win32.TestWin32SandboxContainment.test_a1_infinite_loop_timeout)
 A1: Infinite loop is terminated cleanly at wall-clock deadline.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 86, in test_a1_infinite_loop_timeout
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 86, in test_a1_infinite_loop_timeout
     self.assertEqual(res.status, "timeout")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 'error' != 'timeout'
@@ -918,7 +918,7 @@ FAIL: test_a2_memory_bomb (test_sandbox_win32.TestWin32SandboxContainment.test_a
 A2: Memory bomb (allocating 1 GB in a 256 MB sandbox) triggers MemoryError.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 102, in test_a2_memory_bomb
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 102, in test_a2_memory_bomb
     self.assertEqual(res.stdout.strip(), "CONTAINED_MEMORY_ERROR")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_MEMORY_ERROR'
@@ -937,7 +937,7 @@ FAIL: test_a3_a7_process_proliferation (test_sandbox_win32.TestWin32SandboxConta
 A3 / A7: Child process cannot spawn subprocesses (Job Object limit = 1).
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 117, in test_a3_a7_process_proliferation
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 117, in test_a3_a7_process_proliferation
     self.assertEqual(res.stdout.strip(), "CONTAINED_SPAWN_FAILED")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_SPAWN_FAILED'
@@ -956,7 +956,7 @@ FAIL: test_a4_canary_deletion (test_sandbox_win32.TestWin32SandboxContainment.te
 A4: Attempting to delete a canary file outside scratch fails with PermissionError.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 138, in test_a4_canary_deletion
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 138, in test_a4_canary_deletion
     self.assertEqual(res.stdout.strip(), "CONTAINED_DELETE_BLOCKED")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_DELETE_BLOCKED'
@@ -975,7 +975,7 @@ FAIL: test_a5_filesystem_read_escape (test_sandbox_win32.TestWin32SandboxContain
 A5: Attempting to read files outside scratch fails with PermissionError.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 166, in test_a5_filesystem_read_escape
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 166, in test_a5_filesystem_read_escape
     self.assertEqual(res.stdout.strip(), "CONTAINED_READ_BLOCKED")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_READ_BLOCKED'
@@ -994,7 +994,7 @@ FAIL: test_a6_network_egress (test_sandbox_win32.TestWin32SandboxContainment.tes
 A6: Attempting socket connections fails with PermissionError (WinError 10013).
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 186, in test_a6_network_egress
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 186, in test_a6_network_egress
     self.assertEqual(res.stdout.strip(), "CONTAINED_NETWORK_BLOCKED")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: "Could not find platform independent libr[231 chars]ame>" != 'CONTAINED_NETWORK_BLOCKED'
@@ -1013,7 +1013,7 @@ FAIL: test_a8_ctypes_containment (test_sandbox_win32.TestWin32SandboxContainment
 A8: Native code loading / ctypes escape attempt is trapped; parent intact.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 213, in test_a8_ctypes_containment
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 213, in test_a8_ctypes_containment
     self.assertIn("CONTAINED", res.stdout)
     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 'CONTAINED' not found in "Could not find platform independent libraries <prefix>\nFatal Python error: Failed to import encodings module\nPython runtime state: core initialized\nModuleNotFoundError: No module named 'encodings'\n\nCurrent thread 0x0000694c (most recent call first):\n  <no Python frame>\n"
@@ -1023,7 +1023,7 @@ FAIL: test_a9_stdout_flood (test_sandbox_win32.TestWin32SandboxContainment.test_
 A9: Stdout stream flood is safely capped at 64 KB without deadlock.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 196, in test_a9_stdout_flood
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 196, in test_a9_stdout_flood
     self.assertEqual(res.status, "ok")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
 AssertionError: 'error' != 'ok'
@@ -1036,7 +1036,7 @@ FAIL: test_behavioural_capability_probe (test_sandbox_win32.TestWin32SandboxCont
 Verifies that the live behavioural canary probe passes on this system.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 66, in test_behavioural_capability_probe
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 66, in test_behavioural_capability_probe
     self.assertTrue(ok, f"Behavioural probe failed: {msg}")
     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: False is not true : Behavioural probe failed: Sandbox failed to execute probe script (exit code 1): 
@@ -1046,7 +1046,7 @@ FAIL: test_valid_hello_world_execution (test_sandbox_win32.TestWin32SandboxConta
 Valid computation runs and produces correct output file in scratch.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 75, in test_valid_hello_world_execution
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_sandbox_win32.py", line 75, in test_valid_hello_world_execution
     self.assertEqual(res.status, "ok")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
 AssertionError: 'error' != 'ok'
@@ -1059,14 +1059,14 @@ FAIL: test_default_log_immutability_during_parity_runner (test_shadow_isolation_
 Finding AI/AM: Executes real tools/windows_parity_run.py in a separate subprocess
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 203, in test_default_log_immutability_during_parity_runner
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 203, in test_default_log_immutability_during_parity_runner
     self.assertIn(proc.returncode, (0, 5), f"Parity runner failed with returncode {proc.returncode}:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 2 not found in (0, 5) : Parity runner failed with returncode 2:
 STDOUT:
 
 STDERR:
-C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\python\python.exe: can't open file 'C:\\Users\\hp\\AppData\\Local\\Temp\\pai_pre_bw_hk6yuwg2\\tools\\windows_parity_run.py': [Errno 2] No such file or directory
+<TMP>\pai_pre_bw_hk6yuwg2\python\python.exe: can't open file '<TMP>\\pai_pre_bw_hk6yuwg2\\tools\\windows_parity_run.py': [Errno 2] No such file or directory
 
 
 ======================================================================
@@ -1074,7 +1074,7 @@ FAIL: test_shadow_isolation_mutation_check (test_shadow_isolation_guard.TestShad
 Finding AI: Mutation check verifying that when test isolation is disabled
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 246, in test_shadow_isolation_mutation_check
+  File "<TMP>\pai_pre_bw_hk6yuwg2\research\tests\test_shadow_isolation_guard.py", line 246, in test_shadow_isolation_mutation_check
     self.assertEqual(proc.returncode, 0, f"Mutation subprocess failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 1 != 0 : Mutation subprocess failed:

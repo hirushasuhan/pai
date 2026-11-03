@@ -53,7 +53,11 @@ def load_private_key_file(key_path: Path) -> ed25519.Ed25519PrivateKey:
         raise RuntimeError("cryptography library is required for catalog signing")
 
     if not key_path.is_file():
-        raise FileNotFoundError(f"Private key file not found: {key_path}")
+        try:
+            disp_key = str(key_path.resolve().relative_to(REPO_ROOT.resolve()))
+        except ValueError:
+            disp_key = key_path.name
+        raise FileNotFoundError(f"Private key file not found: {disp_key}")
 
     raw_data = key_path.read_bytes()
     if not raw_data:
@@ -120,9 +124,13 @@ def sign_catalog(
     # Print a warning when the trust root is not research/trust.json.
     default_trust_path = (RESEARCH_DIR / "trust.json").resolve()
     effective_trust_path = Path(trust_file).resolve() if trust_file else default_trust_path
-    print(f"Trust root: {effective_trust_path}")
+    try:
+        display_trust = str(effective_trust_path.relative_to(REPO_ROOT.resolve()))
+    except ValueError:
+        display_trust = effective_trust_path.name
+    print(f"Trust root: {display_trust}")
     if effective_trust_path != default_trust_path:
-        print(f"WARNING: Using non-default trust root file: {effective_trust_path}")
+        print(f"WARNING: Using non-default trust root file: {display_trust}")
 
     private_key = load_private_key_file(key_path)
 
@@ -213,7 +221,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             Path(args.out),
             trust_file=trust_p,
         )
-        print(f"Successfully signed catalog and wrote to: {out_p}")
+        try:
+            display_out = str(out_p.resolve().relative_to(REPO_ROOT.resolve()))
+        except ValueError:
+            display_out = out_p.name
+        print(f"Successfully signed catalog and wrote to: {display_out}")
         return 0
     except Exception as e:
         print(f"ERROR: Catalog signing failed: {e}", file=sys.stderr)

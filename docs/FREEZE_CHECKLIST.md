@@ -10,13 +10,15 @@
 
 All preconditions must be verified and formally accepted before tagging the freeze candidate:
 
-- [ ] **Precondition 1 (EB & EC Fixes & Manual Proof):**
+- [x] **Precondition 1 (EB & EC Fixes & Manual Proofs - Accepted in Commit `d13db15`):**
   - Findings EB (Ollama environment filtering preserves operational variables) and EC (double-quote-only Windows tokenizing) are committed and verified.
-  - Owner runs manual proof checklist ([`docs/evidence/MANUAL_PROOF_OLLAMA_SERVICE.md`](evidence/MANUAL_PROOF_OLLAMA_SERVICE.md)) on real Windows host and records PASS.
-- [ ] **Precondition 2 (CI Green on Branch):**
+  - Owner ran manual proof checklists on real Windows host and recorded PASS:
+    - Shell UI ([`docs/evidence/MANUAL_PROOF_SHELL_UI.md`](evidence/MANUAL_PROOF_SHELL_UI.md)): Rows M-UI-01 through M-UI-07 all verified PASS across terminal emulators.
+    - Managed Ollama Service ([`docs/evidence/MANUAL_PROOF_OLLAMA_SERVICE.md`](evidence/MANUAL_PROOF_OLLAMA_SERVICE.md)): Steps 1 through 4 (including "never" consent mode) verified PASS and signed off.
+- [ ] **Precondition 2 (CI Green on Candidate Commit):**
   - GitHub Actions CI runs on branch `build-stage` and reports green on all 3 jobs (`python-research`, `rust-core`, `linux-portability`).
-- [ ] **Precondition 3 (Decision D10 Decided):**
-  - Formal confirmation of Decision D10: PAI never downloads Ollama directly; the installer's finished page provides direct guidance/link to the official installer.
+- [x] **Precondition 3 (Decision D10 Decided):**
+  - Formal confirmation of Decision D10: PAI never downloads Ollama directly; the installer's finished page provides direct guidance and link to the official installer.
 - [x] **Precondition 4 (Signed Model Catalog Distribution & Freshness Decided - Finding EF & EH):**
   - Signed catalog is bundled as a payload file (`catalog.json` and signature) read by default from installation root (`Path(__file__).parent / "catalog.json"`).
   - Option A accepted: Bundled catalog has no freshness limit; version and signature protect it. External `--catalog` keeps the 90-day rule.
@@ -31,52 +33,66 @@ All preconditions must be verified and formally accepted before tagging the free
        - **New Pinned Research Tree ID:** `3a6c73016227dbd878b739e34cb251609116f132`
        - Baseline `v1.0.0-rc1` research tree ID: `506e520b33a0af8c3f0276114483ce26b9bd3787`
     *(The private key path is never written to any file, log, or commit message).*
-- [ ] **Precondition 6 (Branding Touch-up & Icons Rebuilt):**
-  - Minor stray mark on logo touched up; `tools/make_icons.py` re-run to regenerate final `.ico` and wizard BMPs.
-- [ ] **Precondition 7 (Licence Clarification - Finding EH & D8):**
-  - Owner defines the open-source licence (e.g. MIT, Apache-2.0) and adds `LICENSE` file referenced in installer agreement clause 6.
+- [x] **Precondition 6 (Branding Touch-up & Icons Rebuilt - Accepted in Commit `d13db15`):**
+  - Dedicated stylized PAI mark placed in `public/PAI Logo.png`. `tools/make_icons.py` updated with dynamic bounding box detection to rebuild `packaging/assets/pai.ico` (7 sizes), `wizard-large.bmp` (164x314), `wizard-small.bmp` (55x55), and `public/pai-logo-512.png` (< 200 KB).
+- [x] **Precondition 7 (Licence Clarification - Finding EH & D8):**
+  - Owner confirmed Decision D8: source code is released under the MIT License (`LICENSE` in repository root and installer agreement clause 6).
 - [ ] **Precondition 8 (Manual Installer Checklist on New Build):**
-  - Repeat short installer check (reject non-empty directory, per-user install, PATH verified in fresh shell, uninstall cleanly removes marker and files).
+  - Repeat short installer check (reject non-empty directory, per-user install, PATH verified in fresh shell, uninstall cleanly removes marker and files) in a clean Windows Sandbox/VM.
+- [ ] **Finding AV (Repository Visibility & Credential Rotation Confirmation):**
+  - Awaiting owner confirmation in chat: (1) GitHub Support purge request date (or written exposure acceptance), and (2) Confirmation that all credentials in removed files were rotated.
 
 ---
 
-## 2. Freeze Execution Commands
+## 2. Freeze Execution Commands (Milestone D2b Procedure)
 
-When all preconditions above are marked complete, execute the freeze in a single administrative session:
+When all preconditions above are marked complete, execute the freeze strictly in this sequence:
 
-### Step 2.1: Final Tree and Binary Hash Audit
-Run verification and record exact tree IDs and binary SHA-256:
+### Step 2.1: Pre-Freeze Push to `build-stage` and CI Verification
+User approves in chat: push candidate commit to `build-stage`:
+```powershell
+git push origin master:build-stage
+```
+Wait for GitHub Actions run to complete green across all 3 jobs (`python-research`, `rust-core`, `linux-portability`).
+
+### Step 2.2: Tag Candidate Commit (Declares the Freeze)
+User approves in chat (after Finding AV confirmation):
+Annotate tag `v1.1.0-rc2` on the exact candidate commit and push the tag only (never push master):
+```powershell
+git tag -a v1.1.0-rc2 <candidate_sha> -m "Release Candidate 1.1.0-rc2 for 14-day N+1 Evaluation Window"
+git push origin v1.1.0-rc2
+```
+
+### Step 2.3: Verify Tagged Trees Invariant
+Verify that the tag holds the exact pinned tree IDs:
 ```powershell
 # 1. Verify Core Tree invariant (must match 14c60746ca9a41d91aafd88cc0c7d98719cfe3a9)
-git rev-parse HEAD:core
+git rev-parse v1.1.0-rc2:core
 
-# 2. Record Research Tree ID to be pinned
-git rev-parse HEAD:research
-# Verify that EXPECTED_RESEARCH_TREE in packaging/build_payload.py (or --expected-research-tree)
-# matches this exact research tree ID (3a6c73016227dbd878b739e34cb251609116f132).
+# 2. Verify Research Tree invariant (must match 3a6c73016227dbd878b739e34cb251609116f132)
+git rev-parse v1.1.0-rc2:research
 
-# 4. Verify pin consistency across build code, N+1 checker, checklist, and git ref:
-python tools/check_pins.py
-
-# 3. Verify evaluated binary SHA-256 (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
-CertUtil -hashfile core/target/release/pai-core.exe SHA256
+# 3. Verify evaluated binary SHA-256 with mandatory flag (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
+python tools/check_pins.py --ref v1.1.0-rc2 --require-binary
 ```
 
-### Step 2.2: Tag Freeze Candidate (Declares the Freeze)
-The freeze begins the moment the candidate tag is created on the exact commit audited above:
-```powershell
-git tag -a v1.1.0-rc2 -m "Release Candidate 1.1.0-rc2 for 14-day N+1 Evaluation Window"
-```
-
-### Step 2.3: Build Final Payload & Installer
-Build the complete installer using `packaging/build_installer.py`. Note that payload contents and catalog signatures are verified during the build; ADR-005 detached release-manifest signing is part of final post-window distribution and is NOT required for a candidate build.
+### Step 2.4: Build Final Payload & Installer from Tag
+Build the complete installer directly from the tag:
 ```powershell
 python packaging/build_installer.py --version 1.1.0-rc2 --tag v1.1.0-rc2
 ```
-Output is compiled by Inno Setup into `dist/PAI-Setup-1.1.0-rc2-x64.exe`. Record its SHA-256:
+Verify the payload manifest fields:
+- `catalog_source`: `research-tree`
+- `bundled_catalog`: `true`
+- `catalog_sha256`: matches SHA-256 of `research/catalog.json` in the tag.
+
+Record the installer SHA-256:
 ```powershell
 CertUtil -hashfile dist/PAI-Setup-1.1.0-rc2-x64.exe SHA256
 ```
+
+### Step 2.5: User Runs Precondition 8 Installer Checklist
+User runs the installer check in a clean Windows Sandbox/VM per Precondition 8. The 14-day evaluation window begins only after Precondition 8 is verified and accepted.
 
 ---
 

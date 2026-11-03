@@ -645,7 +645,7 @@ test_high (test_telemetry.TierPolicy.test_high) ... ok
 test_low_battery_downgrades_and_disables_speculation (test_telemetry.TierPolicy.test_low_battery_downgrades_and_disables_speculation) ... ok
 test_saturated_cpu_halves_threads (test_telemetry.TierPolicy.test_saturated_cpu_halves_threads) ... ok
 test_unknown_memory_is_conservative_not_invented (test_telemetry.TierPolicy.test_unknown_memory_is_conservative_not_invented) ... ok
-test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at C:\\Users\\hp\\AppData\\Local\\Temp\\pai_cf_test__srzg5hm\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
+test_rust_binary_exists (test_telemetry_parity.TestTelemetryParity.test_rust_binary_exists) ... skipped 'pai-core executable not found at <TMP>\\pai_cf_test__srzg5hm\\core\\target\\release\\pai-core.exe. Run `cargo build` first.'
 test_telemetry_parity_live (test_telemetry_parity.TestTelemetryParity.test_telemetry_parity_live) ... skipped 'pai-core binary not built'
 test_constitution_drift_rejected (test_updater.Attacks.test_constitution_drift_rejected) ... ok
 test_garbage_signature (test_updater.Attacks.test_garbage_signature) ... ok
@@ -802,7 +802,7 @@ ERROR: test_eval_harness_end_to_end_with_repeats (test_eval_harness.TestEvalHarn
 Runs mock evaluation across 2 repeats and verifies explicit temperature, seed, and digest.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_eval_harness.py", line 373, in test_eval_harness_end_to_end_with_repeats
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_eval_harness.py", line 373, in test_eval_harness_end_to_end_with_repeats
     records, metrics = eval_harness.run_eval_suite(
                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
         tasks_file=tasks_file,
@@ -812,19 +812,19 @@ Traceback (most recent call last):
         ^^^^^^^^^^^^^^
     )
     ^
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\eval_harness.py", line 1330, in run_eval_suite
+  File "<TMP>\pai_cf_test__srzg5hm\research\eval_harness.py", line 1330, in run_eval_suite
     verify_eval_set_hashes()
     ~~~~~~~~~~~~~~~~~~~~~~^^
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\eval_harness.py", line 220, in verify_eval_set_hashes
+  File "<TMP>\pai_cf_test__srzg5hm\research\eval_harness.py", line 220, in verify_eval_set_hashes
     raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
-eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\docs\evidence\eval_sets_hashes.json
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: <TMP>\pai_cf_test__srzg5hm\docs\evidence\eval_sets_hashes.json
 
 ======================================================================
 ERROR: test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks (test_eval_harness.TestEvalHarness.test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks)
 Invariant: Hidden reference tests must never appear in any prompt sent to the model.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_eval_harness.py", line 227, in test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_eval_harness.py", line 227, in test_hidden_tests_never_leaked_into_prompts_across_all_20_tasks
     eval_harness.run_eval_suite(
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
         tasks_file=sample_file,
@@ -834,40 +834,40 @@ Traceback (most recent call last):
         ^^^^^^^^^^^^^^
     )
     ^
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\eval_harness.py", line 1330, in run_eval_suite
+  File "<TMP>\pai_cf_test__srzg5hm\research\eval_harness.py", line 1330, in run_eval_suite
     verify_eval_set_hashes()
     ~~~~~~~~~~~~~~~~~~~~~~^^
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\eval_harness.py", line 220, in verify_eval_set_hashes
+  File "<TMP>\pai_cf_test__srzg5hm\research\eval_harness.py", line 220, in verify_eval_set_hashes
     raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
-eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\docs\evidence\eval_sets_hashes.json
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: <TMP>\pai_cf_test__srzg5hm\docs\evidence\eval_sets_hashes.json
 
 ======================================================================
 ERROR: test_verify_eval_set_hashes_clean (test_eval_harness.TestEvalHarness.test_verify_eval_set_hashes_clean)
 Standard check: All registered frozen eval sets match their recorded hashes.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_eval_harness.py", line 126, in test_verify_eval_set_hashes_clean
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_eval_harness.py", line 126, in test_verify_eval_set_hashes_clean
     verified = eval_harness.verify_eval_set_hashes()
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\eval_harness.py", line 220, in verify_eval_set_hashes
+  File "<TMP>\pai_cf_test__srzg5hm\research\eval_harness.py", line 220, in verify_eval_set_hashes
     raise EvalSetIntegrityError(f"Frozen eval set hash registry not found: {hash_file_path}")
-eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\docs\evidence\eval_sets_hashes.json
+eval_harness.EvalSetIntegrityError: Frozen eval set hash registry not found: <TMP>\pai_cf_test__srzg5hm\docs\evidence\eval_sets_hashes.json
 
 ======================================================================
 ERROR: test_evidence_json_schema_and_platform_fields (test_sandbox_evidence.TestSandboxEvidenceSchema.test_evidence_json_schema_and_platform_fields)
 Verifies that all recorded platforms in the evidence JSON follow the runner schema.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_sandbox_evidence.py", line 67, in test_evidence_json_schema_and_platform_fields
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_sandbox_evidence.py", line 67, in test_evidence_json_schema_and_platform_fields
     with open(self.evidence_path, "r", encoding="utf-8") as f:
          ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\hp\\AppData\\Local\\Temp\\pai_cf_test__srzg5hm\\docs\\evidence\\m2a_sandbox_results.json'
+FileNotFoundError: [Errno 2] No such file or directory: '<TMP>\\pai_cf_test__srzg5hm\\docs\\evidence\\m2a_sandbox_results.json'
 
 ======================================================================
 ERROR: test_evaluation_manifest_lifecycle (test_shadow_isolation_guard.TestShadowIsolationGuard.test_evaluation_manifest_lifecycle)
 Finding AX: Verifies that evaluation_manifest.json is created, verified,
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 851, in test_evaluation_manifest_lifecycle
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 851, in test_evaluation_manifest_lifecycle
     import run_shadow_workload
 ModuleNotFoundError: No module named 'run_shadow_workload'
 
@@ -876,7 +876,7 @@ ERROR: test_shadow_evaluation_gate_environment_isolation (test_shadow_isolation_
 Finding AZ: Verifies that verify_shadow_evaluation_gate strictly fails closed
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 893, in test_shadow_evaluation_gate_environment_isolation
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 893, in test_shadow_evaluation_gate_environment_isolation
     import run_shadow_workload
 ModuleNotFoundError: No module named 'run_shadow_workload'
 
@@ -885,34 +885,34 @@ FAIL: test_evidence_file_exists_and_parses (test_sandbox_evidence.TestSandboxEvi
 Verifies that m2a_sandbox_results.json exists and contains valid JSON.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_sandbox_evidence.py", line 35, in test_evidence_file_exists_and_parses
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_sandbox_evidence.py", line 35, in test_evidence_file_exists_and_parses
     self.assertTrue(os.path.exists(self.evidence_path), f"Evidence JSON not found at: {self.evidence_path}")
     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: False is not true : Evidence JSON not found at: C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\docs\evidence\m2a_sandbox_results.json
+AssertionError: False is not true : Evidence JSON not found at: <TMP>\pai_cf_test__srzg5hm\docs\evidence\m2a_sandbox_results.json
 
 ======================================================================
 FAIL: test_raw_log_exists_and_contains_header (test_sandbox_evidence.TestSandboxEvidenceSchema.test_raw_log_exists_and_contains_header)
 Verifies that m2a_sandbox_raw.log exists and contains a valid harness banner.
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_sandbox_evidence.py", line 125, in test_raw_log_exists_and_contains_header
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_sandbox_evidence.py", line 125, in test_raw_log_exists_and_contains_header
     self.assertTrue(os.path.exists(self.raw_log_path), f"Raw log not found at: {self.raw_log_path}")
     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AssertionError: False is not true : Raw log not found at: C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\docs\evidence\m2a_sandbox_raw.log
+AssertionError: False is not true : Raw log not found at: <TMP>\pai_cf_test__srzg5hm\docs\evidence\m2a_sandbox_raw.log
 
 ======================================================================
 FAIL: test_default_log_immutability_during_parity_runner (test_shadow_isolation_guard.TestShadowIsolationGuard.test_default_log_immutability_during_parity_runner)
 Finding AI/AM: Executes real tools/windows_parity_run.py in a separate subprocess
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 203, in test_default_log_immutability_during_parity_runner
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 203, in test_default_log_immutability_during_parity_runner
     self.assertIn(proc.returncode, (0, 5), f"Parity runner failed with returncode {proc.returncode}:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 2 not found in (0, 5) : Parity runner failed with returncode 2:
 STDOUT:
 
 STDERR:
-C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\python\python.exe: can't open file 'C:\\Users\\hp\\AppData\\Local\\Temp\\pai_cf_test__srzg5hm\\tools\\windows_parity_run.py': [Errno 2] No such file or directory
+<TMP>\pai_cf_test__srzg5hm\python\python.exe: can't open file '<TMP>\\pai_cf_test__srzg5hm\\tools\\windows_parity_run.py': [Errno 2] No such file or directory
 
 
 ======================================================================
@@ -920,7 +920,7 @@ FAIL: test_shadow_isolation_mutation_check (test_shadow_isolation_guard.TestShad
 Finding AI: Mutation check verifying that when test isolation is disabled
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "C:\Users\hp\AppData\Local\Temp\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 246, in test_shadow_isolation_mutation_check
+  File "<TMP>\pai_cf_test__srzg5hm\research\tests\test_shadow_isolation_guard.py", line 246, in test_shadow_isolation_mutation_check
     self.assertEqual(proc.returncode, 0, f"Mutation subprocess failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 1 != 0 : Mutation subprocess failed:

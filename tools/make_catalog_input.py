@@ -343,7 +343,11 @@ def generate_catalog_input_payload(
                     safe_filename = safe_filename_for_tag(tag) + ".txt"
                     lic_out = licence_texts_dir / safe_filename
                     lic_out.write_bytes(lic_bytes)
-                    print(f"Saved licence blob bytes to: {lic_out}")
+                    try:
+                        disp_lic = str(lic_out.resolve().relative_to(REPO_ROOT.resolve()))
+                    except ValueError:
+                        disp_lic = lic_out.name
+                    print(f"Saved licence blob bytes to: {disp_lic}")
 
         entry = build_model_entry(tag, manifest, digest, config_dict, lic_text, lic_digest, measurements)
         models.append(entry)

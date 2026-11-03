@@ -761,7 +761,11 @@ def build_payload(
         # Pre-release with --catalog: allowed, warn and record external source
         catalog_source = "external"
         catalog_sha256 = sha256_file(cat_src)
-        msg_ext = f"WARNING: bundling external catalog from '{catalog_path}' into pre-release payload (catalog_source: external)"
+        try:
+            display_cat_path = str(cat_src.relative_to(repo))
+        except ValueError:
+            display_cat_path = cat_src.name
+        msg_ext = f"WARNING: bundling external catalog from '{display_cat_path}' into pre-release payload (catalog_source: external)"
         print(msg_ext)
         logger.warning(msg_ext)
 
@@ -803,9 +807,13 @@ def build_payload(
         # Findings FD & FH: verify catalog using production verifier with direct verify_catalog_payload call
         default_trust_path = (repo / "research" / "trust.json").resolve()
         effective_trust_path = Path(trust_file).resolve() if trust_file else default_trust_path
-        print(f"Trust root: {effective_trust_path}")
+        try:
+            display_trust_path = effective_trust_path.resolve().relative_to(repo.resolve())
+        except ValueError:
+            display_trust_path = effective_trust_path.name
+        print(f"Trust root: {display_trust_path}")
         if effective_trust_path != default_trust_path:
-            print(f"WARNING: Using non-default trust root file: {effective_trust_path}")
+            print(f"WARNING: Using non-default trust root file: {display_trust_path}")
 
         if str(repo / "research") not in sys.path:
             sys.path.insert(0, str(repo / "research"))
