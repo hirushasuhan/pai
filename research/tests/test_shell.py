@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -21,6 +22,7 @@ RESEARCH_DIR = Path(__file__).resolve().parent.parent
 if str(RESEARCH_DIR) not in sys.path:
     sys.path.insert(0, str(RESEARCH_DIR))
 
+import shell
 from shell import (
     DEVELOPER_CREDIT,
     MAX_HISTORY_BYTES,
@@ -37,6 +39,7 @@ from shell import (
     clear_session_history,
     execute_subcommand,
     format_session_history,
+    get_install_root_version,
     get_pinned_header_lines,
     get_pinned_shell_notice_lines,
     get_session_history,
@@ -970,7 +973,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertIn("\033[6;24r\033[6;1H", raw_stream_output)
 
             # Must write header containing logo and info
-            self.assertIn("PAI v1.1.0", raw_stream_output)
+            self.assertIn("PAI dev", raw_stream_output)
             self.assertIn("Developed by Hirusha Suhan", raw_stream_output)
 
             # Cleanup must restore full margins (\033[r) and cursor attributes
@@ -1608,6 +1611,106 @@ class TestInteractiveShellADR014(unittest.TestCase):
             for _, c, o in history_after
         )
         self.assertLessEqual(total_encoded, MAX_HISTORY_BYTES)
+
+    # -------------------------------------------------------------------------
+    # 29. Finding FP: Version Discovery from Install Root Manifest & Source Fallback
+    # -------------------------------------------------------------------------
+    def test_shell_finding_fp_manifest_version_installed(self) -> None:
+        """
+        Finding FP:
+          - Installed environment: header version comes from manifest.json at install root.
+          - When manifest.json contains {"version": "1.1.0-rc2"}, header shows '1.1.0-rc2'.
+          - Discovery is module-relative: parent of research/ directory.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = Path(td)
+            manifest = temp_root / "manifest.json"
+            manifest.write_text(json.dumps({"version": "1.1.0-rc2"}), encoding="utf-8")
+
+            # Direct install_root call
+            ver = get_install_root_version(temp_root)
+            self.assertEqual(ver, "1.1.0-rc2")
+            info = get_shell_info_line(80, color_enabled=False, install_root=temp_root)
+            self.assertIn("1.1.0-rc2", info)
+            self.assertIn("PAI 1.1.0-rc2", info)
+
+            # Module-relative discovery via shell.__file__ resolution
+            mock_file = str(temp_root / "research" / "shell.py")
+            with patch.object(shell, "__file__", mock_file):
+                self.assertEqual(get_install_root_version(), "1.1.0-rc2")
+                header_lines = get_pinned_header_lines(80, color_enabled=False)
+                self.assertIn("1.1.0-rc2", header_lines[3])
+                self.assertIn("PAI 1.1.0-rc2", header_lines[3])
+
+    def test_shell_finding_fp_manifest_missing_source_checkout(self) -> None:
+        """
+        Finding FP:
+          - Missing manifest / source checkout: header shows 'dev'.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = Path(td)
+            ver = get_install_root_version(temp_root)
+            self.assertEqual(ver, "dev")
+            info = get_shell_info_line(80, color_enabled=False, install_root=temp_root)
+            self.assertIn("dev", info)
+            self.assertIn("PAI dev", info)
+
+            mock_file = str(temp_root / "research" / "shell.py")
+            with patch.object(shell, "__file__", mock_file):
+                self.assertEqual(get_install_root_version(), "dev")
+                header_lines = get_pinned_header_lines(80, color_enabled=False)
+                self.assertIn("dev", header_lines[3])
+                self.assertIn("PAI dev", header_lines[3])
+
+        # Current source repository has no manifest.json at repo root -> must return 'dev'
+        self.assertEqual(get_install_root_version(), "dev")
+        current_header = get_pinned_header_lines(80, color_enabled=False)
+        self.assertIn("PAI dev", current_header[3])
+
+    def test_shell_finding_fp_manifest_malformed(self) -> None:
+        """
+        Finding FP:
+          - Malformed manifest (syntax error, non-dict, missing version, non-string, whitespace) -> fails safe to 'dev'.
+        """
+        malformed_cases = [
+            "{invalid-json-content",
+            "[]",
+            json.dumps({"name": "pai"}),
+            json.dumps({"version": 110}),
+            json.dumps({"version": "   "}),
+            json.dumps({"version": None}),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = Path(td)
+            manifest = temp_root / "manifest.json"
+            for payload in malformed_cases:
+                manifest.write_text(payload, encoding="utf-8")
+                ver = get_install_root_version(temp_root)
+                self.assertEqual(ver, "dev", f"Failed to fallback to 'dev' for payload: {payload}")
+                info = get_shell_info_line(80, color_enabled=False, install_root=temp_root)
+                self.assertIn("PAI dev", info)
+
+    def test_shell_finding_fp_no_v110_literal_in_research_grep(self) -> None:
+        """
+        Finding FP:
+          - Asserts that no hardcoded version string literal exists anywhere in research/.
+          - Preserves invariant: pinned research tree must not change between rc and final release.
+        """
+        forbidden = "".join(["v", "1", ".", "1", ".", "0"])
+        matches = []
+        for root, dirs, files in os.walk(RESEARCH_DIR):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
+            for fname in files:
+                if fname.endswith((".pyc", ".pyo")):
+                    continue
+                fpath = Path(root) / fname
+                try:
+                    text = fpath.read_text(encoding="utf-8", errors="ignore")
+                    if forbidden in text:
+                        matches.append(str(fpath.relative_to(RESEARCH_DIR)))
+                except Exception:
+                    pass
+        self.assertEqual(matches, [], f"Forbidden literal '{forbidden}' found in research/ files: {matches}")
 
 
 if __name__ == "__main__":

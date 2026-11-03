@@ -32,7 +32,9 @@ import collections
 import contextlib
 import datetime
 import io
+import json
 import os
+from pathlib import Path
 import shutil
 import sys
 import threading
@@ -271,12 +273,34 @@ def get_shell_logo_lines(color_enabled: bool = False, stream=sys.stdout) -> List
     return lines
 
 
-def get_shell_info_line(cols: int, color_enabled: bool = False) -> str:
+def get_install_root_version(install_root: Optional[Path] = None) -> str:
+    """Returns application version from manifest.json at the install root (field 'version').
+
+    If manifest.json is missing, unreadable, or malformed, returns 'dev'.
+    The install root is module-relative (the parent of research/). No environment variable chooses it.
+    """
+    try:
+        if install_root is None:
+            install_root = Path(__file__).resolve().parent.parent
+        manifest_p = Path(install_root) / "manifest.json"
+        if manifest_p.is_file():
+            data = json.loads(manifest_p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                ver = data.get("version")
+                if isinstance(ver, str) and ver.strip():
+                    return ver.strip()
+    except Exception:
+        pass
+    return "dev"
+
+
+def get_shell_info_line(cols: int, color_enabled: bool = False, install_root: Optional[Path] = None) -> str:
     """Returns width-adaptive info line declaring model, offline/stateless mode, and provenance."""
     model_name = get_resident_model_name()
-    full_info = f"PAI v1.1.0 | Model: {model_name} | Offline/Stateless | Developed by Hirusha Suhan"
-    medium_info = f"PAI v1.1.0 | Model: {model_name} | Offline | Developed by Hirusha Suhan"
-    compact_info = f"PAI v1.1.0 | Model: {model_name} | Offline | Hirusha Suhan"
+    ver = get_install_root_version(install_root)
+    full_info = f"PAI {ver} | Model: {model_name} | Offline/Stateless | Developed by Hirusha Suhan"
+    medium_info = f"PAI {ver} | Model: {model_name} | Offline | Developed by Hirusha Suhan"
+    compact_info = f"PAI {ver} | Model: {model_name} | Offline | Hirusha Suhan"
     if len(full_info) <= cols:
         info_text = full_info
     elif len(medium_info) <= cols:
@@ -284,7 +308,7 @@ def get_shell_info_line(cols: int, color_enabled: bool = False) -> str:
     elif len(compact_info) <= cols:
         info_text = compact_info
     else:
-        info_text = f"PAI v1.1.0 | {model_name} | Offline"
+        info_text = f"PAI {ver} | {model_name} | Offline"
     return colorize(info_text, DIM, color_enabled)
 
 
@@ -295,10 +319,15 @@ def get_shell_separator_line(cols: int, color_enabled: bool = False, stream=sys.
     return colorize(sep_text, DIM, color_enabled)
 
 
-def get_pinned_header_lines(cols: int, color_enabled: bool = False, stream=sys.stdout) -> List[str]:
+def get_pinned_header_lines(
+    cols: int,
+    color_enabled: bool = False,
+    stream=sys.stdout,
+    install_root: Optional[Path] = None,
+) -> List[str]:
     """Returns exactly 5 header lines: 3 logo lines, 1 info line, 1 separator line."""
     logo_lines = get_shell_logo_lines(color_enabled=color_enabled, stream=stream)
-    info_line = get_shell_info_line(cols, color_enabled=color_enabled)
+    info_line = get_shell_info_line(cols, color_enabled=color_enabled, install_root=install_root)
     sep_line = get_shell_separator_line(cols, color_enabled=color_enabled, stream=stream)
     return logo_lines + [info_line, sep_line]
 

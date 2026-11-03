@@ -690,7 +690,7 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertEqual(events[2]["event"], "fit")
         self.assertEqual(events[3]["event"], "error")
 
-    @unittest.skipUnless(sys.platform == "win32", "Hardware survey is Windows-only in v1.1.0 (ADR-012)")
+    @unittest.skipUnless(sys.platform == "win32", "Hardware survey is Windows-only (ADR-012)")
     def test_12_cli_execution_survey_only(self) -> None:
         """Executes pai_setup.py via subprocess with --survey-only."""
         setup_script = RESEARCH_DIR / "pai_setup.py"
@@ -1439,7 +1439,7 @@ class TestPaiSetupP3(unittest.TestCase):
     # -------------------------------------------------------------------------
     # Finding CW: CLI Unverified-Model Rejection and Confirmation Guardrails
     # -------------------------------------------------------------------------
-    @unittest.skipUnless(sys.platform == "win32", "Hardware survey is Windows-only in v1.1.0 (ADR-012)")
+    @unittest.skipUnless(sys.platform == "win32", "Hardware survey is Windows-only (ADR-012)")
     def test_25_finding_cw_unverified_model_cli_rejection_and_confirmation(self) -> None:
         """
         Finding CW:

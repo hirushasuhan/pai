@@ -1,7 +1,7 @@
 """
 Personal Agentic AI (PAI) - Setup Wizard and Hardware Survey Engine.
 
-Part of Milestones P3 and P4 for the v1.1.0 Packaging and Installer subsystem.
+Part of Milestones P3 and P4 for the Packaging and Installer subsystem.
 Specification: docs/PACKAGING_SPEC.md (§4, §5, §6, Appendix B, Appendix C)
 ADR-005, ADR-012, ADR-013
 
@@ -314,7 +314,7 @@ def collect_hardware_survey(
     """
     if sys.platform != "win32":
         if not allow_mock:
-            raise NotImplementedError("Hardware survey is only supported on Windows in v1.1.0 (ADR-012)")
+            raise NotImplementedError("Hardware survey is only supported on Windows (ADR-012)")
         total_ram, avail_ram, ram_source = 16384.0, 8192.0, "telemetry"
         gpu_name, vram_mb, driver_ver, all_gpus = None, 0.0, None, []
         cpu_cores, cpu_logical, cpu_name = 4, 8, "Mock-CPU"
