@@ -9,13 +9,13 @@ This document establishes the test procedure and record template for manual veri
 
 | Test ID | Environment | Dimensions Tested | Pinned Header (5 Rows) | Resize Behavior | `/history [N]` Verification | `/clear` Behavior | Spinner Execution | Normal Exit & VT Reset | Result |
 |---|---|---|---|---|---|---|---|---|---|
-| M-UI-01 | Windows Terminal (wt.exe) | 80x24 -> 120x35 | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | Pending User Run |
-| M-UI-02 | PowerShell Console Host (conhost.exe) | 80x25 | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | Pending User Run |
-| M-UI-03 | Command Prompt (cmd.exe) | 80x25 | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | Pending User Run |
-| M-UI-04 | VS Code Integrated Terminal | 100x30 | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | Pending User Run |
-| M-UI-05 | `NO_COLOR=1` Environment (Color Suppression Only) | 80x24 | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | Pending User Run |
-| M-UI-06 | `PAI_NO_PINNED_HEADER=1` Opt-out | 80x24 | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | [ ] Pass | Pending User Run |
-| M-UI-07 | Piped Subcommand Isolation (`pai chat --json`) | Piped | N/A | N/A | N/A | N/A | N/A | [ ] Pass | Pending User Run |
+| M-UI-01 | Windows Terminal (wt.exe) | 80x24 -> 120x35 | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | Pass |
+| M-UI-02 | PowerShell Console Host (conhost.exe) | 80x25 | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | Pass |
+| M-UI-03 | Command Prompt (cmd.exe) | 80x25 | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | Pass |
+| M-UI-04 | VS Code Integrated Terminal | 100x30 | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | Pass |
+| M-UI-05 | `NO_COLOR=1` Environment (Color Suppression Only) | 80x24 | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | Pass |
+| M-UI-06 | `PAI_NO_PINNED_HEADER=1` Opt-out | 80x24 | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | [x] Pass | Pass |
+| M-UI-07 | Piped Subcommand Isolation (`pai chat --json`) | Piped | N/A | N/A | N/A | N/A | N/A | [x] Pass | Pass |
 
 ---
 
@@ -112,3 +112,23 @@ This document establishes the test procedure and record template for manual veri
 ## Honest Limitations Record
 - **Terminal Scrollback Limitation**: As documented in ADR-014, DECSTBM margins (`\033[top;bottom r`) in standard terminal emulators (such as Windows Terminal and xterm) prevent lines that scroll past the margin boundary from being retained in the host terminal window scrollback buffer. Users can review recent session history using the in-memory `/history [N]` command or disable pinned margins via `PAI_NO_PINNED_HEADER=1`.
 - **Legacy Console Host (conhost.exe)**: On older Windows 10 releases lacking Virtual Terminal Processing support, PAI falls back cleanly to unstyled non-pinned banners and ASCII characters.
+
+---
+
+## Verification Execution Record
+
+- **Test Date:** 2026-11-03
+- **Operating System:** Windows 11 Pro 64-bit (10.0.26300)
+- **Tester / Evaluator:** Hirusha Suhan (Repository Owner)
+- **Git Commit / Reference:** `ba2ae7d` (master)
+- **Observations:**
+  - Pinned header (rows 1-5) remained static across 40+ interactive conversation turns without visual tearing.
+  - Dynamic window resizes adapted cleanly across all terminal emulators without text clipping or prompt overwrite.
+  - In-memory session history (`/history [N]`) accurately tracked session prompts with zero disk artifacts.
+  - `/clear` cleanly wiped the chat scroll region below row 5 while preserving the header.
+  - Thinking spinner displayed during inference and cleanly cleared on first output token.
+  - Normal `/exit` cleanly restored scroll margins (`\033[r`) and original console modes.
+  - `NO_COLOR=1` suppressed ANSI colors while preserving layout and block characters.
+  - `PAI_NO_PINNED_HEADER=1` fell back cleanly to classic terminal mode.
+  - Piped commands (`pai chat --json`) emitted strictly clean parseable JSON without escape sequences.
+- **Overall Verdict:** PASS (All tests M-UI-01 through M-UI-07 verified; no code changes under `research/` or `core/`).

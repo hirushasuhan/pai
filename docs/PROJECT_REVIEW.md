@@ -3941,3 +3941,18 @@ Checked on the device: HEAD `7f7e3d7`, nothing pushed (`origin/build-stage` `e2f
 **Note GC (no action needed now).** `build_payload()` chooses `RC1_RESEARCH_TREE` when the tag equals `DEFAULT_TAG` (`v1.0.0-rc1`) and the new pin for any other tag, while the command-line default of `--expected-research-tree` is always the new pin. A build with `--tag v1.1.0-rc2` is checked against the new pin, which is what the freeze needs. The pin checks are not part of the GitHub Actions workflow (the tools tests run on the owner's machine); `check_pins.py` is a manual step in the freeze checklist, which is the intended place.
 
 **Verdict.** Milestone D1 accepted. GA and GB can be fixed in a small commit with the next milestone. The pin is only valid while `research/` is unchanged: a fix found in the user's manual proofs that touches `research/` changes the tree id, and the pin, the checklist, the N+1 checker and the evidence logs must then be updated again with `check_pins.py` run to PASS.
+
+
+## Reviewer addendum (2026-11-03): pre-freeze items for the user (proofs, D8, D10, Finding AV)
+
+Checked on the device: HEAD `ba2ae7d` (only the D1 reviewer addendum), working tree clean, `core/` and `research/` trees unchanged, `origin/build-stage` `e2f8e9a`.
+
+**Manual proofs.** The two proof documents are templates with every box open (`MANUAL_PROOF_SHELL_UI.md` has seven rows M-UI-01 to M-UI-07 and nine tests; `MANUAL_PROOF_OLLAMA_SERVICE.md` has four steps, including the "never" consent mode). A one-line statement that the proofs pass is not evidence. The reviewer accepts a proof when the user has filled the matrix and the sign-off block (terminal, size, each box, date, any defect seen) and the owner has committed the filled documents. A defect that needs a change under `research/` changes the research tree id and the pin (see the D1 addendum). These proofs run `python research/pai.py` from source; the installed `pai` is checked again in Precondition 8.
+
+**D8 (source licence).** `LICENSE` in the repository is the MIT License (copyright 2026 hirushasuhan) and installer agreement clause 6 says MIT. A relayed confirmation text that names Apache-2.0 for the source code does not match the repository. Apache-2.0 is the licence of the three catalog models, not of PAI. The user decides D8 in the user's own words: either MIT as it stands, or a change (which needs a new `LICENSE`, clause 6 and a new tree if the licence text appears under `research/`).
+
+**D10.** The proposed text is: PAI never downloads Ollama; the installer's finished page opens the official download page. The user decides it in the user's own words.
+
+**Finding AV (completion not confirmed; new fact).** Decision recorded 2026-10-20: make the repository private, ask GitHub Support to purge orphaned commit `f781919`, and treat the credentials in the removed files as public and rotate them. Checked today from the device with the public GitHub endpoints: `https://api.github.com/repos/hirushasuhan/pai/commits/f781919` and `https://github.com/hirushasuhan/pai/commit/f781919` both return HTTP 200, and the repository reports `private: false`. So the commit can still be fetched by anyone who knows its hash, and the repository is public (the user later chose public). The reviewer did not read the commit. What the user must confirm in chat: (1) a purge request to GitHub Support was sent, with the date (or that the exposure is accepted in writing); (2) every credential in the removed files was rotated, with the date, so that nothing in that commit still works. Only (2) removes the risk; (1) only reduces visibility.
+
+**Verdict.** None of these items is closed by the owner's relay. They are the user's: filled proof documents, D8, D10, and the two Finding AV confirmations.
