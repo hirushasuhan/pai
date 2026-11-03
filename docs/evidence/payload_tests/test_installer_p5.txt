@@ -1,12 +1,12 @@
 ================================================================================
 PAI INNO SETUP INSTALLER TESTS (20 TESTS, ICON & FINDINGS DK, DL, DM, DN, MILESTONE P5) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-03T11:33:03.635726+00:00
+Timestamp (UTC): 2026-11-03T12:10:42.041473+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        574c78447f0206259102111067ba3d73f50b30d0
+Git HEAD:        de36f44f95757bce1c630a240301a754536dd03b
 Working Tree:    clean
 Research Tree:   93e0668dc5813cc33b056e7e850dcc1c8d59c32d
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
@@ -46,6 +46,6 @@ STDERR:
 .WARNING: no bundled catalog found in tag v1.0.0-rc1
 .
 ----------------------------------------------------------------------
-Ran 20 tests in 233.274s
+Ran 20 tests in 246.083s
 
 OK
