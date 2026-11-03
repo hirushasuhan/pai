@@ -9,6 +9,7 @@ Outputs:
   - docs/evidence/payload_tests/test_build_payload.txt
   - docs/evidence/payload_tests/test_launcher_and_zip.txt
   - docs/evidence/payload_tests/test_installer_p5.txt
+  - docs/evidence/payload_tests/test_make_catalog_input.txt
 
 Finding EN rules:
   - Checks git status --porcelain and records "Working Tree: clean" or "Working Tree: DIRTY".
@@ -174,7 +175,7 @@ def main() -> None:
     run_suite_and_save(
         "research/tests/test_shell.py",
         evidence_dir / "test_shell.txt",
-        "PAI Interactive Terminal Shell REPL Tests (17 Tests, ADR-014, Findings ES, ET, EX)",
+        "PAI Interactive Terminal Shell REPL Tests (35 Tests, ADR-014, Findings ES, ET, EX, FK, FL, FM, FN, FO, FP)",
         is_dirty=is_dirty,
     )
     run_suite_and_save(
@@ -193,6 +194,12 @@ def main() -> None:
         "tools/test_installer_p5.py",
         evidence_dir / "test_installer_p5.txt",
         "PAI Inno Setup Installer Tests (20 Tests, Icon & Findings DK, DL, DM, DN, Milestone P5)",
+        is_dirty=is_dirty,
+    )
+    run_suite_and_save(
+        "tools/test_make_catalog_input.py",
+        evidence_dir / "test_make_catalog_input.txt",
+        "PAI Catalog Input Generator Tests (14 Tests, ADR-013, Milestone C1, Findings FQ, FR, FS, FT, FU)",
         is_dirty=is_dirty,
     )
 
