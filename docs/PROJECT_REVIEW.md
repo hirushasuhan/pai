@@ -3862,3 +3862,24 @@ What is good: the tool uses HTTP GET only, hashes the raw response bytes, sums l
 **Finding FU (open, small).** The draft sits at the repository root and is tracked. Fix: keep the reviewed input under `docs/catalog/` with the date in the name, so the signed file can be traced to its input. Note that `issued_utc` is set at generation time; the user should sign soon after the final regeneration.
 
 **Verdict.** Milestone C1 is not accepted yet and the draft must not be signed. The boundary rules were kept (no `catalog.json`, no key, no push, trees unchanged). Fix FQ to FU in one follow-up milestone (C1b), regenerate `catalog_input.json`, then the user reviews the real licence texts and signs offline with `rel-1`.
+
+
+## Reviewer addendum (2026-11-03): Milestone C1b, Findings FQ to FU (commits 3e8196b, de36f44, 90a0110)
+
+Checked on the device: HEAD `90a0110`, nothing pushed (`origin/build-stage` `d4f131b`), working tree clean, no `.lock` file. `core/` tree `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9` and `research/` tree `93e0668dc5813cc33b056e7e850dcc1c8d59c32d` are unchanged; `research/catalog.json` does not exist; `research/trust.json` is untouched; no draft is left at the repository root. The reviewer addendum for C1 is committed (`3e8196b`). `tools/test_make_catalog_input.py` (14 tests), `test_claims` and `test_ctypes_allowlist` pass on the reviewer side. The eight evidence logs all carry Git HEAD `de36f44`, Working Tree clean and the two tree ids above; `90a0110` changes only evidence logs.
+
+**FQ (closed).** The hard-coded licence names are gone. The tool fetches the manifest layer `application/vnd.ollama.image.license`, checks the blob digest, and derives the name from the text. The reviewer removed the carriage returns from the three saved texts and hashed them: all three give `832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e`, the digest recorded in `license.sha256`, and the text is the standard Apache License Version 2.0. So the registry licence text for all three tags is Apache-2.0, and the earlier "Qwen Research License" label for `qwen2.5:0.5b` was wrong. `license_status` is still `unverified` and `read_on` is null, as required.
+
+**FR (closed).** `quantization` and `parameters_b` come from the config blob (0.5, 1.5, 7.6), the manifest digest is compared with the registry header, and the notes state the byte-sum and editorial-tasks facts.
+
+**FS (closed, pending the user's confirmation).** `min_vram_mb` is the weights size in MB for every entry (379.4, 940.4, 4466.1); observed VRAM is kept in `measured.observed_vram_mb`; `min_ram_mb` keeps the measured footprint (1112.2, 4886.5) or the product rule (891.4). `min_vram_mb` is not read by any code today. The user decides whether this rule is accepted.
+
+**FT, FU (closed).** 14 tests, `test_06` now fails without `cryptography`, the new tests are the eighth evidence log, and the draft lives in `docs/catalog/catalog_input_2026-11-03.json`.
+
+**Finding FV (open, process).** The "complete discovery" line in the C1b report, `Ran 633 tests in 442.149s OK (skipped=27)`, is identical to the millisecond to the line in the C1 report. A new run cannot repeat the time exactly, so the line was copied from the earlier report. Rule FJ asks for the final line of a run done for this milestone. Fix: run `cd research/tests && python -m unittest discover -s . -v` on the current head and paste its real last lines.
+
+**Finding FW (open, small).** The licence text files are written with `write_text` after `decode(..., errors="replace")`, so on Windows the newlines became CRLF (11544 bytes each) and the file hash `b907c823…` differs from the blob digest `832dd9e0…` that the catalog records. The content is the same, but the saved file is not byte-exact and a bad byte would be replaced silently. Fix: write the downloaded bytes unchanged (`write_bytes`), decode strictly only for name detection, and add a test that the saved file's sha256 equals the recorded digest. The catalog JSON does not need to change for this; regenerate to a temporary path and take only the three text files, or rewrite them from the same fetch.
+
+**Finding FX (open, low).** `detect_license_name` looks for "Apache License" and "Version 2.0" anywhere in the text, before it looks for other licences. A different licence that quotes Apache would be labelled Apache-2.0. Fix: match the title lines at the start of the text, and add a test where a text mentions Apache but is another licence.
+
+**Verdict.** C1b is accepted: FQ, FR, FS, FT and FU are closed. FV, FW and FX are small and do not change the numbers in the draft. Before signing, the user reads one licence text and says in chat whether to mark the entries `verified` with a `read_on` date (an edit to the draft that the owner makes in a separate docs-only commit), and confirms the `min_vram_mb` rule. The user then signs offline with `rel-1`.
