@@ -2,6 +2,10 @@
 
 ## [1.1.0-rc2] — 2026-10-28 — Build Stage: Interactive Shell Polish, Managed Ollama Service & Temporal Guardrails (ADR-014, Finding ES)
 
+### Milestone C1: Draft Model Catalog Input Generator (`tools/make_catalog_input.py`, `tools/test_make_catalog_input.py`, `catalog_input.json`)
+- **Draft Catalog Generation Tool**: Added `tools/make_catalog_input.py` fetching model manifests read-only from `registry.ollama.ai` (HTTP GET only, zero weights downloaded) for default user-profile models (`qwen2.5:0.5b`, `qwen2.5-coder:1.5b`, `qwen2.5-coder:7b`).
+- **Cryptographic & Schema Invariants**: Accurately computes download and disk byte sizes from layer-size sums, records upstream manifest digests, enforces `license_status = "unverified"` across all entries, grounds memory requirements in `docs/evidence/cold_ram_measurements.json` or conservative context formulas, and writes output atomically. Zero key viewing, zero model execution, and zero mutations to `research/catalog.json` or `research/trust.json`.
+
 ### Milestone B3: Manifest-Driven Versioning & Research Tree Invariance (`research/shell.py`, `research/pai_setup.py`, `research/tests/test_shell.py`, `research/tests/test_pai_setup.py`, `docs/adr/ADR-014-interactive-shell-and-managed-ollama.md`)
 - **Finding FP (Manifest Version Discovery & Tree Invariance)**: Eliminated all hardcoded `"v1.1.0"` literals from `research/` files. The shell header dynamically resolves application version from `manifest.json` at the module-relative install root (`Path(__file__).resolve().parent.parent / "manifest.json"`), falling back safely to `"dev"` when running from a raw source checkout or when the manifest is missing, unreadable, or malformed. Preserves strict research tree hash invariance (`git rev-parse HEAD:research`) between release candidates and final release builds under the N+1 evaluation protocol.
 
