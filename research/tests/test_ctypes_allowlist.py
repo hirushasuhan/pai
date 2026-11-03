@@ -71,7 +71,42 @@ class TestCtypesAllowlist(unittest.TestCase):
             offending_modules,
             [],
             f"Unauthorized 'ctypes' imports detected outside policy allow-list: {offending_modules}. "
-            f"Only {sorted(list(APPROVED_CTYPES_MODULES))} are permitted per ADR-011."
+            f"Only {sorted(list(APPROVED_CTYPES_MODULES))} are permitted per ADR-011 and ADR-014."
+        )
+
+    def test_shell_ctypes_usage_restricted_to_approved_console_apis(self):
+        """
+        Finding FI: Ensures shell.py references NO ctypes or kernel32 attributes
+        other than the three approved console mode functions and standard types.
+        """
+        shell_path = os.path.join(ROOT_DIR, "shell.py")
+        self.assertTrue(os.path.isfile(shell_path), "shell.py must exist in research root")
+
+        with open(shell_path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename="shell.py")
+
+        ALLOWED_KERNEL32_FUNCS = {"GetStdHandle", "GetConsoleMode", "SetConsoleMode"}
+        ALLOWED_CTYPES_ATTRS = {"windll", "c_ulong", "POINTER", "byref"}
+        ALLOWED_WINTYPES_ATTRS = {"HANDLE", "DWORD", "BOOL"}
+
+        unauthorized = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name) and node.value.id == "kernel32":
+                    if node.attr not in ALLOWED_KERNEL32_FUNCS:
+                        unauthorized.append(f"kernel32.{node.attr}")
+                elif isinstance(node.value, ast.Name) and node.value.id == "ctypes":
+                    if node.attr not in ALLOWED_CTYPES_ATTRS:
+                        unauthorized.append(f"ctypes.{node.attr}")
+                elif isinstance(node.value, ast.Name) and node.value.id == "wintypes":
+                    if node.attr not in ALLOWED_WINTYPES_ATTRS:
+                        unauthorized.append(f"wintypes.{node.attr}")
+
+        self.assertEqual(
+            unauthorized,
+            [],
+            f"Unauthorized ctypes/kernel32 attribute usage detected in shell.py: {unauthorized}. "
+            f"shell.py is restricted exclusively to {sorted(list(ALLOWED_KERNEL32_FUNCS))} per ADR-011 and ADR-014."
         )
 
 

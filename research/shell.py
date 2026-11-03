@@ -1,6 +1,6 @@
 """
 Personal Agentic AI (PAI) - Interactive Terminal Shell (REPL).
-Part of ADR-014 (Commit 2: Interactive Shell).
+Part of ADR-014 (Commit 2: Interactive Shell & Milestone B: Shell Layout & Look).
 
 Invariants Enforced:
 1. Terminal guard: Invoked only when sys.stdin.isatty() and sys.stdout.isatty() are True.
@@ -20,14 +20,24 @@ Invariants Enforced:
    and explicit disclaimers: local models rely on static training data without live web or clock access,
    and conversational chat operates in stateless mode without cross-turn memory (Finding DX).
 8. Privacy: No persistent cross-session transcript is written to disk (ADR-002).
+9. Milestone B Layout & Pinned Scroll Region: Pinned DECSTBM header (5 rows) with Unicode block logo
+   (or ASCII fallback) and horizontal color gradient. Honest terminal scrollback limit documented.
+   In-memory /history and chat-clearing /clear commands provided. Non-blocking thinking spinner for /chat.
 """
 
 from __future__ import annotations
 
+import atexit
+import collections
+import contextlib
 import datetime
+import io
 import os
+import shutil
 import sys
-from typing import Callable, List, Optional, Tuple
+import threading
+import time
+from typing import Callable, Deque, List, Optional, Tuple
 
 CANONICAL_SLASH_COMMANDS = {
     "analyze",
@@ -48,6 +58,18 @@ PAI_ASCII_LOGO = (
     r" |  __/ ___ \ | | " + "\n"
     r" |_| /_/   \_\___|"
 )
+
+PAI_UNICODE_BLOCK_LOGO = [
+    "█▀█ ▄▀█ █",
+    "█▀▀ █▀█ █",
+    "▀   ▀ ▀ ▀",
+]
+
+PAI_ASCII_FALLBACK_LOGO = [
+    r" ___  _  ___",
+    r"| _ \/_\  | ",
+    r"|_|  / \ _|_",
+]
 
 DEVELOPER_CREDIT = "Developed by Hirusha Suhan"
 
@@ -73,19 +95,28 @@ SHELL_HELP = (
     "  /models             List verified local and catalog models\n"
     "  /route <prompt>     Evaluate routing decision for given task\n"
     "  /time               Show current system date, time, and time zone\n"
+    "  /history [N]        Show in-memory session history (last N entries, default 20)\n"
+    "  /clear              Clear chat window (preserves pinned header in VT mode)\n"
     "  /help               Show this help message\n"
     "  /exit, /quit        Exit the interactive shell\n"
     "Note: Chat is stateless; each query is evaluated independently without prior conversation memory.\n"
+    "Note: In pinned VT mode, off-screen lines do not enter terminal scrollback; use /history to review session output.\n"
+    "      Set PAI_NO_PINNED_HEADER=1 to disable pinned header mode.\n"
 )
 
-# ANSI terminal formatting (Milestone Step 2)
+# ANSI terminal formatting (Milestone Step 2 & Milestone B)
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 RED = "\033[31m"
+GREEN = "\033[32m"
 YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 BRIGHT_CYAN = "\033[96m"
+BRIGHT_BLUE = "\033[94m"
+BRIGHT_MAGENTA = "\033[95m"
 
 _original_console_mode: Optional[int] = None
 
@@ -180,6 +211,342 @@ def colorize(text: str, color_code: str, enabled: bool) -> str:
     return f"{color_code}{text}{RESET}"
 
 
+def can_encode_blocks(stream=sys.stdout) -> bool:
+    """Returns True if the stream encoding can represent Unicode block and box drawing characters."""
+    try:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        "█▀▄─".encode(encoding)
+        return True
+    except Exception:
+        return False
+
+
+def get_terminal_dimensions() -> Tuple[int, int]:
+    """Returns (columns, lines) of the terminal, defaulting to (80, 24) on error."""
+    try:
+        size = shutil.get_terminal_size(fallback=(80, 24))
+        return size.columns, size.lines
+    except Exception:
+        return 80, 24
+
+
+def get_resident_model_name() -> str:
+    """Retrieves active resident model name or returns 'no model loaded yet'."""
+    try:
+        from router import ModelRouter
+        router = ModelRouter(load_system_profile=True)
+        resident = router.get_live_resident_model()
+        if resident:
+            return resident
+    except Exception:
+        pass
+    return "no model loaded yet"
+
+
+def get_shell_logo_lines(color_enabled: bool = False, stream=sys.stdout) -> List[str]:
+    """
+    Returns 3 logo lines with horizontal gradient (Cyan -> Blue -> Magenta).
+    Falls back to compact ASCII logo if stream cannot encode Unicode block characters.
+    """
+    use_blocks = can_encode_blocks(stream)
+    lines: List[str] = []
+    if use_blocks:
+        for row in PAI_UNICODE_BLOCK_LOGO:
+            p = row[0:4]
+            a = row[4:8]
+            i = row[8:]
+            if color_enabled:
+                lines.append(f"{BRIGHT_CYAN}{p}{RESET}{BRIGHT_BLUE}{a}{RESET}{BRIGHT_MAGENTA}{i}{RESET}")
+            else:
+                lines.append(f"{p}{a}{i}")
+    else:
+        for row in PAI_ASCII_FALLBACK_LOGO:
+            p = row[0:5]
+            a = row[5:9]
+            i = row[9:]
+            if color_enabled:
+                lines.append(f"{BRIGHT_CYAN}{p}{RESET}{BRIGHT_BLUE}{a}{RESET}{BRIGHT_MAGENTA}{i}{RESET}")
+            else:
+                lines.append(f"{p}{a}{i}")
+    return lines
+
+
+def get_shell_info_line(cols: int, color_enabled: bool = False) -> str:
+    """Returns width-adaptive info line declaring model, offline/stateless mode, and provenance."""
+    model_name = get_resident_model_name()
+    full_info = f"PAI v1.1.0 | Model: {model_name} | Offline/Stateless | Developed by Hirusha Suhan"
+    medium_info = f"PAI v1.1.0 | Model: {model_name} | Offline | Developed by Hirusha Suhan"
+    compact_info = f"PAI v1.1.0 | Model: {model_name} | Offline | Hirusha Suhan"
+    if len(full_info) <= cols:
+        info_text = full_info
+    elif len(medium_info) <= cols:
+        info_text = medium_info
+    elif len(compact_info) <= cols:
+        info_text = compact_info
+    else:
+        info_text = f"PAI v1.1.0 | {model_name} | Offline"
+    return colorize(info_text, DIM, color_enabled)
+
+
+def get_shell_separator_line(cols: int, color_enabled: bool = False, stream=sys.stdout) -> str:
+    """Returns horizontal separator line fitting terminal width."""
+    sep_char = "─" if can_encode_blocks(stream) else "-"
+    sep_text = sep_char * min(cols, 80)
+    return colorize(sep_text, DIM, color_enabled)
+
+
+def get_pinned_header_lines(cols: int, color_enabled: bool = False, stream=sys.stdout) -> List[str]:
+    """Returns exactly 5 header lines: 3 logo lines, 1 info line, 1 separator line."""
+    logo_lines = get_shell_logo_lines(color_enabled=color_enabled, stream=stream)
+    info_line = get_shell_info_line(cols, color_enabled=color_enabled)
+    sep_line = get_shell_separator_line(cols, color_enabled=color_enabled, stream=stream)
+    return logo_lines + [info_line, sep_line]
+
+
+def should_pin_header(stream=sys.stdout) -> bool:
+    """
+    Returns True if pinned DECSTBM scroll region should be active.
+    Requires interactive terminal, PAI_NO_PINNED_HEADER != '1', TERM != 'dumb',
+    successful Windows VT processing if on Windows, and lines >= 20, cols >= 60.
+    """
+    if os.environ.get("PAI_NO_PINNED_HEADER") == "1":
+        return False
+    if os.environ.get("TERM") == "dumb":
+        return False
+    if not is_interactive_terminal():
+        return False
+    try:
+        if not stream.isatty():
+            return False
+    except Exception:
+        return False
+    if sys.platform == "win32":
+        if not enable_windows_vt():
+            return False
+    cols, lines = get_terminal_dimensions()
+    if lines < 20 or cols < 60:
+        return False
+    return True
+
+
+def setup_pinned_layout(stream=sys.stdout) -> None:
+    """
+    Initializes DECSTBM pinned scroll region layout.
+    Clears visible screen (\\033[2J), writes header on lines 1..5, sets scroll region
+    to lines 6..rows (\\033[6;{rows}r), and positions cursor at \\033[6;1H.
+    """
+    cols, rows = get_terminal_dimensions()
+    color_enabled = should_enable_color(stream)
+    header_lines = get_pinned_header_lines(cols, color_enabled, stream)
+    n_header = len(header_lines)
+
+    stream.write("\033[2J\033[1;1H")
+    for i, line in enumerate(header_lines, start=1):
+        stream.write(f"\033[{i};1H{line}\r\n")
+    stream.write(f"\033[{n_header + 1};{rows}r\033[{n_header + 1};1H")
+    stream.flush()
+
+
+def check_and_apply_resize(current_dims: Tuple[int, int], stream=sys.stdout) -> Tuple[int, int]:
+    """Detects terminal resize, redraws pinned header, and updates DECSTBM scroll margins."""
+    new_dims = get_terminal_dimensions()
+    if new_dims == current_dims:
+        return current_dims
+    cols, rows = new_dims
+    color_enabled = should_enable_color(stream)
+    header_lines = get_pinned_header_lines(cols, color_enabled, stream)
+    n_header = len(header_lines)
+
+    for i, line in enumerate(header_lines, start=1):
+        stream.write(f"\033[{i};1H\033[2K{line}\r\n")
+    stream.write(f"\033[{n_header + 1};{rows}r")
+    stream.flush()
+    return new_dims
+
+
+def cleanup_pinned_layout(stream=sys.stdout) -> None:
+    """
+    Idempotent cleanup for pinned layout: resets scroll margins (\\033[r),
+    moves cursor to bottom row, resets attributes, and restores Windows console mode.
+    """
+    try:
+        _, rows = get_terminal_dimensions()
+        stream.write("\033[r")
+        stream.write(f"\033[{rows};1H\r\n")
+        stream.write("\033[0m\033[?25h")
+        stream.flush()
+    except Exception:
+        pass
+    finally:
+        restore_windows_console_mode()
+
+
+atexit.register(cleanup_pinned_layout)
+
+# Thinking Spinner for /chat
+BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+ASCII_FRAMES = ["|", "/", "-", "\\"]
+
+
+class ThinkingSpinner:
+    """
+    Renders non-blocking thinking spinner during chat model generation.
+    Active only when stdout is a TTY and TERM != 'dumb'.
+    """
+    def __init__(self, stream=sys.stdout):
+        self.stream = stream
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._start_time: float = 0.0
+        self.enabled = False
+        try:
+            if self.stream.isatty() and os.environ.get("TERM") != "dumb":
+                self.enabled = True
+        except Exception:
+            self.enabled = False
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        self._stop_event.clear()
+        self._start_time = time.time()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def _spin(self) -> None:
+        color_enabled = should_enable_color(self.stream)
+        use_braille = can_encode_blocks(self.stream)
+        frames = BRAILLE_FRAMES if use_braille else ASCII_FRAMES
+        idx = 0
+        while not self._stop_event.is_set():
+            elapsed = int(time.time() - self._start_time)
+            frame = frames[idx % len(frames)]
+            styled_frame = colorize(frame, CYAN, color_enabled)
+            msg = f"\r{styled_frame} Thinking... ({elapsed}s)"
+            try:
+                self.stream.write(msg)
+                self.stream.flush()
+            except Exception:
+                break
+            idx += 1
+            self._stop_event.wait(0.1)
+
+    def stop(self) -> None:
+        if not self.enabled or self._thread is None:
+            return
+        self._stop_event.set()
+        try:
+            self._thread.join(timeout=1.0)
+        except Exception:
+            pass
+        self._thread = None
+        try:
+            self.stream.write("\r\033[2K")
+            self.stream.flush()
+        except Exception:
+            pass
+
+
+# In-Memory Session History
+MAX_HISTORY_ITEMS = 200
+MAX_HISTORY_BYTES = 1_000_000  # 1 MB
+
+_session_history: Deque[Tuple[str, str, str]] = collections.deque(maxlen=MAX_HISTORY_ITEMS)
+
+
+def add_to_session_history(command: str, output: str) -> None:
+    """
+    Adds a command line and its execution output to in-memory session history.
+    Enforces max 200 items and 1 MB memory cap. Never writes to disk.
+    """
+    now_str = datetime.datetime.now().strftime("%H:%M:%S")
+    cleaned_out = output.strip()
+    _session_history.append((now_str, command.strip(), cleaned_out))
+
+    total_bytes = sum(len(c) + len(o) for _, c, o in _session_history)
+    while total_bytes > MAX_HISTORY_BYTES and len(_session_history) > 1:
+        popped = _session_history.popleft()
+        total_bytes -= (len(popped[1]) + len(popped[2]))
+
+
+def get_session_history(limit: Optional[int] = None) -> List[Tuple[str, str, str]]:
+    """Returns list of in-memory history entries up to limit (default 20)."""
+    items = list(_session_history)
+    if limit is not None and limit > 0:
+        return items[-limit:]
+    return items[-20:] if len(items) > 20 else items
+
+
+def clear_session_history() -> None:
+    """Clears in-memory session history."""
+    _session_history.clear()
+
+
+def format_session_history(limit: Optional[int] = None, color_enabled: bool = False) -> str:
+    """Formats session history for console display."""
+    items = get_session_history(limit)
+    if not items:
+        return "No command history in current session."
+
+    count = len(items)
+    header = f"=== Session History (last {count} entries) ==="
+    lines = [colorize(header, BOLD, color_enabled)]
+
+    for idx, (t, cmd, out) in enumerate(items, start=1):
+        prompt_line = f"[{idx}] {t} > {cmd}"
+        lines.append(colorize(prompt_line, CYAN, color_enabled))
+        if out:
+            lines.append(out)
+        lines.append(colorize("-" * 40, DIM, color_enabled))
+
+    lines.append(colorize("=" * len(header), BOLD, color_enabled))
+    return "\n".join(lines)
+
+
+class CaptureStream:
+    """
+    Tees output to underlying stream while capturing output in memory.
+    Triggers on_first_write callback on first non-empty write.
+    """
+    def __init__(self, underlying_stream, on_first_write: Optional[Callable[[], None]] = None):
+        self.underlying_stream = underlying_stream
+        self.on_first_write = on_first_write
+        self._first_write_done = False
+        self._buffer = io.StringIO()
+
+    def write(self, s: str) -> int:
+        if s and not self._first_write_done and self.on_first_write:
+            self._first_write_done = True
+            try:
+                self.on_first_write()
+            except Exception:
+                pass
+        self._buffer.write(s)
+        try:
+            return self.underlying_stream.write(s)
+        except Exception:
+            return len(s)
+
+    def flush(self) -> None:
+        try:
+            self.underlying_stream.flush()
+        except Exception:
+            pass
+
+    def getvalue(self) -> str:
+        return self._buffer.getvalue()
+
+    def isatty(self) -> bool:
+        try:
+            return self.underlying_stream.isatty()
+        except Exception:
+            return False
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self.underlying_stream, "encoding", "utf-8")
+
+
 def get_current_system_clock_context() -> Tuple[str, str, str]:
     """
     Returns current local date, time, and timezone from system clock.
@@ -203,12 +570,12 @@ def is_interactive_terminal() -> bool:
 def tokenize_windows_line(line: str) -> List[str]:
     """
     Tokenizes a Windows command line without stripping backslashes (Findings DW & EC).
-    Only double quotes (") are treated as quote delimiters on Windows (Finding EC).
+    Only double quotes (\") are treated as quote delimiters on Windows (Finding EC).
     Single quotes / apostrophes (') are treated as literal characters (e.g. C:\\Users\\O'Brien\\notes.txt).
     Supports:
       - Normal unquoted arguments with backslashes (C:\\Users\\hp\\project, \\\\server\\share)
-      - Quoted arguments with spaces ("C:\\Program Files\\app", "D:\\my notes")
-      - Apostrophes in paths (C:\\Users\\O'Brien\\notes.txt) and code prompts (/code "def foo(): return 'bar'")
+      - Quoted arguments with spaces (\"C:\\Program Files\\app\", \"D:\\my notes\")
+      - Apostrophes in paths (C:\\Users\\O'Brien\\notes.txt) and code prompts (/code \"def foo(): return 'bar'\")
       - Sinhala and multilingual Unicode characters
       - Enclosing double quote removal for quoted tokens
     Raises ValueError on unclosed double quote.
@@ -254,15 +621,7 @@ def get_shell_banner(
     if color_enabled is None:
         color_enabled = should_enable_color()
 
-    model_name = "no model loaded yet"
-    try:
-        from router import ModelRouter
-        router = ModelRouter(load_system_profile=True)
-        resident = router.get_live_resident_model()
-        if resident:
-            model_name = resident
-    except Exception:
-        model_name = "no model loaded yet"
+    model_name = get_resident_model_name()
 
     logo_text = colorize(PAI_ASCII_LOGO, BRIGHT_CYAN, color_enabled)
     dev_text = colorize(DEVELOPER_CREDIT, DIM, color_enabled)
@@ -289,6 +648,8 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
       - 'exit': Clean exit request (/exit, /quit).
       - 'help': Display shell command reference (/help, /?).
       - 'time': Current system clock context (/time).
+      - 'clear': Clear chat screen/buffer (/clear, /cls).
+      - 'history': In-memory session history (/history [N]).
       - 'unknown_slash': Unrecognized slash command.
       - 'canonical': Recognized slash command mapped to canonical CLI argv.
       - 'chat': Non-slash text routed to canonical 'pai chat'.
@@ -317,6 +678,20 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("time", "clock"):
             return "time", []
+
+        if raw_cmd in ("clear", "cls"):
+            return "clear", []
+
+        if raw_cmd == "history":
+            args = tokens[1:]
+            if args:
+                try:
+                    n = int(args[0])
+                    if n <= 0:
+                        return "error", ["Error: /history argument must be a positive integer."]
+                except ValueError:
+                    return "error", ["Error: /history argument must be a positive integer."]
+            return "history", args
 
         if raw_cmd in CANONICAL_SLASH_COMMANDS:
             # Ergonomics for /chat: pass prompt after '--' sentinel so leading dashes are preserved (Finding DX)
@@ -358,10 +733,11 @@ def run_interactive_shell(
     input_fn: Optional[Callable[[str], str]] = None,
     output_fn: Optional[Callable[[str], None]] = None,
     prompt_str: str = "pai> ",
+    stream=sys.stdout,
 ) -> int:
     """
     Runs the PAI interactive terminal REPL (ADR-014).
-    Accepts custom input/output callables for deterministic unit testing.
+    Accepts custom input/output callables and stream for deterministic unit testing.
     """
     if input_fn is None:
         input_fn = input
@@ -372,16 +748,26 @@ def run_interactive_shell(
     # "Sandbox execution boundary verified fail-closed." is printed ONLY after it returns.
     from pai import enforce_sandbox_boundary
     enforce_sandbox_boundary()
-    output_fn("Sandbox execution boundary verified fail-closed.")
 
-    color_enabled = should_enable_color()
-    output_fn(get_shell_banner(color_enabled=color_enabled))
+    color_enabled = should_enable_color(stream)
+    pinned = should_pin_header(stream)
+
+    if pinned:
+        setup_pinned_layout(stream)
+        output_fn("Sandbox execution boundary verified fail-closed.")
+    else:
+        output_fn("Sandbox execution boundary verified fail-closed.")
+        output_fn(get_shell_banner(color_enabled=color_enabled))
 
     styled_prompt = colorize(prompt_str, BRIGHT_CYAN, color_enabled)
+    current_dims = get_terminal_dimensions()
 
     os.environ["PAI_SHELL_ACTIVE"] = "1"
     try:
         while True:
+            if pinned:
+                current_dims = check_and_apply_resize(current_dims, stream)
+
             try:
                 line = input_fn(styled_prompt)
             except EOFError:
@@ -401,9 +787,32 @@ def run_interactive_shell(
             elif action == "help":
                 output_fn(SHELL_HELP)
                 continue
+            elif action == "clear":
+                if pinned:
+                    stream.write("\033[6;1H\033[J")
+                    stream.flush()
+                else:
+                    if color_enabled:
+                        stream.write("\033[2J\033[1;1H")
+                        stream.flush()
+                    output_fn(get_shell_banner(color_enabled=color_enabled))
+                continue
+            elif action == "history":
+                limit = int(argv[0]) if argv else None
+                hist_text = format_session_history(limit, color_enabled=color_enabled)
+                output_fn(hist_text)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
             elif action == "time":
                 d, t, tz = get_current_system_clock_context()
-                output_fn(f"Current local time: {d} {t} {tz}")
+                time_str = f"Current local time: {d} {t} {tz}"
+                output_fn(time_str)
+                add_to_session_history(line, time_str)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
             elif action == "unknown_slash":
                 msg = f"Unknown command '{argv[0]}'. Type /help for available commands or /exit to quit."
@@ -413,12 +822,31 @@ def run_interactive_shell(
                 output_fn(colorize(argv[0], RED, color_enabled))
                 continue
             elif action in ("canonical", "chat"):
+                cmd_name = argv[0] if argv else ""
+                spinner = ThinkingSpinner(stream) if cmd_name == "chat" else None
+                capture = CaptureStream(stream, on_first_write=spinner.stop if spinner else None)
                 try:
-                    execute_subcommand(argv)
+                    if spinner:
+                        spinner.start()
+                    with contextlib.redirect_stdout(capture):
+                        execute_subcommand(argv)
                 except KeyboardInterrupt:
                     output_fn("\n[Operation cancelled by user]")
                 except Exception as e:
                     output_fn(colorize(f"Error: {e}", RED, color_enabled))
+                finally:
+                    if spinner:
+                        spinner.stop()
+
+                cmd_out = capture.getvalue()
+                add_to_session_history(line, cmd_out)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
     finally:
         os.environ.pop("PAI_SHELL_ACTIVE", None)
-        restore_windows_console_mode()
+        clear_session_history()
+        if pinned:
+            cleanup_pinned_layout(stream)
+        else:
+            restore_windows_console_mode()

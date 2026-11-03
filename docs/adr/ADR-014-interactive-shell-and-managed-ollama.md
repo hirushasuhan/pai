@@ -137,3 +137,44 @@ To prevent local models from stating obsolete or confabulated facts regarding li
 3. **Deterministic Heuristic Notice (Layer 3):** Prompts matching time-sensitive keywords across English, Singlish, and Sinhala trigger a deterministic post-response notice:
    > "PAI is offline. This answer comes from the model's training data and may be outdated. It was not checked against the internet."
    *Honest Limitation:* The keyword matching heuristic can miss novel temporal queries and may flag certain non-temporal questions that contain temporal keywords. Live web verification is deferred to future opt-in ADRs to preserve PAI's local execution boundaries.
+
+---
+
+## Addendum (2026-11-03): Milestone B Interactive Shell Layout, Pinned Scroll Region, Thinking Spinner, and Session History
+
+### 1. Pinned Header & DECSTBM Scroll Region Architecture
+To provide a clean, modern terminal interface while maintaining low screen footprint:
+- **Header Layout (5 Rows Total)**:
+  - Rows 1-3: Half-block Unicode logo (`█▀█ ▄▀█ █` / `█▀▀ █▀█ █` / `▀   ▀ ▀ ▀`) styled with a horizontal color gradient (Bright Cyan for 'P', Bright Blue for 'A', Bright Magenta for 'I'). If stream encoding cannot represent block characters (detected via `can_encode_blocks`), PAI falls back to a 3-row compact ASCII logo (` ___  _  ___` / `| _ \/_\  | ` / `|_|  / \ _|_`).
+  - Row 4: Width-adaptive info line (`PAI v1.1.0 | Model: ... | Offline | Developed by Hirusha Suhan`).
+  - Row 5: Horizontal box-drawing rule (`─` or `-` fallback) matching the terminal width (max 80 columns).
+- **DECSTBM Margins (`\033[6;{rows}r`)**:
+  - Activated when `is_interactive_terminal()` is True, `PAI_NO_PINNED_HEADER != "1"`, `TERM != "dumb"`, terminal height $\ge 20$, width $\ge 60$, and Windows VT processing is enabled.
+  - Screen is cleared with `\033[2J\033[1;1H` (strictly avoiding `\033[3J` which clears terminal scrollback).
+  - Header is drawn on rows 1..5; scrolling margin is pinned to rows 6..`rows`.
+  - Terminal resizing is detected on each turn via `check_and_apply_resize`, dynamically updating header lines and DECSTBM margins.
+  - On exit (`/exit`, EOF, Ctrl+C, SystemExit, or unexpected exception), `cleanup_pinned_layout` resets scroll margins (`\033[r`), restores the cursor to the bottom row, resets attributes, and restores original console mode.
+
+### 2. Honest Terminal Scrollback Limitation & In-Memory Session History
+- **Terminal Scrollback Limitation**: In standard terminal emulators (such as Windows Terminal and xterm), text scrolling past DECSTBM margins is discarded by the terminal and does not enter the host window scrollback buffer.
+- **In-Memory `/history [N]` Command**: To provide full interaction review without compromising privacy:
+  - Stores up to 200 items in memory, capped strictly at 1 MB (`MAX_HISTORY_BYTES = 1_000_000`).
+  - Displays timestamps, commands, and outputs. Supports optional limit parameter (e.g. `/history 5`, defaulting to 20).
+  - Zero disk writes: never written to disk, maintaining ADR-002 privacy invariants.
+  - Memory buffer is wiped clean on shell exit.
+  - History is never forwarded to language models or Ollama daemon.
+- **Opt-Out Mechanism**: Users preferring traditional non-pinned terminal scrolling can disable pinned headers by setting `PAI_NO_PINNED_HEADER=1`.
+
+### 3. Shell-Local `/clear` Command
+- `/clear` (and `/cls`) clears the screen:
+  - In pinned VT mode: clears strictly the scrolling region below row 5 (`\033[6;1H\033[J`), repositioning the cursor at line 6, col 1 without redrawing or breaking the pinned header.
+  - In non-pinned mode: clears the screen (`\033[2J\033[1;1H`) and re-displays the startup banner.
+
+### 4. Non-Blocking Thinking Spinner for `/chat`
+- During local model generation in `/chat` (and conversational inputs routed to chat), an animated thinking spinner displays elapsed seconds (`\r{frame} Thinking... ({elapsed}s)`).
+- Uses Unicode braille frames (`⠋⠙⠹...`) on UTF-8 streams and ASCII frames (`|/-\`) on non-UTF-8 streams.
+- Runs on a non-blocking daemon thread; cleanly clears the spinner line (`\r\033[2K`) on the first byte of model output or during `finally` cleanup.
+- Automatically disabled when standard output is not a TTY or `TERM == "dumb"`.
+
+### 5. Model Output Hygiene & Terminal Margin Protection
+- All model output passes through `sanitize_terminal_output` before printing, ensuring CSI margin escape codes (`\033[r`), cursor repositioning codes (`\033[H`), and screen clear codes are defanged, preventing untrusted model responses from altering terminal margins or corrupting the pinned header.

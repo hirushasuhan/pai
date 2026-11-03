@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -20,15 +21,48 @@ if str(RESEARCH_DIR) not in sys.path:
 
 from shell import (
     DEVELOPER_CREDIT,
+    MAX_HISTORY_BYTES,
+    MAX_HISTORY_ITEMS,
+    PAI_ASCII_FALLBACK_LOGO,
+    PAI_UNICODE_BLOCK_LOGO,
     SHELL_BANNER,
     SHELL_HELP,
+    ThinkingSpinner,
+    add_to_session_history,
+    can_encode_blocks,
+    check_and_apply_resize,
+    cleanup_pinned_layout,
+    clear_session_history,
     execute_subcommand,
+    format_session_history,
+    get_pinned_header_lines,
+    get_session_history,
     get_shell_banner,
+    get_shell_info_line,
+    get_shell_logo_lines,
+    get_shell_separator_line,
+    get_terminal_dimensions,
     is_interactive_terminal,
     parse_shell_line,
     run_interactive_shell,
+    setup_pinned_layout,
+    should_pin_header,
     tokenize_windows_line,
 )
+
+
+class DummyStream(io.StringIO):
+    def __init__(self, initial_value="", encoding="utf-8", is_tty=True):
+        super().__init__(initial_value)
+        self._encoding = encoding
+        self._is_tty = is_tty
+
+    @property
+    def encoding(self) -> str:
+        return self._encoding
+
+    def isatty(self) -> bool:
+        return self._is_tty
 
 
 class TestInteractiveShellADR014(unittest.TestCase):
@@ -728,6 +762,397 @@ class TestInteractiveShellADR014(unittest.TestCase):
                     from pai import cmd_chat
                     cmd_chat(MagicMock(prompt="", json=False))
                     self.assertNotIn("Sandbox execution boundary verified fail-closed.", mock_out.getvalue())
+
+    # -------------------------------------------------------------------------
+    # 15. Milestone B: Pinned DECSTBM Header Layout & Cleanup (ADR-014)
+    # -------------------------------------------------------------------------
+    def test_shell_pinned_header_layout_vt(self) -> None:
+        """
+        Milestone B: Asserts that when terminal conditions satisfy should_pin_header():
+          - Screen is cleared with \033[2J\033[1;1H (never \033[3J which clears scrollback).
+          - Exactly 5 header lines are written to top rows (rows 1..5).
+          - Pinned scroll region is set via DECSTBM: \033[6;{rows}r\033[6;1H.
+          - On clean exit (/exit, EOF), cleanup_pinned_layout emits \033[r to restore full scroll region,
+            positions cursor at bottom row, resets attributes (\033[0m), and shows cursor (\033[?25h).
+        """
+        mock_stream = DummyStream(encoding="utf-8", is_tty=True)
+
+        with patch("shell.is_interactive_terminal", return_value=True), \
+             patch("shell.enable_windows_vt", return_value=True), \
+             patch("shell.get_terminal_dimensions", return_value=(80, 24)), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PAI_NO_PINNED_HEADER", None)
+            os.environ.pop("TERM", None)
+
+            self.assertTrue(should_pin_header(mock_stream))
+
+            inputs = iter(["/exit"])
+            outputs: list[str] = []
+
+            with patch("pai.enforce_sandbox_boundary"):
+                code = run_interactive_shell(
+                    input_fn=lambda _: next(inputs),
+                    output_fn=outputs.append,
+                    stream=mock_stream,
+                )
+                self.assertEqual(code, 0)
+
+            raw_stream_output = mock_stream.getvalue()
+            # Must clear screen without 3J (3J destroys terminal scrollback buffer)
+            self.assertIn("\033[2J\033[1;1H", raw_stream_output)
+            self.assertNotIn("\033[3J", raw_stream_output)
+
+            # Must set DECSTBM margins for rows 6..24
+            self.assertIn("\033[6;24r\033[6;1H", raw_stream_output)
+
+            # Must write header containing logo and info
+            self.assertIn("PAI v1.1.0", raw_stream_output)
+            self.assertIn("Developed by Hirusha Suhan", raw_stream_output)
+
+            # Cleanup must restore full margins (\033[r) and cursor attributes
+            self.assertIn("\033[r", raw_stream_output)
+            self.assertIn("\033[24;1H\r\n", raw_stream_output)
+            self.assertIn("\033[0m\033[?25h", raw_stream_output)
+
+    # -------------------------------------------------------------------------
+    # 16. Milestone B: Non-Pinned Mode Fallbacks
+    # -------------------------------------------------------------------------
+    def test_shell_non_pinned_fallbacks(self) -> None:
+        """
+        Milestone B: Asserts that DECSTBM pinned layout is skipped (should_pin_header returns False)
+        and zero margin sequences (\033[6; or \033[r) are emitted when:
+          - Output stream is not a TTY.
+          - PAI_NO_PINNED_HEADER=1 opt-out is set.
+          - TERM='dumb'.
+          - Terminal height < 20 (small window).
+          - Terminal width < 60 (narrow window).
+        """
+        # Case A: Not a TTY
+        mock_non_tty = io.StringIO()
+        mock_non_tty.isatty = lambda: False  # type: ignore[attr-defined]
+        self.assertFalse(should_pin_header(mock_non_tty))
+
+        # Case B: PAI_NO_PINNED_HEADER=1 opt-out
+        mock_tty = io.StringIO()
+        mock_tty.isatty = lambda: True  # type: ignore[attr-defined]
+        with patch.dict(os.environ, {"PAI_NO_PINNED_HEADER": "1"}):
+            self.assertFalse(should_pin_header(mock_tty))
+
+        # Case C: TERM=dumb
+        with patch.dict(os.environ, {"TERM": "dumb"}):
+            self.assertFalse(should_pin_header(mock_tty))
+
+        # Case D: Height < 20
+        with patch("shell.is_interactive_terminal", return_value=True), \
+             patch("shell.get_terminal_dimensions", return_value=(80, 19)):
+            self.assertFalse(should_pin_header(mock_tty))
+
+        # Case E: Width < 60
+        with patch("shell.is_interactive_terminal", return_value=True), \
+             patch("shell.get_terminal_dimensions", return_value=(59, 25)):
+            self.assertFalse(should_pin_header(mock_tty))
+
+        # Execution assertion: Under non-pinned mode, standard banner is used and zero DECSTBM escapes are emitted
+        stream_out = io.StringIO()
+        stream_out.isatty = lambda: False  # type: ignore[attr-defined]
+        inputs = iter(["/exit"])
+        outputs: list[str] = []
+
+        with patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=stream_out,
+            )
+            self.assertEqual(code, 0)
+
+        raw = stream_out.getvalue()
+        self.assertNotIn("\033[6;", raw)
+        self.assertNotIn("\033[24r", raw)
+        self.assertNotIn("\033[r", raw)
+        # Standard banner printed in outputs
+        combined = "\n".join(outputs)
+        self.assertIn("Personal Agentic AI (PAI) Interactive Shell", combined)
+
+    # -------------------------------------------------------------------------
+    # 17. Milestone B: Terminal Window Resize Detection
+    # -------------------------------------------------------------------------
+    def test_shell_resize_detection(self) -> None:
+        """
+        Milestone B: Asserts check_and_apply_resize detects dimension changes,
+        redraws the pinned header, and updates the DECSTBM scrolling margin.
+        """
+        mock_stream = DummyStream(encoding="utf-8", is_tty=True)
+
+        # Case 1: Dimensions unchanged -> returns same dimensions, writes nothing
+        with patch("shell.get_terminal_dimensions", return_value=(80, 24)):
+            res = check_and_apply_resize((80, 24), stream=mock_stream)
+            self.assertEqual(res, (80, 24))
+            self.assertEqual(mock_stream.getvalue(), "")
+
+        # Case 2: Terminal resized from 80x24 to 120x40
+        with patch("shell.get_terminal_dimensions", return_value=(120, 40)):
+            res = check_and_apply_resize((80, 24), stream=mock_stream)
+            self.assertEqual(res, (120, 40))
+            out = mock_stream.getvalue()
+            # Header line redrawn with clear line (\033[2K)
+            self.assertIn("\033[1;1H\033[2K", out)
+            # New scroll margin set: rows 6..40
+            self.assertIn("\033[6;40r", out)
+
+    # -------------------------------------------------------------------------
+    # 18. Milestone B: Logo Encoding Detection & ASCII Fallback
+    # -------------------------------------------------------------------------
+    def test_shell_logo_encoding_and_fallback(self) -> None:
+        """
+        Milestone B: Asserts can_encode_blocks detects Unicode block character support:
+          - UTF-8 stream: returns True, uses 3-row half-block logo (█▀█) and box-drawing rule (─).
+          - Non-Unicode stream (e.g. cp1252 / ascii): returns False, uses 3-row compact ASCII logo and hyphen rule (-).
+          - Header lines are exactly 5 rows and fit comfortably in 80 columns.
+        """
+        # Stream A: UTF-8
+        utf8_stream = DummyStream(encoding="utf-8", is_tty=True)
+        self.assertTrue(can_encode_blocks(utf8_stream))
+
+        lines_utf8 = get_pinned_header_lines(80, color_enabled=False, stream=utf8_stream)
+        self.assertEqual(len(lines_utf8), 5)
+        self.assertIn("█▀█", lines_utf8[0])
+        self.assertIn("─", lines_utf8[4])
+        for line in lines_utf8:
+            self.assertLessEqual(len(line), 80)
+
+        # Stream B: ASCII / Non-Unicode stream
+        ascii_stream = DummyStream(encoding="ascii", is_tty=True)
+        self.assertFalse(can_encode_blocks(ascii_stream))
+
+        lines_ascii = get_pinned_header_lines(80, color_enabled=False, stream=ascii_stream)
+        self.assertEqual(len(lines_ascii), 5)
+        self.assertIn(" ___ ", lines_ascii[0])
+        self.assertIn("-", lines_ascii[4])
+        for line in lines_ascii:
+            self.assertLessEqual(len(line), 80)
+
+    # -------------------------------------------------------------------------
+    # 19. Milestone B: In-Memory /history Command & Privacy Bounds
+    # -------------------------------------------------------------------------
+    def test_shell_in_memory_session_history(self) -> None:
+        """
+        Milestone B: Asserts in-memory session history:
+          - Records commands and outputs in memory (_session_history).
+          - Enforces 1 MB total memory limit and 200 items maximum cap.
+          - /history defaults to last 20 entries; /history N displays last N entries.
+          - Invalid arguments (non-integer, <= 0) return clear error.
+          - Zero disk writes: asserts open(), Path.write_text(), Path.write_bytes() are never called for writing.
+          - History is never forwarded to language model / Ollama daemon.
+          - History is wiped clean upon shell termination.
+        """
+        clear_session_history()
+        self.assertEqual(len(get_session_history()), 0)
+
+        # Record sample commands
+        add_to_session_history("/doctor", "All checks passed.")
+        add_to_session_history("what is rust", "Rust is a systems programming language.")
+        self.assertEqual(len(get_session_history()), 2)
+
+        formatted = format_session_history(color_enabled=False)
+        self.assertIn("=== Session History (last 2 entries) ===", formatted)
+        self.assertIn("/doctor", formatted)
+        self.assertIn("what is rust", formatted)
+        self.assertIn("All checks passed.", formatted)
+
+        # Limit parameter
+        limited = format_session_history(limit=1, color_enabled=False)
+        self.assertIn("=== Session History (last 1 entries) ===", limited)
+        self.assertNotIn("/doctor", limited)
+        self.assertIn("what is rust", limited)
+
+        # Memory capping (MAX_HISTORY_BYTES = 1 MB)
+        huge_output = "X" * 600_000
+        add_to_session_history("cmd1", huge_output)
+        add_to_session_history("cmd2", huge_output)
+        # Should pop oldest entry to stay under 1 MB
+        self.assertLessEqual(sum(len(c) + len(o) for _, c, o in get_session_history(200)), MAX_HISTORY_BYTES)
+
+        # REPL execution assertion & Zero Disk Writes test
+        inputs = iter(["/history 5", "/exit"])
+        outputs: list[str] = []
+
+        original_open = open
+        write_open_calls = []
+
+        def spy_open(file, mode="r", *args, **kwargs):
+            if any(m in str(mode) for m in ("w", "a", "+", "x")):
+                write_open_calls.append((file, mode))
+            return original_open(file, mode, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=spy_open), \
+             patch("pathlib.Path.write_text") as mock_write_text, \
+             patch("pathlib.Path.write_bytes") as mock_write_bytes, \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(write_open_calls, [])
+            mock_write_text.assert_not_called()
+            mock_write_bytes.assert_not_called()
+
+        combined = "\n".join(outputs)
+        self.assertIn("Session History", combined)
+
+        # History is wiped on exit
+        self.assertEqual(len(get_session_history()), 0)
+
+        # Command parsing validation for /history
+        act_def, argv_def = parse_shell_line("/history")
+        self.assertEqual(act_def, "history")
+        self.assertEqual(argv_def, [])
+
+        act_5, argv_5 = parse_shell_line("/history 10")
+        self.assertEqual(act_5, "history")
+        self.assertEqual(argv_5, ["10"])
+
+        act_bad, argv_bad = parse_shell_line("/history abc")
+        self.assertEqual(act_bad, "error")
+        self.assertIn("Error: /history argument must be a positive integer.", argv_bad[0])
+
+        act_neg, argv_neg = parse_shell_line("/history -5")
+        self.assertEqual(act_neg, "error")
+        self.assertIn("Error: /history argument must be a positive integer.", argv_neg[0])
+
+    # -------------------------------------------------------------------------
+    # 20. Milestone B: /clear Command in Pinned and Non-Pinned Modes
+    # -------------------------------------------------------------------------
+    def test_shell_clear_command(self) -> None:
+        """
+        Milestone B: Asserts /clear (and /cls):
+          - In pinned VT mode: clears only the scrolling chat region (\033[6;1H\033[J)
+            without clearing the pinned header rows.
+          - In non-pinned mode: clears screen (\033[2J\033[1;1H) and re-displays the startup banner.
+        """
+        # Parsing test
+        for cmd in ("/clear", "/cls"):
+            act, argv = parse_shell_line(cmd)
+            self.assertEqual(act, "clear")
+            self.assertEqual(argv, [])
+
+        # Case A: Pinned VT mode
+        pinned_stream = DummyStream(encoding="utf-8", is_tty=True)
+
+        with patch("shell.should_pin_header", return_value=True), \
+             patch("pai.enforce_sandbox_boundary"):
+            inputs = iter(["/clear", "/exit"])
+            outputs: list[str] = []
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=pinned_stream,
+            )
+            self.assertEqual(code, 0)
+            raw = pinned_stream.getvalue()
+            # Must position cursor at line 6, col 1 and clear to end of screen (\033[J)
+            self.assertIn("\033[6;1H\033[J", raw)
+
+        # Case B: Non-pinned mode
+        unpinned_stream = DummyStream(encoding="utf-8", is_tty=False)
+
+        with patch("shell.should_pin_header", return_value=False), \
+             patch("pai.enforce_sandbox_boundary"):
+            inputs = iter(["/clear", "/exit"])
+            outputs = []
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=unpinned_stream,
+            )
+            self.assertEqual(code, 0)
+            # Startup banner reprinted in outputs
+            self.assertGreaterEqual(sum("Personal Agentic AI (PAI)" in o for o in outputs), 2)
+
+    # -------------------------------------------------------------------------
+    # 21. Milestone B: Thinking Spinner for /chat
+    # -------------------------------------------------------------------------
+    def test_shell_thinking_spinner(self) -> None:
+        """
+        Milestone B: Asserts ThinkingSpinner:
+          - Starts only when stdout is a TTY and TERM != 'dumb'.
+          - Does not start when stdout is not a TTY.
+          - Renders braille or ASCII frames with elapsed time.
+          - Clears line (\r\033[2K) upon stop().
+          - Thread is cleanly joined even when command raises an exception.
+        """
+        # Non-TTY: disabled
+        non_tty_stream = DummyStream(encoding="utf-8", is_tty=False)
+        spinner_disabled = ThinkingSpinner(non_tty_stream)
+        self.assertFalse(spinner_disabled.enabled)
+        spinner_disabled.start()
+        self.assertIsNone(spinner_disabled._thread)
+        spinner_disabled.stop()
+
+        # Simulated TTY: enabled
+        tty_stream = DummyStream(encoding="utf-8", is_tty=True)
+        spinner_enabled = ThinkingSpinner(tty_stream)
+        self.assertTrue(spinner_enabled.enabled)
+
+        spinner_enabled.start()
+        self.assertIsNotNone(spinner_enabled._thread)
+        self.assertTrue(spinner_enabled._thread.is_alive())  # type: ignore[union-attr]
+        time.sleep(0.15)
+        spinner_enabled.stop()
+        self.assertIsNone(spinner_enabled._thread)
+        raw_out = tty_stream.getvalue()
+        self.assertIn("Thinking...", raw_out)
+        self.assertIn("\r\033[2K", raw_out)
+
+        # Exception safety in REPL: spinner safely stopped on error
+        failing_stream = DummyStream(encoding="utf-8", is_tty=True)
+
+        def bomb(_):
+            raise RuntimeError("Model crashed")
+
+        with patch("shell.execute_subcommand", side_effect=bomb), \
+             patch("shell.should_pin_header", return_value=False), \
+             patch("pai.enforce_sandbox_boundary"):
+            inputs = iter(["/chat boom", "/exit"])
+            outputs: list[str] = []
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=failing_stream,
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("Error: Model crashed", " ".join(outputs))
+
+    # -------------------------------------------------------------------------
+    # 22. Milestone B: Model Output Hygiene & Terminal Scroll Margin Integrity
+    # -------------------------------------------------------------------------
+    def test_shell_model_output_hygiene_cannot_break_scroll_margins(self) -> None:
+        """
+        Milestone B: Asserts model replies containing malicious VT escape sequences
+        (such as \033[r to reset scroll margins, \033[1;1H to overwrite the pinned header,
+        or \033[2J to clear the screen) are sanitized by sanitize_terminal_output,
+        guaranteeing that untrusted model responses cannot break out of or corrupt terminal margins.
+        """
+        from ingest import sanitize_terminal_output
+
+        malicious_model_payloads = [
+            "Normal answer \033[r breaking scroll region",
+            "Reset margins \x1b[r and clear screen \x1b[2J",
+            "Move cursor to header \033[1;1H Overwritten header!",
+            "Inject escape \033[6;30r new margins",
+            "OSC hyperlink test \033]8;;https://malicious.site\033\\Click here\033]8;;\033\\",
+        ]
+
+        for payload in malicious_model_payloads:
+            sanitized = sanitize_terminal_output(payload)
+            self.assertNotIn("\033[r", sanitized)
+            self.assertNotIn("\x1b[r", sanitized)
+            self.assertNotIn("\033[1;1H", sanitized)
+            self.assertNotIn("\033[2J", sanitized)
+            self.assertNotIn("\x1b[2J", sanitized)
+            self.assertNotIn("\033[6;30r", sanitized)
+            self.assertNotIn("\033]8;;", sanitized)
 
 
 if __name__ == "__main__":

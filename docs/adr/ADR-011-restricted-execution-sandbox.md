@@ -138,6 +138,20 @@ On every runner initialization, PAI conducts a **live behavioural canary self-te
      - `memory_probe.py`
      - `secure_buffer.py`
      - `sandbox_win32.py`
+     - `shell.py` (restricted console mode only per Addendum §8)
+3. **Interactive Shell Console Mode Exception (Finding FI & ADR-014)**:
+   - `research/shell.py` is approved on Windows strictly for querying console mode, enabling `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, and restoring original console mode upon exit.
+   - Restricted strictly to three `kernel32` functions: `GetStdHandle`, `GetConsoleMode`, `SetConsoleMode`.
+   - Blanket `ctypes` usage is prohibited; enforced by AST attribute analysis in `research/tests/test_ctypes_allowlist.py`.
+
+### 8. Addendum (2026-11-03): Interactive Shell Console Mode Allow-List Exception (Finding FI)
+- **Approved Module**: `research/shell.py`.
+- **Architectural Scope**: Required exclusively on Windows (`sys.platform == "win32"`) for terminal ergonomics and Virtual Terminal Processing (VT100) support (ADR-014, Finding EY).
+- **Strictly Limited API Surface**: `shell.py` is permitted to reference ONLY three functions from `ctypes.windll.kernel32`:
+  1. `GetStdHandle`: Retrieves the standard output handle (`STD_OUTPUT_HANDLE = -11`).
+  2. `GetConsoleMode`: Reads the current console output mode flags.
+  3. `SetConsoleMode`: Enables `ENABLE_VIRTUAL_TERMINAL_PROCESSING` (0x0004) during interactive shell execution and restores the original console mode flags upon shell exit.
+- **AST Attribute Enforcement**: Enforced by `research/tests/test_ctypes_allowlist.py`, which verifies via AST inspection that `shell.py` accesses no other `ctypes` or `kernel32` attributes. Blanket or general-purpose `ctypes` access remains strictly prohibited.
 
 ## Consequences & Residual Risks
 - **Containment Statement**: All listed vectors **must be contained; acceptance requires passing tests on both Windows and Linux**.
