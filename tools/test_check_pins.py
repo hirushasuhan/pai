@@ -79,15 +79,65 @@ class TestCheckPins(unittest.TestCase):
             self.assertIn("3. CORE BINARY SHA-256 INVARIANT: FAIL", report)
             self.assertIn("OVERALL PIN AUDIT VERDICT: FAIL", report)
 
-    def test_05_cli_main_require_binary_flag(self) -> None:
-        """CLI main honors --require-binary flag."""
+    def test_05a_cli_main_require_binary_absent_fails(self) -> None:
+        """CLI main with --require-binary returns 1 when binary is absent (Finding GD)."""
+        orig_is_file = Path.is_file
+
+        def fake_is_file(p_self: Path) -> bool:
+            if "pai-core" in p_self.name:
+                return False
+            return orig_is_file(p_self)
+
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         try:
-            rc = check_pins_main(["--require-binary"])
+            with patch.object(Path, "is_file", fake_is_file):
+                rc = check_pins_main(["--require-binary"])
         finally:
             sys.stdout = old_stdout
-        # On Windows developer machine where binary exists, returns 0
+        self.assertEqual(rc, 1)
+
+    def test_05b_cli_main_require_binary_present_passes(self) -> None:
+        """CLI main with --require-binary returns 0 when binary is present with matching SHA-256 (Finding GD)."""
+        orig_is_file = Path.is_file
+        from packaging.build_payload import EXPECTED_BINARY_SHA256
+
+        def fake_is_file(p_self: Path) -> bool:
+            if "pai-core" in p_self.name:
+                return True
+            return orig_is_file(p_self)
+
+        def fake_sha256(p_self: Path) -> str:
+            if "pai-core" in p_self.name:
+                return EXPECTED_BINARY_SHA256.lower()
+            import hashlib
+            return hashlib.sha256(p_self.read_bytes()).hexdigest()
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            with patch.object(Path, "is_file", fake_is_file), patch("check_pins.sha256_file", fake_sha256):
+                rc = check_pins_main(["--require-binary"])
+        finally:
+            sys.stdout = old_stdout
+        self.assertEqual(rc, 0)
+
+    def test_05c_cli_main_default_without_require_binary(self) -> None:
+        """CLI main without --require-binary returns 0 even when binary is absent (Finding GD)."""
+        orig_is_file = Path.is_file
+
+        def fake_is_file(p_self: Path) -> bool:
+            if "pai-core" in p_self.name:
+                return False
+            return orig_is_file(p_self)
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            with patch.object(Path, "is_file", fake_is_file):
+                rc = check_pins_main([])
+        finally:
+            sys.stdout = old_stdout
         self.assertEqual(rc, 0)
 
 

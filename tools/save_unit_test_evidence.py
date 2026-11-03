@@ -10,6 +10,7 @@ Outputs:
   - docs/evidence/payload_tests/test_launcher_and_zip.txt
   - docs/evidence/payload_tests/test_installer_p5.txt
   - docs/evidence/payload_tests/test_make_catalog_input.txt
+  - docs/evidence/payload_tests/test_check_pins.txt
 
 Finding EN rules:
   - Checks git status --porcelain and records "Working Tree: clean" or "Working Tree: DIRTY".
@@ -200,6 +201,12 @@ def main() -> None:
         "tools/test_make_catalog_input.py",
         evidence_dir / "test_make_catalog_input.txt",
         "PAI Catalog Input Generator Tests (16 Tests, ADR-013, Milestone C1, Findings FQ, FR, FS, FT, FU, FW, FX)",
+        is_dirty=is_dirty,
+    )
+    run_suite_and_save(
+        "tools/test_check_pins.py",
+        evidence_dir / "test_check_pins.txt",
+        "PAI Pin Consistency Check Tests (7 Tests, Milestone D1/D2, Findings GB, GD, GE)",
         is_dirty=is_dirty,
     )
 
