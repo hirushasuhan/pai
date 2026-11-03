@@ -1,12 +1,12 @@
 ================================================================================
 PAI BUILD PAYLOAD UNIT TESTS (19 TESTS, MILESTONE P2/P3, FINDING EO) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-03T14:55:32.920273+00:00
+Timestamp (UTC): 2026-11-03T17:57:28.804869+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        c276c10c4aefa81e0a935d4db8abd3e2049fda18
+Git HEAD:        20f604463b076fa4d40abad4965989052c1385e6
 Working Tree:    clean
 Research Tree:   3a6c73016227dbd878b739e34cb251609116f132
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
@@ -21,30 +21,30 @@ Exit Code: 0
 
 STDOUT:
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
+Trust root: research\trust.json
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
+Trust root: research\trust.json
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
+Trust root: research\trust.json
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
+Trust root: research\trust.json
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-Trust root: C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\trust.json
-WARNING: bundling external catalog from 'C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\test_catalog.json' into pre-release payload (catalog_source: external)
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\throwaway_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\throwaway_trust.json
-WARNING: bundling external catalog from 'C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\bad_sig_catalog.json' into pre-release payload (catalog_source: external)
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\throwaway_trust.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\throwaway_trust.json
+Trust root: research\trust.json
+WARNING: bundling external catalog from 'test_catalog.json' into pre-release payload (catalog_source: external)
+Trust root: throwaway_trust.json
+WARNING: Using non-default trust root file: throwaway_trust.json
+WARNING: bundling external catalog from 'bad_sig_catalog.json' into pre-release payload (catalog_source: external)
+Trust root: throwaway_trust.json
+WARNING: Using non-default trust root file: throwaway_trust.json
 ERROR: Bundled catalog verification failed: Catalog Ed25519 signature verification failed against trust root
-WARNING: bundling external catalog from 'C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\test_cat_fe.json' into pre-release payload (catalog_source: external)
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\throwaway_trust_fe.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\throwaway_trust_fe.json
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\throwaway_trust_fe.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\throwaway_trust_fe.json
+WARNING: bundling external catalog from 'test_cat_fe.json' into pre-release payload (catalog_source: external)
+Trust root: throwaway_trust_fe.json
+WARNING: Using non-default trust root file: throwaway_trust_fe.json
+Trust root: throwaway_trust_fe.json
+WARNING: Using non-default trust root file: throwaway_trust_fe.json
 WARNING: bundling working-tree catalog from 'test_cat_fe.json' into pre-release payload (catalog_source: working-tree)
-Trust root: C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\throwaway_trust_fe.json
-WARNING: Using non-default trust root file: C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\throwaway_trust_fe.json
+Trust root: throwaway_trust_fe.json
+WARNING: Using non-default trust root file: throwaway_trust_fe.json
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
@@ -55,16 +55,16 @@ WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-rel
 ........sWARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 ..WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 .....WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-.WARNING: bundling external catalog from 'C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\test_catalog.json' into pre-release payload (catalog_source: external)
-WARNING: bundling external catalog from 'C:\Users\hp\AppData\Local\Temp\pai_p1_test_qvea10qw\bad_sig_catalog.json' into pre-release payload (catalog_source: external)
+.WARNING: bundling external catalog from 'test_catalog.json' into pre-release payload (catalog_source: external)
+WARNING: bundling external catalog from 'bad_sig_catalog.json' into pre-release payload (catalog_source: external)
 Bundled catalog verification failed: Catalog Ed25519 signature verification failed against trust root
-.WARNING: bundling external catalog from 'C:\Users\hp\AppData\Local\Temp\pai_p1_test_hpgpzd8x\test_cat_fe.json' into pre-release payload (catalog_source: external)
+.WARNING: bundling external catalog from 'test_cat_fe.json' into pre-release payload (catalog_source: external)
 WARNING: bundling working-tree catalog from 'test_cat_fe.json' into pre-release payload (catalog_source: working-tree)
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 .
 ----------------------------------------------------------------------
-Ran 19 tests in 31.129s
+Ran 19 tests in 26.022s
 
 OK (skipped=1)

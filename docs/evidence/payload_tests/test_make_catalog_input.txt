@@ -1,34 +1,25 @@
 ================================================================================
 PAI CATALOG INPUT GENERATOR TESTS (16 TESTS, ADR-013, MILESTONE C1, FINDINGS FQ, FR, FS, FT, FU, FW, FX) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-03T15:01:45.684460+00:00
+Timestamp (UTC): 2026-11-03T18:02:50.636653+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        c276c10c4aefa81e0a935d4db8abd3e2049fda18
+Git HEAD:        20f604463b076fa4d40abad4965989052c1385e6
 Working Tree:    clean
-Git Info:        Failed (Command '['git', 'add', '-A', 'research']' returned non-zero exit status 128.)
+Research Tree:   3a6c73016227dbd878b739e34cb251609116f132
+Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
+pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
+pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
+pai.iss SHA256:   62a520749fe4dac601a91650c0221186896cdffcc7bba15dc7402e50650bb6ca
+agreement SHA256: e0e477178d61dedc41f182cc1839ed75418b360f77d6a0617fb031da5f31c0e9
 ================================================================================
 
 Command: python tools/test_make_catalog_input.py
 Exit Code: 0
 
 STDOUT:
-Fetching manifest for qwen2.5:0.5b from https://registry.ollama.ai/v2/library...
-Fetching manifest for qwen2.5:0.5b from https://registry.ollama.ai/v2/library...
-Fetching config blob sha256:be0bf34e0439a5fa03c96e69b2ed6c6ab12bf137b595a923070cda1b5167718d for qwen2.5:0.5b...
-Fetching license blob sha256:b8f382ba452e7a924f0eb9b8a48ed63065b5e6305fa88b89a93763c8e6a76ea5 for qwen2.5:0.5b...
-Saved licence blob bytes to: C:\Users\hp\AppData\Local\Temp\pai_cat_test_7gquo80_\licences\qwen2.5_0.5b.txt
-Fetching manifest for qwen2.5-coder:1.5b from https://registry.ollama.ai/v2/library...
-Fetching config blob sha256:8b1eb3ab35c424ba5fb0935936b1eb089e09217d7d4b1514ec504b6a372c26b1 for qwen2.5-coder:1.5b...
-Fetching license blob sha256:dd3b1f57fda1200d8f85f87f08721bfb4455890c1636c562e40f74e0ad869e28 for qwen2.5-coder:1.5b...
-Saved licence blob bytes to: C:\Users\hp\AppData\Local\Temp\pai_cat_test_haefvm2s\licence_texts\qwen2.5-coder_1.5b.txt
-Fetching manifest for qwen2.5:0.5b from https://registry.ollama.ai/v2/library...
-Fetching manifest for qwen2.5:0.5b from https://registry.ollama.ai/v2/library...
-Fetching config blob sha256:be0bf34e0439a5fa03c96e69b2ed6c6ab12bf137b595a923070cda1b5167718d for qwen2.5:0.5b...
-Fetching license blob sha256:75c251dbf536b9a107a9dfe757480dddad21c39709880cd28da8139adfe8e3bb for qwen2.5:0.5b...
-Saved licence blob bytes to: C:\Users\hp\AppData\Local\Temp\pai_cat_test_org5puv5\test_lic_exact\qwen2.5_0.5b.txt
 
 STDERR:
 ....ERROR: Failed to generate catalog input: Failed to fetch manifest for 'qwen2.5:0.5b' from https://registry.ollama.ai/v2/library/qwen2.5/manifests/0.5b: <urlopen error Network connection failed>
@@ -37,6 +28,6 @@ STDERR:
   _warnings.warn(self.warn_message, ResourceWarning)
 .
 ----------------------------------------------------------------------
-Ran 16 tests in 0.049s
+Ran 16 tests in 0.055s
 
 OK
