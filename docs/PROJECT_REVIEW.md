@@ -3883,3 +3883,18 @@ Checked on the device: HEAD `90a0110`, nothing pushed (`origin/build-stage` `d4f
 **Finding FX (open, low).** `detect_license_name` looks for "Apache License" and "Version 2.0" anywhere in the text, before it looks for other licences. A different licence that quotes Apache would be labelled Apache-2.0. Fix: match the title lines at the start of the text, and add a test where a text mentions Apache but is another licence.
 
 **Verdict.** C1b is accepted: FQ, FR, FS, FT and FU are closed. FV, FW and FX are small and do not change the numbers in the draft. Before signing, the user reads one licence text and says in chat whether to mark the entries `verified` with a `read_on` date (an edit to the draft that the owner makes in a separate docs-only commit), and confirms the `min_vram_mb` rule. The user then signs offline with `rel-1`.
+
+
+## Reviewer addendum (2026-11-03): Milestone C1c, Findings FV, FW, FX (commits 458b255, ee88f1f, e2ba863)
+
+Checked on the device: HEAD `e2ba863`, nothing pushed (`origin/build-stage` `d4f131b`), working tree clean, no `.lock` file. `core/` tree `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9` and `research/` tree `93e0668dc5813cc33b056e7e850dcc1c8d59c32d` are unchanged. `research/catalog.json` does not exist and `research/trust.json` is untouched. `docs/catalog/catalog_input_2026-11-03.json` is unchanged since `90a0110` (`git diff` empty; file sha256 `04f66149588e5c41429a8ab04b692d1a8aa33384046a8a99e61990aa31fd5fd3`). `tools/test_make_catalog_input.py` (16 tests), `test_claims` and `test_ctypes_allowlist` pass on the reviewer side. All eight evidence logs carry Git HEAD `ee88f1f` and Working Tree clean; `e2ba863` changes only evidence logs.
+
+**FV (closed).** The discovery line is now `Ran 633 tests in 441.590s`, `OK (skipped=27)`, which differs from the earlier line, so it comes from a new run. The final line of each of the eight evidence logs was listed in the report and matches the logs.
+
+**FW (closed).** The tool writes the downloaded blob with `write_bytes` and decodes strictly only for name detection (a decode error gives "see licence text"). The three files in `docs/catalog/licence_texts/` are 11343 bytes each and hash to `832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e` on the device, in the git index (`git show HEAD:...`), and in the catalog `license.sha256`. `.gitattributes` has `eol=lf`, and the blob itself uses LF, so a checkout on Windows does not change the bytes. Tests 14 and 16 compare the saved file bytes with the downloaded bytes and the recorded digest.
+
+**FX (closed).** The title match is limited to the first five non-empty lines and anchored with `^Apache License`; test 15 uses a different licence that mentions Apache in its body and expects "see licence text".
+
+**Note (no action).** `docs/catalog/catalog_input_2026-11-03.json` shows `w/crlf` in the working tree on the owner's machine while the index has LF. The signing tool signs the canonical JSON built from the parsed content, so line endings do not change the signature.
+
+**Verdict.** Milestone C1c accepted; Findings FV, FW and FX closed. The draft catalog is ready for the user's decisions: the `min_vram_mb` rule, whether the three entries become `verified` (the user reads the licence text and gives the `read_on` date in chat), and then the offline signing with `rel-1`. The next owner milestone is C2: commit the signed `research/catalog.json`, verify it with the production verifier, regenerate the evidence, record the new `research/` tree id, and set `EXPECTED_RESEARCH_TREE` for the freeze.
