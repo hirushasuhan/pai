@@ -340,7 +340,7 @@ class TestMakeCatalogInput(unittest.TestCase):
 
         saved_file = lic_dir / "qwen2.5-coder_1.5b.txt"
         self.assertTrue(saved_file.is_file(), "License file must be saved with safe filename")
-        self.assertEqual(saved_file.read_text(encoding="utf-8"), lic_text)
+        self.assertEqual(saved_file.read_bytes(), lic_bytes, "Saved file must be byte-exact to downloaded blob (Finding FW)")
         self.assertEqual(cat["models"][0]["license"]["name"], "Apache-2.0")
 
     def test_08_license_fallback_unknown(self) -> None:
@@ -427,6 +427,54 @@ class TestMakeCatalogInput(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 fetch_registry_manifest("qwen2.5:0.5b")
             self.assertIn("mismatch", str(ctx.exception).lower())
+
+    def test_15_license_mentioning_apache_in_body_not_named_apache(self) -> None:
+        """Requirement (Finding FX): License text mentioning Apache License in its body must NOT be detected as Apache-2.0."""
+        custom_text = (
+            "My Custom Proprietary License\n"
+            "Copyright (c) 2026 Author\n"
+            "All rights reserved.\n\n"
+            "Portions of this software are based on dependencies licensed under\n"
+            "the Apache License Version 2.0.\n"
+        )
+        self.assertEqual(detect_license_name(custom_text), "see licence text")
+
+    def test_16_saved_license_file_sha256_equals_digest(self) -> None:
+        """Requirement (Finding FW): Saved license file bytes must have SHA-256 equal to recorded license digest."""
+        lic_bytes = b"Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n"
+        lic_sha = f"sha256:{hashlib.sha256(lic_bytes).hexdigest()}"
+        cfg_bytes = make_fake_config("Q4_K_M", "0.5B")
+        cfg_dig = f"sha256:{hashlib.sha256(cfg_bytes).hexdigest()}"
+        man_bytes = make_fake_manifest([50_000_000], config_digest=cfg_dig, license_digest=lic_sha)
+
+        def mock_urlopen(req, timeout=15.0):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            resp = MagicMock()
+            resp.headers = {}
+            resp.__enter__.return_value = resp
+            if "/manifests/" in url:
+                resp.read.return_value = man_bytes
+            elif cfg_dig in url:
+                resp.read.return_value = cfg_bytes
+            elif lic_sha in url:
+                resp.read.return_value = lic_bytes
+            return resp
+
+        lic_dir = self.tmp_path / "test_lic_exact"
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+            cat = generate_catalog_input_payload(
+                model_tags=["qwen2.5:0.5b"],
+                measurements_path=self.tmp_path / "empty.json",
+                licence_texts_dir=lic_dir,
+            )
+
+        saved_file = lic_dir / "qwen2.5_0.5b.txt"
+        self.assertTrue(saved_file.is_file())
+        file_bytes = saved_file.read_bytes()
+        file_sha = f"sha256:{hashlib.sha256(file_bytes).hexdigest()}"
+        recorded_sha = cat["models"][0]["license"]["sha256"]
+        self.assertEqual(file_sha, recorded_sha)
+        self.assertEqual(file_bytes, lic_bytes)
 
 
 if __name__ == "__main__":

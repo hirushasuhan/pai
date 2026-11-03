@@ -70,22 +70,27 @@ def safe_filename_for_tag(tag: str) -> str:
 
 def detect_license_name(license_text: str) -> str:
     """
-    Derives license name from text only when matching known license headers;
-    otherwise returns 'see licence text'.
+    Derives license name from text only when the title at the start of the text
+    (first non-empty lines) matches a known license; otherwise returns 'see licence text'.
     """
-    if not license_text or not license_text.strip():
+    if not license_text or not isinstance(license_text, str) or not license_text.strip():
         return "see licence text"
-    # Apache 2.0
-    if re.search(r"Apache License", license_text, re.IGNORECASE) and re.search(r"Version 2\.0", license_text, re.IGNORECASE):
+    first_lines = "\n".join([line.strip() for line in license_text.splitlines() if line.strip()][:5])
+    # Apache 2.0: Title at start of text contains "Apache License" and "Version 2.0" (Finding FX)
+    if re.search(r"^Apache License", first_lines, re.IGNORECASE | re.MULTILINE) and re.search(
+        r"Version 2\.0", first_lines, re.IGNORECASE
+    ):
         return "Apache-2.0"
     # MIT
-    if re.search(r"MIT License", license_text, re.IGNORECASE):
+    if re.search(r"MIT License", first_lines, re.IGNORECASE):
         return "MIT"
     # BSD-3-Clause
-    if "Redistribution and use in source and binary forms" in license_text and "Neither the name" in license_text:
+    if re.search(r"BSD\s+(?:3-Clause|Three Clause)", first_lines, re.IGNORECASE) or (
+        "Redistribution and use in source and binary forms" in first_lines
+    ):
         return "BSD-3-Clause"
     # Qwen Research License
-    if re.search(r"Qwen Research License", license_text, re.IGNORECASE):
+    if re.search(r"Qwen Research License", first_lines, re.IGNORECASE):
         return "Qwen Research License"
     return "see licence text"
 
@@ -326,15 +331,19 @@ def generate_catalog_input_payload(
             if lic_digest and isinstance(lic_digest, str):
                 print(f"Fetching license blob {lic_digest} for {tag}...")
                 lic_bytes = fetch_registry_blob(name, lic_digest, registry_base_url=registry_base_url, timeout=timeout)
-                lic_text = lic_bytes.decode("utf-8", errors="replace")
+                # Decode strictly only for licence name detection (Finding FW)
+                try:
+                    lic_text = lic_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    lic_text = ""
 
-                # Save license text to file if directory specified
+                # Save raw license bytes directly (byte-exact, no CRLF conversion, Finding FW)
                 if licence_texts_dir is not None:
                     licence_texts_dir.mkdir(parents=True, exist_ok=True)
                     safe_filename = safe_filename_for_tag(tag) + ".txt"
                     lic_out = licence_texts_dir / safe_filename
-                    lic_out.write_text(lic_text, encoding="utf-8")
-                    print(f"Saved licence text to: {lic_out}")
+                    lic_out.write_bytes(lic_bytes)
+                    print(f"Saved licence blob bytes to: {lic_out}")
 
         entry = build_model_entry(tag, manifest, digest, config_dict, lic_text, lic_digest, measurements)
         models.append(entry)
