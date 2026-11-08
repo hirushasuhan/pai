@@ -10,6 +10,7 @@ Validates:
 7. Graceful degradation: Equal RAM budget adoption comparisons (fit-aware selection, no unmeasured quality claim)
 """
 
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
@@ -19,6 +20,11 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hardware_telemetry import HardwareBudget
 from router import ModelCandidate, ModelRouter, RouteDecision
+
+
+def _recent_calibrated_on(days_ago: int = 1) -> str:
+    """Returns a recent UTC timestamp to prevent test fixtures from expiring after 30 days."""
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class TestModelRouter(unittest.TestCase):
@@ -321,7 +327,7 @@ class TestModelRouter(unittest.TestCase):
             profile_data = {
                 "schema_version": 1,
                 "machine_id": "test_box",
-                "calibrated_on": "2026-10-07T22:00:00Z",
+                "calibrated_on": _recent_calibrated_on(1),
                 "os": "test-os",
                 "total_ram_gb": 16.0,
                 "cpu_cores": 8,
@@ -360,7 +366,7 @@ class TestModelRouter(unittest.TestCase):
             profile_data = {
                 "schema_version": 1,
                 "machine_id": "test_box",
-                "calibrated_on": "2026-10-07T22:00:00Z",
+                "calibrated_on": _recent_calibrated_on(1),
                 "os": "test-os",
                 "total_ram_gb": 16.0,
                 "cpu_cores": 8,
@@ -481,7 +487,7 @@ class TestModelRouter(unittest.TestCase):
             save_machine_profile({
                 "schema_version": 1,
                 "machine_id": "implausible_box",
-                "calibrated_on": "2026-10-07T22:00:00Z",
+                "calibrated_on": _recent_calibrated_on(1),
                 "os": "test-os",
                 "total_ram_gb": 16.0,
                 "cpu_cores": 8,
@@ -539,7 +545,7 @@ class TestModelRouter(unittest.TestCase):
             save_machine_profile({
                 "schema_version": 1,
                 "machine_id": "other_machine_uuid_123",
-                "calibrated_on": "2026-10-07T22:00:00Z",
+                "calibrated_on": _recent_calibrated_on(1),
                 "os": "test-os",
                 "total_ram_gb": 16.0,
                 "cpu_cores": 8,

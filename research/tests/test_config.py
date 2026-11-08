@@ -6,6 +6,7 @@ Validates:
 3. Clean save/load roundtrips for config.json and machine_profile.json.
 """
 
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
@@ -21,6 +22,11 @@ from config import (
     validate_machine_profile,
     validate_user_config,
 )
+
+
+def _recent_calibrated_on(days_ago: int = 1) -> str:
+    """Returns a recent UTC timestamp to prevent test fixtures from expiring after 30 days."""
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class TestConfigSecurity(unittest.TestCase):
@@ -85,7 +91,7 @@ class TestConfigSecurity(unittest.TestCase):
         prof = {
             "schema_version": 1,
             "machine_id": "box_1",
-            "calibrated_on": "2026-10-07T00:00:00Z",
+            "calibrated_on": _recent_calibrated_on(1),
             "total_ram_gb": 8.0,
             "cpu_cores": 4,
             "calibrated_profiles": {
@@ -116,7 +122,7 @@ class TestConfigSecurity(unittest.TestCase):
             prof_data = {
                 "schema_version": 1,
                 "machine_id": "laptop_alpha",
-                "calibrated_on": "2026-10-07T00:00:00Z",
+                "calibrated_on": _recent_calibrated_on(1),
                 "total_ram_gb": 16.0,
                 "cpu_cores": 12,
                 "calibrated_profiles": {
@@ -217,7 +223,7 @@ class TestConfigSecurity(unittest.TestCase):
             "_comment": "Illustrative example schema",
             "schema_version": 1,
             "machine_id": "box_1",
-            "calibrated_on": "2026-10-07T00:00:00Z",
+            "calibrated_on": _recent_calibrated_on(1),
             "os": "Linux",
             "total_ram_gb": 16.0,
             "cpu_cores": 8,
@@ -231,7 +237,7 @@ class TestConfigSecurity(unittest.TestCase):
         prof = {
             "schema_version": 1,
             "machine_id": "box_1",
-            "calibrated_on": "2026-10-07T00:00:00Z",
+            "calibrated_on": _recent_calibrated_on(1),
             "os": "Linux 6.8.0-45-generic",
             "total_ram_gb": 16.0,
             "cpu_cores": 8,
@@ -269,7 +275,7 @@ class TestConfigSecurity(unittest.TestCase):
         old_prof = {
             "schema_version": 1,
             "machine_id": "box_1",
-            "calibrated_on": "2026-08-01T00:00:00Z",
+            "calibrated_on": _recent_calibrated_on(40),
             "os": "win32",
             "total_ram_gb": 16.0,
             "cpu_cores": 8,
@@ -283,8 +289,8 @@ class TestConfigSecurity(unittest.TestCase):
         expired_prof = {
             "schema_version": 1,
             "machine_id": "box_1",
-            "calibrated_on": "2026-10-01T00:00:00Z",
-            "expires_at": "2026-10-05T00:00:00Z",  # past
+            "calibrated_on": _recent_calibrated_on(10),
+            "expires_at": _recent_calibrated_on(5),  # past
             "os": "win32",
             "total_ram_gb": 16.0,
             "cpu_cores": 8,
