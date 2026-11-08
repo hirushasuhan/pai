@@ -3988,3 +3988,17 @@ Checked on the device: HEAD `fe40c7c`, nothing pushed (`origin/build-stage` `e2f
 **Finding AV is still open.** No confirmation of the purge request or of the credential rotation has been given in this chat, so the tag `v1.1.0-rc2` is not pushed. The freeze checklist still lists Preconditions 2, 8 and AV as open, which is correct.
 
 **Verdict.** Milestone D2a accepted except GD. The next owner step is a small commit that fixes GD and adds GE (and commits this addendum); evidence logs are regenerated on that clean head, because the head that CI will test and the tag will point to must be the final one. The user then approves the push to `build-stage` in chat.
+
+
+## Reviewer addendum (2026-11-08): Milestone D2a-fix Acceptance & Finding AV Closure
+
+**Milestone D2a-fix (`cb6de7a` & `0438bce`) accepted.**
+Findings GD and GE are closed:
+1. `tools/test_check_pins.py` was made build-independent with isolated mocks for `--require-binary` branches (absent -> FAIL / exit 1; present with matching hash -> PASS / exit 0; default absent without flag -> PASS / exit 0).
+2. `tools/test_check_pins.py` was registered as the 9th verified test suite in `tools/save_unit_test_evidence.py`, bringing payload unit test evidence to 9 suites / 167 tests (166 OK, 1 skipped, 0 host leaks).
+3. Evaluated tree invariants match across all locations (`HEAD:core` `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`, `HEAD:research` `3a6c73016227dbd878b739e34cb251609116f132`, `pai-core.exe` SHA-256 `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`).
+
+**Finding AV (Closed 2026-11-08).**
+Owner formally confirmed in chat:
+1. Orphaned commit `f781919`: Formally accepted in writing the residual exposure of unreachable orphaned commit `f781919` without a support purge.
+2. Credential rotation: Confirmed all personal credentials/tokens from prior history were rotated on 2026-10-20.

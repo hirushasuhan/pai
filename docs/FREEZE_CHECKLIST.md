@@ -39,8 +39,10 @@ All preconditions must be verified and formally accepted before tagging the free
   - Owner confirmed Decision D8: source code is released under the MIT License (`LICENSE` in repository root and installer agreement clause 6).
 - [ ] **Precondition 8 (Manual Installer Checklist on New Build):**
   - Repeat short installer check (reject non-empty directory, per-user install, PATH verified in fresh shell, uninstall cleanly removes marker and files) in a clean Windows Sandbox/VM.
-- [ ] **Finding AV (Repository Visibility & Credential Rotation Confirmation):**
-  - Awaiting owner confirmation in chat: (1) GitHub Support purge request date (or written exposure acceptance), and (2) Confirmation that all credentials in removed files were rotated.
+- [x] **Finding AV (Repository Visibility & Credential Rotation Confirmation - Closed 2026-11-08):**
+  - Owner confirmation in chat (2026-11-08):
+    1. Orphaned commit `f781919`: Formally accepted in writing the residual exposure of unreachable orphaned commit `f781919` without a support purge.
+    2. Credential rotation: Confirmed all personal credentials/tokens from prior history were rotated on 2026-10-20.
 
 ---
 
