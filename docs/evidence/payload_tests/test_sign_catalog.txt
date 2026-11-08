@@ -1,14 +1,14 @@
 ================================================================================
 PAI CATALOG SIGN TOOL TESTS (9 TESTS, ADR-013 & FINDINGS EH, EK, EL, ER) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-03T18:29:39.916629+00:00
+Timestamp (UTC): 2026-11-08T10:19:29.238150+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        cb6de7a70cebbc0cf75867a3b104846bbf37c2c2
+Git HEAD:        e31cd256199f09a05a6d6b2147390855da73178e
 Working Tree:    clean
-Research Tree:   3a6c73016227dbd878b739e34cb251609116f132
+Research Tree:   7278714c420db9c16b5fd83b257d11d530a99b05
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -25,6 +25,6 @@ STDERR:
 ...ERROR: Catalog signing failed: Private key file not found: nonexistent.key
 ......
 ----------------------------------------------------------------------
-Ran 9 tests in 0.467s
+Ran 9 tests in 0.427s
 
 OK
