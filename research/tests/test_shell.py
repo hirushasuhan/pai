@@ -1861,6 +1861,103 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertNotIn("PAI_CHAT_HISTORY", os.environ)
         _session_chat_turns.clear()
 
+    def test_shell_resolve_target_file_and_edit_file(self) -> None:
+        """Asserts resolve_target_file and edit_target_file correctly update file and create backup."""
+        from shell import resolve_target_file, edit_target_file
+
+        with tempfile.TemporaryDirectory() as td:
+            temp_dir = Path(td)
+            test_file = temp_dir / "game.html"
+            test_file.write_text("<html><body>Original Game</body></html>", encoding="utf-8")
+
+            # 1. resolve_target_file
+            resolved = resolve_target_file(str(test_file))
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved, test_file.resolve())
+
+            non_existent = resolve_target_file(str(temp_dir / "does_not_exist.html"))
+            self.assertIsNone(non_existent)
+
+            # 2. edit_target_file with mock executor
+            def mock_executor(argv):
+                prompt = argv[-1]
+                self.assertIn("Original Game", prompt)
+                self.assertIn("add score counter", prompt)
+                print("```html\n<html><body>Updated Game with Score</body></html>\n```")
+                return 0
+
+            ok, msg, updated = edit_target_file(
+                str(test_file),
+                "add score counter",
+                stream=io.StringIO(),
+                executor=mock_executor,
+            )
+            self.assertTrue(ok)
+            self.assertIn("Successfully updated", msg)
+            self.assertIn("Backup saved to", msg)
+
+            # File updated
+            self.assertEqual(test_file.read_text(encoding="utf-8"), "<html><body>Updated Game with Score</body></html>")
+            # Backup exists
+            bak_file = test_file.with_suffix(".html.bak")
+            self.assertTrue(bak_file.is_file())
+            self.assertEqual(bak_file.read_text(encoding="utf-8"), "<html><body>Original Game</body></html>")
+
+    def test_shell_edit_parsing_and_repl_execution(self) -> None:
+        """Asserts /edit, edit, and natural language file editing parse and execute in REPL."""
+        from shell import parse_shell_line, _session_chat_turns
+        _session_chat_turns.clear()
+
+        # Parsing checks
+        act1, args1 = parse_shell_line("/edit Downloads\\game.html add score")
+        self.assertEqual(act1, "edit")
+        self.assertEqual(args1[0], "Downloads\\game.html")
+        self.assertEqual(args1[1], "add score")
+
+        act2, args2 = parse_shell_line('edit "C:\\My Games\\game.html" add restart button')
+        self.assertEqual(act2, "edit")
+        self.assertEqual(args2[0], "C:\\My Games\\game.html")
+        self.assertEqual(args2[1], "add restart button")
+
+        act_err, args_err = parse_shell_line("/edit")
+        self.assertEqual(act_err, "error")
+
+        act_err2, args_err2 = parse_shell_line("/edit game.html")
+        self.assertEqual(act_err2, "error")
+
+        with tempfile.TemporaryDirectory() as td:
+            temp_dir = Path(td)
+            app_file = temp_dir / "app.py"
+            app_file.write_text("print('hello')", encoding="utf-8")
+
+            # Natural language line referencing existing file with 'wenas'
+            act_nat, args_nat = parse_shell_line(f"{app_file} eka wenas karanna print goodbye danna")
+            self.assertEqual(act_nat, "edit")
+            self.assertEqual(args_nat[0], str(app_file.resolve()))
+
+            # REPL execution with /edit
+            inputs = iter([f"/edit {app_file} change to goodbye", "/exit"])
+            outputs: list[str] = []
+
+            def mock_exec(argv):
+                print("```python\nprint('goodbye')\n```")
+                return 0
+
+            with patch("shell.execute_subcommand", side_effect=mock_exec), \
+                 patch("pai.enforce_sandbox_boundary"):
+                code = run_interactive_shell(
+                    input_fn=lambda _: next(inputs),
+                    output_fn=outputs.append,
+                    stream=io.StringIO(),
+                )
+                self.assertEqual(code, 0)
+
+            self.assertEqual(app_file.read_text(encoding="utf-8"), "print('goodbye')")
+            self.assertTrue(app_file.with_suffix(".py.bak").is_file())
+            combined = "\n".join(outputs)
+            self.assertIn("Successfully updated", combined)
+        _session_chat_turns.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,7 @@ SHELL_HELP = (
     "Personal Agentic AI (PAI) Interactive Shell Commands:\n"
     "  /chat <prompt>      Chat with the assistant (or enter prompt directly without slash)\n"
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
+    "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
     "  /analyze <path>     Analyze codebase architecture, dependencies, and risks\n"
     "  /docs <path>        Search and synthesize local documentation (.txt, .md, .csv)\n"
     "  /save <path>        Save the last response or extracted code block to a local file\n"
@@ -104,7 +105,7 @@ SHELL_HELP = (
     "  /clear              Clear chat window (preserves pinned header in VT mode)\n"
     "  /help               Show this help message\n"
     "  /exit, /quit        Exit the interactive shell\n"
-    "Note: Chat is stateless; each query is evaluated independently without prior conversation memory.\n"
+    "Note: Chat is stateless by default; in-memory multi-turn session memory is maintained in RAM.\n"
     "Note: In pinned VT mode, off-screen lines do not enter terminal scrollback; use /history to review session output.\n"
     "      Set PAI_NO_PINNED_HEADER=1 to disable pinned header mode.\n"
 )
@@ -855,6 +856,154 @@ def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
         return False, f"Failed to save file: {e}"
 
 
+def resolve_target_file(target_str: str) -> Optional[Path]:
+    """
+    Resolves a target file path from string.
+    Supports absolute paths, relative paths, special directories (Downloads, Desktop, Documents),
+    and bare filenames by searching cwd, Downloads, Desktop, Documents.
+    Returns Path if file exists, None otherwise.
+    """
+    clean = target_str.strip().strip('"').strip("'")
+    if not clean:
+        return None
+
+    try:
+        p = Path(clean).expanduser()
+        if p.is_file():
+            return p.resolve()
+    except Exception:
+        pass
+
+    user_home = Path.home()
+    c_lower = clean.lower()
+    for prefix, folder in [
+        ("downloads\\", user_home / "Downloads"),
+        ("downloads/", user_home / "Downloads"),
+        ("desktop\\", user_home / "Desktop"),
+        ("desktop/", user_home / "Desktop"),
+        ("documents\\", user_home / "Documents"),
+        ("documents/", user_home / "Documents"),
+    ]:
+        if c_lower.startswith(prefix):
+            sub = clean[len(prefix):]
+            candidate = folder / sub
+            if candidate.is_file():
+                return candidate.resolve()
+
+    if "\\" not in clean and "/" not in clean:
+        for loc in [Path.cwd(), user_home / "Downloads", user_home / "Desktop", user_home / "Documents"]:
+            try:
+                candidate = loc / clean
+                if candidate.is_file():
+                    return candidate.resolve()
+            except Exception:
+                pass
+
+    return None
+
+
+def edit_target_file(
+    target_str: str,
+    instructions: str,
+    stream=sys.stdout,
+    executor: Optional[Callable[[List[str]], int]] = None,
+) -> Tuple[bool, str, Optional[str]]:
+    """
+    Reads an existing local file, applies user modification instructions using the resident model,
+    creates a .bak backup file, and saves the updated content back to disk.
+    Returns (success, message, updated_content).
+    """
+    resolved_path = resolve_target_file(target_str)
+    if not resolved_path:
+        return False, f"Error: File not found: '{target_str}'. Please check the file name or path.", None
+
+    try:
+        original_content = resolved_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        try:
+            original_content = resolved_path.read_text(encoding="cp1252")
+        except Exception as e:
+            return False, f"Error reading file '{resolved_path}': {e}", None
+    except Exception as e:
+        return False, f"Error reading file '{resolved_path}': {e}", None
+
+    if not original_content.strip():
+        return False, f"Error: Target file '{resolved_path}' is empty.", None
+
+    suffix = resolved_path.suffix.lstrip(".").lower()
+    lang_map = {
+        "html": "html",
+        "htm": "html",
+        "py": "python",
+        "js": "javascript",
+        "jsx": "javascript",
+        "ts": "typescript",
+        "tsx": "typescript",
+        "rs": "rust",
+        "json": "json",
+        "css": "css",
+        "md": "markdown",
+        "txt": "text",
+    }
+    lang = lang_map.get(suffix, suffix or "text")
+
+    edit_prompt = (
+        f"You are an expert programmer and software editor.\n"
+        f"Below is the complete content of the file '{resolved_path.name}':\n"
+        f"```{lang}\n{original_content}\n```\n\n"
+        f"User Modification Request:\n{instructions}\n\n"
+        f"Apply all requested changes carefully.\n"
+        f"Output the entire updated file inside a single ```{lang} ... ``` code block.\n"
+        f"Do not omit code, do not use comments like '// rest unchanged', and provide the complete runnable file."
+    )
+
+    if executor is None:
+        exec_fn = execute_subcommand
+    else:
+        exec_fn = executor
+
+    spinner = ThinkingSpinner(stream)
+    capture = CaptureStream(stream, on_first_write=spinner.stop)
+    try:
+        spinner.start()
+        with contextlib.redirect_stdout(capture):
+            exec_fn(["chat", "--", edit_prompt])
+    except KeyboardInterrupt:
+        return False, "Operation cancelled by user.", None
+    except Exception as e:
+        return False, f"Error generating file update: {e}", None
+    finally:
+        spinner.stop()
+
+    model_out = capture.getvalue()
+    if not model_out or not model_out.strip():
+        return False, "Error: Model returned empty response.", None
+
+    import re
+    code_blocks = re.findall(r"```(?:\w+)?\r?\n(.*?)\r?\n```", model_out, re.DOTALL)
+    if code_blocks:
+        updated_content = max(code_blocks, key=len)
+    else:
+        updated_content = model_out.strip()
+
+    bak_path = resolved_path.with_suffix(resolved_path.suffix + ".bak")
+    try:
+        bak_path.write_text(original_content, encoding="utf-8")
+    except Exception:
+        pass
+
+    try:
+        resolved_path.write_text(updated_content, encoding="utf-8")
+    except Exception as e:
+        return False, f"Error writing updated file '{resolved_path}': {e}", None
+
+    msg = (
+        f"[Successfully updated {resolved_path}]\n"
+        f"[Backup saved to {bak_path}]"
+    )
+    return True, msg, updated_content
+
+
 def get_shell_banner(
     endpoint: str = "http://127.0.0.1:11434",
     color_enabled: Optional[bool] = None,
@@ -971,6 +1120,25 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 target = args[0]
             return "save", [target]
 
+        if raw_cmd in ("edit", "modify"):
+            args = tokens[1:]
+            if not args:
+                return "error", ["Error: /edit requires a target file path and instructions (e.g. /edit Downloads\\game.html add score counter)."]
+            if len(args) == 1:
+                return "error", ["Error: Please provide modification instructions (e.g. /edit Downloads\\game.html add score counter)."]
+            target = args[0]
+            idx = stripped.find(tokens[0]) + len(tokens[0])
+            rest = stripped[idx:].strip()
+            if rest.startswith('"'):
+                end_quote = rest.find('"', 1)
+                instructions = rest[end_quote + 1:].strip() if end_quote != -1 else " ".join(args[1:])
+            elif rest.startswith("'"):
+                end_quote = rest.find("'", 1)
+                instructions = rest[end_quote + 1:].strip() if end_quote != -1 else " ".join(args[1:])
+            else:
+                instructions = rest.split(None, 1)[1] if len(rest.split(None, 1)) > 1 else " ".join(args[1:])
+            return "edit", [target, instructions]
+
         if raw_cmd == "history":
             args = tokens[1:]
             if args:
@@ -995,6 +1163,41 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         # Fail-safe: Unrecognized slash commands are NEVER forwarded to the reasoner
         return "unknown_slash", [tokens[0]]
+
+    # Check for unslashed 'edit' or 'modify' command
+    lower_unslashed = stripped.lower()
+    if lower_unslashed.startswith("edit ") or lower_unslashed.startswith("modify "):
+        try:
+            tokens = tokenize_windows_line(stripped)
+            if len(tokens) >= 3:
+                target_file = tokens[1]
+                idx = stripped.find(tokens[0]) + len(tokens[0])
+                rest = stripped[idx:].strip()
+                if rest.startswith('"'):
+                    end_quote = rest.find('"', 1)
+                    instructions = rest[end_quote + 1:].strip() if end_quote != -1 else " ".join(tokens[2:])
+                elif rest.startswith("'"):
+                    end_quote = rest.find("'", 1)
+                    instructions = rest[end_quote + 1:].strip() if end_quote != -1 else " ".join(tokens[2:])
+                else:
+                    instructions = rest.split(None, 1)[1] if len(rest.split(None, 1)) > 1 else " ".join(tokens[2:])
+                return "edit", [target_file, instructions]
+            elif len(tokens) == 2:
+                return "error", [f"Error: Please provide modification instructions (e.g. {tokens[0]} Downloads\\game.html add score counter)."]
+        except Exception:
+            pass
+
+    # Check for natural language editing intent referencing an existing file
+    edit_keywords = ("edit", "modify", "wenas", "update", "change")
+    if any(k in lower_unslashed for k in edit_keywords):
+        try:
+            tokens = tokenize_windows_line(stripped)
+            for tok in tokens:
+                resolved = resolve_target_file(tok)
+                if resolved and resolved.is_file():
+                    return "edit", [str(resolved), stripped]
+        except Exception:
+            pass
 
     # Conversational text without leading slash routes to canonical 'pai chat'
     # Use '--' sentinel so prompts beginning with a dash (e.g. '-5 is negative')
@@ -1129,6 +1332,23 @@ def run_interactive_shell(
                 color = GREEN if ok else RED
                 output_fn(colorize(msg, color, color_enabled))
                 add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "edit":
+                target_str = argv[0]
+                instructions = argv[1] if len(argv) > 1 else ""
+                output_fn(colorize(f"Modifying '{target_str}' with resident model...", CYAN, color_enabled))
+                ok, msg, updated_content = edit_target_file(target_str, instructions, stream=stream)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                if ok and updated_content:
+                    _session_chat_turns.append({"role": "user", "content": f"Edit {target_str}: {instructions}"})
+                    _session_chat_turns.append({"role": "assistant", "content": f"Updated {target_str}:\n{msg}"})
+                    if len(_session_chat_turns) > 12:
+                        del _session_chat_turns[:-12]
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
