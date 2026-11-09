@@ -1829,16 +1829,18 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertIn("┌──[", hdr)
 
     def test_shell_multiturn_chat_memory(self) -> None:
-        """Asserts multi-turn chat in shell tracks turns and injects --history."""
+        """Asserts multi-turn chat in shell tracks turns and injects PAI_CHAT_HISTORY env var."""
         from shell import _session_chat_turns
         _session_chat_turns.clear()
 
         executed_cmds: list[list[str]] = []
+        captured_history_envs: list[Optional[str]] = []
         inputs = iter(["first question", "second follow-up", "/exit"])
         outputs: list[str] = []
 
         def mock_exec(argv):
             executed_cmds.append(list(argv))
+            captured_history_envs.append(os.environ.get("PAI_CHAT_HISTORY"))
             return 0
 
         with patch("shell.execute_subcommand", side_effect=mock_exec), \
@@ -1850,10 +1852,13 @@ class TestInteractiveShellADR014(unittest.TestCase):
             )
             self.assertEqual(code, 0)
 
-        # First chat call had no history
-        self.assertNotIn("--history", executed_cmds[0])
-        # Second chat call had --history injected with first turn
-        self.assertIn("--history", executed_cmds[1])
+        # First chat call had no PAI_CHAT_HISTORY
+        self.assertIsNone(captured_history_envs[0])
+        # Second chat call had PAI_CHAT_HISTORY injected with first turn
+        self.assertIsNotNone(captured_history_envs[1])
+        self.assertIn("first question", captured_history_envs[1])
+        # After shell exits, PAI_CHAT_HISTORY is cleaned up
+        self.assertNotIn("PAI_CHAT_HISTORY", os.environ)
         _session_chat_turns.clear()
 
 

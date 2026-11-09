@@ -1286,7 +1286,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (default: 0.0)")
     p_chat.add_argument("--seed", type=int, default=42, help="Generation seed (default: 42)")
     p_chat.add_argument("--model-timeout", type=float, default=None, help="Model generation HTTP request timeout in seconds")
-    p_chat.add_argument("--history", type=str, default=None, help="JSON-encoded prior conversation turns for multi-turn chat")
     p_chat.add_argument("--json", action="store_true", help="Output chat response and routing metadata in JSON format")
 
     # setup (Milestone P6)
@@ -3188,7 +3187,7 @@ def cmd_chat(args) -> int:
             pass
 
     history_context = ""
-    history_arg = getattr(args, "history", None)
+    history_arg = getattr(args, "history", None) or os.environ.get("PAI_CHAT_HISTORY")
     if history_arg:
         try:
             turns = json.loads(history_arg)

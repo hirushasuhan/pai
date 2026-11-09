@@ -1180,8 +1180,9 @@ def run_interactive_shell(
                     exec_argv = exec_argv + ["--out", "pai_output"]
 
                 if cmd_name == "chat" and _session_chat_turns:
-                    hist_json = json.dumps(_session_chat_turns[-6:])
-                    exec_argv = exec_argv + ["--history", hist_json]
+                    os.environ["PAI_CHAT_HISTORY"] = json.dumps(_session_chat_turns[-6:])
+                else:
+                    os.environ.pop("PAI_CHAT_HISTORY", None)
 
                 spinner = ThinkingSpinner(stream) if cmd_name == "chat" else None
                 capture = CaptureStream(stream, on_first_write=spinner.stop if spinner else None)
@@ -1197,6 +1198,7 @@ def run_interactive_shell(
                 finally:
                     if spinner:
                         spinner.stop()
+                    os.environ.pop("PAI_CHAT_HISTORY", None)
 
                 cmd_out = capture.getvalue()
                 add_to_session_history(line, cmd_out)
