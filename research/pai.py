@@ -3186,6 +3186,14 @@ def cmd_chat(args) -> int:
         except Exception:
             pass
 
+    skills_context = ""
+    skills_hint_arg = os.environ.get("PAI_SKILL_HINTS")
+    if skills_hint_arg:
+        try:
+            skills_context = f"Relevant Learned Skills & Methodologies:\n{skills_hint_arg.strip()}\n\n"
+        except Exception:
+            pass
+
     history_context = ""
     history_arg = getattr(args, "history", None) or os.environ.get("PAI_CHAT_HISTORY")
     if history_arg:
@@ -3208,6 +3216,7 @@ def cmd_chat(args) -> int:
         "You are Personal Agentic AI (PAI), a helpful, accurate, privacy-first local assistant.\n"
         f"System Clock: Current local date and time is {clock_ctx}.\n"
         f"{wifi_context}"
+        f"{skills_context}"
         f"{history_context}"
         "Operating Mode: Fully offline local execution without internet access.\n"
         "Knowledge and Temporal Boundaries:\n"
@@ -3215,6 +3224,7 @@ def cmd_chat(args) -> int:
         "- You do NOT have live web access, real-time news, or external search capabilities.\n"
         "- For live or time-sensitive facts (such as current events, office holders, market prices, news, weather, or sports scores), you must state clearly that you work offline, cannot verify live facts, and that your knowledge may be outdated.\n"
         "Instructions:\n"
+        "- When Relevant Learned Skills are provided, prioritize using the methodologies, design patterns, and best practices specified in those skills.\n"
         "- When prior conversation context is provided, use it to understand follow-up questions and references (such as 'can you do it', 'make it faster', 'change it', 'explain that').\n"
         "- When asked to write code, a web page, or a game, provide the complete, ready-to-run code in standard markdown code fences (```lang ... ```).\n"
         "- Reply in the same language and style as the user's message (if the user writes in Singlish, reply in natural Singlish; if Sinhala, reply in Sinhala; if English, reply in English).\n"

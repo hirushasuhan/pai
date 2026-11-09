@@ -35,11 +35,13 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import threading
 import time
-from typing import Callable, Deque, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+import webbrowser
 
 CANONICAL_SLASH_COMMANDS = {
     "analyze",
@@ -92,6 +94,10 @@ SHELL_HELP = (
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
     "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
     "  /project <dir> [type] Scaffold a new project (web/python/custom) in target directory\n"
+    "  /open [path|url]    Open web page, HTML file, or project preview in default browser\n"
+    "  /skills             List all learned and active agent skills\n"
+    "  /skill <name>       View details and prompt guidance for a specific skill\n"
+    "  /learn <name> <doc> Teach PAI a new skill to automatically apply in future tasks\n"
     "  /model [name]       View available models or switch active resident model on the fly\n"
     "  /analyze <path>     Analyze codebase architecture, dependencies, and risks\n"
     "  /docs <path>        Search and synthesize local documentation (.txt, .md, .csv)\n"
@@ -1368,6 +1374,351 @@ def analyze_and_fix_bugs(
     return True, "\n\n".join(reports), fixed_files
 
 
+# =============================================================================
+# Browser Integration
+# =============================================================================
+
+def open_in_browser(target: Optional[str] = None, stream=sys.stdout) -> Tuple[bool, str]:
+    """
+    Opens a file, project preview, or URL in the system's default web browser.
+    Auto-detects index.html, game.html, or common web files if no target is provided.
+    Works cross-platform (Windows, Linux, macOS) using standard library webbrowser.
+    """
+    target_str = (target or "").strip()
+
+    # 1. URL handling (http://, https://, file://)
+    if target_str.startswith(("http://", "https://", "file://")):
+        try:
+            webbrowser.open(target_str)
+            return True, f"Opened URL in default browser: {target_str}"
+        except Exception as e:
+            return False, f"Failed to open URL in browser: {e}"
+
+    # 2. File / Directory target resolution
+    target_path: Optional[Path] = None
+    if target_str:
+        resolved = resolve_target_file(target_str)
+        if resolved and resolved.exists():
+            target_path = resolved
+        else:
+            cand = Path(target_str).expanduser()
+            if not cand.is_absolute():
+                cand = (Path.cwd() / cand).resolve()
+            if cand.exists():
+                target_path = cand
+            else:
+                cand_html = cand.with_suffix(".html")
+                if cand_html.exists():
+                    target_path = cand_html
+
+    # 3. Auto-detection if no target or target not found
+    if not target_path or not target_path.exists():
+        if target_str:
+            return False, f"File or path not found: '{target_str}'"
+
+        cwd = Path.cwd()
+        for common_name in ("index.html", "game.html", "main.html", "app.html"):
+            cand = cwd / common_name
+            if cand.is_file():
+                target_path = cand
+                break
+
+        if not target_path:
+            for sub_cand in cwd.glob("*/index.html"):
+                if sub_cand.is_file():
+                    target_path = sub_cand
+                    break
+
+        if not target_path:
+            return False, (
+                "No target specified and no index.html or game.html found in current directory.\n"
+                "Usage: /open <file|url> (e.g. /open Downloads\\game.html or /open index.html)"
+            )
+
+    # 4. If directory, look for index.html or game.html inside it
+    if target_path.is_dir():
+        for sub_file in ("index.html", "game.html", "main.html", "app.html"):
+            cand = target_path / sub_file
+            if cand.is_file():
+                target_path = cand
+                break
+
+    try:
+        uri = target_path.resolve().as_uri()
+        webbrowser.open(uri)
+        return True, f"Opened '{target_path.name}' in default browser: {target_path}"
+    except Exception as e:
+        return False, f"Failed to open browser: {e}"
+
+
+# =============================================================================
+# Agentic Persistent Skills & Self-Learning System
+# =============================================================================
+
+STARTER_SKILLS = [
+    {
+        "name": "web-3d-threejs",
+        "description": "Three.js 3D web games, scenes, animations, lighting, and camera loops",
+        "tags": ["threejs", "treejs", "3d", "game", "webgl", "canvas", "scene", "animation"],
+        "guidance": (
+            "When creating 3D web applications or games using Three.js:\n"
+            "1. Single-file bundle: embed CSS in <style> and JS in <script> tags for immediate offline browser execution.\n"
+            "2. Script CDN: include Three.js via <script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"></script>.\n"
+            "3. Scene Setup: Initialize THREE.Scene(), THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000), and THREE.WebGLRenderer({ antialias: true }).\n"
+            "4. Lighting: Always add THREE.AmbientLight(0xffffff, 0.6) and THREE.DirectionalLight(0xffffff, 0.8) with proper position.\n"
+            "5. Geometries & Materials: Use standard meshes (THREE.BoxGeometry, THREE.SphereGeometry) with THREE.MeshStandardMaterial.\n"
+            "6. Game Loop: Implement requestAnimationFrame(animate) with delta timing or rotation/position updates, calling renderer.render(scene, camera).\n"
+            "7. Controls: Add window resize listeners and keyboard/mouse listeners (keydown, keyup) for player movement.\n"
+            "8. UI Overlay: Provide HTML/CSS score counter, health bar, or restart button on top of canvas."
+        ),
+    },
+    {
+        "name": "bug-fixer",
+        "description": "Root-cause diagnostic and precision code repair with automatic backup",
+        "tags": ["bug", "fix", "error", "hadanna", "waradi", "repair", "debug", "broken", "syntax"],
+        "guidance": (
+            "Bug Analysis and Precision Repair Best Practices:\n"
+            "1. Read and diagnose the full target file before modifying.\n"
+            "2. Identify exact syntax errors, indentation issues, wrong operators, missing variables, or logic flaws.\n"
+            "3. Always preserve existing code structure, comments, docstrings, and unrelated functions.\n"
+            "4. Create a .bak backup before overwriting any file.\n"
+            "5. Provide clear, minimal, self-contained fix within standard markdown code fences (```lang ... ```).\n"
+            "6. Summarize the root cause and the specific lines repaired."
+        ),
+    },
+    {
+        "name": "web-app-scaffold",
+        "description": "Modern responsive web applications with semantic HTML5, CSS3, and modular JS",
+        "tags": ["project", "web", "html", "css", "javascript", "app", "website", "frontend", "responsive"],
+        "guidance": (
+            "Web Application Architecture Best Practices:\n"
+            "1. Structure: Separation of concerns across index.html (semantic tags), style.css (modern responsive CSS), and script.js (clean DOM event handlers).\n"
+            "2. Viewport: Include <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"> in <head>.\n"
+            "3. Modern CSS: Use CSS custom properties (:root variables), Flexbox/Grid for layout, and media queries for mobile-friendly viewports.\n"
+            "4. JavaScript: Wrap in DOMContentLoaded listener, use modern ES6+ (const/let, arrow functions, async/await), and maintain modular state.\n"
+            "5. Accessibility: Use proper semantic HTML (<header>, <nav>, <main>, <section>, <footer>) and ARIA attributes where needed."
+        ),
+    },
+    {
+        "name": "python-automation",
+        "description": "Robust cross-platform Python scripts and CLI automation",
+        "tags": ["python", "script", "automation", "cli", "tools", "utility", "process"],
+        "guidance": (
+            "Python CLI and Automation Script Best Practices:\n"
+            "1. Cross-platform paths: Use pathlib.Path instead of string concatenations.\n"
+            "2. Safe execution: Use subprocess.run with check=False or try/except, capturing stdout/stderr safely.\n"
+            "3. Arguments: Use standard library argparse with descriptive help and type validation.\n"
+            "4. Error Handling: Graceful exit codes (0 for success, non-zero for failure) and user-friendly error messages on stderr.\n"
+            "5. Encoding: Always specify encoding=\"utf-8\" when reading or writing text files."
+        ),
+    },
+]
+
+
+def get_skills_dir() -> Path:
+    """Returns directory where persistent skills are stored (~/.pai/skills)."""
+    env_dir = os.environ.get("PAI_SKILLS_DIR")
+    if env_dir:
+        skills_dir = Path(env_dir)
+    else:
+        skills_dir = Path.home() / ".pai" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    return skills_dir
+
+
+def ensure_starter_skills() -> None:
+    """Seeds default starter skills if skills directory has no skill files."""
+    skills_dir = get_skills_dir()
+    for item in STARTER_SKILLS:
+        skill_file = skills_dir / f"{item['name']}.json"
+        if not skill_file.exists():
+            data = {
+                "name": item["name"],
+                "description": item["description"],
+                "tags": item["tags"],
+                "guidance": item["guidance"],
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+            try:
+                skill_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+
+def list_skills() -> List[Dict[str, Any]]:
+    """Loads and returns all skills from ~/.pai/skills/ sorted by name."""
+    ensure_starter_skills()
+    skills_dir = get_skills_dir()
+    skills = []
+    for f in sorted(skills_dir.glob("*.json")):
+        try:
+            content = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(content, dict) and "name" in content:
+                skills.append(content)
+        except Exception:
+            pass
+    return skills
+
+
+def get_skill(name: str) -> Optional[Dict[str, Any]]:
+    """Finds a skill by exact or fuzzy name/slug."""
+    q = name.strip().lower()
+    for s in list_skills():
+        if s.get("name", "").lower() == q:
+            return s
+    for s in list_skills():
+        if q in s.get("name", "").lower():
+            return s
+    return None
+
+
+def save_skill(
+    name: str,
+    description: str,
+    guidance: str,
+    tags: Optional[List[str]] = None,
+) -> Tuple[bool, str]:
+    """Saves or updates a persistent skill in ~/.pai/skills/{slug}.json."""
+    ensure_starter_skills()
+    slug = re.sub(r"[^a-zA-Z0-9_\-]+", "-", name.strip().lower()).strip("-")
+    if not slug:
+        return False, "Error: Invalid skill name. Use alphanumeric characters and hyphens."
+
+    if not guidance.strip():
+        return False, f"Error: Skill '{slug}' requires guidance instructions."
+
+    if tags is None:
+        raw_words = re.findall(r"\w+", f"{slug} {description} {guidance}".lower())
+        tags = sorted(list({w for w in raw_words if len(w) >= 3 and w not in ("the", "and", "for", "with", "that", "this", "when", "use", "using")}))[:12]
+
+    skills_dir = get_skills_dir()
+    skill_file = skills_dir / f"{slug}.json"
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    existing_created = now_iso
+    if skill_file.exists():
+        try:
+            old = json.loads(skill_file.read_text(encoding="utf-8"))
+            existing_created = old.get("created_at", now_iso)
+        except Exception:
+            pass
+
+    data = {
+        "name": slug,
+        "description": description.strip() or f"Skill for {slug}",
+        "tags": tags,
+        "guidance": guidance.strip(),
+        "created_at": existing_created,
+        "updated_at": now_iso,
+    }
+
+    try:
+        skill_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return True, f"Skill '{slug}' successfully learned and saved to {skill_file}"
+    except Exception as e:
+        return False, f"Failed to save skill '{slug}': {e}"
+
+
+def delete_skill(name: str) -> Tuple[bool, str]:
+    """Deletes a learned skill from ~/.pai/skills/."""
+    skill = get_skill(name)
+    if not skill:
+        return False, f"Error: Skill '{name}' not found."
+    slug = skill.get("name", name)
+    skills_dir = get_skills_dir()
+    skill_file = skills_dir / f"{slug}.json"
+    if skill_file.is_file():
+        try:
+            skill_file.unlink()
+            return True, f"Skill '{slug}' removed from persistent library."
+        except Exception as e:
+            return False, f"Failed to delete skill '{slug}': {e}"
+    return False, f"Error: Skill file not found: {skill_file}"
+
+
+def find_matching_skills(query: str, limit: int = 2) -> List[Dict[str, Any]]:
+    """
+    Finds skills that match keywords in the user query.
+    Returns up to `limit` highest-scoring skills.
+    """
+    skills = list_skills()
+    if not skills:
+        return []
+
+    query_tokens = set(re.findall(r"\w+", query.lower()))
+    if not query_tokens:
+        return []
+
+    scored: List[Tuple[int, Dict[str, Any]]] = []
+    for s in skills:
+        score = 0
+        name = s.get("name", "").lower()
+        desc = s.get("description", "").lower()
+        tags = [t.lower() for t in s.get("tags", [])]
+
+        for tok in query_tokens:
+            if tok in name:
+                score += 5
+            if tok in desc:
+                score += 2
+            if tok in tags:
+                score += 4
+
+        if any(w in query_tokens for w in ("threejs", "treejs", "3d", "webgl")) and name == "web-3d-threejs":
+            score += 10
+        if any(w in query_tokens for w in ("bug", "bugs", "error", "fix", "hadanna", "waradi")) and name == "bug-fixer":
+            score += 10
+        if any(w in query_tokens for w in ("project", "web", "html", "css", "website")) and name == "web-app-scaffold":
+            score += 8
+        if any(w in query_tokens for w in ("script", "automation", "python", "cli")) and name == "python-automation":
+            score += 6
+
+        if score > 0:
+            scored.append((score, s))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [s for _, s in scored[:limit]]
+
+
+def format_skills_list(color_enabled: bool = False) -> str:
+    """Formats list of available learned skills."""
+    skills = list_skills()
+    lines = [colorize("=== Agentic Skills Library (~/.pai/skills) ===", BOLD, color_enabled)]
+    if not skills:
+        lines.append("  (No skills found)")
+    else:
+        for s in skills:
+            name_str = colorize(f"● {s.get('name', 'unnamed')}", CYAN, color_enabled)
+            desc_str = s.get("description", "")
+            lines.append(f"  {name_str} - {desc_str}")
+    lines.append(colorize("─" * 50, DIM, color_enabled))
+    lines.append(colorize("Commands: /skill <name> to view | /learn <name> <doc> to teach | /forget <name> to remove", DIM, color_enabled))
+    return "\n".join(lines)
+
+
+def format_skill_detail(skill: Dict[str, Any], color_enabled: bool = False) -> str:
+    """Formats detailed view of a skill."""
+    name = skill.get("name", "")
+    desc = skill.get("description", "")
+    tags = ", ".join(skill.get("tags", []))
+    guidance = skill.get("guidance", "")
+    created = skill.get("created_at", "")[:10]
+
+    lines = [
+        colorize(f"=== Skill: {name} ===", BOLD, color_enabled),
+        f"{colorize('Description:', CYAN, color_enabled)} {desc}",
+        f"{colorize('Tags:', CYAN, color_enabled)}        {tags}",
+        f"{colorize('Created:', CYAN, color_enabled)}     {created}",
+        colorize("─" * 50, DIM, color_enabled),
+        colorize("Guidance & Methodology:", BOLD, color_enabled),
+        guidance,
+        colorize("─" * 50, DIM, color_enabled),
+        colorize(f"To use this skill, mention its keywords or ask tasks matching {name}.", DIM, color_enabled),
+    ]
+    return "\n".join(lines)
+
+
 def get_shell_banner(
     endpoint: str = "http://127.0.0.1:11434",
     color_enabled: Optional[bool] = None,
@@ -1540,6 +1891,48 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 fix_inst = ""
             return "fix", [target_file_or_dir, fix_inst]
 
+        if raw_cmd in ("open", "preview", "browse"):
+            args = tokens[1:]
+            target = stripped[len(tokens[0]):].strip() if args else ""
+            return "browser_open", [target]
+
+        if raw_cmd in ("skills", "skill"):
+            args = tokens[1:]
+            if not args or args[0].lower() in ("list", "ls"):
+                return "skills_list", []
+            sub = args[0].lower()
+            if sub in ("learn", "add", "create", "new"):
+                if len(args) < 2:
+                    return "error", ["Error: /skill learn requires a skill name and guidance instructions."]
+                name = args[1]
+                idx = stripped.find(name) + len(name)
+                guidance = stripped[idx:].strip()
+                if not guidance:
+                    return "error", [f"Error: Please provide guidance instructions for skill '{name}'."]
+                return "skill_learn", [name, guidance]
+            if sub in ("delete", "remove", "forget", "rm"):
+                if len(args) < 2:
+                    return "error", ["Error: /skill delete requires a skill name."]
+                return "skill_delete", [args[1]]
+            return "skill_show", [args[0]]
+
+        if raw_cmd == "learn":
+            args = tokens[1:]
+            if not args:
+                return "error", ["Error: /learn requires a skill name and guidance instructions (e.g. /learn web-game Focus on modular Three.js scripts)."]
+            name = args[0]
+            idx = stripped.find(name) + len(name)
+            guidance = stripped[idx:].strip()
+            if not guidance:
+                return "error", [f"Error: Please provide guidance instructions for skill '{name}'."]
+            return "skill_learn", [name, guidance]
+
+        if raw_cmd in ("forget", "unlearn"):
+            args = tokens[1:]
+            if not args:
+                return "error", ["Error: /forget requires a skill name to remove."]
+            return "skill_delete", [args[0]]
+
         if raw_cmd == "history":
             args = tokens[1:]
             if args:
@@ -1663,6 +2056,59 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                     return "edit", [str(resolved), stripped]
         except Exception:
             pass
+
+    # Check for unslashed open / preview / browse command
+    if lower_unslashed.startswith("open ") or lower_unslashed.startswith("preview ") or lower_unslashed.startswith("browse "):
+        first_word = lower_unslashed.split()[0]
+        rest_target = stripped[len(first_word):].strip()
+        if any(rest_target.lower().endswith(ext) for ext in (".html", ".htm", ".js", ".css", ".py", ".md")) or rest_target.startswith(("http://", "https://", "localhost:")) or "browser" in lower_unslashed:
+            clean_t = rest_target.replace("in browser", "").replace("browser eke", "").strip()
+            return "browser_open", [clean_t]
+
+    # Check for natural language browser open intent
+    if any(k in lower_unslashed for k in ("browser eke", "browser eka", "open in browser", "preview in browser", "preview karanna", "open karanna browser", "open browser")):
+        tokens = stripped.split()
+        cand_target = ""
+        for tok in tokens:
+            clean_tok = tok.strip(".,;:?!'\"")
+            if clean_tok.startswith(("http://", "https://", "localhost:")):
+                cand_target = clean_tok
+                break
+            if any(clean_tok.lower().endswith(ext) for ext in (".html", ".htm", ".js", ".css", ".py", ".md")):
+                cand_target = clean_tok
+                break
+            res = resolve_target_file(clean_tok)
+            if res and res.is_file():
+                cand_target = str(res)
+                break
+        return "browser_open", [cand_target]
+
+    # Check for natural language skills intent
+    if any(k in lower_unslashed for k in ("skills monawada", "skills list", "show skills", "list skills", "thiyena skills")):
+        return "skills_list", []
+
+    if any(k in lower_unslashed for k in ("skill eka pennanna", "view skill", "skill details")):
+        tokens = stripped.split()
+        cand_name = ""
+        for tok in reversed(tokens):
+            clean_tok = tok.strip(".,;:?!'\"")
+            if clean_tok.lower() not in ("skill", "eka", "details", "pennanna", "view", "show"):
+                cand_name = clean_tok
+                break
+        if cand_name:
+            return "skill_show", [cand_name]
+        return "skills_list", []
+
+    if any(k in lower_unslashed for k in ("skill ekak hadanna", "skill hadanna", "aluth skill ekak", "learn skill", "create skill")):
+        tokens = stripped.split()
+        cand_name = "custom-skill"
+        for idx, tok in enumerate(tokens):
+            if tok.lower() in ("skill", "called", "namata", "name", "skill:") and idx + 1 < len(tokens):
+                nxt = tokens[idx + 1].strip(".,;:?!'\"")
+                if nxt.lower() not in ("ekak", "hadanna", "a", "new", "aluth"):
+                    cand_name = nxt
+                    break
+        return "skill_learn", [cand_name, stripped]
 
     # Conversational text without leading slash routes to canonical 'pai chat'
     # Use '--' sentinel so prompts beginning with a dash (e.g. '-5 is negative')
@@ -1869,6 +2315,55 @@ def run_interactive_shell(
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
+            elif action == "browser_open":
+                target = argv[0] if argv else ""
+                ok, msg = open_in_browser(target, stream=stream)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "skills_list":
+                output_fn(format_skills_list(color_enabled=color_enabled))
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "skill_show":
+                skill_name = argv[0] if argv else ""
+                skill = get_skill(skill_name)
+                if skill:
+                    output_fn(format_skill_detail(skill, color_enabled=color_enabled))
+                else:
+                    output_fn(colorize(f"Error: Skill '{skill_name}' not found. Type /skills to view all available skills.", RED, color_enabled))
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "skill_learn":
+                skill_name = argv[0] if argv else "custom-skill"
+                instructions = argv[1] if len(argv) > 1 else ""
+                description = argv[2] if len(argv) > 2 else f"Custom learned skill for {skill_name}"
+                ok, msg = save_skill(name=skill_name, description=description, guidance=instructions)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "skill_delete":
+                skill_name = argv[0] if argv else ""
+                ok, msg = delete_skill(skill_name)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
             elif action == "cmd":
                 import subprocess
                 cmd_to_run = argv[0]
@@ -1924,6 +2419,21 @@ def run_interactive_shell(
                 else:
                     os.environ.pop("PAI_CHAT_HISTORY", None)
 
+                if cmd_name == "chat":
+                    chat_query = argv[-1] if len(argv) > 1 else line
+                    matched_skills = find_matching_skills(chat_query)
+                    if matched_skills:
+                        skill_blocks = []
+                        for s in matched_skills:
+                            skill_blocks.append(f"- Skill: {s.get('name')}\n  Description: {s.get('description')}\n  Guidance:\n{s.get('guidance')}")
+                        os.environ["PAI_SKILL_HINTS"] = "\n\n".join(skill_blocks)
+                        top_s = matched_skills[0]
+                        output_fn(colorize(f"💡 Active Skill Applied: {top_s['name']} - {top_s['description']}", CYAN, color_enabled))
+                    else:
+                        os.environ.pop("PAI_SKILL_HINTS", None)
+                else:
+                    os.environ.pop("PAI_SKILL_HINTS", None)
+
                 spinner = ThinkingSpinner(stream) if cmd_name == "chat" else None
                 capture = CaptureStream(stream, on_first_write=spinner.stop if spinner else None)
                 try:
@@ -1939,6 +2449,7 @@ def run_interactive_shell(
                     if spinner:
                         spinner.stop()
                     os.environ.pop("PAI_CHAT_HISTORY", None)
+                    os.environ.pop("PAI_SKILL_HINTS", None)
 
                 cmd_out = capture.getvalue()
                 add_to_session_history(line, cmd_out)
@@ -1957,6 +2468,7 @@ def run_interactive_shell(
         set_terminal_title("", stream)
         os.environ.pop("PAI_SHELL_ACTIVE", None)
         os.environ.pop("PAI_ACTIVE_MODEL", None)
+        os.environ.pop("PAI_SKILL_HINTS", None)
         _active_model_override = None
         clear_session_history()
         _session_chat_turns.clear()

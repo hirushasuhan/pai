@@ -2090,6 +2090,180 @@ class TestInteractiveShellADR014(unittest.TestCase):
         act_nat, args_nat = parse_shell_line("game.html eke bugs thiyenam hadanna")
         self.assertEqual(act_nat, "fix")
 
+    def test_shell_browser_integration(self) -> None:
+        """Asserts open_in_browser opens URLs, files, auto-detects index.html, and handles errors."""
+        from shell import open_in_browser, parse_shell_line
+
+        with patch("webbrowser.open", return_value=True) as mock_wb:
+            # 1. URL opening
+            ok, msg = open_in_browser("http://localhost:8080/index.html")
+            self.assertTrue(ok)
+            self.assertIn("Opened URL", msg)
+            mock_wb.assert_called_with("http://localhost:8080/index.html")
+
+            # 2. File opening
+            with tempfile.TemporaryDirectory() as td:
+                temp_dir = Path(td)
+                test_html = temp_dir / "game.html"
+                test_html.write_text("<h1>3D Game</h1>", encoding="utf-8")
+
+                ok_f, msg_f = open_in_browser(str(test_html))
+                self.assertTrue(ok_f)
+                self.assertIn("game.html", msg_f)
+                self.assertTrue(mock_wb.called)
+
+            # 3. Nonexistent file
+            ok_missing, msg_missing = open_in_browser("nonexistent_page_12345.html")
+            self.assertFalse(ok_missing)
+            self.assertIn("not found", msg_missing.lower())
+
+        # 4. Command parsing
+        act, argv = parse_shell_line("/open Downloads\\game.html")
+        self.assertEqual(act, "browser_open")
+        self.assertEqual(argv[0], "Downloads\\game.html")
+
+        act_prev, argv_prev = parse_shell_line("/preview index.html")
+        self.assertEqual(act_prev, "browser_open")
+        self.assertEqual(argv_prev[0], "index.html")
+
+        act_nat, argv_nat = parse_shell_line("game.html browser eke open karanna")
+        self.assertEqual(act_nat, "browser_open")
+
+        act_nat2, argv_nat2 = parse_shell_line("preview in browser index.html")
+        self.assertEqual(act_nat2, "browser_open")
+
+    def test_shell_skills_system(self) -> None:
+        """Asserts starter skills seeding, listing, getting, saving, deleting, and matching."""
+        from shell import (
+            ensure_starter_skills,
+            list_skills,
+            get_skill,
+            save_skill,
+            delete_skill,
+            find_matching_skills,
+            format_skills_list,
+            format_skill_detail,
+            parse_shell_line,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {"PAI_SKILLS_DIR": td}):
+                # 1. Seeding starter skills
+                ensure_starter_skills()
+                skills = list_skills()
+                self.assertGreaterEqual(len(skills), 4)
+                names = [s["name"] for s in skills]
+                self.assertIn("web-3d-threejs", names)
+                self.assertIn("bug-fixer", names)
+                self.assertIn("web-app-scaffold", names)
+                self.assertIn("python-automation", names)
+
+                # 2. Get specific skill
+                s_three = get_skill("web-3d-threejs")
+                self.assertIsNotNone(s_three)
+                self.assertEqual(s_three["name"], "web-3d-threejs")
+
+                # 3. Find matching skills
+                matches_3d = find_matching_skills("create a 3d web game with treejs")
+                self.assertGreater(len(matches_3d), 0)
+                self.assertEqual(matches_3d[0]["name"], "web-3d-threejs")
+
+                matches_bug = find_matching_skills("fix this bug in script.py")
+                self.assertGreater(len(matches_bug), 0)
+                self.assertEqual(matches_bug[0]["name"], "bug-fixer")
+
+                # 4. Save custom skill
+                ok_s, msg_s = save_skill(
+                    name="dark-mode-game",
+                    description="Dark theme styling and neon graphics for canvas games",
+                    guidance="Always use #121212 background and neon green #00ff88 accents.",
+                )
+                self.assertTrue(ok_s)
+                self.assertIn("dark-mode-game", msg_s)
+
+                s_custom = get_skill("dark-mode-game")
+                self.assertIsNotNone(s_custom)
+                self.assertIn("neon", s_custom["guidance"])
+
+                matches_dark = find_matching_skills("game with neon accents")
+                self.assertTrue(any(m["name"] == "dark-mode-game" for m in matches_dark))
+
+                # 5. Format list and detail
+                ls_fmt = format_skills_list(color_enabled=False)
+                self.assertIn("web-3d-threejs", ls_fmt)
+                self.assertIn("dark-mode-game", ls_fmt)
+
+                det_fmt = format_skill_detail(s_custom, color_enabled=False)
+                self.assertIn("Skill: dark-mode-game", det_fmt)
+                self.assertIn("neon green", det_fmt)
+
+                # 6. Delete skill
+                ok_del, msg_del = delete_skill("dark-mode-game")
+                self.assertTrue(ok_del)
+                self.assertIsNone(get_skill("dark-mode-game"))
+
+        # 7. Parsing checks
+        act_ls, _ = parse_shell_line("/skills")
+        self.assertEqual(act_ls, "skills_list")
+
+        act_sh, args_sh = parse_shell_line("/skill web-3d-threejs")
+        self.assertEqual(act_sh, "skill_show")
+        self.assertEqual(args_sh[0], "web-3d-threejs")
+
+        act_lrn, args_lrn = parse_shell_line("/learn my-skill Focus on unit testing and clean code")
+        self.assertEqual(act_lrn, "skill_learn")
+        self.assertEqual(args_lrn[0], "my-skill")
+
+        act_fgt, args_fgt = parse_shell_line("/forget my-skill")
+        self.assertEqual(act_fgt, "skill_delete")
+        self.assertEqual(args_fgt[0], "my-skill")
+
+        act_nat_ls, _ = parse_shell_line("skills monawada thiyenne")
+        self.assertEqual(act_nat_ls, "skills_list")
+
+        act_nat_lrn, args_nat_lrn = parse_shell_line("skill ekak hadanna clean-code Always write unit tests first")
+        self.assertEqual(act_nat_lrn, "skill_learn")
+
+    def test_shell_repl_browser_and_skills_dispatch(self) -> None:
+        """Asserts REPL executes browser_open, skills commands, and injects PAI_SKILL_HINTS into chat."""
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {"PAI_SKILLS_DIR": td}):
+                captured_skill_hints: list[str] = []
+
+                def mock_exec(argv):
+                    if os.environ.get("PAI_SKILL_HINTS"):
+                        captured_skill_hints.append(os.environ["PAI_SKILL_HINTS"])
+                    print("Model response: Completed task successfully.")
+                    return 0
+
+                inputs = iter([
+                    "/skills",
+                    "/learn canvas-art Use HTML5 canvas 2D rendering context",
+                    "/skill canvas-art",
+                    "make a 3d game using threejs",
+                    "/open test.html",
+                    "/exit",
+                ])
+                outputs: list[str] = []
+
+                with patch("shell.execute_subcommand", side_effect=mock_exec), \
+                     patch("webbrowser.open", return_value=True), \
+                     patch("pai.enforce_sandbox_boundary"):
+                    code = run_interactive_shell(
+                        input_fn=lambda _: next(inputs),
+                        output_fn=outputs.append,
+                        stream=io.StringIO(),
+                    )
+                    self.assertEqual(code, 0)
+
+                combined = "\n".join(outputs)
+                self.assertIn("Agentic Skills Library", combined)
+                self.assertIn("successfully learned", combined)
+                self.assertIn("Skill: canvas-art", combined)
+                self.assertIn("Active Skill Applied: web-3d-threejs", combined)
+                self.assertGreater(len(captured_skill_hints), 0)
+                self.assertIn("web-3d-threejs", captured_skill_hints[0])
+
 
 if __name__ == "__main__":
     unittest.main()
