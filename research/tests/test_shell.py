@@ -1787,6 +1787,75 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertIn("--out", executed_cmds[0])
         self.assertIn("pai_output", executed_cmds[0])
 
+    def test_shell_smart_folder_save(self) -> None:
+        """Asserts /save to directory targets automatically chooses smart filename."""
+        from shell import save_session_output_to_file, clear_session_history, add_to_session_history
+
+        clear_session_history()
+        with tempfile.TemporaryDirectory() as td:
+            temp_dir = Path(td)
+            # HTML content auto-saves as game.html or index.html
+            add_to_session_history(
+                "create 3d web game",
+                "Here is your game:\n```html\n<!DOCTYPE html><html><body><canvas></canvas></body></html>\n```"
+            )
+            ok, msg = save_session_output_to_file(str(temp_dir))
+            self.assertTrue(ok)
+            self.assertTrue((temp_dir / "game.html").is_file())
+            self.assertIn("game.html", msg)
+
+            # Python content auto-saves as app.py
+            add_to_session_history(
+                "create python script",
+                "Here is python:\n```python\ndef solve(): pass\n```"
+            )
+            ok2, msg2 = save_session_output_to_file(str(temp_dir))
+            self.assertTrue(ok2)
+            self.assertTrue((temp_dir / "app.py").is_file())
+            self.assertIn("app.py", msg2)
+        clear_session_history()
+
+    def test_shell_terminal_title_and_compact_prompt(self) -> None:
+        """Asserts set_terminal_title emits OSC 0 and compact prompt header contains PAI and model."""
+        from shell import set_terminal_title, get_compact_prompt_header
+
+        stream = DummyStream()
+        set_terminal_title("Test Title", stream=stream)
+        self.assertIn("\033]0;Test Title\007", stream.getvalue())
+
+        hdr = get_compact_prompt_header(color_enabled=False)
+        self.assertIn("PAI", hdr)
+        self.assertIn("Hirusha Suhan", hdr)
+        self.assertIn("┌──[", hdr)
+
+    def test_shell_multiturn_chat_memory(self) -> None:
+        """Asserts multi-turn chat in shell tracks turns and injects --history."""
+        from shell import _session_chat_turns
+        _session_chat_turns.clear()
+
+        executed_cmds: list[list[str]] = []
+        inputs = iter(["first question", "second follow-up", "/exit"])
+        outputs: list[str] = []
+
+        def mock_exec(argv):
+            executed_cmds.append(list(argv))
+            return 0
+
+        with patch("shell.execute_subcommand", side_effect=mock_exec), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=io.StringIO(),
+            )
+            self.assertEqual(code, 0)
+
+        # First chat call had no history
+        self.assertNotIn("--history", executed_cmds[0])
+        # Second chat call had --history injected with first turn
+        self.assertIn("--history", executed_cmds[1])
+        _session_chat_turns.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

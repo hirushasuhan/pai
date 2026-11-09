@@ -1286,6 +1286,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (default: 0.0)")
     p_chat.add_argument("--seed", type=int, default=42, help="Generation seed (default: 42)")
     p_chat.add_argument("--model-timeout", type=float, default=None, help="Model generation HTTP request timeout in seconds")
+    p_chat.add_argument("--history", type=str, default=None, help="JSON-encoded prior conversation turns for multi-turn chat")
     p_chat.add_argument("--json", action="store_true", help="Output chat response and routing metadata in JSON format")
 
     # setup (Milestone P6)
@@ -3186,16 +3187,37 @@ def cmd_chat(args) -> int:
         except Exception:
             pass
 
+    history_context = ""
+    history_arg = getattr(args, "history", None)
+    if history_arg:
+        try:
+            turns = json.loads(history_arg)
+            if isinstance(turns, list) and turns:
+                formatted_turns = []
+                for turn in turns[-6:]:
+                    r = str(turn.get("role", "user")).capitalize()
+                    c = str(turn.get("content", "")).strip()
+                    if len(c) > 400:
+                        c = c[:400] + "..."
+                    formatted_turns.append(f"{r}: {c}")
+                if formatted_turns:
+                    history_context = "Prior Conversation Context (in-memory multi-turn session):\n" + "\n".join(formatted_turns) + "\n\n"
+        except Exception:
+            pass
+
     chat_prompt = (
         "You are Personal Agentic AI (PAI), a helpful, accurate, privacy-first local assistant.\n"
         f"System Clock: Current local date and time is {clock_ctx}.\n"
         f"{wifi_context}"
+        f"{history_context}"
         "Operating Mode: Fully offline local execution without internet access.\n"
         "Knowledge and Temporal Boundaries:\n"
         "- Your knowledge ends at your model training cut-off.\n"
         "- You do NOT have live web access, real-time news, or external search capabilities.\n"
         "- For live or time-sensitive facts (such as current events, office holders, market prices, news, weather, or sports scores), you must state clearly that you work offline, cannot verify live facts, and that your knowledge may be outdated.\n"
         "Instructions:\n"
+        "- When prior conversation context is provided, use it to understand follow-up questions and references (such as 'can you do it', 'make it faster', 'change it', 'explain that').\n"
+        "- When asked to write code, a web page, or a game, provide the complete, ready-to-run code in standard markdown code fences (```lang ... ```).\n"
         "- Reply in the same language and style as the user's message (if the user writes in Singlish, reply in natural Singlish; if Sinhala, reply in Sinhala; if English, reply in English).\n"
         "- Keep all code snippets, CLI commands, file paths, and technical identifiers in English.\n"
         "- Be concise, clear, and technically accurate.\n\n"

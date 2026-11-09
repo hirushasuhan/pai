@@ -515,6 +515,7 @@ def _entry_encoded_bytes(cmd: str, out: str) -> int:
 
 
 _session_history: Deque[Tuple[str, str, str]] = collections.deque(maxlen=MAX_HISTORY_ITEMS)
+_session_chat_turns: List[dict] = []
 
 
 def add_to_session_history(command: str, output: str) -> None:
@@ -761,10 +762,30 @@ def format_wifi_report(networks: List[dict], color_enabled: bool = False, stream
     return "\n".join(lines)
 
 
+def set_terminal_title(title: str, stream=sys.stdout) -> None:
+    """Sets the terminal window / tab title using ANSI OSC 0 sequence."""
+    try:
+        if getattr(stream, "isatty", lambda: False)():
+            stream.write(f"\033]0;{title}\007")
+            stream.flush()
+    except Exception:
+        pass
+
+
+def get_compact_prompt_header(color_enabled: bool = False, install_root: Optional[Path] = None) -> str:
+    """Returns compact status bar displayed immediately above the prompt."""
+    ver = get_install_root_version(install_root)
+    model_name = get_resident_model_name()
+    status_text = f" PAI {ver} | Model: {model_name} | Hirusha Suhan "
+    bar = f"┌──[{status_text}]"
+    return colorize(bar, DIM, color_enabled)
+
+
 def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
     """
     Saves the last command output or chat response from in-memory session history to target_path.
     Extracts fenced code if present (e.g. ```lang ... ```); otherwise saves full response.
+    Supports directory targets (e.g. 'Downloads', 'Desktop', folders) with intelligent auto-naming.
     Creates parent directories if necessary.
     """
     history = get_session_history()
@@ -772,23 +793,64 @@ def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
         return False, "No previous output in session history to save."
 
     last_entry = history[-1]
+    last_query = last_entry[1]
     last_output = last_entry[2]
     if not last_output or not last_output.strip():
         return False, "Previous command produced no output to save."
 
     import re
-    code_match = re.search(r"```(?:\w+)?\r?\n(.*?)\r?\n```", last_output, re.DOTALL)
+    code_match = re.search(r"```(\w+)?\r?\n(.*?)\r?\n```", last_output, re.DOTALL)
+    code_lang = ""
     if code_match:
-        content = code_match.group(1)
+        code_lang = (code_match.group(1) or "").lower()
+        content = code_match.group(2)
     else:
         content = last_output.strip()
 
+    target_clean = target_path_str.strip().strip('"').strip("'")
+    target_lower = target_clean.lower()
+    user_home = Path.home()
+
+    if target_lower in ("downloads", "~/downloads"):
+        base_dir = user_home / "Downloads"
+        is_dir_target = True
+    elif target_lower in ("desktop", "~/desktop"):
+        base_dir = user_home / "Desktop"
+        is_dir_target = True
+    elif target_lower in ("documents", "~/documents"):
+        base_dir = user_home / "Documents"
+        is_dir_target = True
+    else:
+        candidate_p = Path(target_clean).expanduser().resolve()
+        if candidate_p.is_dir() or (not candidate_p.suffix and not target_clean.endswith((".py", ".html", ".txt", ".json", ".js", ".md", ".rs", ".csv"))):
+            base_dir = candidate_p
+            is_dir_target = True
+        else:
+            base_dir = candidate_p.parent
+            is_dir_target = False
+            final_p = candidate_p
+
+    if is_dir_target:
+        c_lower = content.lower()
+        if "<html" in c_lower or "<!doctype" in c_lower or "three.js" in c_lower or code_lang == "html":
+            default_name = "game.html" if ("game" in last_query.lower() or "canvas" in c_lower or "game" in c_lower) else "index.html"
+        elif "def " in content or "import " in content or code_lang in ("python", "py"):
+            default_name = "app.py"
+        elif "function " in content or "const " in content or code_lang in ("javascript", "js"):
+            default_name = "script.js"
+        elif code_lang == "json" or (content.startswith("{") and content.endswith("}")):
+            default_name = "data.json"
+        elif code_lang in ("rust", "rs"):
+            default_name = "main.rs"
+        else:
+            default_name = "output.txt"
+        final_p = base_dir / default_name
+
     try:
-        p = Path(target_path_str).resolve()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        final_p.parent.mkdir(parents=True, exist_ok=True)
+        final_p.write_text(content, encoding="utf-8")
         byte_count = len(content.encode("utf-8"))
-        return True, f"Saved {byte_count:,} bytes to {p}"
+        return True, f"Saved {byte_count:,} bytes to {final_p}"
     except Exception as e:
         return False, f"Failed to save file: {e}"
 
@@ -988,14 +1050,22 @@ def run_interactive_shell(
         output_fn("Sandbox execution boundary verified fail-closed.")
         output_fn(get_shell_banner(color_enabled=color_enabled))
 
-    styled_prompt = colorize(prompt_str, BRIGHT_CYAN, color_enabled)
     current_dims = get_terminal_dimensions()
+    ver = get_install_root_version()
+    model_name = get_resident_model_name()
+    set_terminal_title(f"PAI {ver} | Model: {model_name} | Developed by Hirusha Suhan", stream)
 
     os.environ["PAI_SHELL_ACTIVE"] = "1"
     try:
         while True:
             if pinned:
                 current_dims = check_and_apply_resize(current_dims, stream)
+
+            prompt_top = get_compact_prompt_header(color_enabled=color_enabled)
+            if os.environ.get("PAI_SIMPLE_PROMPT") == "1":
+                styled_prompt = colorize(prompt_str, BRIGHT_CYAN, color_enabled)
+            else:
+                styled_prompt = f"{prompt_top}\n{colorize('└──pai> ', BRIGHT_CYAN, color_enabled)}"
 
             try:
                 line = input_fn(styled_prompt)
@@ -1017,6 +1087,7 @@ def run_interactive_shell(
                 output_fn(SHELL_HELP)
                 continue
             elif action == "clear":
+                _session_chat_turns.clear()
                 if pinned:
                     cols, _ = get_terminal_dimensions()
                     color_enabled = should_enable_color(stream)
@@ -1108,6 +1179,10 @@ def run_interactive_shell(
                 if cmd_name == "code" and "--out" not in exec_argv:
                     exec_argv = exec_argv + ["--out", "pai_output"]
 
+                if cmd_name == "chat" and _session_chat_turns:
+                    hist_json = json.dumps(_session_chat_turns[-6:])
+                    exec_argv = exec_argv + ["--history", hist_json]
+
                 spinner = ThinkingSpinner(stream) if cmd_name == "chat" else None
                 capture = CaptureStream(stream, on_first_write=spinner.stop if spinner else None)
                 try:
@@ -1125,12 +1200,22 @@ def run_interactive_shell(
 
                 cmd_out = capture.getvalue()
                 add_to_session_history(line, cmd_out)
+                if cmd_name == "chat":
+                    chat_prompt = argv[-1] if argv else line
+                    _session_chat_turns.append({"role": "user", "content": chat_prompt})
+                    if cmd_out and cmd_out.strip():
+                        _session_chat_turns.append({"role": "assistant", "content": cmd_out.strip()})
+                    if len(_session_chat_turns) > 12:
+                        del _session_chat_turns[:-12]
+
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
     finally:
+        set_terminal_title("", stream)
         os.environ.pop("PAI_SHELL_ACTIVE", None)
         clear_session_history()
+        _session_chat_turns.clear()
         if pinned:
             cleanup_pinned_layout(stream)
         else:

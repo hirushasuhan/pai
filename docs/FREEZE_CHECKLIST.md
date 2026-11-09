@@ -1,8 +1,8 @@
 # Release N+1 Freeze Checklist & Evaluation Window Guide
 
 **Document ID:** `docs/FREEZE_CHECKLIST.md`  
-**Purpose:** Defines the exact sequence, verification commands, and operational procedures required to freeze Release Candidate `v1.1.0-rc3` and execute the 14-day N+1 Evaluation Window.  
-**Freeze Definition:** The "Freeze" is formally defined as the exact moment the git tag (e.g. `v1.1.0-rc3`) exists on the specific commit whose `research/` and `core/` tree IDs are recorded. From that moment forward, strictly NO code modifications to `research/` or `core/` may occur.
+**Purpose:** Defines the exact sequence, verification commands, and operational procedures required to freeze Release Candidate `v1.1.0-rc4` and execute the 14-day N+1 Evaluation Window.  
+**Freeze Definition:** The "Freeze" is formally defined as the exact moment the git tag (e.g. `v1.1.0-rc4`) exists on the specific commit whose `research/` and `core/` tree IDs are recorded. From that moment forward, strictly NO code modifications to `research/` or `core/` may occur.
 
 ---
 
@@ -30,7 +30,7 @@ All preconditions must be verified and formally accepted before tagging the free
     3. Commit `research/catalog.json` to git. [Completed in commit `e618920`]
     4. Regenerate evidence logs on the new clean tree via `python tools/save_unit_test_evidence.py`.
     5. Record new research tree ID and update pins:
-       - **New Pinned Research Tree ID:** `d68600277bbdfea021355b03e832db52f4337ba5` (updated in Milestone D2b-fix, Finding GF)
+       - **New Pinned Research Tree ID:** `ad59a3634c3c12e50372568a7b7dbdbd8066c4ed` (updated in Milestone D2b-fix, Finding GF)
        - Baseline `v1.0.0-rc1` research tree ID: `506e520b33a0af8c3f0276114483ce26b9bd3787`
     *(The private key path is never written to any file, log, or commit message).*
 - [x] **Precondition 6 (Branding Touch-up & Icons Rebuilt - Accepted in Commit `d13db15`):**
@@ -59,29 +59,29 @@ Wait for GitHub Actions run to complete green across all 3 jobs (`python-researc
 
 ### Step 2.2: Tag Candidate Commit (Declares the Freeze)
 User approves in chat (after Finding AV confirmation):
-Annotate tag `v1.1.0-rc3` on the exact candidate commit and push the tag only (never push master):
+Annotate tag `v1.1.0-rc4` on the exact candidate commit and push the tag only (never push master):
 ```powershell
-git tag -a v1.1.0-rc3 <candidate_sha> -m "Release Candidate 1.1.0-rc3 for 14-day N+1 Evaluation Window"
-git push origin v1.1.0-rc3
+git tag -a v1.1.0-rc4 <candidate_sha> -m "Release Candidate 1.1.0-rc4 for 14-day N+1 Evaluation Window"
+git push origin v1.1.0-rc4
 ```
 
 ### Step 2.3: Verify Tagged Trees Invariant
 Verify that the tag holds the exact pinned tree IDs:
 ```powershell
 # 1. Verify Core Tree invariant (must match 14c60746ca9a41d91aafd88cc0c7d98719cfe3a9)
-git rev-parse v1.1.0-rc3:core
+git rev-parse v1.1.0-rc4:core
 
-# 2. Verify Research Tree invariant (must match d68600277bbdfea021355b03e832db52f4337ba5)
-git rev-parse v1.1.0-rc3:research
+# 2. Verify Research Tree invariant (must match ad59a3634c3c12e50372568a7b7dbdbd8066c4ed)
+git rev-parse v1.1.0-rc4:research
 
 # 3. Verify evaluated binary SHA-256 with mandatory flag (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
-python tools/check_pins.py --ref v1.1.0-rc3 --require-binary
+python tools/check_pins.py --ref v1.1.0-rc4 --require-binary
 ```
 
 ### Step 2.4: Build Final Payload & Installer from Tag
 Build the complete installer directly from the tag:
 ```powershell
-python packaging/build_installer.py --version 1.1.0-rc3 --tag v1.1.0-rc3
+python packaging/build_installer.py --version 1.1.0-rc4 --tag v1.1.0-rc4
 ```
 Verify the payload manifest fields:
 - `catalog_source`: `research-tree`
@@ -120,7 +120,7 @@ User runs the installer check in a clean Windows Sandbox/VM per Precondition 8. 
    - Installer SHA-256 hash (`dist/PAI-Setup-1.1.0-rc2-x64.exe`)
    - Three Evaluated Pins:
      - `core/` tree ID: `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`
-     - `research/` tree ID: `d68600277bbdfea021355b03e832db52f4337ba5`
+     - `research/` tree ID: `ad59a3634c3c12e50372568a7b7dbdbd8066c4ed`
      - `pai-core.exe` SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`
 
 ---
