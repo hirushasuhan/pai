@@ -1956,7 +1956,13 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
             return "canonical", argv
 
         # Fail-safe: Unrecognized slash commands are NEVER forwarded to the reasoner
-        return "unknown_slash", [tokens[0]]
+        # If tokens[0] contains internal slashes/backslashes (e.g. /tmp/app.py, /path/to/file)
+        # or resolves to an existing filesystem entity, it is a POSIX path rather than a slash command.
+        is_path_token = "/" in tokens[0][1:] or "\\" in tokens[0] or (
+            resolve_target_file(tokens[0]) is not None or Path(tokens[0]).exists()
+        )
+        if not is_path_token:
+            return "unknown_slash", [tokens[0]]
 
     # Check for unslashed 'edit' or 'modify' command
     lower_unslashed = stripped.lower()
