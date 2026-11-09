@@ -90,6 +90,9 @@ SHELL_HELP = (
     "  /chat <prompt>      Chat with the assistant (or enter prompt directly without slash)\n"
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
+    "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
+    "  /project <dir> [type] Scaffold a new project (web/python/custom) in target directory\n"
+    "  /model [name]       View available models or switch active resident model on the fly\n"
     "  /analyze <path>     Analyze codebase architecture, dependencies, and risks\n"
     "  /docs <path>        Search and synthesize local documentation (.txt, .md, .csv)\n"
     "  /save <path>        Save the last response or extracted code block to a local file\n"
@@ -236,8 +239,17 @@ def get_terminal_dimensions() -> Tuple[int, int]:
         return 80, 24
 
 
+_active_model_override: Optional[str] = None
+
+
 def get_resident_model_name() -> str:
     """Retrieves active resident model name or returns 'no model loaded yet'."""
+    global _active_model_override
+    if _active_model_override:
+        return _active_model_override
+    env_override = os.environ.get("PAI_ACTIVE_MODEL")
+    if env_override:
+        return env_override
     try:
         from router import ModelRouter
         router = ModelRouter(load_system_profile=True)
@@ -247,6 +259,82 @@ def get_resident_model_name() -> str:
     except Exception:
         pass
     return "no model loaded yet"
+
+
+def get_available_models() -> List[str]:
+    """Returns list of installed local model names from Ollama, or fallback catalog."""
+    try:
+        from pai import probe_ollama_server
+        info = probe_ollama_server()
+        if info.get("reachable") and info.get("models"):
+            return list(info["models"])
+    except Exception:
+        pass
+    try:
+        from router import ModelRouter
+        router = ModelRouter(load_system_profile=True)
+        return list(router.candidates.keys())
+    except Exception:
+        pass
+    return ["qwen2.5-coder:7b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"]
+
+
+def resolve_model_name(query: str) -> Optional[str]:
+    """Resolves exact or fuzzy model name to an available model."""
+    q = query.strip().lower()
+    avail = get_available_models()
+    for m in avail:
+        if m.lower() == q:
+            return m
+    for m in avail:
+        base = m.split(":")[0].lower()
+        if base == q:
+            return m
+    matches = [m for m in avail if q in m.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        for m in matches:
+            if m.lower().startswith(q):
+                return m
+        return matches[0]
+    return None
+
+
+def switch_active_model(target_model_str: str, stream=sys.stdout) -> Tuple[bool, str]:
+    """
+    Switches active resident model override in the shell.
+    Updates terminal title bar and status prompt.
+    """
+    global _active_model_override
+    resolved = resolve_model_name(target_model_str)
+    avail = get_available_models()
+    if not resolved:
+        avail_list = "\n  - " + "\n  - ".join(avail)
+        return False, f"Error: Model '{target_model_str}' not found.\nAvailable installed models:{avail_list}"
+
+    _active_model_override = resolved
+    os.environ["PAI_ACTIVE_MODEL"] = resolved
+
+    ver = get_install_root_version()
+    set_terminal_title(f"PAI {ver} | Model: {resolved} | Developed by Hirusha Suhan", stream)
+    return True, f"Active model switched to '{resolved}'"
+
+
+def format_models_list(color_enabled: bool = False) -> str:
+    """Formats available models with active indicator and memory info."""
+    avail = get_available_models()
+    current = get_resident_model_name()
+    lines = [colorize("=== Available Local Models ===", BOLD, color_enabled)]
+    for m in avail:
+        if m == current:
+            prefix = colorize(" ● [ACTIVE] ", GREEN, color_enabled)
+        else:
+            prefix = "   [      ] "
+        lines.append(f"{prefix}{colorize(m, CYAN, color_enabled)}")
+    lines.append(colorize("─" * 40, DIM, color_enabled))
+    lines.append(colorize(f"To switch model, type: /model <name> (e.g. /model {avail[0]})", DIM, color_enabled))
+    return "\n".join(lines)
 
 
 def get_shell_logo_lines(color_enabled: bool = False, stream=sys.stdout) -> List[str]:
@@ -1004,6 +1092,282 @@ def edit_target_file(
     return True, msg, updated_content
 
 
+def create_project_scaffold(
+    target_dir_str: str,
+    project_type_or_prompt: str = "",
+    stream=sys.stdout,
+) -> Tuple[bool, str, List[str]]:
+    """
+    Creates a new project directory and scaffolds initial files based on type or instructions.
+    Supports web (HTML/CSS/JS), Python, and custom project scaffolding.
+    Returns (success, message, created_files).
+    """
+    clean_target = target_dir_str.strip().strip('"').strip("'")
+    if not clean_target:
+        clean_target = "my_project"
+
+    target_path = Path(clean_target).expanduser().resolve()
+    try:
+        target_path.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return False, f"Error creating directory '{target_path}': {e}", []
+
+    prompt_lower = (project_type_or_prompt or "").lower()
+    created_files: List[str] = []
+
+    # 1. Web / HTML / Game project
+    if any(k in prompt_lower for k in ("web", "html", "game", "threejs", "frontend", "canvas", "css", "js")) or not prompt_lower:
+        index_html = target_path / "index.html"
+        style_css = target_path / "style.css"
+        script_js = target_path / "script.js"
+        readme_md = target_path / "README.md"
+
+        title = target_path.name.replace("_", " ").replace("-", " ").title()
+        if not index_html.exists():
+            index_html.write_text(
+                f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+                f"  <meta charset=\"UTF-8\">\n"
+                f"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+                f"  <title>{title}</title>\n"
+                f"  <link rel=\"stylesheet\" href=\"style.css\">\n"
+                f"</head>\n<body>\n"
+                f"  <div id=\"app\">\n"
+                f"    <h1>{title}</h1>\n"
+                f"    <canvas id=\"mainCanvas\"></canvas>\n"
+                f"  </div>\n"
+                f"  <script src=\"script.js\"></script>\n"
+                f"</body>\n</html>\n",
+                encoding="utf-8"
+            )
+            created_files.append("index.html")
+
+        if not style_css.exists():
+            style_css.write_text(
+                "body {\n  margin: 0;\n  padding: 0;\n  background: #111;\n  color: #fff;\n  font-family: sans-serif;\n  display: flex;\n  justify-content: center;\n  align-items: center;\n  min-height: 100vh;\n}\n#app {\n  text-align: center;\n}\ncanvas {\n  border: 1px solid #333;\n  border-radius: 8px;\n  background: #000;\n}\n",
+                encoding="utf-8"
+            )
+            created_files.append("style.css")
+
+        if not script_js.exists():
+            js_content = (
+                f"// {title} - Main JavaScript Entry\n"
+                f"console.log('{title} initialized.');\n"
+                "window.addEventListener('DOMContentLoaded', () => {\n"
+                "  const canvas = document.getElementById('mainCanvas');\n"
+                "  if (canvas) {\n"
+                "    canvas.width = 800;\n"
+                "    canvas.height = 600;\n"
+                "    const ctx = canvas.getContext('2d');\n"
+                "    ctx.fillStyle = '#00f';\n"
+                "    ctx.fillRect(50, 50, 100, 100);\n"
+                "  }\n"
+                "});\n"
+            )
+            script_js.write_text(js_content, encoding="utf-8")
+            created_files.append("script.js")
+
+        if not readme_md.exists():
+            readme_md.write_text(
+                f"# {title}\n\nProject initialized by PAI.\n\n## Getting Started\nOpen `index.html` in your web browser to run the project.\n",
+                encoding="utf-8"
+            )
+            created_files.append("README.md")
+
+    # 2. Python project
+    elif any(k in prompt_lower for k in ("python", "py", "script", "api", "backend", "ai")):
+        main_py = target_path / "main.py"
+        req_txt = target_path / "requirements.txt"
+        readme_md = target_path / "README.md"
+        gitignore = target_path / ".gitignore"
+
+        title = target_path.name
+        if not main_py.exists():
+            main_py.write_text(
+                f"#!/usr/bin/env python3\n\"\"\"{title} - Main application entry point.\"\"\"\n\ndef main():\n    print(\"Hello from {title}!\")\n\nif __name__ == \"__main__\":\n    main()\n",
+                encoding="utf-8"
+            )
+            created_files.append("main.py")
+
+        if not req_txt.exists():
+            req_txt.write_text("# Dependencies\n", encoding="utf-8")
+            created_files.append("requirements.txt")
+
+        if not readme_md.exists():
+            readme_md.write_text(
+                f"# {title}\n\nProject initialized by PAI.\n\n## Run\n```bash\npython main.py\n```\n",
+                encoding="utf-8"
+            )
+            created_files.append("README.md")
+
+        if not gitignore.exists():
+            gitignore.write_text("__pycache__/\n*.pyc\n.env\nvenv/\n", encoding="utf-8")
+            created_files.append(".gitignore")
+
+    # 3. Custom / General project
+    else:
+        title = target_path.name
+        readme_md = target_path / "README.md"
+        main_file = target_path / "main.py"
+
+        if not readme_md.exists():
+            readme_md.write_text(
+                f"# {title}\n\nProject initialized by PAI.\nDescription: {project_type_or_prompt or 'New project'}\n",
+                encoding="utf-8"
+            )
+            created_files.append("README.md")
+
+        if not main_file.exists():
+            main_file.write_text(
+                f"# {title}\ndef main():\n    print('Project {title} initialized.')\n\nif __name__ == '__main__':\n    main()\n",
+                encoding="utf-8"
+            )
+            created_files.append("main.py")
+
+    file_bullets = "\n  - " + "\n  - ".join(created_files) if created_files else "  (directory already existed)"
+    msg = (
+        f"[Successfully initialized new project in {target_path}]\n"
+        f"Files created:{file_bullets}"
+    )
+    return True, msg, created_files
+
+
+def analyze_and_fix_bugs(
+    target_str: str,
+    instructions: str = "",
+    stream=sys.stdout,
+    executor: Optional[Callable[[List[str]], int]] = None,
+) -> Tuple[bool, str, List[str]]:
+    """
+    Analyzes a target file or project folder for bugs, errors, and logic flaws,
+    creates .bak backup(s), and applies fixes directly to the file(s).
+    Returns (success, report, fixed_files).
+    """
+    clean_target = target_str.strip().strip('"').strip("'")
+    if not clean_target:
+        clean_target = "."
+
+    resolved = resolve_target_file(clean_target)
+    is_file = resolved is not None and resolved.is_file()
+    is_dir = False
+    if not is_file:
+        cand_dir = Path(clean_target).expanduser().resolve()
+        if cand_dir.is_dir():
+            is_dir = True
+            resolved = cand_dir
+
+    if not is_file and not is_dir:
+        return False, f"Error: Target '{clean_target}' not found (must be an existing file or project directory).", []
+
+    fixed_files: List[str] = []
+    reports: List[str] = []
+
+    if is_file:
+        files_to_check = [resolved]
+    else:
+        exts = (".html", ".htm", ".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".rs", ".json")
+        files_to_check = []
+        for p in resolved.rglob("*"):
+            if p.is_file() and p.suffix.lower() in exts:
+                parts = p.parts
+                if any(j in parts for j in (".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build")):
+                    continue
+                files_to_check.append(p)
+                if len(files_to_check) >= 5:
+                    break
+
+    if not files_to_check:
+        return False, f"No code files found in '{resolved}' to analyze.", []
+
+    if executor is None:
+        exec_fn = execute_subcommand
+    else:
+        exec_fn = executor
+
+    for fpath in files_to_check:
+        try:
+            orig_content = fpath.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                orig_content = fpath.read_text(encoding="cp1252")
+            except Exception:
+                continue
+        except Exception:
+            continue
+
+        if not orig_content.strip():
+            continue
+
+        suffix = fpath.suffix.lstrip(".").lower()
+        lang_map = {
+            "html": "html", "htm": "html", "py": "python",
+            "js": "javascript", "ts": "typescript", "rs": "rust", "css": "css",
+        }
+        lang = lang_map.get(suffix, suffix or "text")
+
+        fix_prompt = (
+            f"You are an expert software debugger and code quality auditor.\n"
+            f"Analyze the following file '{fpath.name}' for bugs, syntax errors, and runtime issues:\n"
+            f"```{lang}\n{orig_content}\n```\n\n"
+            f"User notes / issues:\n{instructions or 'Identify and fix all bugs, syntax errors, broken imports, and logic flaws.'}\n\n"
+            f"Tasks:\n"
+            f"1. State what bugs or issues were found and how they were fixed.\n"
+            f"2. Output the complete, fixed code inside a single ```{lang} ... ``` code block.\n"
+            f"Provide the complete ready-to-run file without any omissions."
+        )
+
+        spinner = ThinkingSpinner(stream)
+        capture = CaptureStream(stream, on_first_write=spinner.stop)
+        try:
+            spinner.start()
+            with contextlib.redirect_stdout(capture):
+                exec_fn(["chat", "--", fix_prompt])
+        except KeyboardInterrupt:
+            return False, "Operation cancelled by user.", fixed_files
+        except Exception as e:
+            reports.append(f"Error analyzing '{fpath.name}': {e}")
+            continue
+        finally:
+            spinner.stop()
+
+        model_out = capture.getvalue()
+        if not model_out or not model_out.strip():
+            continue
+
+        import re
+        code_blocks = re.findall(r"```(?:\w+)?\r?\n(.*?)\r?\n```", model_out, re.DOTALL)
+        if code_blocks:
+            fixed_code = max(code_blocks, key=len)
+            explanation = model_out.split("```")[0].strip()
+        else:
+            fixed_code = model_out.strip()
+            explanation = "Applied bug fixes to file."
+
+        bak_path = fpath.with_suffix(fpath.suffix + ".bak")
+        try:
+            bak_path.write_text(orig_content, encoding="utf-8")
+        except Exception:
+            pass
+
+        try:
+            fpath.write_text(fixed_code, encoding="utf-8")
+            fixed_files.append(str(fpath))
+            summary_header = f"=== Bug Fix Report: {fpath.name} ==="
+            expl_text = "\n".join(explanation.splitlines()[:6]) if explanation else "Identified and resolved code issues."
+            reports.append(
+                f"{summary_header}\n"
+                f"{expl_text}\n"
+                f"[Updated: {fpath}]\n"
+                f"[Backup: {bak_path}]"
+            )
+        except Exception as e:
+            reports.append(f"Error writing fixed file '{fpath}': {e}")
+
+    if not fixed_files:
+        return False, "No fixes applied. (Code was clean or model returned empty response)", []
+
+    return True, "\n\n".join(reports), fixed_files
+
+
 def get_shell_banner(
     endpoint: str = "http://127.0.0.1:11434",
     color_enabled: Optional[bool] = None,
@@ -1139,6 +1503,43 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 instructions = rest.split(None, 1)[1] if len(rest.split(None, 1)) > 1 else " ".join(args[1:])
             return "edit", [target, instructions]
 
+        if raw_cmd == "model":
+            args = tokens[1:]
+            if not args or args[0].lower() in ("list", "ls", "show"):
+                return "model_list", []
+            target_model = args[1] if args[0].lower() in ("switch", "use", "set") and len(args) > 1 else args[0]
+            return "model_switch", [target_model]
+
+        if raw_cmd in ("switch", "use"):
+            args = tokens[1:]
+            if not args:
+                return "model_list", []
+            return "model_switch", [args[0]]
+
+        if raw_cmd in ("project", "new"):
+            args = tokens[1:]
+            target_dir = args[0] if args else "my_project"
+            rest_idx = stripped.find(tokens[0]) + len(tokens[0])
+            rest = stripped[rest_idx:].strip()
+            if len(args) > 1:
+                idx2 = rest.find(args[0]) + len(args[0])
+                proj_prompt = rest[idx2:].strip()
+            else:
+                proj_prompt = ""
+            return "project", [target_dir, proj_prompt]
+
+        if raw_cmd in ("fix", "bugfix"):
+            args = tokens[1:]
+            target_file_or_dir = args[0] if args else "."
+            rest_idx = stripped.find(tokens[0]) + len(tokens[0])
+            rest = stripped[rest_idx:].strip()
+            if len(args) > 1:
+                idx2 = rest.find(args[0]) + len(args[0])
+                fix_inst = rest[idx2:].strip()
+            else:
+                fix_inst = ""
+            return "fix", [target_file_or_dir, fix_inst]
+
         if raw_cmd == "history":
             args = tokens[1:]
             if args:
@@ -1187,6 +1588,70 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         except Exception:
             pass
 
+    # Check for unslashed project command
+    if lower_unslashed.startswith("project ") or lower_unslashed.startswith("new project "):
+        try:
+            tokens = tokenize_windows_line(stripped)
+            target = tokens[1] if len(tokens) > 1 and tokens[0].lower() == "project" else (tokens[2] if len(tokens) > 2 else "my_project")
+            idx = stripped.find(target) + len(target)
+            inst = stripped[idx:].strip() if idx < len(stripped) else ""
+            return "project", [target, inst]
+        except Exception:
+            pass
+
+    # Check for unslashed fix / bugfix command
+    if lower_unslashed.startswith("fix ") or lower_unslashed.startswith("bugfix "):
+        try:
+            tokens = tokenize_windows_line(stripped)
+            target = tokens[1] if len(tokens) > 1 else "."
+            idx = stripped.find(target) + len(target)
+            inst = stripped[idx:].strip() if idx < len(stripped) else ""
+            return "fix", [target, inst]
+        except Exception:
+            pass
+
+    # Check for natural language model change intent
+    if any(k in lower_unslashed for k in ("change model", "switch model", "use model", "model eka change", "model eka wenas", "model maru", "aluth model")):
+        if any(q in lower_unslashed for q in ("monawada", "what", "list", "show", "available", "thiyena")):
+            return "model_list", []
+        tokens = stripped.split()
+        cand = None
+        for t in reversed(tokens):
+            clean_t = t.strip(".,;:?!'\"")
+            if clean_t and clean_t.lower() not in ("model", "eka", "ekata", "change", "switch", "use", "to", "karanna", "maru", "wenas"):
+                cand = clean_t
+                break
+        if cand:
+            return "model_switch", [cand]
+        return "model_list", []
+
+    # Check for natural language project creation intent
+    if any(k in lower_unslashed for k in ("folder ekak hadala", "aluth project", "new project", "create project", "start project", "project ekak patan", "hadanna aluth project")):
+        tokens = stripped.split()
+        cand_folder = "my_project"
+        for idx, tok in enumerate(tokens):
+            if tok.lower() in ("folder", "project", "folder:", "called", "in", "namata") and idx + 1 < len(tokens):
+                nxt = tokens[idx + 1].strip(".,;:?!'\"")
+                if nxt and nxt.lower() not in ("ekak", "hadala", "patan", "ganna", "a", "new", "aluth"):
+                    cand_folder = nxt
+                    break
+        return "project", [cand_folder, stripped]
+
+    # Check for natural language bug analysis and fix intent
+    if any(k in lower_unslashed for k in ("bug", "bugs", "error", "errors", "weradi")) and any(k in lower_unslashed for k in ("hadanna", "fix", "analyze", "check", "balala", "repair", "balanna")):
+        target = "."
+        for tok in stripped.split():
+            clean_tok = tok.strip(".,;:?!'\"")
+            res = resolve_target_file(clean_tok)
+            if res is not None:
+                target = str(res)
+                break
+            cand_p = Path(clean_tok).expanduser()
+            if cand_p.is_dir() or cand_p.is_file():
+                target = str(cand_p.resolve())
+                break
+        return "fix", [target, stripped]
+
     # Check for natural language editing intent referencing an existing file
     edit_keywords = ("edit", "modify", "wenas", "update", "change")
     if any(k in lower_unslashed for k in edit_keywords):
@@ -1231,6 +1696,7 @@ def run_interactive_shell(
     Runs the PAI interactive terminal REPL (ADR-014).
     Accepts custom input/output callables and stream for deterministic unit testing.
     """
+    global _active_model_override
     if input_fn is None:
         input_fn = input
     if output_fn is None:
@@ -1353,6 +1819,56 @@ def run_interactive_shell(
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
+            elif action == "model_list":
+                output_fn(format_models_list(color_enabled=color_enabled))
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "model_switch":
+                target_model = argv[0]
+                ok, msg = switch_active_model(target_model, stream=stream)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "project":
+                target_folder = argv[0] if argv else "my_project"
+                proj_prompt = argv[1] if len(argv) > 1 else ""
+                output_fn(colorize(f"Scaffolding project in '{target_folder}'...", CYAN, color_enabled))
+                ok, msg, created = create_project_scaffold(target_folder, proj_prompt, stream=stream)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                if ok:
+                    _session_chat_turns.append({"role": "user", "content": f"Create project in {target_folder}: {proj_prompt}"})
+                    _session_chat_turns.append({"role": "assistant", "content": msg})
+                    if len(_session_chat_turns) > 12:
+                        del _session_chat_turns[:-12]
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "fix":
+                target = argv[0] if argv else "."
+                inst = argv[1] if len(argv) > 1 else ""
+                output_fn(colorize(f"Analyzing and fixing bugs in '{target}' with resident model...", CYAN, color_enabled))
+                ok, msg, fixed = analyze_and_fix_bugs(target, inst, stream=stream)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                if ok and fixed:
+                    _session_chat_turns.append({"role": "user", "content": f"Fix bugs in {target}: {inst}"})
+                    _session_chat_turns.append({"role": "assistant", "content": f"Fixed bugs in {len(fixed)} file(s):\n{msg}"})
+                    if len(_session_chat_turns) > 12:
+                        del _session_chat_turns[:-12]
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
             elif action == "cmd":
                 import subprocess
                 cmd_to_run = argv[0]
@@ -1399,6 +1915,10 @@ def run_interactive_shell(
                 if cmd_name == "code" and "--out" not in exec_argv:
                     exec_argv = exec_argv + ["--out", "pai_output"]
 
+                if _active_model_override and "--model" not in exec_argv:
+                    if cmd_name in ("chat", "code", "analyze", "docs", "forecast"):
+                        exec_argv = exec_argv + ["--model", _active_model_override]
+
                 if cmd_name == "chat" and _session_chat_turns:
                     os.environ["PAI_CHAT_HISTORY"] = json.dumps(_session_chat_turns[-6:])
                 else:
@@ -1436,6 +1956,8 @@ def run_interactive_shell(
     finally:
         set_terminal_title("", stream)
         os.environ.pop("PAI_SHELL_ACTIVE", None)
+        os.environ.pop("PAI_ACTIVE_MODEL", None)
+        _active_model_override = None
         clear_session_history()
         _session_chat_turns.clear()
         if pinned:

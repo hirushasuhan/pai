@@ -1958,6 +1958,138 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertIn("Successfully updated", combined)
         _session_chat_turns.clear()
 
+    def test_shell_model_switching(self) -> None:
+        """Asserts model listing, resolving, switching, and REPL argv injection."""
+        from shell import (
+            get_available_models,
+            resolve_model_name,
+            switch_active_model,
+            format_models_list,
+            parse_shell_line,
+        )
+
+        avail = get_available_models()
+        self.assertGreater(len(avail), 0)
+
+        # 1. Resolving
+        first = avail[0]
+        res_exact = resolve_model_name(first)
+        self.assertEqual(res_exact, first)
+
+        prefix = first.split(":")[0]
+        res_prefix = resolve_model_name(prefix)
+        self.assertIsNotNone(res_prefix)
+
+        # 2. Switch
+        dummy_stream = DummyStream()
+        ok, msg = switch_active_model(first, stream=dummy_stream)
+        self.assertTrue(ok)
+        self.assertIn(first, msg)
+        self.assertEqual(os.environ.get("PAI_ACTIVE_MODEL"), first)
+
+        # 3. Formatting
+        formatted = format_models_list(color_enabled=False)
+        self.assertIn("=== Available Local Models ===", formatted)
+        self.assertIn(first, formatted)
+
+        # 4. Parsing
+        act_ls, _ = parse_shell_line("/model")
+        self.assertEqual(act_ls, "model_list")
+
+        act_sw, args_sw = parse_shell_line(f"/model {first}")
+        self.assertEqual(act_sw, "model_switch")
+        self.assertEqual(args_sw[0], first)
+
+        act_nat, args_nat = parse_shell_line(f"change model to {first}")
+        self.assertEqual(act_nat, "model_switch")
+
+        act_sin, args_sin = parse_shell_line(f"model eka change karanna {first} ekata")
+        self.assertEqual(act_sin, "model_switch")
+
+        # REPL execution with model switch and auto-injection into chat
+        executed_argvs: list[list[str]] = []
+        inputs = iter([f"/model {first}", "hello test", "/exit"])
+        outputs: list[str] = []
+
+        def mock_exec(argv):
+            executed_argvs.append(list(argv))
+            return 0
+
+        with patch("shell.execute_subcommand", side_effect=mock_exec), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=io.StringIO(),
+            )
+            self.assertEqual(code, 0)
+
+        self.assertTrue(any("--model" in cmd and first in cmd for cmd in executed_argvs))
+
+    def test_shell_project_scaffold(self) -> None:
+        """Asserts create_project_scaffold generates web and python project files."""
+        from shell import create_project_scaffold, parse_shell_line
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            web_dir = base / "my_web_game"
+            ok_w, msg_w, files_w = create_project_scaffold(str(web_dir), "web game")
+            self.assertTrue(ok_w)
+            self.assertIn("index.html", files_w)
+            self.assertIn("style.css", files_w)
+            self.assertIn("script.js", files_w)
+            self.assertTrue((web_dir / "index.html").is_file())
+
+            py_dir = base / "my_python_app"
+            ok_p, msg_p, files_p = create_project_scaffold(str(py_dir), "python script")
+            self.assertTrue(ok_p)
+            self.assertIn("main.py", files_p)
+            self.assertIn("requirements.txt", files_p)
+            self.assertTrue((py_dir / "main.py").is_file())
+
+        # Parsing checks
+        act_proj, args_proj = parse_shell_line("/project test_app web")
+        self.assertEqual(act_proj, "project")
+        self.assertEqual(args_proj[0], "test_app")
+
+        act_nat, args_nat = parse_shell_line("methana folder ekak hadala aluth project ekak patan ganna my_game")
+        self.assertEqual(act_nat, "project")
+
+    def test_shell_bug_analysis_and_fix(self) -> None:
+        """Asserts analyze_and_fix_bugs finds issues, creates backup, and writes fixed code."""
+        from shell import analyze_and_fix_bugs, parse_shell_line
+
+        with tempfile.TemporaryDirectory() as td:
+            temp_dir = Path(td)
+            buggy_file = temp_dir / "calc.py"
+            buggy_file.write_text("def add(a, b):\n    return a - b  # BUG: subtracts instead of adds\n", encoding="utf-8")
+
+            def mock_debugger(argv):
+                prompt = argv[-1]
+                self.assertIn("calc.py", prompt)
+                print("Found bug: subtraction operator used instead of addition.\n```python\ndef add(a, b):\n    return a + b\n```")
+                return 0
+
+            ok, report, fixed = analyze_and_fix_bugs(
+                str(buggy_file),
+                "fix math logic",
+                stream=io.StringIO(),
+                executor=mock_debugger,
+            )
+            self.assertTrue(ok)
+            self.assertEqual(len(fixed), 1)
+            self.assertIn("add(a, b):", buggy_file.read_text(encoding="utf-8"))
+            self.assertIn("return a + b", buggy_file.read_text(encoding="utf-8"))
+            self.assertTrue(buggy_file.with_suffix(".py.bak").is_file())
+
+        # Parsing checks
+        act_fix, args_fix = parse_shell_line("/fix Downloads\\game.html fix score")
+        self.assertEqual(act_fix, "fix")
+        self.assertEqual(args_fix[0], "Downloads\\game.html")
+
+        act_nat, args_nat = parse_shell_line("game.html eke bugs thiyenam hadanna")
+        self.assertEqual(act_nat, "fix")
+
 
 if __name__ == "__main__":
     unittest.main()
