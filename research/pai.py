@@ -3084,6 +3084,21 @@ def is_plain_datetime_query(prompt: str) -> bool:
     return any(re.fullmatch(pat, clean, re.IGNORECASE) for pat in PLAIN_DATETIME_TEMPLATES)
 
 
+def is_plain_wifi_query(prompt: str) -> bool:
+    """Checks if a user chat prompt is inquiring about local Wi-Fi networks."""
+    p = str(prompt).lower()
+    wifi_terms = ["wifi", "wi-fi", "wlan", "hotspot", "wireless", "network", "වයිෆයි", "නෙට්වර්ක්"]
+    scan_terms = [
+        "scan", "show", "list", "search", "available", "detect", "see", "around",
+        "check", "signal", "strength", "what", "which",
+        "monawada", "thiyenne", "thiyena", "penwanna", "balanna", "kiyanna", "ganna",
+        "පෙන්වන්න", "බලන්න", "තියෙන්නෙ", "තියෙන", "මොනවද", "මොනවාද", "අසල", "හොයන්න"
+    ]
+    has_wifi = any(t in p for t in wifi_terms)
+    has_scan = any(s in p for s in scan_terms) or len(p.split()) <= 3
+    return has_wifi and has_scan
+
+
 def cmd_chat(args) -> int:
     """Executes general and bilingual (Singlish/Sinhala/English) assistant chat (M7)."""
     enforce_sandbox_boundary()
@@ -3154,9 +3169,27 @@ def cmd_chat(args) -> int:
     now = datetime.datetime.now().astimezone()
     clock_ctx = f"{now.strftime('%Y-%m-%d (%A)')}, {now.strftime('%H:%M:%S')} {now.strftime('%Z (UTC%z)')}"
 
+    wifi_context = ""
+    if is_plain_wifi_query(user_prompt):
+        try:
+            from shell import scan_local_wifi
+            detected_nets = scan_local_wifi()
+            if detected_nets:
+                net_summaries = []
+                for n in detected_nets:
+                    s_name = n.get("ssid", "Unknown")
+                    s_sig = n["signals"][0] if n.get("signals") else "Unknown"
+                    s_band = n.get("band", "Unknown")
+                    s_auth = n.get("auth", "Unknown")
+                    net_summaries.append(f"- SSID: '{s_name}', Signal: {s_sig}, Band: {s_band}, Security: {s_auth}")
+                wifi_context = "Live System Context - Visible Wi-Fi Networks Detected on this computer:\n" + "\n".join(net_summaries) + "\n\n"
+        except Exception:
+            pass
+
     chat_prompt = (
         "You are Personal Agentic AI (PAI), a helpful, accurate, privacy-first local assistant.\n"
         f"System Clock: Current local date and time is {clock_ctx}.\n"
+        f"{wifi_context}"
         "Operating Mode: Fully offline local execution without internet access.\n"
         "Knowledge and Temporal Boundaries:\n"
         "- Your knowledge ends at your model training cut-off.\n"

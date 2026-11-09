@@ -46,8 +46,8 @@ class TestCheckNPlus1(unittest.TestCase):
 
         manifest = {
             "format": 1,
-            "version": "1.1.0-rc2",
-            "tag": "v1.1.0-rc2",
+            "version": "1.1.0-rc3",
+            "tag": "v1.1.0-rc3",
             "trees": {
                 "core": core_tree,
                 "research": research_tree,

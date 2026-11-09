@@ -91,6 +91,9 @@ SHELL_HELP = (
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
     "  /analyze <path>     Analyze codebase architecture, dependencies, and risks\n"
     "  /docs <path>        Search and synthesize local documentation (.txt, .md, .csv)\n"
+    "  /save <path>        Save the last response or extracted code block to a local file\n"
+    "  /cmd <command>      Execute a Windows system command and display output\n"
+    "  /wifi               Scan and display available Wi-Fi networks and signal strength\n"
     "  /forecast <path>    Run time-series forecasting analysis on tabular data\n"
     "  /doctor             Verify local environment health and hardware telemetry\n"
     "  /setup              Run setup, hardware survey, and model configuration\n"
@@ -335,9 +338,13 @@ def get_pinned_header_lines(
 def should_pin_header(stream=sys.stdout) -> bool:
     """
     Returns True if pinned DECSTBM scroll region should be active.
-    Requires interactive terminal, PAI_NO_PINNED_HEADER != '1', TERM != 'dumb',
-    successful Windows VT processing if on Windows, and lines >= 20, cols >= 60.
+    Default is False to preserve natural mouse-wheel scrollback on Windows Terminal / PowerShell.
+    Set PAI_PINNED_HEADER=1 to opt-in to pinned VT mode.
+    Requires interactive terminal, PAI_PINNED_HEADER == '1', PAI_NO_PINNED_HEADER != '1',
+    TERM != 'dumb', successful Windows VT processing if on Windows, and lines >= 20, cols >= 60.
     """
+    if os.environ.get("PAI_PINNED_HEADER") != "1":
+        return False
     if os.environ.get("PAI_NO_PINNED_HEADER") == "1":
         return False
     if os.environ.get("TERM") == "dumb":
@@ -670,15 +677,136 @@ def tokenize_windows_line(line: str) -> List[str]:
     return tokens
 
 
+def scan_local_wifi(timeout: float = 8.0) -> List[dict]:
+    """Scans visible Wi-Fi networks on Windows via netsh wlan show networks mode=bssid."""
+    import subprocess
+    if sys.platform != "win32":
+        return []
+    try:
+        proc = subprocess.run(
+            ["netsh", "wlan", "show", "networks", "mode=bssid"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        out = proc.stdout
+    except Exception:
+        return []
+
+    networks: List[dict] = []
+    current: dict = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("SSID"):
+            if current and "ssid" in current:
+                networks.append(current)
+            parts = line.split(":", 1)
+            ssid = parts[1].strip() if len(parts) > 1 else "Hidden"
+            current = {"ssid": ssid, "signals": [], "auth": "Open", "band": "Unknown"}
+        elif "Authentication" in line and current:
+            current["auth"] = line.split(":", 1)[1].strip()
+        elif "Signal" in line and current:
+            current["signals"].append(line.split(":", 1)[1].strip())
+        elif "Band" in line and current:
+            current["band"] = line.split(":", 1)[1].strip()
+    if current and "ssid" in current:
+        networks.append(current)
+    return networks
+
+
+def format_wifi_report(networks: List[dict], color_enabled: bool = False, stream=sys.stdout) -> str:
+    """Formats Wi-Fi networks into a clean, readable terminal table with signal indicators."""
+    if not networks:
+        return colorize("No Wi-Fi networks detected (or Wi-Fi adapter is turned off).", YELLOW, color_enabled)
+
+    use_blocks = can_encode_blocks(stream)
+    sep_char = "─" if use_blocks else "-"
+    sep = sep_char * 70
+    header = f"{'SSID':<26} {'Signal':<12} {'Band':<10} {'Security':<20}"
+    lines = [
+        colorize("Detected Wi-Fi Networks:", BOLD, color_enabled),
+        colorize(sep, DIM, color_enabled),
+        colorize(header, CYAN, color_enabled),
+        colorize(sep, DIM, color_enabled),
+    ]
+
+    for net in networks:
+        ssid = net.get("ssid") or "Hidden"
+        sig_str = net["signals"][0] if net.get("signals") else "N/A"
+        band = net.get("band", "Unknown")
+        auth = net.get("auth", "Unknown")
+
+        sig_val = 0
+        try:
+            sig_val = int(sig_str.replace("%", "").strip())
+        except Exception:
+            pass
+
+        bar_len = min(5, max(1, sig_val // 20))
+        if use_blocks:
+            bar = "█" * bar_len + "░" * (5 - bar_len)
+        else:
+            bar = "#" * bar_len + "." * (5 - bar_len)
+        sig_display = f"{sig_str} [{bar}]"
+
+        sig_color = GREEN if sig_val >= 70 else (YELLOW if sig_val >= 40 else RED)
+        styled_sig = colorize(f"{sig_display:<12}", sig_color, color_enabled)
+        styled_ssid = colorize(f"{ssid:<26}", BRIGHT_CYAN, color_enabled)
+        styled_band = colorize(f"{band:<10}", DIM, color_enabled)
+        styled_auth = colorize(f"{auth:<20}", DIM, color_enabled)
+
+        lines.append(f"{styled_ssid} {styled_sig} {styled_band} {styled_auth}")
+
+    lines.append(colorize(sep, DIM, color_enabled))
+    return "\n".join(lines)
+
+
+def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
+    """
+    Saves the last command output or chat response from in-memory session history to target_path.
+    Extracts fenced code if present (e.g. ```lang ... ```); otherwise saves full response.
+    Creates parent directories if necessary.
+    """
+    history = get_session_history()
+    if not history:
+        return False, "No previous output in session history to save."
+
+    last_entry = history[-1]
+    last_output = last_entry[2]
+    if not last_output or not last_output.strip():
+        return False, "Previous command produced no output to save."
+
+    import re
+    code_match = re.search(r"```(?:\w+)?\r?\n(.*?)\r?\n```", last_output, re.DOTALL)
+    if code_match:
+        content = code_match.group(1)
+    else:
+        content = last_output.strip()
+
+    try:
+        p = Path(target_path_str).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        byte_count = len(content.encode("utf-8"))
+        return True, f"Saved {byte_count:,} bytes to {p}"
+    except Exception as e:
+        return False, f"Failed to save file: {e}"
+
+
 def get_shell_banner(
     endpoint: str = "http://127.0.0.1:11434",
     color_enabled: Optional[bool] = None,
+    install_root: Optional[Path] = None,
+    stream=sys.stdout,
 ) -> str:
     """Constructs the interactive shell startup banner stating active model, developer credit, and honest limitations."""
     if color_enabled is None:
-        color_enabled = should_enable_color()
+        color_enabled = should_enable_color(stream)
 
+    cols, _ = get_terminal_dimensions()
     model_name = get_resident_model_name()
+    info_line = get_shell_info_line(cols, color_enabled=color_enabled, install_root=install_root)
+    sep_line = get_shell_separator_line(cols, color_enabled=color_enabled, stream=stream)
 
     logo_text = colorize(PAI_ASCII_LOGO, BRIGHT_CYAN, color_enabled)
     dev_text = colorize(DEVELOPER_CREDIT, DIM, color_enabled)
@@ -689,6 +817,8 @@ def get_shell_banner(
         f"{logo_text}\n"
         f"{title_text}\n"
         f"{dev_text}\n"
+        f"{info_line}\n"
+        f"{sep_line}\n"
         f"Model: {model_name} | Endpoint: {endpoint}\n"
         "Note: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off.\n"
         "Mode: Stateless (each line is evaluated independently without prior conversation memory).\n"
@@ -760,6 +890,24 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("clear", "cls"):
             return "clear", []
+
+        if raw_cmd in ("wifi", "wlan"):
+            return "wifi", []
+
+        if raw_cmd in ("cmd", "run"):
+            subcmd = stripped[len(tokens[0]):].strip()
+            if not subcmd:
+                return "error", ["Error: /cmd requires a Windows command to execute (e.g. /cmd dir)."]
+            return "cmd", [subcmd]
+
+        if raw_cmd == "save":
+            args = tokens[1:]
+            if not args:
+                return "error", ["Error: /save requires a destination file path (e.g. /save C:\\path\\to\\file.ext)."]
+            target = stripped[len(tokens[0]):].strip()
+            if len(args) == 1:
+                target = args[0]
+            return "save", [target]
 
         if raw_cmd == "history":
             args = tokens[1:]
@@ -904,6 +1052,49 @@ def run_interactive_shell(
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
+            elif action == "save":
+                target_path = argv[0]
+                ok, msg = save_session_output_to_file(target_path)
+                color = GREEN if ok else RED
+                output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "cmd":
+                import subprocess
+                cmd_to_run = argv[0]
+                try:
+                    proc = subprocess.run(cmd_to_run, shell=True, text=True, capture_output=True, timeout=30)
+                    cmd_out = proc.stdout
+                    if proc.stderr:
+                        cmd_out += ("\n" if cmd_out else "") + proc.stderr
+                    if not cmd_out:
+                        cmd_out = "[Command executed successfully with no output]"
+                    output_fn(cmd_out.rstrip())
+                    add_to_session_history(line, cmd_out)
+                except subprocess.TimeoutExpired:
+                    err_msg = "Error: Command timed out after 30 seconds."
+                    output_fn(colorize(err_msg, RED, color_enabled))
+                    add_to_session_history(line, err_msg)
+                except Exception as e:
+                    err_msg = f"Error executing command: {e}"
+                    output_fn(colorize(err_msg, RED, color_enabled))
+                    add_to_session_history(line, err_msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "wifi":
+                nets = scan_local_wifi()
+                report = format_wifi_report(nets, color_enabled=color_enabled)
+                output_fn(report)
+                add_to_session_history(line, report)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
             elif action == "unknown_slash":
                 msg = f"Unknown command '{argv[0]}'. Type /help for available commands or /exit to quit."
                 output_fn(colorize(msg, RED, color_enabled))
@@ -913,13 +1104,17 @@ def run_interactive_shell(
                 continue
             elif action in ("canonical", "chat"):
                 cmd_name = argv[0] if argv else ""
+                exec_argv = list(argv)
+                if cmd_name == "code" and "--out" not in exec_argv:
+                    exec_argv = exec_argv + ["--out", "pai_output"]
+
                 spinner = ThinkingSpinner(stream) if cmd_name == "chat" else None
                 capture = CaptureStream(stream, on_first_write=spinner.stop if spinner else None)
                 try:
                     if spinner:
                         spinner.start()
                     with contextlib.redirect_stdout(capture):
-                        execute_subcommand(argv)
+                        execute_subcommand(exec_argv)
                 except KeyboardInterrupt:
                     output_fn("\n[Operation cancelled by user]")
                 except Exception as e:

@@ -1,8 +1,8 @@
 # Release N+1 Freeze Checklist & Evaluation Window Guide
 
 **Document ID:** `docs/FREEZE_CHECKLIST.md`  
-**Purpose:** Defines the exact sequence, verification commands, and operational procedures required to freeze Release Candidate `v1.1.0-rc2` and execute the 14-day N+1 Evaluation Window.  
-**Freeze Definition:** The "Freeze" is formally defined as the exact moment the git tag (e.g. `v1.1.0-rc2`) exists on the specific commit whose `research/` and `core/` tree IDs are recorded. From that moment forward, strictly NO code modifications to `research/` or `core/` may occur.
+**Purpose:** Defines the exact sequence, verification commands, and operational procedures required to freeze Release Candidate `v1.1.0-rc3` and execute the 14-day N+1 Evaluation Window.  
+**Freeze Definition:** The "Freeze" is formally defined as the exact moment the git tag (e.g. `v1.1.0-rc3`) exists on the specific commit whose `research/` and `core/` tree IDs are recorded. From that moment forward, strictly NO code modifications to `research/` or `core/` may occur.
 
 ---
 
@@ -59,29 +59,29 @@ Wait for GitHub Actions run to complete green across all 3 jobs (`python-researc
 
 ### Step 2.2: Tag Candidate Commit (Declares the Freeze)
 User approves in chat (after Finding AV confirmation):
-Annotate tag `v1.1.0-rc2` on the exact candidate commit and push the tag only (never push master):
+Annotate tag `v1.1.0-rc3` on the exact candidate commit and push the tag only (never push master):
 ```powershell
-git tag -a v1.1.0-rc2 <candidate_sha> -m "Release Candidate 1.1.0-rc2 for 14-day N+1 Evaluation Window"
-git push origin v1.1.0-rc2
+git tag -a v1.1.0-rc3 <candidate_sha> -m "Release Candidate 1.1.0-rc3 for 14-day N+1 Evaluation Window"
+git push origin v1.1.0-rc3
 ```
 
 ### Step 2.3: Verify Tagged Trees Invariant
 Verify that the tag holds the exact pinned tree IDs:
 ```powershell
 # 1. Verify Core Tree invariant (must match 14c60746ca9a41d91aafd88cc0c7d98719cfe3a9)
-git rev-parse v1.1.0-rc2:core
+git rev-parse v1.1.0-rc3:core
 
-# 2. Verify Research Tree invariant (must match 7278714c420db9c16b5fd83b257d11d530a99b05)
-git rev-parse v1.1.0-rc2:research
+# 2. Verify Research Tree invariant (must match d68600277bbdfea021355b03e832db52f4337ba5)
+git rev-parse v1.1.0-rc3:research
 
 # 3. Verify evaluated binary SHA-256 with mandatory flag (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
-python tools/check_pins.py --ref v1.1.0-rc2 --require-binary
+python tools/check_pins.py --ref v1.1.0-rc3 --require-binary
 ```
 
 ### Step 2.4: Build Final Payload & Installer from Tag
 Build the complete installer directly from the tag:
 ```powershell
-python packaging/build_installer.py --version 1.1.0-rc2 --tag v1.1.0-rc2
+python packaging/build_installer.py --version 1.1.0-rc3 --tag v1.1.0-rc3
 ```
 Verify the payload manifest fields:
 - `catalog_source`: `research-tree`

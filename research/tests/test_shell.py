@@ -947,7 +947,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
         with patch("shell.is_interactive_terminal", return_value=True), \
              patch("shell.enable_windows_vt", return_value=True), \
              patch("shell.get_terminal_dimensions", return_value=(80, 24)), \
-             patch.dict(os.environ, {}, clear=False):
+             patch.dict(os.environ, {"PAI_PINNED_HEADER": "1"}, clear=False):
             os.environ.pop("PAI_NO_PINNED_HEADER", None)
             os.environ.pop("TERM", None)
 
@@ -1536,6 +1536,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
 
         with patch("shell.should_pin_header", return_value=True), \
              patch("shell.setup_pinned_layout"), \
+             patch("shell.get_resident_model_name", return_value="no model loaded yet"), \
              patch("pai.enforce_sandbox_boundary"):
             code = run_interactive_shell(
                 input_fn=lambda _: next(inputs),
@@ -1711,6 +1712,80 @@ class TestInteractiveShellADR014(unittest.TestCase):
                 except Exception:
                     pass
         self.assertEqual(matches, [], f"Forbidden literal '{forbidden}' found in research/ files: {matches}")
+
+    def test_shell_save_command_extracted_code_and_text(self) -> None:
+        """Asserts /save extracts fenced code and writes files with directory creation."""
+        from shell import save_session_output_to_file, clear_session_history, add_to_session_history
+
+        clear_session_history()
+        # Case A: Empty history
+        ok, msg = save_session_output_to_file("test.txt")
+        self.assertFalse(ok)
+        self.assertIn("No previous output", msg)
+
+        # Case B: History with fenced code
+        with tempfile.TemporaryDirectory() as td:
+            target_p = Path(td) / "subdir" / "output.py"
+            add_to_session_history(
+                "write a python func",
+                "Here is the function:\n```python\ndef greet():\n    return 'hello'\n```\nHope this helps!"
+            )
+            ok, msg = save_session_output_to_file(str(target_p))
+            self.assertTrue(ok)
+            self.assertTrue(target_p.is_file())
+            content = target_p.read_text(encoding="utf-8")
+            self.assertEqual(content, "def greet():\n    return 'hello'")
+        clear_session_history()
+
+    def test_shell_cmd_and_run_command_execution(self) -> None:
+        """Asserts /cmd and /run parse correctly and execute shell commands."""
+        action, argv = parse_shell_line('/cmd echo "test_output"')
+        self.assertEqual(action, "cmd")
+        self.assertEqual(argv, ['echo "test_output"'])
+
+        action, argv = parse_shell_line('/run dir')
+        self.assertEqual(action, "cmd")
+        self.assertEqual(argv, ['dir'])
+
+        action, argv = parse_shell_line('/cmd')
+        self.assertEqual(action, "error")
+
+    def test_shell_wifi_command_and_format(self) -> None:
+        """Asserts /wifi parses and format_wifi_report displays table with signals."""
+        from shell import format_wifi_report
+
+        action, argv = parse_shell_line("/wifi")
+        self.assertEqual(action, "wifi")
+        self.assertEqual(argv, [])
+
+        # Formatting with sample networks
+        sample = [
+            {"ssid": "Home-Network", "signals": ["85%"], "band": "5 GHz", "auth": "WPA2-Personal"},
+            {"ssid": "Office-Guest", "signals": ["45%"], "band": "2.4 GHz", "auth": "Open"},
+        ]
+        rep = format_wifi_report(sample, color_enabled=False)
+        self.assertIn("Home-Network", rep)
+        self.assertIn("85%", rep)
+        self.assertIn("Office-Guest", rep)
+
+    def test_shell_code_auto_out_default(self) -> None:
+        """Asserts /code in interactive shell supplies --out pai_output when omitted."""
+        executed_cmds: list[list[str]] = []
+        inputs = iter(['/code "generate factorial"', '/exit'])
+        outputs: list[str] = []
+
+        with patch("shell.execute_subcommand", side_effect=lambda a: executed_cmds.append(a) or 0), \
+             patch("pai.enforce_sandbox_boundary"):
+            code = run_interactive_shell(
+                input_fn=lambda _: next(inputs),
+                output_fn=outputs.append,
+                stream=io.StringIO(),
+            )
+            self.assertEqual(code, 0)
+
+        self.assertEqual(len(executed_cmds), 1)
+        self.assertIn("--out", executed_cmds[0])
+        self.assertIn("pai_output", executed_cmds[0])
 
 
 if __name__ == "__main__":

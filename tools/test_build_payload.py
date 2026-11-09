@@ -828,7 +828,7 @@ class TestBuildPayloadP1(unittest.TestCase):
             out_dir=out_prerelease,
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
-            version="1.1.0-rc2",
+            version="1.1.0-rc3",
             catalog_path=test_cat_path,
             trust_file=throwaway_trust_file,
         )
@@ -866,7 +866,7 @@ class TestBuildPayloadP1(unittest.TestCase):
             out_dir=out_prerelease_wt,
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
-            version="1.1.0-rc2",
+            version="1.1.0-rc3",
             catalog_path=None,
             working_tree_catalog=test_cat_path,
             trust_file=throwaway_trust_file,
@@ -901,7 +901,7 @@ class TestBuildPayloadP1(unittest.TestCase):
             out_dir=out_no_catalog,
             tag=DEFAULT_TAG,
             binary_path=self.binary_path,
-            version="1.1.0-rc2",
+            version="1.1.0-rc3",
             working_tree_catalog=nonexistent_cat,
         )
         self.assertFalse(res_none["manifest"].get("bundled_catalog"))
