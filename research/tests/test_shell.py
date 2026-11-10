@@ -1813,6 +1813,40 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertTrue(ok2)
             self.assertTrue((temp_dir / "app.py").is_file())
             self.assertIn("app.py", msg2)
+
+            # Backwards search in history when intervening status commands exist
+            target_sub = temp_dir / "dron_sub"
+            target_sub.mkdir(parents=True, exist_ok=True)
+            add_to_session_history(
+                "create 3d drone game",
+                "Here is the game:\n```html\n<!DOCTYPE html><html><body><h1>Drone Simulator</h1><script src=\"three.min.js\"></script></body></html>\n```"
+            )
+            add_to_session_history(
+                "create folder in downloads name it as dron simulator",
+                "[Successfully initialized new project in Downloads\\dron simulator]"
+            )
+            ok_bw, msg_bw = save_session_output_to_file(str(target_sub))
+            self.assertTrue(ok_bw)
+            saved_file = target_sub / "game.html" if (target_sub / "game.html").is_file() else target_sub / "index.html"
+            self.assertTrue(saved_file.is_file())
+            self.assertIn("Drone Simulator", saved_file.read_text(encoding="utf-8"))
+
+        # Natural language save intent parsing
+        from shell import parse_shell_line
+        act_s1, args_s1 = parse_shell_line("save that game in dron simulator folder in downloads")
+        self.assertEqual(act_s1, "save")
+        self.assertIn("dron simulator", args_s1[0].lower())
+
+        act_s2, args_s2 = parse_shell_line("save this `Downloads/dron simulator` folder.")
+        self.assertEqual(act_s2, "save")
+        self.assertIn("dron simulator", args_s2[0].lower())
+
+        act_s3, args_s3 = parse_shell_line("save it")
+        self.assertEqual(act_s3, "save")
+
+        act_s4, args_s4 = parse_shell_line("downloads eke dron simulator folder eke save karanna")
+        self.assertEqual(act_s4, "save")
+        self.assertIn("dron simulator", args_s4[0].lower())
         clear_session_history()
 
     def test_shell_terminal_title_and_compact_prompt(self) -> None:
@@ -2084,6 +2118,12 @@ class TestInteractiveShellADR014(unittest.TestCase):
         act_dl3, args_dl3 = parse_shell_line("downloads eke my game kiyala folder ekak hadanna")
         self.assertEqual(act_dl3, "project")
         self.assertIn("my game", args_dl3[0].lower())
+
+        # Compound prompt with folder name and project prompt
+        act_cp, args_cp = parse_shell_line("create folder in downloads name it as my game and create drone shooting game using three js")
+        self.assertEqual(act_cp, "project")
+        self.assertTrue(args_cp[0].lower().endswith("my game"))
+        self.assertNotIn("and create", args_cp[0].lower())
 
     def test_shell_bug_analysis_and_fix(self) -> None:
         """Asserts analyze_and_fix_bugs finds issues, creates backup, and writes fixed code."""

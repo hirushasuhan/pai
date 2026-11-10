@@ -876,6 +876,38 @@ def get_compact_prompt_header(color_enabled: bool = False, install_root: Optiona
     return colorize(bar, DIM, color_enabled)
 
 
+def resolve_target_dir(target_str: str) -> Path:
+    """
+    Resolves a target directory path, expanding ~ and special folders (Downloads, Desktop, Documents).
+    """
+    clean = target_str.strip().strip('"').strip("'").strip('`')
+    if not clean:
+        return Path.cwd() / "my_project"
+
+    user_home = Path.home()
+    c_lower = clean.lower()
+    for prefix, folder in [
+        ("downloads\\", user_home / "Downloads"),
+        ("downloads/", user_home / "Downloads"),
+        ("desktop\\", user_home / "Desktop"),
+        ("desktop/", user_home / "Desktop"),
+        ("documents\\", user_home / "Documents"),
+        ("documents/", user_home / "Documents"),
+    ]:
+        if c_lower.startswith(prefix):
+            remainder = clean[len(prefix):]
+            return (folder / remainder).resolve()
+
+    if c_lower == "downloads":
+        return user_home / "Downloads"
+    if c_lower == "desktop":
+        return user_home / "Desktop"
+    if c_lower == "documents":
+        return user_home / "Documents"
+
+    return Path(clean).expanduser().resolve()
+
+
 def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
     """
     Saves the last command output or chat response from in-memory session history to target_path.
@@ -887,50 +919,66 @@ def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
     if not history:
         return False, "No previous output in session history to save."
 
-    last_entry = history[-1]
-    last_query = last_entry[1]
-    last_output = last_entry[2]
+    # Search backwards for the most recent entry with code blocks or substantial text
+    target_entry = None
+    for entry in reversed(history):
+        out = entry[2]
+        if out.startswith("Saved ") and "bytes to" in out:
+            continue
+        if out.startswith("[Successfully initialized new project"):
+            continue
+        if "```" in out or len(out.strip()) > 80:
+            target_entry = entry
+            break
+    if not target_entry:
+        target_entry = history[-1]
+
+    last_query = target_entry[1]
+    last_output = target_entry[2]
     if not last_output or not last_output.strip():
         return False, "Previous command produced no output to save."
 
     import re
-    code_match = re.search(r"```(\w+)?\r?\n(.*?)\r?\n```", last_output, re.DOTALL)
+    code_matches = list(re.finditer(r"```(\w+)?\r?\n(.*?)\r?\n```", last_output, re.DOTALL))
     code_lang = ""
-    if code_match:
-        code_lang = (code_match.group(1) or "").lower()
-        content = code_match.group(2)
-    else:
-        content = last_output.strip()
+    target_clean = target_path_str.strip().strip('"').strip("'").strip('`')
+    t_lower = target_clean.lower()
 
-    target_clean = target_path_str.strip().strip('"').strip("'")
-    target_lower = target_clean.lower()
-    user_home = Path.home()
-
-    if target_lower in ("downloads", "~/downloads"):
-        base_dir = user_home / "Downloads"
-        is_dir_target = True
-    elif target_lower in ("desktop", "~/desktop"):
-        base_dir = user_home / "Desktop"
-        is_dir_target = True
-    elif target_lower in ("documents", "~/documents"):
-        base_dir = user_home / "Documents"
-        is_dir_target = True
+    if code_matches:
+        chosen = code_matches[0]
+        if t_lower.endswith((".html", ".htm")) or "html" in t_lower or "web" in t_lower:
+            for m in code_matches:
+                if (m.group(1) or "").lower() in ("html", "htm") or "<html" in m.group(2).lower() or "<!doctype" in m.group(2).lower():
+                    chosen = m
+                    break
+        elif t_lower.endswith(".py") or "python" in t_lower:
+            for m in code_matches:
+                if (m.group(1) or "").lower() in ("python", "py"):
+                    chosen = m
+                    break
+        code_lang = (chosen.group(1) or "").lower()
+        content = chosen.group(2)
     else:
-        candidate_p = Path(target_clean).expanduser().resolve()
-        if candidate_p.is_dir() or (not candidate_p.suffix and not target_clean.endswith((".py", ".html", ".txt", ".json", ".js", ".md", ".rs", ".csv"))):
-            base_dir = candidate_p
-            is_dir_target = True
+        # Check if output has unclosed code fence (e.g. truncated generation)
+        unclosed = re.search(r"```(\w+)?\r?\n(.*)", last_output, re.DOTALL)
+        if unclosed and len(unclosed.group(2).strip()) > 30:
+            code_lang = (unclosed.group(1) or "").lower()
+            content = unclosed.group(2).strip()
         else:
-            base_dir = candidate_p.parent
-            is_dir_target = False
-            final_p = candidate_p
+            content = last_output.strip()
 
-    if is_dir_target:
+    # Determine destination file path
+    if t_lower.endswith((".html", ".htm", ".py", ".js", ".css", ".txt", ".json", ".md", ".rs", ".csv")):
+        p = Path(target_clean)
+        parent_dir = resolve_target_dir(str(p.parent)) if str(p.parent) != "." else Path.cwd()
+        final_p = parent_dir / p.name
+    else:
+        base_dir = resolve_target_dir(target_clean)
         c_lower = content.lower()
-        if "<html" in c_lower or "<!doctype" in c_lower or "three.js" in c_lower or code_lang == "html":
+        if "<html" in c_lower or "<!doctype" in c_lower or "three.js" in c_lower or code_lang in ("html", "htm"):
             default_name = "game.html" if ("game" in last_query.lower() or "canvas" in c_lower or "game" in c_lower) else "index.html"
         elif "def " in content or "import " in content or code_lang in ("python", "py"):
-            default_name = "app.py"
+            default_name = "app.py" if ("app" in last_query.lower() or "script" in last_query.lower() or "solve" in c_lower) else "main.py"
         elif "function " in content or "const " in content or code_lang in ("javascript", "js"):
             default_name = "script.js"
         elif code_lang == "json" or (content.startswith("{") and content.endswith("}")):
@@ -1098,38 +1146,6 @@ def edit_target_file(
     return True, msg, updated_content
 
 
-def resolve_target_dir(target_str: str) -> Path:
-    """
-    Resolves a target directory path, expanding ~ and special folders (Downloads, Desktop, Documents).
-    """
-    clean = target_str.strip().strip('"').strip("'")
-    if not clean:
-        return Path.cwd() / "my_project"
-
-    user_home = Path.home()
-    c_lower = clean.lower()
-    for prefix, folder in [
-        ("downloads\\", user_home / "Downloads"),
-        ("downloads/", user_home / "Downloads"),
-        ("desktop\\", user_home / "Desktop"),
-        ("desktop/", user_home / "Desktop"),
-        ("documents\\", user_home / "Documents"),
-        ("documents/", user_home / "Documents"),
-    ]:
-        if c_lower.startswith(prefix):
-            remainder = clean[len(prefix):]
-            return (folder / remainder).resolve()
-
-    if c_lower == "downloads":
-        return user_home / "Downloads"
-    if c_lower == "desktop":
-        return user_home / "Desktop"
-    if c_lower == "documents":
-        return user_home / "Documents"
-
-    return Path(clean).expanduser().resolve()
-
-
 def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
     """
     Detects natural language intent to create a folder or project.
@@ -1177,7 +1193,7 @@ def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
     if not cand_name:
         # Patterns in English & Sinhala:
         # 1. name it as <name> / named <name> / called <name>
-        m = re.search(r'(?:name\s+it\s+(?:as\s+)?|named\s+(?:as\s+)?|called\s+(?:as\s+)?)\s*([a-zA-Z0-9_\-\s]+)', stripped, re.I)
+        m = re.search(r'(?:name\s+it\s+(?:as\s+)?|named\s+(?:as\s+)?|called\s+(?:as\s+)?)\s*([a-zA-Z0-9_\-\s]+?)(?:\s+(?:and|with|for|to|&|then|hadala|create|make|aluth)\b|$)', stripped, re.I)
         if m:
             cand_name = m.group(1).strip()
 
@@ -1192,7 +1208,7 @@ def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
 
     if not cand_name:
         # 3. create folder <name> in downloads OR create folder <name>
-        m = re.search(r'(?:create\s+folder|make\s+folder|new\s+folder|create\s+project|new\s+project)\s+(?:in\s+\w+\s+)?(?:called\s+|named\s+)?([a-zA-Z0-9_\-\s]+)', stripped, re.I)
+        m = re.search(r'(?:create\s+folder|make\s+folder|new\s+folder|create\s+project|new\s+project)\s+(?:in\s+\w+\s+)?(?:called\s+|named\s+)?([a-zA-Z0-9_\-\s]+?)(?:\s+(?:and|with|for|to|&|then|hadala|create|make|aluth)\b|$)', stripped, re.I)
         if m:
             raw = m.group(1).strip()
             cleaned = re.sub(r'\b(in\s+downloads|in\s+desktop|in\s+documents|downloads|desktop|documents)\b', '', raw, flags=re.I).strip()
@@ -1218,8 +1234,119 @@ def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
         cand_name = "my_project"
 
     cand_name = re.sub(r'^(?:a|an|the)\s+', '', cand_name, flags=re.I).strip()
+    cand_name = re.sub(r'\s+(?:and|with|for|to|&|then|hadala|create|make|aluth)\b.*$', '', cand_name, flags=re.I).strip()
     target_path = base / cand_name
     return str(target_path), stripped
+
+
+def parse_natural_save_intent(line: str) -> Optional[str]:
+    """
+    Detects natural language intent to save output or code from chat to a file or folder.
+    Returns target path string (e.g. 'Downloads/dron simulator', 'Downloads', 'app.py') or None.
+    Handles English, Sinhala/Singlish, backticks, quotes, and special directories.
+    """
+    stripped = line.strip()
+    lower = stripped.lower()
+
+    # Informational questions route to chat
+    if any(q in lower for q in ("how to", "how do", "kohomada", "what is", "mokakda", "explain", "why")):
+        return None
+
+    save_triggers = (
+        "save it", "save this", "save that", "save code", "save file", "save game",
+        "save project", "save to", "save in", "save into", "save karanna", "save karapan",
+        "save karala", "save danna", "save wenna"
+    )
+    is_save = any(t in lower for t in save_triggers) or lower.startswith(("save ", "save:")) or lower in ("save", "save it", "save this", "save that")
+    if not is_save and any(k in lower for k in ("save", "save.")) and any(k in lower for k in ("karanna", "karapan", "danna", "eke", "ekata", "folder")):
+        is_save = True
+
+    if not is_save:
+        return None
+
+    target = None
+
+    # 1. Backticks: `path/to/folder`
+    bt_match = re.search(r'`([^`]+)`', stripped)
+    if bt_match:
+        target = bt_match.group(1).strip()
+
+    # 2. Quotes: 'path/to/folder' or "path/to/folder"
+    if not target:
+        q_match = re.search(r'["\']([^"\']+)["\']', stripped)
+        if q_match:
+            target = q_match.group(1).strip()
+
+    # 3. 'in <name> folder in downloads' or 'to <name> folder in downloads'
+    if not target:
+        m = re.search(r'(?:in|to|into)\s+([a-zA-Z0-9_\-\s]+?)\s+folder\s+in\s+downloads', stripped, re.I)
+        if m:
+            folder_name = m.group(1).strip()
+            target = f"Downloads/{folder_name}"
+
+    # 4. 'in/to/into downloads\<name>' or 'downloads/<name>' (handling spaces and folder names)
+    if not target:
+        m = re.search(r'(?:in|to|into)\s+((?:downloads|desktop|documents)[\\\/][a-zA-Z0-9_\-\s\.]+?)(?:\s+folder|\.|$)', stripped, re.I)
+        if m:
+            target = m.group(1).strip()
+
+    # 5. 'save it as <file> in <dir>'
+    if not target:
+        m = re.search(r'save\s+(?:it\s+)?as\s+([a-zA-Z0-9_\-\.]+)\s+in\s+([a-zA-Z0-9_\-\\\/\s]+)', stripped, re.I)
+        if m:
+            fname = m.group(1).strip()
+            dname = m.group(2).strip().rstrip(".")
+            target = f"{dname}/{fname}"
+
+    # 6. Sinhala patterns: 'downloads eke <name> folder eke save karanna' or '<name> folder ekata save'
+    if not target:
+        m = re.search(r'(?:downloads\s+eke\s+)?([a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+)?)\s+(?:folder\s+eke|folder\s+ekata|ekata|eke)\s+save', stripped, re.I)
+        if m:
+            extracted = m.group(1).strip()
+            cleaned = re.sub(r'\b(downloads|eke|folder|ekata|karanna|danna)\b', '', extracted, flags=re.I).strip()
+            if cleaned:
+                target = f"Downloads/{cleaned}" if "downloads" in lower else cleaned
+
+    # 7. Sinhala: 'save karanna downloads eke <name> folder ekata'
+    if not target and any(k in lower for k in ("save karanna", "save karapan", "save danna")):
+        m = re.search(r'save\s+(?:karanna|karapan|danna)\s+(?:downloads\s+eke\s+)?([a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+)?)\s*(?:folder\s+ekata|folder\s+eke|ekata|eke)?', stripped, re.I)
+        if m:
+            extracted = m.group(1).strip()
+            cleaned = re.sub(r'\b(downloads|eke|folder|ekata|karanna|karapan|danna|aluth)\b', '', extracted, flags=re.I).strip()
+            if cleaned:
+                target = f"Downloads/{cleaned}" if "downloads" in lower else cleaned
+
+    # 8. 'in <dir> folder' or 'to <dir> folder'
+    if not target:
+        m = re.search(r'(?:in|to|into)\s+([a-zA-Z0-9_\-\s]+?)\s+folder', stripped, re.I)
+        if m:
+            cand = m.group(1).strip()
+            cleaned = re.sub(r'\b(the|a|an|this|that|my)\b', '', cand, flags=re.I).strip()
+            if cleaned and cleaned.lower() not in ("it", "this", "that", "code", "game"):
+                target = f"Downloads/{cleaned}" if "downloads" in lower else cleaned
+
+    # 9. 'save <path>' (direct path argument)
+    if not target and lower.startswith("save "):
+        cand = stripped[5:].strip()
+        cleaned = re.sub(r'\b(it|this|that|the|a|an|file|code|game|folder|now|karanna|karapan)\b', '', cand, flags=re.I).strip()
+        if cleaned:
+            target = cleaned
+
+    # Default to Downloads if no specific folder was given
+    if not target or target.lower() in ("it", "this", "that", "file", "code", "game", "now", "folder"):
+        if "downloads" in lower:
+            target = "Downloads"
+        elif "desktop" in lower:
+            target = "Desktop"
+        elif "documents" in lower:
+            target = "Documents"
+        else:
+            target = "Downloads"
+
+    # Clean trailing punctuation and keywords
+    target = re.sub(r'[\.\,\;\:\?\!]+$', '', target).strip()
+    target = re.sub(r'\s+folder$', '', target, flags=re.I).strip()
+    return target
 
 
 def create_project_scaffold(
@@ -2213,6 +2340,11 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 return "error", [f"Error: Please provide modification instructions (e.g. {tokens[0]} Downloads\\game.html add score counter)."]
         except Exception:
             pass
+
+    # Check for save intent (natural language or unslashed command)
+    nat_save = parse_natural_save_intent(stripped)
+    if nat_save is not None:
+        return "save", [nat_save]
 
     # Check for folder / project creation intent (natural language or unslashed command)
     nat_folder = parse_natural_folder_intent(stripped)
