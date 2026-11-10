@@ -91,10 +91,13 @@ SHELL_HELP = (
     "Personal Agentic AI (PAI) Interactive Shell Commands:\n"
     "  /chat <prompt>      Chat with the assistant (or enter prompt directly without slash)\n"
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
+    "  /agent <prompt>     Run multi-agent collaboration (Planner, Coder, Reviewer, Tools)\n"
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
     "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
     "  /project [dir]      Scaffold project or show active project status\n"
     "  /open [path|url]    Open web page, HTML file, or active project in default browser\n"
+    "  /mcp [status|tools] Inspect connected Model Context Protocol servers and tools\n"
+    "  /graphql <query>    Execute GraphQL operation or inspect schema via introspection\n"
     "  /skills             List all learned and active agent skills\n"
     "  /skill <name>       View details and prompt guidance for a specific skill\n"
     "  /learn <name> <doc> Teach PAI a new skill to automatically apply in future tasks\n"
@@ -1182,14 +1185,26 @@ def edit_target_file(
     }
     lang = lang_map.get(suffix, suffix or "text")
 
+    active_parent = resolved_path.parent
+    other_context = ""
+    if (active_parent / "index.html").is_file() and resolved_path.name != "index.html":
+        try:
+            h_snip = (active_parent / "index.html").read_text(encoding="utf-8", errors="replace")[:1000]
+            other_context += f"\nProject index.html overview:\n```html\n{h_snip}...\n```\n"
+        except Exception:
+            pass
+
     edit_prompt = (
-        f"You are an expert programmer and software editor.\n"
+        f"You are an expert programmer and game developer modifying the project in '{active_parent.name}'.\n"
         f"Below is the complete content of the file '{resolved_path.name}':\n"
-        f"```{lang}\n{original_content}\n```\n\n"
+        f"```{lang}\n{original_content}\n```\n"
+        f"{other_context}\n"
         f"User Modification Request:\n{instructions}\n\n"
         f"Apply all requested changes carefully.\n"
-        f"Output the entire updated file inside a single ```{lang} ... ``` code block.\n"
-        f"Do not omit code, do not use comments like '// rest unchanged', and provide the complete runnable file."
+        f"Output the complete runnable updated code in a markdown code block.\n"
+        f"If multiple files need updating (e.g. index.html and script.js), prefix each with a header:\n"
+        f"### File: filename.ext\n```{lang}\n...complete file...\n```\n"
+        f"Do not omit code, do not use comments like '// rest unchanged', and provide complete runnable code."
     )
 
     if executor is None:
@@ -1219,29 +1234,68 @@ def edit_target_file(
         return False, "Error: Model returned empty response.", None
 
     import re
-    code_blocks = re.findall(r"```(?:\w+)?\r?\n(.*?)\r?\n```", model_out, re.DOTALL)
-    if code_blocks:
-        updated_content = max(code_blocks, key=len)
-    else:
-        updated_content = model_out.strip()
-
-    bak_path = resolved_path.with_suffix(resolved_path.suffix + ".bak")
-    try:
-        bak_path.write_text(original_content, encoding="utf-8")
-    except Exception:
-        pass
-
-    try:
-        resolved_path.write_text(updated_content, encoding="utf-8")
-        set_active_project_dir(resolved_path.parent)
-    except Exception as e:
-        return False, f"Error writing updated file '{resolved_path}': {e}", None
-
-    msg = (
-        f"[Successfully updated {resolved_path}]\n"
-        f"[Backup saved to {bak_path}]"
+    # Robust extraction pattern supporting closed and unclosed blocks, and file headers
+    block_pattern = re.compile(
+        r"(?:(?:###|####)\s*(?:\d+\.\s*)?(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)[^\n]*\r?\n)?```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:\r?\n```|\Z)"
     )
-    return True, msg, updated_content
+    extracted_blocks = list(block_pattern.finditer(model_out))
+
+    updated_files = []
+    primary_updated_content = None
+
+    if extracted_blocks:
+        for m in extracted_blocks:
+            fname = m.group(1)
+            lang_tag = (m.group(2) or "").lower()
+            body = m.group(3).strip()
+            if not fname:
+                if lang_tag in ("javascript", "js") and (active_parent / "script.js").is_file():
+                    fname = "script.js"
+                elif lang_tag in ("html", "htm") and (active_parent / "index.html").is_file():
+                    fname = "index.html"
+                elif lang_tag == "css" and (active_parent / "style.css").is_file():
+                    fname = "style.css"
+                elif lang_tag in ("python", "py") and (active_parent / "main.py").is_file():
+                    fname = "main.py"
+                else:
+                    fname = resolved_path.name
+
+            if len(body) > 15:
+                dest = active_parent / fname
+                try:
+                    if dest.is_file():
+                        bak = dest.with_suffix(dest.suffix + ".bak")
+                        bak.write_text(dest.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+                    dest.write_text(body, encoding="utf-8")
+                    updated_files.append(dest)
+                    if dest == resolved_path or primary_updated_content is None:
+                        primary_updated_content = body
+                except Exception:
+                    pass
+
+    if not updated_files:
+        updated_content = model_out.strip()
+        bak_path = resolved_path.with_suffix(resolved_path.suffix + ".bak")
+        try:
+            bak_path.write_text(original_content, encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            resolved_path.write_text(updated_content, encoding="utf-8")
+            updated_files.append(resolved_path)
+            primary_updated_content = updated_content
+        except Exception as e:
+            return False, f"Error writing updated file '{resolved_path}': {e}", None
+
+    set_active_project_dir(resolved_path.parent)
+
+    msg_lines = []
+    for uf in updated_files:
+        msg_lines.append(f"[Successfully updated {uf}]")
+    bak_note = f"[Backup saved to {resolved_path.with_suffix(resolved_path.suffix + '.bak')}]"
+    msg_lines.append(bak_note)
+
+    return True, "\n".join(msg_lines), primary_updated_content
 
 
 def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
@@ -2767,6 +2821,26 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
             target = stripped[len(tokens[0]):].strip() if args else ""
             return "browser_open", [target]
 
+        if raw_cmd in ("agent", "team", "plan"):
+            args = tokens[1:]
+            rest = stripped[len(tokens[0]):].strip()
+            if not rest:
+                return "error", ["Error: /agent requires a task prompt (e.g. /agent Build a drone mission dashboard with GraphQL and Three.js)."]
+            return "multi_agent", [rest]
+
+        if raw_cmd == "mcp":
+            args = tokens[1:]
+            sub = args[0].lower() if args else "status"
+            rest = " ".join(args[1:]) if len(args) > 1 else ""
+            return "mcp_hub", [sub, rest]
+
+        if raw_cmd in ("graphql", "gql"):
+            args = tokens[1:]
+            rest = stripped[len(tokens[0]):].strip()
+            if not rest:
+                return "error", ["Error: /graphql requires a query or command (e.g. /graphql { drone { speed } } or /graphql introspect)."]
+            return "graphql_cmd", [rest]
+
         if raw_cmd in ("skills", "skill"):
             args = tokens[1:]
             if not args or args[0].lower() in ("list", "ls"):
@@ -2909,44 +2983,6 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 break
         return "fix", [target, stripped]
 
-    # Check for natural language editing intent referencing an existing file or active project
-    edit_keywords = (
-        "edit", "modify", "wenas", "update", "change", "hadanna",
-        "danna", "ekathu", "wedi", "adu", "improve", "faster", "slower",
-        "increase", "decrease"
-    )
-    is_edit_verb = any(k in lower_unslashed for k in (
-        "edit ", "modify ", "update ", "change ", "wenas", "hadanna",
-        "wedi karanna", "adu karanna", "ekathu karanna", "danna", "add "
-    ))
-    if any(k in lower_unslashed for k in edit_keywords):
-        try:
-            tokens = tokenize_windows_line(stripped)
-            for tok in tokens:
-                resolved = resolve_target_file(tok)
-                if resolved and resolved.is_file():
-                    return "edit", [str(resolved), stripped]
-        except Exception:
-            pass
-
-        # If no explicit file token, but there is an active project:
-        active_p = get_active_project_dir()
-        if active_p and active_p.is_dir() and (is_edit_verb or any(k in lower_unslashed for k in ("speed", "sound", "audio", "faster", "enemy", "enemies", "laser", "score", "game", "drone", "physics"))):
-            target_f = None
-            if any(k in lower_unslashed for k in ("style", "css", "color", "background", "theme")) and not any(k in lower_unslashed for k in ("speed", "physics", "shoot", "laser", "enemy", "drone")):
-                if (active_p / "style.css").is_file():
-                    target_f = active_p / "style.css"
-            elif any(k in lower_unslashed for k in ("index", "html", "title", "button", "hud", "ui")) and not any(k in lower_unslashed for k in ("speed", "physics", "enemy", "drone", "sound")):
-                if (active_p / "index.html").is_file():
-                    target_f = active_p / "index.html"
-            else:
-                if (active_p / "script.js").is_file():
-                    target_f = active_p / "script.js"
-                elif (active_p / "main.py").is_file():
-                    target_f = active_p / "main.py"
-            if target_f and target_f.is_file():
-                return "edit", [str(target_f), stripped]
-
     # Check for unslashed open / preview / browse command
     if lower_unslashed.startswith("open ") or lower_unslashed.startswith("preview ") or lower_unslashed.startswith("browse "):
         first_word = lower_unslashed.split()[0]
@@ -2999,6 +3035,60 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                     cand_name = nxt
                     break
         return "skill_learn", [cand_name, stripped]
+
+    # Check for natural language multi-agent intent
+    if lower_unslashed.startswith("agent ") or lower_unslashed.startswith("team ") or any(k in lower_unslashed for k in ("agent team", "multi agent", "agents use karala", "agents la")):
+        return "multi_agent", [stripped]
+
+    # Check for natural language editing intent referencing an existing file or active project
+    is_creation_intent = lower_unslashed.startswith(("create ", "make a ", "build a ", "i want to create", "create a ", "make an "))
+    edit_keywords = (
+        "edit", "modify", "wenas", "update", "change", "hadanna",
+        "danna", "ekathu", "wedi", "adu", "improve", "faster", "slower",
+        "increase", "decrease", "add", "make", "put", "remove", "replace",
+        "texture", "textures", "missile", "missiles", "bullet", "bullets",
+        "hellfire", "cctv", "camera", "tank", "tanks", "drone", "game",
+        "sound", "audio", "hud", "ui", "physics", "shoot", "laser", "enemy",
+        "enemies", "weapon", "weapons", "graphics", "view", "controls"
+    )
+    is_edit_verb = any(k in lower_unslashed for k in (
+        "edit ", "modify ", "update ", "change ", "wenas", "hadanna",
+        "wedi karanna", "adu karanna", "ekathu karanna", "danna", "add ",
+        "make it", "put ", "texture", "missile", "bullet", "cctv", "shoot", "fire"
+    ))
+    if not is_creation_intent and any(k in lower_unslashed for k in edit_keywords):
+        try:
+            tokens = tokenize_windows_line(stripped)
+            for tok in tokens:
+                resolved = resolve_target_file(tok)
+                if resolved and resolved.is_file():
+                    return "edit", [str(resolved), stripped]
+        except Exception:
+            pass
+
+        # If no explicit file token, but there is an active project:
+        active_p = get_active_project_dir()
+        if active_p and active_p.is_dir() and (is_edit_verb or any(k in lower_unslashed for k in (
+            "speed", "sound", "audio", "faster", "enemy", "enemies", "laser",
+            "score", "game", "drone", "physics", "missile", "bullet", "cctv",
+            "camera", "tank", "texture", "textures", "weapon", "weapons", "view"
+        ))):
+            target_f = None
+            if any(k in lower_unslashed for k in ("style", "css", "color", "background", "theme")) and not any(k in lower_unslashed for k in ("speed", "physics", "shoot", "laser", "enemy", "drone", "missile", "cctv")):
+                if (active_p / "style.css").is_file():
+                    target_f = active_p / "style.css"
+            elif any(k in lower_unslashed for k in ("index", "html", "title", "button", "hud", "ui")) and not any(k in lower_unslashed for k in ("speed", "physics", "enemy", "drone", "sound", "missile", "cctv")):
+                if (active_p / "index.html").is_file():
+                    target_f = active_p / "index.html"
+            else:
+                if (active_p / "script.js").is_file():
+                    target_f = active_p / "script.js"
+                elif (active_p / "index.html").is_file():
+                    target_f = active_p / "index.html"
+                elif (active_p / "main.py").is_file():
+                    target_f = active_p / "main.py"
+            if target_f and target_f.is_file():
+                return "edit", [str(target_f), stripped]
 
     # Conversational text without leading slash routes to canonical 'pai chat'
     # Use '--' sentinel so prompts beginning with a dash (e.g. '-5 is negative')
@@ -3232,6 +3322,46 @@ def run_interactive_shell(
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
+            elif action == "multi_agent":
+                agent_prompt = argv[0] if argv else ""
+                active_p = get_active_project_dir()
+                output_fn(colorize("🚀 Launching Multi-Agent Team: Planner, Coder, GraphQL/Tool, Reviewer...", CYAN, color_enabled))
+                from research.multi_agent import MultiAgentTeam
+                team = MultiAgentTeam(
+                    model_name=_active_model_override,
+                    output_fn=output_fn,
+                    color_enabled=color_enabled,
+                )
+                res = team.run_collaborative_workflow(agent_prompt, active_project_dir=active_p)
+                add_to_session_history(line, f"[Multi-Agent workflow completed for: {agent_prompt}]")
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "mcp_hub":
+                from research.mcp_client import MCPRegistry
+                output_fn(MCPRegistry.format_status(color_enabled=color_enabled))
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "graphql_cmd":
+                gql_text = argv[0] if argv else ""
+                from research.graphql_agent import GraphQLClient
+                ep = os.environ.get("PAI_GRAPHQL_ENDPOINT", "http://127.0.0.1:4000/graphql")
+                client = GraphQLClient(endpoint=ep)
+                if "introspect" in gql_text.lower() or "schema" in gql_text.lower():
+                    output_fn(colorize("Introspecting GraphQL Schema...", CYAN, color_enabled))
+                    schema_str = client.get_sparse_schema_summary()
+                    output_fn(schema_str)
+                else:
+                    output_fn(colorize(f"Executing GraphQL against {ep}...", CYAN, color_enabled))
+                    res = client.execute(gql_text)
+                    output_fn(json.dumps(res, indent=2, ensure_ascii=False))
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
             elif action == "skills_list":
                 output_fn(format_skills_list(color_enabled=color_enabled))
                 cols, _ = get_terminal_dimensions()
@@ -3380,26 +3510,30 @@ def run_interactive_shell(
                     if "```" in cmd_out:
                         lower_line = line.lower()
                         active_p = get_active_project_dir()
-                        if active_p and active_p.is_dir() and any(k in lower_line for k in ("update", "save", "add", "change", "wenas", "hadanna", "project", "folder", "script", "code")):
-                            code_blocks = re.findall(r"```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)\r?\n```", cmd_out)
-                            for lang_tag, block_code in code_blocks:
-                                lang_tag = lang_tag.lower()
-                                target_fname = None
-                                if lang_tag in ("javascript", "js") and (active_p / "script.js").is_file():
-                                    target_fname = "script.js"
-                                elif lang_tag in ("html", "htm") and (active_p / "index.html").is_file():
-                                    target_fname = "index.html"
-                                elif lang_tag == "css" and (active_p / "style.css").is_file():
-                                    target_fname = "style.css"
-                                elif lang_tag in ("python", "py") and (active_p / "main.py").is_file():
-                                    target_fname = "main.py"
+                        if active_p and active_p.is_dir() and any(k in lower_line for k in ("update", "save", "add", "change", "wenas", "hadanna", "project", "folder", "script", "code", "drone", "game")):
+                            block_pattern = re.compile(
+                                r"(?:(?:###|####)\s*(?:\d+\.\s*)?(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)[^\n]*\r?\n)?```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:\r?\n```|\Z)"
+                            )
+                            for m in block_pattern.finditer(cmd_out):
+                                target_fname = m.group(1)
+                                lang_tag = (m.group(2) or "").lower()
+                                block_code = m.group(3).strip()
+                                if not target_fname:
+                                    if lang_tag in ("javascript", "js") and (active_p / "script.js").is_file():
+                                        target_fname = "script.js"
+                                    elif lang_tag in ("html", "htm") and (active_p / "index.html").is_file():
+                                        target_fname = "index.html"
+                                    elif lang_tag == "css" and (active_p / "style.css").is_file():
+                                        target_fname = "style.css"
+                                    elif lang_tag in ("python", "py") and (active_p / "main.py").is_file():
+                                        target_fname = "main.py"
 
-                                if target_fname and len(block_code.strip()) > 30:
+                                if target_fname and len(block_code) > 20:
                                     target_file = active_p / target_fname
                                     try:
                                         bak = target_file.with_suffix(target_file.suffix + ".bak")
                                         bak.write_text(target_file.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
-                                        target_file.write_text(block_code.strip(), encoding="utf-8")
+                                        target_file.write_text(block_code, encoding="utf-8")
                                         output_fn(colorize(f"[Auto-synced updated code to {target_file}]", GREEN, color_enabled))
                                     except Exception:
                                         pass

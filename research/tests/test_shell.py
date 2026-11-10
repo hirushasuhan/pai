@@ -2462,6 +2462,122 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertIn("Successfully updated", combined_out)
             self.assertIn("Tip: Refresh index.html", combined_out)
 
+    def test_mcp_graphql_multiagent_and_cctv_drone_modification(self) -> None:
+        """Asserts natural language CCTV drone modification, MCP hub, GraphQL engine, and multi-agent collaboration."""
+        from shell import (
+            get_active_project_dir,
+            set_active_project_dir,
+            parse_shell_line,
+            run_interactive_shell,
+            _session_chat_turns,
+        )
+        from mcp_client import MCPRegistry
+        from graphql_agent import GraphQLClient
+        from capabilities import create_agent_capability_broker, Risk
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            proj_dir = Path(td) / "game_test_2"
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            script_f = proj_dir / "script.js"
+            index_f = proj_dir / "index.html"
+            script_f.write_text("// initial drone script\nlet speed = 5;", encoding="utf-8")
+            index_f.write_text("<!DOCTYPE html><html><body><canvas></canvas></body></html>", encoding="utf-8")
+            set_active_project_dir(proj_dir)
+
+            # 1. Exact user prompt parsing check
+            user_instruction = (
+                "Add more textures to this. The drone doesn't need to be visible. "
+                "Make it so it can fire missiles, bullets, and Hellfire missiles from above at the "
+                "people walking below and the battle tanks, in black and white, exactly like looking through a CCTV camera."
+            )
+            act_cctv, args_cctv = parse_shell_line(user_instruction)
+            self.assertEqual(act_cctv, "edit")
+            self.assertEqual(args_cctv[0], str(script_f.resolve()))
+            self.assertIn("CCTV camera", args_cctv[1])
+
+            # 2. Test slash commands for agent, mcp, and graphql
+            act_agent, args_agent = parse_shell_line("/agent Build autonomous drone surveillance")
+            self.assertEqual(act_agent, "multi_agent")
+            self.assertIn("surveillance", args_agent[0])
+
+            act_mcp, args_mcp = parse_shell_line("/mcp status")
+            self.assertEqual(act_mcp, "mcp_hub")
+
+            act_gql, args_gql = parse_shell_line("/graphql introspect")
+            self.assertEqual(act_gql, "graphql_cmd")
+            self.assertEqual(args_gql[0], "introspect")
+
+            # 3. Test GraphQL client validator and Capability Broker
+            val_ok, val_err = GraphQLClient.validate_query("query { drone { id speed } }")
+            self.assertTrue(val_ok)
+            self.assertIsNone(val_err)
+
+            inv_ok, inv_err = GraphQLClient.validate_query("query { unclosed")
+            self.assertFalse(inv_ok)
+            self.assertIsNotNone(inv_err)
+
+            broker = create_agent_capability_broker()
+            self.assertIn("execute_graphql", broker._tools)
+            self.assertEqual(broker._tools["execute_graphql"].risk, Risk.NETWORK_OUT)
+
+            # 4. Test REPL execution of CCTV drone modification with multi-file code update
+            def mock_exec_cctv(argv):
+                # Simulated model response outputting both index.html and script.js with CCTV features
+                print("""### Files to Update:
+#### 1. index.html
+```html
+<!DOCTYPE html>
+<html>
+<head><title>CCTV Drone Strike</title></head>
+<body><div id="ui">CCTV ACTIVE</div><script src="script.js"></script></body>
+</html>
+```
+
+#### 2. script.js
+```javascript
+// CCTV Grayscale & Missile System
+const weapons = ['bullet', 'missile', 'hellfire'];
+let currentWeapon = 'hellfire';
+const matCCTV = { color: 0x808080 };
+console.log('CCTV Drone Weapons Active');
+```""")
+                return 0
+
+            inputs = iter([
+                user_instruction,
+                "/mcp",
+                "/exit",
+            ])
+            outputs: list[str] = []
+            with patch("shell.execute_subcommand", side_effect=mock_exec_cctv), \
+                 patch("webbrowser.open", return_value=True), \
+                 patch("pai.enforce_sandbox_boundary"):
+                code = run_interactive_shell(
+                    input_fn=lambda _: next(inputs),
+                    output_fn=outputs.append,
+                    stream=io.StringIO(),
+                )
+                self.assertEqual(code, 0)
+
+            # 5. Verify both files were updated on disk and backups were created
+            updated_js = script_f.read_text(encoding="utf-8")
+            self.assertIn("CCTV Grayscale & Missile System", updated_js)
+            self.assertIn("hellfire", updated_js)
+
+            updated_html = index_f.read_text(encoding="utf-8")
+            self.assertIn("CCTV Drone Strike", updated_html)
+
+            # Verify backups
+            self.assertTrue(script_f.with_suffix(".js.bak").is_file())
+            self.assertTrue(index_f.with_suffix(".html.bak").is_file())
+
+            combined_out = "\n".join(outputs)
+            self.assertIn("Successfully updated", combined_out)
+            self.assertIn("Model Context Protocol", combined_out)
+            self.assertIn("Tip: Refresh index.html", combined_out)
+
 
 if __name__ == "__main__":
     unittest.main()

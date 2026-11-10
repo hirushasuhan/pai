@@ -167,3 +167,30 @@ class ToolBroker:
         self._calls[name] = self._calls.get(name, 0) + 1
         self._record(name, args, True, "allowed" + (" after human confirmation" if confirmed else ""), tainted, confirmed)
         return tool.func(**args)
+
+
+def create_agent_capability_broker(
+    additional_tools: Optional[Sequence[Tool]] = None,
+    additional_grants: Optional[Sequence[Grant]] = None,
+    confirm: Optional[Callable[[ToolRequest], bool]] = None,
+) -> ToolBroker:
+    """
+    Constructs a ToolBroker pre-configured with agent tools (GraphQL, MCP, safe I/O).
+    """
+    from research.graphql_agent import execute_graphql_tool, introspect_graphql_tool
+
+    base_tools = [
+        Tool("execute_graphql", Risk.NETWORK_OUT, execute_graphql_tool),
+        Tool("introspect_graphql", Risk.NETWORK_OUT, introspect_graphql_tool),
+    ]
+    if additional_tools:
+        base_tools.extend(additional_tools)
+
+    base_grants = [
+        Grant("execute_graphql", max_calls=100),
+        Grant("introspect_graphql", max_calls=20),
+    ]
+    if additional_grants:
+        base_grants.extend(additional_grants)
+
+    return ToolBroker(tools=base_tools, grants=base_grants, confirm=confirm)

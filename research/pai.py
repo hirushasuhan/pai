@@ -1095,13 +1095,17 @@ def call_model_generate(
         "stream": False,
         "think": False,
     }
-    options: Dict[str, Any] = {}
+    options: Dict[str, Any] = {
+        "num_predict": int(os.environ.get("PAI_NUM_PREDICT", "4096")),
+    }
     if temperature is not None:
         options["temperature"] = float(temperature)
     if seed is not None:
         options["seed"] = int(seed)
-    if len(prompt) > 6000:
-        options["num_ctx"] = 8192
+    if len(prompt) > 2000 or "code" in prompt.lower() or "file" in prompt.lower():
+        options["num_ctx"] = int(os.environ.get("PAI_NUM_CTX", "8192"))
+    elif len(prompt) > 6000:
+        options["num_ctx"] = int(os.environ.get("PAI_NUM_CTX", "16384"))
     if options:
         req_payload["options"] = options
 
