@@ -2059,6 +2059,17 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertEqual(code, 0)
 
         self.assertTrue(any("--model" in cmd and first in cmd for cmd in executed_argvs))
+        # Ensure --model is placed before the '--' sentinel so argparse parses it as a valid flag
+        matching_cmd = next((cmd for cmd in executed_argvs if "--model" in cmd and first in cmd), None)
+        self.assertIsNotNone(matching_cmd)
+        if "--" in matching_cmd:
+            self.assertLess(matching_cmd.index("--model"), matching_cmd.index("--"))
+
+        from pai import build_parser
+        parser = build_parser()
+        for cmd in executed_argvs:
+            parsed = parser.parse_args(cmd)
+            self.assertEqual(parsed.model, first)
 
     def test_shell_project_scaffold(self) -> None:
         """Asserts create_project_scaffold generates web, 3d, and python project files."""

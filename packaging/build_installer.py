@@ -8,7 +8,7 @@ ADR-005, ADR-013
 Hard rules enforced:
   1. Shipped payload is built strictly from evaluated git tag via build_payload().
   2. Fails closed if git trees differ from evaluated constants:
-     - research/ tree: 418cc12405a5777e8ec9efda694889c8774099e5
+     - research/ tree: 88566b70258de5752c7aaf160be472a7f01d6b38
      - core/ tree:     14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
   3. Verifies pai-core.exe SHA-256 matches pinned hash (6f13d494...).
   4. Bundles official agreement text (Appendix A) with verified SHA-256.

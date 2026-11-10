@@ -1108,8 +1108,12 @@ def edit_target_file(
     capture = CaptureStream(stream, on_first_write=spinner.stop)
     try:
         spinner.start()
+        chat_cmd = ["chat"]
+        if _active_model_override:
+            chat_cmd += ["--model", _active_model_override]
+        chat_cmd += ["--", edit_prompt]
         with contextlib.redirect_stdout(capture):
-            exec_fn(["chat", "--", edit_prompt])
+            exec_fn(chat_cmd)
     except KeyboardInterrupt:
         return False, "Operation cancelled by user.", None
     except Exception as e:
@@ -2083,8 +2087,12 @@ def analyze_and_fix_bugs(
         capture = CaptureStream(stream, on_first_write=spinner.stop)
         try:
             spinner.start()
+            chat_cmd = ["chat"]
+            if _active_model_override:
+                chat_cmd += ["--model", _active_model_override]
+            chat_cmd += ["--", fix_prompt]
             with contextlib.redirect_stdout(capture):
-                exec_fn(["chat", "--", fix_prompt])
+                exec_fn(chat_cmd)
         except KeyboardInterrupt:
             return False, "Operation cancelled by user.", fixed_files
         except Exception as e:
@@ -3159,11 +3167,19 @@ def run_interactive_shell(
                 cmd_name = argv[0] if argv else ""
                 exec_argv = list(argv)
                 if cmd_name == "code" and "--out" not in exec_argv:
-                    exec_argv = exec_argv + ["--out", "pai_output"]
+                    if "--" in exec_argv:
+                        dash_idx = exec_argv.index("--")
+                        exec_argv = exec_argv[:dash_idx] + ["--out", "pai_output"] + exec_argv[dash_idx:]
+                    else:
+                        exec_argv = exec_argv + ["--out", "pai_output"]
 
                 if _active_model_override and "--model" not in exec_argv:
                     if cmd_name in ("chat", "code", "analyze", "docs", "forecast"):
-                        exec_argv = exec_argv + ["--model", _active_model_override]
+                        if "--" in exec_argv:
+                            dash_idx = exec_argv.index("--")
+                            exec_argv = exec_argv[:dash_idx] + ["--model", _active_model_override] + exec_argv[dash_idx:]
+                        else:
+                            exec_argv = exec_argv + ["--model", _active_model_override]
 
                 if cmd_name == "chat" and _session_chat_turns:
                     os.environ["PAI_CHAT_HISTORY"] = json.dumps(_session_chat_turns[-6:])
