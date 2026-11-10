@@ -92,6 +92,7 @@ SHELL_HELP = (
     "  /chat <prompt>      Chat with the assistant (or enter prompt directly without slash)\n"
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
     "  /team [status|prompt] Run autonomous Multi-Model Developer Team (PM, Senior Dev, Specialist Dev, QA)\n"
+    "  /team set <role>=<m> Configure model assigned to a team role (e.g. /team set pm=llama3.2:3b)\n"
     "  /agent <prompt>     Alias for /team multi-agent collaborative workflow\n"
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
     "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
@@ -2843,9 +2844,15 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("agent", "team", "plan"):
             args = tokens[1:]
-            rest = stripped[len(tokens[0]):].strip()
-            if not rest:
+            if not args:
                 return "multi_agent", ["status"]
+            first_arg = args[0].lower()
+            if first_arg in ("set", "assign", "config", "configure", "models", "reset", "roles"):
+                rest = stripped[len(tokens[0]):].strip()
+                idx = rest.find(args[0]) + len(args[0])
+                sub_args = rest[idx:].strip()
+                return "team_config", [first_arg, sub_args]
+            rest = stripped[len(tokens[0]):].strip()
             return "multi_agent", [rest]
 
         if raw_cmd == "mcp":
@@ -3055,6 +3062,27 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                     cand_name = nxt
                     break
         return "skill_learn", [cand_name, stripped]
+
+    # Check for natural language team model configuration intent
+    is_team_scope = any(k in lower_unslashed for k in ("team eke", "team model", "roles walata", "role walata", "team roles", "team set", "team config"))
+    has_model_mention = any(k in lower_unslashed for k in ("model", "models", "role", "roles"))
+    has_config_action = any(k in lower_unslashed for k in ("wenas", "maru", "change", "set", "danna", "dala", "configure", "assign", "switch")) or (
+        has_model_mention and any(tok.lower().strip(".,;:?!'\"").startswith(("llama", "qwen", "gemma", "mistral", "phi")) for tok in stripped.split())
+    )
+    if is_team_scope and (has_model_mention or has_config_action):
+        assignments = []
+        for word in stripped.split():
+            if "=" in word and any(r in word.lower().split("=")[0] for r in ("pm", "dev", "coder", "senior", "ui", "specialist", "qa", "tester", "manager", "lead")):
+                assignments.append(word)
+        if assignments:
+            return "team_config", ["set", " ".join(assignments)]
+        for r_key in ("pm", "senior dev", "senior", "dev", "coder", "ui", "specialist", "qa"):
+            if r_key in lower_unslashed:
+                for tok in stripped.split():
+                    clean_tok = tok.strip(".,;:?!'\"")
+                    if any(clean_tok.lower().startswith(m_prefix) for m_prefix in ("llama", "qwen", "gemma", "mistral", "phi")):
+                        return "team_config", ["set", f"{r_key.replace(' ', '_')}={clean_tok}"]
+        return "team_config", ["help", ""]
 
     # Check for natural language multi-agent intent
     if lower_unslashed.startswith("agent ") or lower_unslashed.startswith("team ") or any(k in lower_unslashed for k in ("agent team", "multi agent", "agents use karala", "agents la", "developer team", "dev team", "team eka", "team ekata", "team ekath", "team ekath ekka")):
@@ -3362,6 +3390,35 @@ def run_interactive_shell(
                     output_fn(colorize("🚀 Launching Autonomous Engineering Team (FIPA-ACL Standard)...", CYAN, color_enabled))
                     res = team.run_collaborative_workflow(agent_prompt, active_project_dir=active_p)
                     add_to_session_history(line, f"[Multi-Agent workflow completed for: {agent_prompt}]")
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "team_config":
+                sub = argv[0].lower() if argv else "help"
+                rest = " ".join(argv[1:]) if len(argv) > 1 else ""
+                try:
+                    from research.multi_agent import MultiAgentTeam
+                except ModuleNotFoundError:
+                    from multi_agent import MultiAgentTeam
+                team = MultiAgentTeam(
+                    output_fn=output_fn,
+                    color_enabled=color_enabled,
+                )
+                if sub in ("set", "assign"):
+                    msgs = team.registry.parse_and_apply_assignments(rest)
+                    for m in msgs:
+                        output_fn(colorize(f"  {m}", GREEN if "Assigned" in m else YELLOW, color_enabled))
+                    output_fn("\n" + team.get_roster_summary())
+                elif sub == "reset":
+                    msg = team.registry.reset_to_defaults()
+                    output_fn(colorize(f"  {msg}", GREEN, color_enabled))
+                    output_fn("\n" + team.get_roster_summary())
+                elif sub == "models":
+                    output_fn(team.registry.format_available_models(color_enabled=color_enabled))
+                else:
+                    output_fn(team.registry.format_config_help(color_enabled=color_enabled))
+                    output_fn("\n" + team.get_roster_summary())
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))

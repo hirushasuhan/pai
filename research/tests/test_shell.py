@@ -2648,6 +2648,43 @@ console.log('Playable Verified');
             self.assertIn("Playable Verified", (p_dir / "script.js").read_text(encoding="utf-8"))
             self.assertTrue((p_dir / "script.js.bak").is_file())
 
+        # 5. Test Team Model Configuration (Role Customization & Natural Language Intent)
+        act_cfg, args_cfg = parse_shell_line("/team set pm=llama3.2:3b dev=qwen2.5-coder:7b")
+        self.assertEqual(act_cfg, "team_config")
+        self.assertEqual(args_cfg[0], "set")
+        self.assertIn("pm=llama3.2:3b", args_cfg[1])
+
+        # Test natural language model change intent
+        act_nl_help, _ = parse_shell_line("apita team eke role walata dala inna model wenas karanna puluwan wenna hadanna")
+        self.assertEqual(act_nl_help, "team_config")
+
+        act_nl_set, args_nl_set = parse_shell_line("team eke pm model eka llama3.2:3b karanna")
+        self.assertEqual(act_nl_set, "team_config")
+        self.assertEqual(args_nl_set[0], "set")
+        self.assertIn("pm=llama3.2:3b", args_nl_set[1])
+
+        # Test dynamic role assignment and reset on registry
+        with tempfile.TemporaryDirectory() as td_cfg:
+            cfg_p = Path(td_cfg) / "team_config.json"
+            with patch.object(TeamRoleModelRegistry, "get_config_path", return_value=cfg_p):
+                reg = TeamRoleModelRegistry()
+                ok, msg = reg.set_role_model("pm", "llama3.2:3b")
+                self.assertTrue(ok)
+                self.assertEqual(reg.role_models["project_manager"], "llama3.2:3b")
+                self.assertIn("project_manager", reg.custom_roles)
+                self.assertTrue(cfg_p.is_file())
+
+                # Test multiple assignments via string parsing
+                res_msgs = reg.parse_and_apply_assignments("dev=qwen2.5-coder:7b qa=qwen3.5:4b")
+                self.assertEqual(len(res_msgs), 2)
+                self.assertEqual(reg.role_models["senior_developer"], "qwen2.5-coder:7b")
+                self.assertEqual(reg.role_models["qa_engineer"], "qwen3.5:4b")
+
+                # Test reset to defaults
+                reset_msg = reg.reset_to_defaults()
+                self.assertIn("reset", reset_msg)
+                self.assertEqual(len(reg.custom_roles), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

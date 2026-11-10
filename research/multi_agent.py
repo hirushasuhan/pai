@@ -49,7 +49,7 @@ def discover_available_models(base_url: str = "http://127.0.0.1:11434") -> List[
 
 
 class TeamRoleModelRegistry:
-    """Manages role-to-model mapping and prioritized failovers."""
+    """Manages role-to-model mapping, user customization, and prioritized failovers."""
     
     ROLE_PREFERENCES: Dict[str, List[str]] = {
         "project_manager": ["llama3.2:3b", "qwen3.5:4b", "llama3.2:1b"],
@@ -72,11 +72,170 @@ class TeamRoleModelRegistry:
         "qa_engineer": "🧪",
     }
 
+    ROLE_ALIASES: Dict[str, str] = {
+        "pm": "project_manager",
+        "project_manager": "project_manager",
+        "manager": "project_manager",
+        "lead": "project_manager",
+        "planner": "project_manager",
+        "senior": "senior_developer",
+        "senior_developer": "senior_developer",
+        "senior_dev": "senior_developer",
+        "dev": "senior_developer",
+        "coder": "senior_developer",
+        "developer": "senior_developer",
+        "architect": "senior_developer",
+        "specialist": "specialist_developer",
+        "specialist_developer": "specialist_developer",
+        "ui": "specialist_developer",
+        "frontend": "specialist_developer",
+        "graphics": "specialist_developer",
+        "audio": "specialist_developer",
+        "qa": "qa_engineer",
+        "qa_engineer": "qa_engineer",
+        "test": "qa_engineer",
+        "tester": "qa_engineer",
+        "auditor": "qa_engineer",
+        "reviewer": "qa_engineer",
+    }
+
     def __init__(self, model_override: Optional[str] = None):
         self.available_models = discover_available_models()
         self.role_models: Dict[str, str] = {}
         self.role_fallbacks: Dict[str, List[str]] = {}
+        self.custom_roles: set[str] = set()
         self._initialize_mappings(model_override)
+        if not model_override:
+            self.load_saved_config()
+
+    @staticmethod
+    def get_config_path() -> Path:
+        env_p = os.environ.get("PAI_TEAM_CONFIG")
+        if env_p:
+            return Path(env_p)
+        return Path.home() / ".pai" / "team_config.json"
+
+    def load_saved_config(self):
+        """Loads saved team role-to-model configuration overrides."""
+        cfg_file = self.get_config_path()
+        if cfg_file.is_file():
+            try:
+                data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for r, m in data.items():
+                        canon = self.ROLE_ALIASES.get(r.lower())
+                        if canon and isinstance(m, str) and m.strip():
+                            self.role_models[canon] = m.strip()
+                            self.custom_roles.add(canon)
+            except Exception:
+                pass
+
+    def save_config(self):
+        """Persists custom team role-to-model assignments to ~/.pai/team_config.json."""
+        cfg_file = self.get_config_path()
+        try:
+            cfg_file.parent.mkdir(parents=True, exist_ok=True)
+            cfg_file.write_text(json.dumps(self.role_models, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def set_role_model(self, role_str: str, model_name: str, persist: bool = True) -> Tuple[bool, str]:
+        """Assigns an AI model to a specific team role."""
+        canon = self.ROLE_ALIASES.get(role_str.strip().lower())
+        if not canon:
+            return False, f"Unknown role '{role_str}'. Valid roles: pm, dev, ui, qa."
+
+        clean_model = model_name.strip()
+        for avail in self.available_models:
+            if avail.lower() == clean_model.lower():
+                clean_model = avail
+                break
+            elif avail.lower().startswith(clean_model.lower() + ":"):
+                clean_model = avail
+                break
+
+        self.role_models[canon] = clean_model
+        self.custom_roles.add(canon)
+        if persist:
+            self.save_config()
+
+        icon = self.ROLE_ICONS.get(canon, "🤖")
+        title = self.ROLE_TITLES.get(canon, canon)
+        status = f"Assigned {icon} {title} ({canon}) -> model '{clean_model}'"
+        if self.available_models and clean_model not in self.available_models:
+            status += f" (Note: '{clean_model}' is not currently running in local Ollama tags)"
+        return True, status
+
+    def parse_and_apply_assignments(self, assignment_str: str, persist: bool = True) -> List[str]:
+        """Parses assignment expressions like 'pm=llama3.2:3b dev=qwen2.5-coder:7b' or 'pm llama3.2:3b'."""
+        results = []
+        tokens = assignment_str.replace(",", " ").split()
+        for tok in tokens:
+            if "=" in tok:
+                parts = tok.split("=", 1)
+                ok, msg = self.set_role_model(parts[0], parts[1], persist=False)
+                results.append(msg)
+            elif ":" in tok and not any(tok.startswith(p) for p in ("qwen", "llama", "gemma")):
+                parts = tok.split(":", 1)
+                ok, msg = self.set_role_model(parts[0], parts[1], persist=False)
+                results.append(msg)
+
+        if not results and len(tokens) >= 2:
+            r = tokens[0]
+            m = tokens[1]
+            ok, msg = self.set_role_model(r, m, persist=False)
+            results.append(msg)
+
+        if persist:
+            self.save_config()
+        if not results:
+            results.append("No valid role=model assignments found (e.g. pm=llama3.2:3b dev=qwen2.5-coder:7b).")
+        return results
+
+    def reset_to_defaults(self, persist: bool = True) -> str:
+        """Resets all team role models to automatic intelligent defaults."""
+        self.custom_roles.clear()
+        cfg_file = self.get_config_path()
+        if cfg_file.is_file():
+            try:
+                cfg_file.unlink()
+            except Exception:
+                pass
+        self._initialize_mappings()
+        return "All team roles have been reset to automatic intelligent defaults."
+
+    def format_config_help(self, color_enabled: bool = False) -> str:
+        """Returns guide on how to configure team roles."""
+        lines = [
+            "=== Autonomous AI Team Model Configuration ===",
+            "Configure role-specific models for the multi-agent team (persisted to ~/.pai/team_config.json).",
+            "",
+            "Usage:",
+            "  /team set <role>=<model> [...]   (e.g. /team set pm=llama3.2:3b dev=qwen2.5-coder:7b)",
+            "  /team set <role> <model>         (e.g. /team set pm qwen3.5:4b)",
+            "  /team reset                      (Restore automatic intelligent defaults)",
+            "  /team models                     (List local models available for assignment)",
+            "  /team status                     (View active team roster and assigned models)",
+            "",
+            "Role Identifiers:",
+            "  • pm / manager    : Product & Project Manager",
+            "  • dev / senior    : Principal Software Engineer & Architect",
+            "  • ui / specialist : Frontend / UI, Textures & Audio Specialist",
+            "  • qa / tester     : Lead QA Engineer & Code Auditor",
+        ]
+        return "\n".join(lines)
+
+    def format_available_models(self, color_enabled: bool = False) -> str:
+        """Returns formatted list of local models."""
+        models = self.available_models or discover_available_models()
+        lines = ["=== Local Models Available for Team Assignment ==="]
+        if not models:
+            lines.append("  (No models detected via loopback Ollama endpoint http://127.0.0.1:11434)")
+        else:
+            for m in models:
+                lines.append(f"  • {m}")
+        lines.append("\nTip: Use '/team set <role>=<model>' to assign any model to a role.")
+        return "\n".join(lines)
 
     def _initialize_mappings(self, override: Optional[str] = None):
         for role, prefs in self.ROLE_PREFERENCES.items():
@@ -130,7 +289,8 @@ class MultiAgentTeam:
             m = self.registry.role_models.get(role, "unknown")
             fb = self.registry.role_fallbacks.get(role, [])
             fb_str = f" (fallback: {fb[0]})" if fb else ""
-            lines.append(f"│ {icon} {role:<18} {title:<35} {m}{fb_str}")
+            tag = " [custom]" if role in self.registry.custom_roles else " [auto]"
+            lines.append(f"│ {icon} {role:<18} {title:<35} {m}{tag}{fb_str}")
         lines.append("└──────────────────────────────────────────────────────────────────────────────")
         return "\n".join(lines)
 
