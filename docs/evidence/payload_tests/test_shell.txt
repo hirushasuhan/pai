@@ -1,14 +1,14 @@
 ================================================================================
 PAI INTERACTIVE TERMINAL SHELL REPL TESTS (35 TESTS, ADR-014, FINDINGS ES, ET, EX, FK, FL, FM, FN, FO, FP) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-10T14:18:31.758315+00:00
+Timestamp (UTC): 2026-11-10T15:05:45.171241+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        ecfb5ec20aa55c1aa0f038aea3ce0a4276590def
+Git HEAD:        29c57f417fd1e9eb8205fa9fe3debcf354440da0
 Working Tree:    clean
-Research Tree:   24db7b215d40ca3e0af78696a0c2f7b5251ab6de
+Research Tree:   418cc12405a5777e8ec9efda694889c8774099e5
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -26,6 +26,6 @@ STDERR:
 Error: Chat prompt cannot be empty.
 ....
 ----------------------------------------------------------------------
-Ran 50 tests in 41.583s
+Ran 50 tests in 42.270s
 
 OK
