@@ -233,6 +233,20 @@ class VirtualTerminalStream(DummyStream):
 
 
 class TestInteractiveShellADR014(unittest.TestCase):
+    def setUp(self) -> None:
+        import shell
+        shell._active_model_override = None
+        shell._session_active_project = None
+        os.environ.pop("PAI_ACTIVE_MODEL", None)
+        os.environ.pop("PAI_ACTIVE_PROJECT", None)
+
+    def tearDown(self) -> None:
+        import shell
+        shell._active_model_override = None
+        shell._session_active_project = None
+        os.environ.pop("PAI_ACTIVE_MODEL", None)
+        os.environ.pop("PAI_ACTIVE_PROJECT", None)
+
     # -------------------------------------------------------------------------
     # 1. Terminal Detection Guard (ADR-014 §1)
     # -------------------------------------------------------------------------
@@ -1397,6 +1411,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
 
         with patch("shell.should_pin_header", return_value=True), \
              patch("shell.get_terminal_dimensions", return_value=(80, 24)), \
+             patch("shell.get_resident_model_name", return_value="no model loaded yet"), \
              patch("pai.enforce_sandbox_boundary"):
             code = run_interactive_shell(
                 input_fn=turn_input,
@@ -1406,7 +1421,8 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertEqual(code, 0)
 
         # Retrieve reference header lines for 80 columns without color
-        ref_lines = get_pinned_header_lines(80, color_enabled=False, stream=stream)
+        with patch("shell.get_resident_model_name", return_value="no model loaded yet"):
+            ref_lines = get_pinned_header_lines(80, color_enabled=False, stream=stream)
         self.assertEqual(len(ref_lines), 5)
 
         # Assert all 40 snapshots maintained exact intact header rows
