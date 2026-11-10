@@ -1192,8 +1192,8 @@ def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
 
     if not cand_name:
         # Patterns in English & Sinhala:
-        # 1. name it as <name> / named <name> / called <name>
-        m = re.search(r'(?:name\s+it\s+(?:as\s+)?|named\s+(?:as\s+)?|called\s+(?:as\s+)?)\s*([a-zA-Z0-9_\-\s]+?)(?:\s+(?:and|with|for|to|&|then|hadala|create|make|aluth)\b|$)', stripped, re.I)
+        # 1. name it as / name it ad / named as / called
+        m = re.search(r'(?:name\s+it\s+(?:as|ad|a|to)?\s*|named\s+(?:as|ad|a|to)?\s*|called\s+(?:as|ad|a|to)?\s*)\s*([a-zA-Z0-9_\-\s]+?)(?:\s+(?:and|with|for|to|&|then|hadala|create|make|aluth)\b|$)', stripped, re.I)
         if m:
             cand_name = m.group(1).strip()
 
@@ -1212,7 +1212,7 @@ def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
         if m:
             raw = m.group(1).strip()
             cleaned = re.sub(r'\b(in\s+downloads|in\s+desktop|in\s+documents|downloads|desktop|documents)\b', '', raw, flags=re.I).strip()
-            cleaned = re.sub(r'\b(name\s+it\s+as|name\s+it|as|called|named)\b', '', cleaned, flags=re.I).strip()
+            cleaned = re.sub(r'\b(name\s+it\s+(?:as|ad|a|to)?|name\s+it|as|called|named)\b', '', cleaned, flags=re.I).strip()
             if cleaned:
                 cand_name = cleaned
 
@@ -1234,7 +1234,7 @@ def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
         cand_name = "my_project"
 
     cand_name = re.sub(r'^(?:a|an|the)\s+', '', cand_name, flags=re.I).strip()
-    cand_name = re.sub(r'\s+(?:and|with|for|to|&|then|hadala|create|make|aluth)\b.*$', '', cand_name, flags=re.I).strip()
+    cand_name = re.sub(r'\s+(?:and|with|for|to|&|then|hadala|create|make|aluth|save)\b.*$', '', cand_name, flags=re.I).strip()
     target_path = base / cand_name
     return str(target_path), stripped
 
@@ -1250,6 +1250,15 @@ def parse_natural_save_intent(line: str) -> Optional[str]:
 
     # Informational questions route to chat
     if any(q in lower for q in ("how to", "how do", "kohomada", "what is", "mokakda", "explain", "why")):
+        return None
+
+    # Guard: Prompts asking to create, make, build, write, code, or generate
+    # are CREATION prompts (project scaffold or chat generation), NEVER save-last-response commands!
+    creation_prefixes = (
+        "create ", "make ", "new ", "start ", "build ", "generate ",
+        "write ", "code ", "aluth ", "hadanna ", "hadala ", "patan "
+    )
+    if lower.startswith(creation_prefixes) or any(k in lower for k in ("create folder", "make folder", "new folder", "create project", "new project")):
         return None
 
     save_triggers = (
@@ -1369,7 +1378,8 @@ def create_project_scaffold(
     prompt_lower = (project_type_or_prompt or "").lower()
     created_files: List[str] = []
 
-    is_threejs = any(k in prompt_lower for k in ("three", "threejs", "treejs", "tree.js", "3d", "webgl"))
+    is_drone_game = any(k in prompt_lower for k in ("drone", "dron", "shooting", "military", "flight", "turret"))
+    is_threejs = any(k in prompt_lower for k in ("three", "threejs", "treejs", "tree.js", "3d", "webgl")) or is_drone_game
 
     # 1. Web / HTML / Game project
     if any(k in prompt_lower for k in ("web", "html", "game", "threejs", "frontend", "canvas", "css", "js")) or not prompt_lower or is_threejs:
@@ -1380,7 +1390,32 @@ def create_project_scaffold(
 
         title = target_path.name.replace("_", " ").replace("-", " ").title()
         if not index_html.exists():
-            if is_threejs:
+            if is_drone_game:
+                html_body = (
+                    f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+                    f"  <meta charset=\"UTF-8\">\n"
+                    f"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+                    f"  <title>{title} - Realistic Military Drone Shooter 3D</title>\n"
+                    f"  <link rel=\"stylesheet\" href=\"style.css\">\n"
+                    f"  <script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"></script>\n"
+                    f"</head>\n<body>\n"
+                    f"  <div id=\"hud\">\n"
+                    f"    <div class=\"hud-bar top-bar\">\n"
+                    f"      <div class=\"hud-panel\"><span class=\"label\">UAV:</span> <strong>MQ-9 REAPER [ACTIVE]</strong></div>\n"
+                    f"      <div class=\"hud-panel\"><span class=\"label\">TARGETS:</span> <span id=\"scoreVal\">0</span> / 8</div>\n"
+                    f"      <div class=\"hud-panel\"><span class=\"label\">ALT:</span> <span id=\"altVal\">45</span>m | <span class=\"label\">SPD:</span> <span id=\"spdVal\">0</span> km/h</div>\n"
+                    f"    </div>\n"
+                    f"    <div id=\"crosshair\"><div class=\"reticle\"></div></div>\n"
+                    f"    <div class=\"hud-bar bottom-bar\">\n"
+                    f"      <div class=\"hud-panel\"><span class=\"label\">HULL:</span> <span id=\"hpVal\">100%</span></div>\n"
+                    f"      <div class=\"hud-panel\"><span class=\"label\">AMMO:</span> <span id=\"ammoVal\">500</span> [SPACE TO FIRE]</div>\n"
+                    f"      <div class=\"hud-panel controls-hint\">W/S: Pitch/Thrust | A/D: Turn | SPACE: Shoot | SHIFT: Boost | R: Reset</div>\n"
+                    f"    </div>\n"
+                    f"  </div>\n"
+                    f"  <script src=\"script.js\"></script>\n"
+                    f"</body>\n</html>\n"
+                )
+            elif is_threejs:
                 html_body = (
                     f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
                     f"  <meta charset=\"UTF-8\">\n"
@@ -1415,7 +1450,83 @@ def create_project_scaffold(
             created_files.append("index.html")
 
         if not style_css.exists():
-            if is_threejs:
+            if is_drone_game:
+                css_body = (
+                    "body {\n"
+                    "  margin: 0;\n"
+                    "  padding: 0;\n"
+                    "  overflow: hidden;\n"
+                    "  background: #050a14;\n"
+                    "  font-family: 'Courier New', Courier, monospace;\n"
+                    "  color: #00ff88;\n"
+                    "  user-select: none;\n"
+                    "}\n"
+                    "canvas {\n"
+                    "  display: block;\n"
+                    "  width: 100vw;\n"
+                    "  height: 100vh;\n"
+                    "}\n"
+                    "#hud {\n"
+                    "  position: absolute;\n"
+                    "  top: 0; left: 0; width: 100%; height: 100%;\n"
+                    "  pointer-events: none;\n"
+                    "  display: flex;\n"
+                    "  flex-direction: column;\n"
+                    "  justify-content: space-between;\n"
+                    "  box-sizing: border-box;\n"
+                    "  padding: 16px 20px;\n"
+                    "}\n"
+                    ".hud-bar {\n"
+                    "  display: flex;\n"
+                    "  justify-content: space-between;\n"
+                    "  align-items: center;\n"
+                    "}\n"
+                    ".hud-panel {\n"
+                    "  background: rgba(5, 18, 30, 0.85);\n"
+                    "  border: 1px solid #00ff88;\n"
+                    "  box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);\n"
+                    "  padding: 6px 14px;\n"
+                    "  border-radius: 4px;\n"
+                    "  font-size: 13px;\n"
+                    "  font-weight: bold;\n"
+                    "  letter-spacing: 1px;\n"
+                    "  text-shadow: 0 0 6px rgba(0, 255, 136, 0.8);\n"
+                    "}\n"
+                    ".hud-panel .label {\n"
+                    "  color: #77bbaa;\n"
+                    "  font-size: 11px;\n"
+                    "}\n"
+                    ".controls-hint {\n"
+                    "  font-size: 12px;\n"
+                    "  color: #aaffdd;\n"
+                    "}\n"
+                    "#crosshair {\n"
+                    "  position: absolute;\n"
+                    "  top: 50%; left: 50%;\n"
+                    "  transform: translate(-50%, -50%);\n"
+                    "  width: 40px; height: 40px;\n"
+                    "}\n"
+                    ".reticle {\n"
+                    "  position: relative;\n"
+                    "  width: 100%; height: 100%;\n"
+                    "  border: 2px solid rgba(0, 255, 136, 0.8);\n"
+                    "  border-radius: 50%;\n"
+                    "  box-shadow: 0 0 8px #00ff88;\n"
+                    "}\n"
+                    ".reticle::before {\n"
+                    "  content: '';\n"
+                    "  position: absolute;\n"
+                    "  top: 19px; left: -10px; width: 60px; height: 2px;\n"
+                    "  background: rgba(0, 255, 136, 0.8);\n"
+                    "}\n"
+                    ".reticle::after {\n"
+                    "  content: '';\n"
+                    "  position: absolute;\n"
+                    "  top: -10px; left: 19px; width: 2px; height: 60px;\n"
+                    "  background: rgba(0, 255, 136, 0.8);\n"
+                    "}\n"
+                )
+            elif is_threejs:
                 css_body = (
                     "body {\n"
                     "  margin: 0;\n"
@@ -1455,7 +1566,286 @@ def create_project_scaffold(
             created_files.append("style.css")
 
         if not script_js.exists():
-            if is_threejs:
+            if is_drone_game:
+                js_content = (
+                    f"// {title} - Realistic Military Drone Shooter 3D (Three.js)\n"
+                    "window.addEventListener('DOMContentLoaded', () => {\n"
+                    "  if (typeof THREE === 'undefined') {\n"
+                    "    console.error('Three.js CDN not available');\n"
+                    "    return;\n"
+                    "  }\n\n"
+                    "  // 1. Audio System (Procedural Web Audio API)\n"
+                    "  let audioCtx = null;\n"
+                    "  function initAudio() {\n"
+                    "    if (!audioCtx) {\n"
+                    "      audioCtx = new (window.AudioContext || window.webkitAudioContext)();\n"
+                    "    }\n"
+                    "  }\n"
+                    "  function playLaser() {\n"
+                    "    if (!audioCtx) return;\n"
+                    "    const osc = audioCtx.createOscillator();\n"
+                    "    const gain = audioCtx.createGain();\n"
+                    "    osc.type = 'sawtooth';\n"
+                    "    osc.frequency.setValueAtTime(880, audioCtx.currentTime);\n"
+                    "    osc.frequency.exponentialRampToValueAtTime(110, audioCtx.currentTime + 0.12);\n"
+                    "    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);\n"
+                    "    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);\n"
+                    "    osc.connect(gain);\n"
+                    "    gain.connect(audioCtx.destination);\n"
+                    "    osc.start();\n"
+                    "    osc.stop(audioCtx.currentTime + 0.13);\n"
+                    "  }\n"
+                    "  function playBoom() {\n"
+                    "    if (!audioCtx) return;\n"
+                    "    const bufSize = audioCtx.sampleRate * 0.4;\n"
+                    "    const buffer = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);\n"
+                    "    const data = buffer.getChannelData(0);\n"
+                    "    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;\n"
+                    "    const noise = audioCtx.createBufferSource();\n"
+                    "    noise.buffer = buffer;\n"
+                    "    const filter = audioCtx.createBiquadFilter();\n"
+                    "    filter.type = 'lowpass';\n"
+                    "    filter.frequency.setValueAtTime(600, audioCtx.currentTime);\n"
+                    "    filter.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.4);\n"
+                    "    const gain = audioCtx.createGain();\n"
+                    "    gain.gain.setValueAtTime(0.4, audioCtx.currentTime);\n"
+                    "    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);\n"
+                    "    noise.connect(filter);\n"
+                    "    filter.connect(gain);\n"
+                    "    gain.connect(audioCtx.destination);\n"
+                    "    noise.start();\n"
+                    "  }\n\n"
+                    "  // 2. Scene, Camera, Lighting\n"
+                    "  const scene = new THREE.Scene();\n"
+                    "  scene.background = new THREE.Color(0x060c18);\n"
+                    "  scene.fog = new THREE.FogExp2(0x060c18, 0.0035);\n"
+                    "  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 2000);\n"
+                    "  const renderer = new THREE.WebGLRenderer({ antialias: true });\n"
+                    "  renderer.setSize(window.innerWidth, window.innerHeight);\n"
+                    "  renderer.setPixelRatio(window.devicePixelRatio);\n"
+                    "  renderer.shadowMap.enabled = true;\n"
+                    "  document.body.appendChild(renderer.domElement);\n\n"
+                    "  const ambient = new THREE.AmbientLight(0x446688, 0.8);\n"
+                    "  scene.add(ambient);\n"
+                    "  const sun = new THREE.DirectionalLight(0xffffff, 1.2);\n"
+                    "  sun.position.set(100, 200, 100);\n"
+                    "  scene.add(sun);\n\n"
+                    "  // 3. Ground & Environment\n"
+                    "  const groundGeo = new THREE.PlaneGeometry(3000, 3000, 60, 60);\n"
+                    "  const groundMat = new THREE.MeshStandardMaterial({ color: 0x0a141e, roughness: 0.8, metalness: 0.2 });\n"
+                    "  const ground = new THREE.Mesh(groundGeo, groundMat);\n"
+                    "  ground.rotation.x = -Math.PI / 2;\n"
+                    "  scene.add(ground);\n"
+                    "  const grid = new THREE.GridHelper(3000, 150, 0x00ff88, 0x112233);\n"
+                    "  grid.position.y = 0.2;\n"
+                    "  scene.add(grid);\n\n"
+                    "  // Military bunkers and towers\n"
+                    "  const buildingMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5 });\n"
+                    "  for (let i = 0; i < 40; i++) {\n"
+                    "    const bx = (Math.random() - 0.5) * 1600;\n"
+                    "    const bz = (Math.random() - 0.5) * 1600;\n"
+                    "    const bh = 20 + Math.random() * 60;\n"
+                    "    const bGeo = new THREE.BoxGeometry(30 + Math.random() * 30, bh, 30 + Math.random() * 30);\n"
+                    "    const bMesh = new THREE.Mesh(bGeo, buildingMat);\n"
+                    "    bMesh.position.set(bx, bh / 2, bz);\n"
+                    "    scene.add(bMesh);\n"
+                    "  }\n\n"
+                    "  // 4. Player Military Drone Model\n"
+                    "  const drone = new THREE.Group();\n"
+                    "  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x242e38, metalness: 0.8, roughness: 0.3 });\n"
+                    "  const accentMat = new THREE.MeshStandardMaterial({ color: 0x00ff88, emissive: 0x00ff88, emissiveIntensity: 0.5 });\n"
+                    "  const droneBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 2.6), bodyMat);\n"
+                    "  drone.add(droneBody);\n"
+                    "  const wingMat = new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.7 });\n"
+                    "  const wings = new THREE.Mesh(new THREE.BoxGeometry(6.0, 0.1, 0.8), wingMat);\n"
+                    "  wings.position.set(0, 0.1, 0.2);\n"
+                    "  drone.add(wings);\n"
+                    "  // Rotors\n"
+                    "  const rotors = [];\n"
+                    "  const rotorOffsets = [\n"
+                    "    [-2.8, 0.3, 0.2], [2.8, 0.3, 0.2], [-1.0, 0.3, 1.4], [1.0, 0.3, 1.4]\n"
+                    "  ];\n"
+                    "  rotorOffsets.forEach(([rx, ry, rz]) => {\n"
+                    "    const blade = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.04, 0.12), accentMat);\n"
+                    "    blade.position.set(rx, ry, rz);\n"
+                    "    drone.add(blade);\n"
+                    "    rotors.push(blade);\n"
+                    "  });\n"
+                    "  drone.position.set(0, 45, 0);\n"
+                    "  scene.add(drone);\n\n"
+                    "  // 5. Hostile Enemy Drones\n"
+                    "  const enemies = [];\n"
+                    "  const enemyMat = new THREE.MeshStandardMaterial({ color: 0xaa2222, emissive: 0xff1111, emissiveIntensity: 0.4 });\n"
+                    "  function spawnEnemy(x, y, z) {\n"
+                    "    const eGroup = new THREE.Group();\n"
+                    "    const eMesh = new THREE.Mesh(new THREE.OctahedronGeometry(2.2, 0), enemyMat);\n"
+                    "    eGroup.add(eMesh);\n"
+                    "    eGroup.position.set(x, y, z);\n"
+                    "    eGroup.userData = { hp: 100, maxHp: 100, initialY: y, speed: 0.4 + Math.random() * 0.4 };\n"
+                    "    scene.add(eGroup);\n"
+                    "    enemies.push(eGroup);\n"
+                    "  }\n"
+                    "  for (let i = 0; i < 8; i++) {\n"
+                    "    const ang = (i / 8) * Math.PI * 2;\n"
+                    "    const dist = 120 + Math.random() * 180;\n"
+                    "    spawnEnemy(Math.cos(ang) * dist, 35 + Math.random() * 30, Math.sin(ang) * dist);\n"
+                    "  }\n\n"
+                    "  // 6. Projectiles and Particle Explosions\n"
+                    "  const bullets = [];\n"
+                    "  const bulletMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });\n"
+                    "  const particles = [];\n"
+                    "  function spawnExplosion(pos) {\n"
+                    "    playBoom();\n"
+                    "    for (let i = 0; i < 24; i++) {\n"
+                    "      const p = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0xff4400 : 0xffcc00 }));\n"
+                    "      p.position.copy(pos);\n"
+                    "      p.userData = {\n"
+                    "        vx: (Math.random() - 0.5) * 1.6,\n"
+                    "        vy: (Math.random() - 0.2) * 1.6,\n"
+                    "        vz: (Math.random() - 0.5) * 1.6,\n"
+                    "        life: 1.0\n"
+                    "      };\n"
+                    "      scene.add(p);\n"
+                    "      particles.push(p);\n"
+                    "    }\n"
+                    "  }\n\n"
+                    "  // 7. Flight Physics State\n"
+                    "  const keys = {};\n"
+                    "  let speed = 0;\n"
+                    "  let droneYaw = 0;\n"
+                    "  let dronePitch = 0;\n"
+                    "  let droneRoll = 0;\n"
+                    "  let score = 0;\n"
+                    "  let ammo = 500;\n"
+                    "  let hull = 100;\n"
+                    "  let lastShotTime = 0;\n\n"
+                    "  window.addEventListener('keydown', (e) => {\n"
+                    "    keys[e.code] = true;\n"
+                    "    initAudio();\n"
+                    "    if (e.code === 'KeyR') {\n"
+                    "      drone.position.set(0, 45, 0);\n"
+                    "      speed = 0;\n"
+                    "      hull = 100;\n"
+                    "    }\n"
+                    "  });\n"
+                    "  window.addEventListener('keyup', (e) => { keys[e.code] = false; });\n\n"
+                    "  function shoot() {\n"
+                    "    if (ammo <= 0) return;\n"
+                    "    const now = performance.now();\n"
+                    "    if (now - lastShotTime < 140) return;\n"
+                    "    lastShotTime = now;\n"
+                    "    ammo--;\n"
+                    "    playLaser();\n\n"
+                    "    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(drone.quaternion);\n"
+                    "    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.4), bulletMat);\n"
+                    "    b.quaternion.copy(drone.quaternion);\n"
+                    "    b.rotateX(Math.PI / 2);\n"
+                    "    b.position.copy(drone.position).add(forward.clone().multiplyScalar(2.0));\n"
+                    "    b.userData = { vel: forward.multiplyScalar(4.5), life: 120 };\n"
+                    "    scene.add(b);\n"
+                    "    bullets.push(b);\n"
+                    "  }\n\n"
+                    "  // 8. Main Loop & Physics Update\n"
+                    "  function animate() {\n"
+                    "    requestAnimationFrame(animate);\n\n"
+                    "    // Rotors spin\n"
+                    "    rotors.forEach(r => { r.rotation.y += 0.8; });\n\n"
+                    "    // Flight controls\n"
+                    "    const accel = keys['ShiftLeft'] ? 0.06 : 0.03;\n"
+                    "    const maxSpd = keys['ShiftLeft'] ? 2.8 : 1.6;\n"
+                    "    if (keys['KeyW'] || keys['ArrowUp']) speed = Math.min(speed + accel, maxSpd);\n"
+                    "    else if (keys['KeyS'] || keys['ArrowDown']) speed = Math.max(speed - accel * 1.5, -0.4);\n"
+                    "    else speed *= 0.98; // Drag damping\n\n"
+                    "    if (keys['KeyA'] || keys['ArrowLeft']) {\n"
+                    "      droneYaw += 0.03;\n"
+                    "      droneRoll = THREE.MathUtils.lerp(droneRoll, 0.4, 0.1);\n"
+                    "    } else if (keys['KeyD'] || keys['ArrowRight']) {\n"
+                    "      droneYaw -= 0.03;\n"
+                    "      droneRoll = THREE.MathUtils.lerp(droneRoll, -0.4, 0.1);\n"
+                    "    } else {\n"
+                    "      droneRoll = THREE.MathUtils.lerp(droneRoll, 0, 0.1);\n"
+                    "    }\n\n"
+                    "    if (keys['Space']) shoot();\n\n"
+                    "    // Update drone attitude & motion\n"
+                    "    dronePitch = THREE.MathUtils.lerp(dronePitch, (speed / maxSpd) * 0.35, 0.1);\n"
+                    "    drone.rotation.set(0, 0, 0);\n"
+                    "    drone.rotation.y = droneYaw;\n"
+                    "    drone.rotation.x = dronePitch;\n"
+                    "    drone.rotation.z = droneRoll;\n\n"
+                    "    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(drone.quaternion);\n"
+                    "    drone.position.add(forward.multiplyScalar(speed));\n"
+                    "    if (drone.position.y < 4) drone.position.y = 4;\n\n"
+                    "    // Third-person camera follow\n"
+                    "    const camOffset = new THREE.Vector3(0, 4.5, 12).applyAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);\n"
+                    "    camera.position.lerp(drone.position.clone().add(camOffset), 0.15);\n"
+                    "    camera.lookAt(drone.position.clone().add(forward.clone().multiplyScalar(20)));\n\n"
+                    "    // Update projectiles\n"
+                    "    for (let i = bullets.length - 1; i >= 0; i--) {\n"
+                    "      const b = bullets[i];\n"
+                    "      b.position.add(b.userData.vel);\n"
+                    "      b.userData.life--;\n\n"
+                    "      // Hit detection with enemies\n"
+                    "      let hit = false;\n"
+                    "      for (let j = enemies.length - 1; j >= 0; j--) {\n"
+                    "        const e = enemies[j];\n"
+                    "        if (b.position.distanceTo(e.position) < 3.5) {\n"
+                    "          e.userData.hp -= 35;\n"
+                    "          hit = true;\n"
+                    "          if (e.userData.hp <= 0) {\n"
+                    "            spawnExplosion(e.position);\n"
+                    "            scene.remove(e);\n"
+                    "            enemies.splice(j, 1);\n"
+                    "            score++;\n"
+                    "          }\n"
+                    "          break;\n"
+                    "        }\n"
+                    "      }\n"
+                    "      if (hit || b.userData.life <= 0 || b.position.y < 0) {\n"
+                    "        scene.remove(b);\n"
+                    "        bullets.splice(i, 1);\n"
+                    "      }\n"
+                    "    }\n\n"
+                    "    // Update particle explosions\n"
+                    "    for (let i = particles.length - 1; i >= 0; i--) {\n"
+                    "      const p = particles[i];\n"
+                    "      p.position.x += p.userData.vx;\n"
+                    "      p.position.y += p.userData.vy;\n"
+                    "      p.position.z += p.userData.vz;\n"
+                    "      p.userData.life -= 0.03;\n"
+                    "      p.scale.multiplyScalar(0.96);\n"
+                    "      if (p.userData.life <= 0) {\n"
+                    "        scene.remove(p);\n"
+                    "        particles.splice(i, 1);\n"
+                    "      }\n"
+                    "    }\n\n"
+                    "    // Enemy patrol\n"
+                    "    const time = performance.now() * 0.001;\n"
+                    "    enemies.forEach((e, idx) => {\n"
+                    "      e.position.y = e.userData.initialY + Math.sin(time * 2 + idx) * 3;\n"
+                    "      e.rotation.y += 0.02;\n"
+                    "    });\n\n"
+                    "    // Update HUD\n"
+                    "    const altEl = document.getElementById('altVal');\n"
+                    "    const spdEl = document.getElementById('spdVal');\n"
+                    "    const scoreEl = document.getElementById('scoreVal');\n"
+                    "    const hpEl = document.getElementById('hpVal');\n"
+                    "    const ammoEl = document.getElementById('ammoVal');\n"
+                    "    if (altEl) altEl.textContent = Math.round(drone.position.y);\n"
+                    "    if (spdEl) spdEl.textContent = Math.round(Math.abs(speed) * 120);\n"
+                    "    if (scoreEl) scoreEl.textContent = score;\n"
+                    "    if (hpEl) hpEl.textContent = hull + '%';\n"
+                    "    if (ammoEl) ammoEl.textContent = ammo;\n\n"
+                    "    renderer.render(scene, camera);\n"
+                    "  }\n"
+                    "  animate();\n\n"
+                    "  window.addEventListener('resize', () => {\n"
+                    "    camera.aspect = window.innerWidth / window.innerHeight;\n"
+                    "    camera.updateProjectionMatrix();\n"
+                    "    renderer.setSize(window.innerWidth, window.innerHeight);\n"
+                    "  });\n"
+                    "});\n"
+                )
+            elif is_threejs:
                 js_content = (
                     f"// {title} - Three.js 3D Game\n"
                     f"console.log('{title} 3D initialized.');\n\n"
@@ -1527,10 +1917,24 @@ def create_project_scaffold(
             created_files.append("script.js")
 
         if not readme_md.exists():
-            readme_md.write_text(
-                f"# {title}\n\nProject initialized by PAI.\n\n## Getting Started\nOpen `index.html` in your web browser to run the project.\n",
-                encoding="utf-8"
-            )
+            if is_drone_game:
+                readme_body = (
+                    f"# {title} - Realistic Military Drone Shooter 3D\n\n"
+                    "Tactical 3D combat drone flight simulation built with Three.js.\n\n"
+                    "## Controls\n"
+                    "- **W / Up Arrow**: Pitch down & accelerate forward\n"
+                    "- **S / Down Arrow**: Pitch up & brake / fly backward\n"
+                    "- **A / Left Arrow**: Bank left & yaw heading left\n"
+                    "- **D / Right Arrow**: Bank right & yaw heading right\n"
+                    "- **Left Shift**: Afterburner boost (extra speed)\n"
+                    "- **Spacebar**: Rapid-fire autocannon / laser bolts\n"
+                    "- **R**: Reset UAV position and hull status\n\n"
+                    "## Getting Started\n"
+                    "Open `index.html` in any modern web browser (Chrome, Edge, Firefox).\n"
+                )
+            else:
+                readme_body = f"# {title}\n\nProject initialized by PAI.\n\n## Getting Started\nOpen `index.html` in your web browser to run the project.\n"
+            readme_md.write_text(readme_body, encoding="utf-8")
             created_files.append("README.md")
 
     # 2. Python project
@@ -2807,6 +3211,33 @@ def run_interactive_shell(
                         _session_chat_turns.append({"role": "assistant", "content": cmd_out.strip()})
                     if len(_session_chat_turns) > 12:
                         del _session_chat_turns[:-12]
+
+                    # Auto-save generated code if prompt asked to save it
+                    if "```" in cmd_out:
+                        lower_line = line.lower()
+                        if any(k in lower_line for k in ("and save it", "save it in", "save it to", "save it on", "save it into", "save this in", "save this to", "save that in", "save that to", "save it on that folder")):
+                            auto_target = None
+                            if any(k in lower_line for k in ("that folder", "this folder", "the folder")):
+                                for h_entry in reversed(get_session_history()):
+                                    if "[Successfully initialized new project in " in h_entry[2]:
+                                        m_p = re.search(r'\[Successfully initialized new project in ([^\]]+)\]', h_entry[2])
+                                        if m_p:
+                                            auto_target = m_p.group(1).strip()
+                                            break
+                                if not auto_target:
+                                    auto_target = "Downloads"
+                            else:
+                                if "downloads" in lower_line:
+                                    auto_target = "Downloads"
+                                elif "desktop" in lower_line:
+                                    auto_target = "Desktop"
+                                elif "documents" in lower_line:
+                                    auto_target = "Documents"
+
+                            if auto_target:
+                                ok_s, msg_s = save_session_output_to_file(auto_target)
+                                if ok_s:
+                                    output_fn(colorize(f"[{msg_s}]", GREEN, color_enabled))
 
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"

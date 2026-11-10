@@ -2091,6 +2091,22 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertIn("requirements.txt", files_p)
             self.assertTrue((py_dir / "main.py").is_file())
 
+            # Realistic 3D military drone shooting game scaffold
+            drone_dir = base / "game_test_1"
+            ok_dr, msg_dr, files_dr = create_project_scaffold(str(drone_dir), "create realistic military dron shooting game")
+            self.assertTrue(ok_dr)
+            self.assertIn("index.html", files_dr)
+            self.assertIn("style.css", files_dr)
+            self.assertIn("script.js", files_dr)
+            self.assertIn("README.md", files_dr)
+            drone_index = (drone_dir / "index.html").read_text(encoding="utf-8")
+            self.assertIn("MQ-9 REAPER", drone_index)
+            self.assertIn("Realistic Military Drone Shooter 3D", drone_index)
+            drone_script = (drone_dir / "script.js").read_text(encoding="utf-8")
+            self.assertIn("playLaser", drone_script)
+            self.assertIn("droneBody", drone_script)
+            self.assertIn("rotors", drone_script)
+
         # Parsing checks
         act_proj, args_proj = parse_shell_line("/project test_app web")
         self.assertEqual(act_proj, "project")
@@ -2124,6 +2140,17 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertEqual(act_cp, "project")
         self.assertTrue(args_cp[0].lower().endswith("my game"))
         self.assertNotIn("and create", args_cp[0].lower())
+
+        # Typo tolerance: 'name it ad game test 1' with trailing 'and save it on that folder'
+        act_ad, args_ad = parse_shell_line("create folder in downloads name it ad game test 1 and create realistic military dron shooting game and save it on that folder")
+        self.assertEqual(act_ad, "project")
+        self.assertTrue(args_ad[0].lower().endswith("game test 1"))
+        self.assertNotIn("save", args_ad[0].lower())
+
+        # Creation prompt with trailing 'and save it on that folder' must route to chat, not save
+        act_cr, args_cr = parse_shell_line("create create realistic military dron shooting game and save it on that folder")
+        self.assertEqual(act_cr, "chat")
+        self.assertIn("create realistic military", args_cr[-1].lower())
 
     def test_shell_bug_analysis_and_fix(self) -> None:
         """Asserts analyze_and_fix_bugs finds issues, creates backup, and writes fixed code."""
