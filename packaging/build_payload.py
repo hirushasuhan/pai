@@ -50,7 +50,7 @@ DEFAULT_PLATFORM = "win-x64" if sys.platform == "win32" else "linux-x64"
 # Evaluated tree invariants established in Release N (v1.0.0-rc1, commit 8ce81cb)
 EXPECTED_CORE_TREE = "14c60746ca9a41d91aafd88cc0c7d98719cfe3a9"
 # Pre-freeze pinned research tree for v1.1.0-rc4
-EXPECTED_RESEARCH_TREE = "b0efff74a9cc8871750d28e1d1d32cbe9069f117"
+EXPECTED_RESEARCH_TREE = "eaf3cc425e0a8b7527dac188aae3c19420530657"
 # Historical baseline research tree for v1.0.0-rc1 tag
 RC1_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
 EXPECTED_BINARY_SHA256 = "6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe"

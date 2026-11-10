@@ -393,6 +393,56 @@ class MultiAgentTeam:
 
         return ""
 
+    @staticmethod
+    def _collect_codebase_context(
+        project_dir: Optional[Path],
+        max_chars_per_file: int = 12000,
+        max_total_chars: int = 25000,
+    ) -> str:
+        """Extracts existing text source files from the active project to guide PM and developers."""
+        if not project_dir or not project_dir.is_dir():
+            return ""
+        snippets = []
+        total_len = 0
+        priority_files = ["script.js", "index.html", "style.css", "main.py", "app.py", "README.md"]
+        ordered_files = []
+        for name in priority_files:
+            cand = project_dir / name
+            if cand.is_file():
+                ordered_files.append(cand)
+        try:
+            for cand in sorted(project_dir.iterdir()):
+                if cand.is_file() and cand not in ordered_files and not cand.name.endswith(".bak") and not cand.name.startswith("."):
+                    ordered_files.append(cand)
+        except Exception:
+            pass
+
+        skip_exts = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".bin", ".zip", ".tar", ".gz", ".mp3", ".wav"}
+        for f in ordered_files:
+            if f.suffix.lower() in skip_exts:
+                continue
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace").strip()
+                if not content:
+                    continue
+                if len(content) > max_chars_per_file:
+                    content = content[:max_chars_per_file] + "\n... [truncated for context budget] ..."
+                lang_tag = f.suffix.lstrip(".") or "text"
+                if lang_tag == "js":
+                    lang_tag = "javascript"
+                elif lang_tag == "py":
+                    lang_tag = "python"
+                snippet = f"[File: {f.name} ({f.stat().st_size:,} bytes)]\n```{lang_tag}\n{content}\n```"
+                if total_len + len(snippet) > max_total_chars:
+                    break
+                snippets.append(snippet)
+                total_len += len(snippet)
+            except Exception:
+                pass
+        if not snippets:
+            return ""
+        return "\n--- Active Project Codebase ---\n" + "\n\n".join(snippets)
+
     def run_collaborative_workflow(
         self,
         task_prompt: str,
@@ -420,6 +470,9 @@ class MultiAgentTeam:
             "qa_verdict": "",
         }
 
+        # Collect codebase context from active project if present
+        codebase_ctx = self._collect_codebase_context(active_project_dir) if active_project_dir else ""
+
         # ------------------------------------------------------------- 1. Project Manager (Planning)
         self.log_and_display_message(
             sender="project_manager",
@@ -433,11 +486,15 @@ class MultiAgentTeam:
             "Produce a structured Work Breakdown Structure (WBS) with 3-4 milestones.\n"
             "Detail camera parameters, game loop, weapons, hostile entities, and UI HUD elements."
         )
+        pm_prompt = f"Objective:\n{task_prompt}"
+        if codebase_ctx:
+            pm_prompt += f"\n\n{codebase_ctx[:8000]}"
+
         plan_out = self._call_agent_persona(
             role="project_manager",
             system_role="Product & Project Manager",
             instructions=pm_instructions,
-            user_prompt=task_prompt,
+            user_prompt=pm_prompt,
             timeout=180.0,
         )
         results["plan"] = plan_out
@@ -476,11 +533,15 @@ class MultiAgentTeam:
             "3. Monochromatic CCTV scanline and vignette overlay styles.\n"
             "Provide clean, self-contained JavaScript code."
         )
+        spec_prompt = f"Task: {task_prompt}\nPlan: {plan_out}"
+        if codebase_ctx:
+            spec_prompt += f"\n\nExisting Codebase:\n{codebase_ctx[:4000]}"
+
         specialist_out = self._call_agent_persona(
             role="specialist_developer",
             system_role="Graphics, Textures & Audio Specialist",
             instructions=specialist_instructions,
-            user_prompt=f"Task: {task_prompt}\nPlan: {plan_out}",
+            user_prompt=spec_prompt,
             timeout=180.0,
         )
         results["specialist_assets"] = specialist_out
@@ -508,6 +569,8 @@ class MultiAgentTeam:
         if active_project_dir and active_project_dir.is_dir():
             existing = [f.name for f in active_project_dir.iterdir() if f.is_file() and not f.name.endswith(".bak")]
             coder_context += f"Active Project Dir: {active_project_dir}\nExisting Files: {', '.join(existing)}\n"
+            if codebase_ctx:
+                coder_context += f"\n{codebase_ctx}\n"
 
         coder_instructions = (
             "Write the complete, runnable code to fulfill the project.\n"
@@ -537,11 +600,15 @@ class MultiAgentTeam:
             "2. Playability audit: Verify mouse aiming, raycasting, weapon controls, and entity collision.\n"
             "3. State your verdict clearly: 'VERDICT: PASS' or 'VERDICT: REVISE' with details in 2-3 sentences."
         )
+        qa_prompt = f"Task: {task_prompt}\nCandidate Code Summary:\n{code_out[:1500]}..."
+        if codebase_ctx:
+            qa_prompt += f"\n\nBaseline Codebase:\n{codebase_ctx[:2000]}"
+
         qa_out = self._call_agent_persona(
             role="qa_engineer",
             system_role="Lead QA Engineer & Code Auditor",
             instructions=qa_instructions,
-            user_prompt=f"Task: {task_prompt}\nCandidate Code Summary:\n{code_out[:1500]}...",
+            user_prompt=qa_prompt,
             timeout=180.0,
         )
         results["qa_verdict"] = qa_out
@@ -577,6 +644,17 @@ class MultiAgentTeam:
                 if fname and len(body) > 30:
                     dest = active_project_dir / fname
                     try:
+                        # Safeguard: Never overwrite a substantial file (>3KB) with a tiny stub (<800B) if audit failed or stub is degenerate
+                        is_substantial = dest.is_file() and dest.stat().st_size > 3000
+                        is_tiny_stub = len(body) < 800
+                        if is_substantial and is_tiny_stub and (not verdict_pass or dest.stat().st_size > len(body) * 5):
+                            cand_f = dest.with_suffix(dest.suffix + ".candidate")
+                            cand_f.write_text(body, encoding="utf-8")
+                            self.output_fn(
+                                f"  ⚠️ [Preserved {dest.name} ({dest.stat().st_size:,} bytes) against tiny stub overwrite ({len(body)} bytes). Saved candidate to {cand_f.name}]"
+                            )
+                            continue
+
                         if dest.is_file():
                             bak = dest.with_suffix(dest.suffix + ".bak")
                             bak.write_text(dest.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")

@@ -2580,7 +2580,7 @@ console.log('CCTV Drone Weapons Active');
 
     def test_multimodel_team_fipa_acl_and_auto_failover(self) -> None:
         """Verifies multi-model autonomous team roster, FIPA-ACL messaging, and model failover."""
-        from shell import parse_shell_line
+        from shell import parse_shell_line, set_active_project_dir
         try:
             from research.multi_agent import MultiAgentTeam, TeamRoleModelRegistry
         except ModuleNotFoundError:
@@ -2591,10 +2591,18 @@ console.log('CCTV Drone Weapons Active');
         self.assertEqual(act_team, "multi_agent")
         self.assertIn("developer team", args_team[0])
 
-        act_play, args_play = parse_shell_line(
-            "it's not playble fix it and Add more textures to this. The drone doesn't need to be visible."
-        )
-        self.assertEqual(act_play, "edit")
+        with tempfile.TemporaryDirectory() as td_proj:
+            p_mock = Path(td_proj)
+            (p_mock / "script.js").write_text("// mock drone script", encoding="utf-8")
+            set_active_project_dir(p_mock)
+            try:
+                act_play, args_play = parse_shell_line(
+                    "it's not playble fix it and Add more textures to this. The drone doesn't need to be visible."
+                )
+                self.assertEqual(act_play, "edit")
+                self.assertIn("script.js", args_play[0])
+            finally:
+                set_active_project_dir(None)
 
         act_stat, args_stat = parse_shell_line("/team status")
         self.assertEqual(act_stat, "multi_agent")
@@ -2647,6 +2655,25 @@ console.log('Playable Verified');
             self.assertIn("script.js", res["code_updates"])
             self.assertIn("Playable Verified", (p_dir / "script.js").read_text(encoding="utf-8"))
             self.assertTrue((p_dir / "script.js.bak").is_file())
+
+        # Test safeguard against overwriting substantial working code with tiny stubs
+        with tempfile.TemporaryDirectory() as td_guard:
+            guard_dir = Path(td_guard)
+            large_script = guard_dir / "script.js"
+            large_script.write_text("// realistic game engine\n" + ("let x = 1;\n" * 400), encoding="utf-8")
+            orig_size = large_script.stat().st_size
+            self.assertGreater(orig_size, 3000)
+
+            def mock_stub_exec(argv):
+                # Senior dev returns a tiny stub (>30 bytes and <800 bytes)
+                print("### File: script.js\n```javascript\n// tiny stub with minimal code\nconst a = 1;\nconsole.log(a);\n```")
+                return 0
+
+            team_guard = MultiAgentTeam(executor=mock_stub_exec)
+            res_guard = team_guard.run_collaborative_workflow("fix bugs", active_project_dir=guard_dir)
+            # Ensure large_script was preserved
+            self.assertEqual(large_script.stat().st_size, orig_size)
+            self.assertTrue((guard_dir / "script.js.candidate").is_file())
 
         # 5. Test Team Model Configuration (Role Customization & Natural Language Intent)
         act_cfg, args_cfg = parse_shell_line("/team set pm=llama3.2:3b dev=qwen2.5-coder:7b")
