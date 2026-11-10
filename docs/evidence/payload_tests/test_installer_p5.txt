@@ -1,14 +1,14 @@
 ================================================================================
 PAI INNO SETUP INSTALLER TESTS (20 TESTS, ICON & FINDINGS DK, DL, DM, DN, MILESTONE P5) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-10T13:12:10.485447+00:00
+Timestamp (UTC): 2026-11-10T14:21:03.120543+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        1b8c46e7bbf9920a194b705d6cfd263b1538d619
+Git HEAD:        ecfb5ec20aa55c1aa0f038aea3ce0a4276590def
 Working Tree:    clean
-Research Tree:   cb86010bde9f7c85fa1c5cb53b20f4f6bb868942
+Research Tree:   24db7b215d40ca3e0af78696a0c2f7b5251ab6de
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -57,6 +57,6 @@ STDERR:
 .WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 .
 ----------------------------------------------------------------------
-Ran 20 tests in 241.793s
+Ran 20 tests in 237.100s
 
 OK
