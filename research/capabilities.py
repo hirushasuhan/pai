@@ -177,7 +177,10 @@ def create_agent_capability_broker(
     """
     Constructs a ToolBroker pre-configured with agent tools (GraphQL, MCP, safe I/O).
     """
-    from research.graphql_agent import execute_graphql_tool, introspect_graphql_tool
+    try:
+        from research.graphql_agent import execute_graphql_tool, introspect_graphql_tool
+    except ModuleNotFoundError:
+        from graphql_agent import execute_graphql_tool, introspect_graphql_tool
 
     base_tools = [
         Tool("execute_graphql", Risk.NETWORK_OUT, execute_graphql_tool),

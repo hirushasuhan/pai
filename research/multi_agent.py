@@ -58,12 +58,14 @@ class MultiAgentTeam:
             exec_argv += ["--model", self.model_name]
         exec_argv += ["--", persona_prompt]
 
-        from research.shell import CaptureStream
+        try:
+            from research.shell import CaptureStream, execute_subcommand
+        except ModuleNotFoundError:
+            from shell import CaptureStream, execute_subcommand
         cap = CaptureStream()
 
         import contextlib
         try:
-            from research.shell import execute_subcommand
             exec_fn = self.executor or execute_subcommand
             with contextlib.redirect_stdout(cap):
                 exec_fn(exec_argv)
@@ -111,7 +113,10 @@ class MultiAgentTeam:
         # ------------------------------------------------------------- Stage 2: GraphQL / Tool Agent (Optional)
         if include_graphql or any(k in task_prompt.lower() for k in ("graphql", "schema", "api", "query", "mutation")):
             self.output_fn("🌐 [GraphQL / Tool Agent] Discovering schema and constructing sparse operations...")
-            from research.graphql_agent import GraphQLClient
+            try:
+                from research.graphql_agent import GraphQLClient
+            except ModuleNotFoundError:
+                from graphql_agent import GraphQLClient
             ep = graphql_endpoint or os.environ.get("PAI_GRAPHQL_ENDPOINT", "http://127.0.0.1:4000/graphql")
             client = GraphQLClient(endpoint=ep)
             sparse_sdl = client.get_sparse_schema_summary()

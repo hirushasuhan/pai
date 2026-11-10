@@ -3326,7 +3326,10 @@ def run_interactive_shell(
                 agent_prompt = argv[0] if argv else ""
                 active_p = get_active_project_dir()
                 output_fn(colorize("🚀 Launching Multi-Agent Team: Planner, Coder, GraphQL/Tool, Reviewer...", CYAN, color_enabled))
-                from research.multi_agent import MultiAgentTeam
+                try:
+                    from research.multi_agent import MultiAgentTeam
+                except ModuleNotFoundError:
+                    from multi_agent import MultiAgentTeam
                 team = MultiAgentTeam(
                     model_name=_active_model_override,
                     output_fn=output_fn,
@@ -3339,7 +3342,10 @@ def run_interactive_shell(
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
             elif action == "mcp_hub":
-                from research.mcp_client import MCPRegistry
+                try:
+                    from research.mcp_client import MCPRegistry
+                except ModuleNotFoundError:
+                    from mcp_client import MCPRegistry
                 output_fn(MCPRegistry.format_status(color_enabled=color_enabled))
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
@@ -3347,7 +3353,10 @@ def run_interactive_shell(
                 continue
             elif action == "graphql_cmd":
                 gql_text = argv[0] if argv else ""
-                from research.graphql_agent import GraphQLClient
+                try:
+                    from research.graphql_agent import GraphQLClient
+                except ModuleNotFoundError:
+                    from graphql_agent import GraphQLClient
                 ep = os.environ.get("PAI_GRAPHQL_ENDPOINT", "http://127.0.0.1:4000/graphql")
                 client = GraphQLClient(endpoint=ep)
                 if "introspect" in gql_text.lower() or "schema" in gql_text.lower():
