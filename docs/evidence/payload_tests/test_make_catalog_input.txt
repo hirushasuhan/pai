@@ -1,14 +1,14 @@
 ================================================================================
 PAI CATALOG INPUT GENERATOR TESTS (16 TESTS, ADR-013, MILESTONE C1, FINDINGS FQ, FR, FS, FT, FU, FW, FX) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-09T19:59:17.860891+00:00
+Timestamp (UTC): 2026-11-10T13:16:12.716426+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        200818d4a3f380f70e1c9571241bf4fd82fc7557
+Git HEAD:        1b8c46e7bbf9920a194b705d6cfd263b1538d619
 Working Tree:    clean
-Research Tree:   b00f0eee5d05d068abc5ddd6ed2c060cd6c84cac
+Research Tree:   cb86010bde9f7c85fa1c5cb53b20f4f6bb868942
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -28,6 +28,6 @@ STDERR:
   _warnings.warn(self.warn_message, ResourceWarning)
 .
 ----------------------------------------------------------------------
-Ran 16 tests in 0.052s
+Ran 16 tests in 0.054s
 
 OK
