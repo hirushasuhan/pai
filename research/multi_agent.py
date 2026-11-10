@@ -146,13 +146,23 @@ class TeamRoleModelRegistry:
             return False, f"Unknown role '{role_str}'. Valid roles: pm, dev, ui, qa."
 
         clean_model = model_name.strip()
+        matched_avail = None
         for avail in self.available_models:
             if avail.lower() == clean_model.lower():
-                clean_model = avail
+                matched_avail = avail
                 break
             elif avail.lower().startswith(clean_model.lower() + ":"):
-                clean_model = avail
+                matched_avail = avail
                 break
+            elif avail.lower().startswith(clean_model.lower()):
+                matched_avail = avail
+                break
+            elif clean_model.lower() in avail.lower():
+                matched_avail = avail
+                break
+
+        if matched_avail:
+            clean_model = matched_avail
 
         self.role_models[canon] = clean_model
         self.custom_roles.add(canon)
@@ -359,7 +369,10 @@ class MultiAgentTeam:
         exec_fn = self.executor or execute_subcommand
 
         for attempt_model in candidate_queue:
-            exec_argv = ["chat", "--model", attempt_model, "--model-timeout", str(timeout), "--", persona_prompt]
+            exec_argv = ["chat", "--model", attempt_model, "--model-timeout", str(timeout)]
+            if "gemma" in attempt_model.lower():
+                exec_argv.append("--gemma4-opt-in")
+            exec_argv += ["--", persona_prompt]
             cap = io.StringIO()
 
             try:

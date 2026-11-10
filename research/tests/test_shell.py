@@ -2663,6 +2663,12 @@ console.log('Playable Verified');
         self.assertEqual(args_nl_set[0], "set")
         self.assertIn("pm=llama3.2:3b", args_nl_set[1])
 
+        # Test Sinhala natural language intent: "mata gemma model eka pm dala hadla denna"
+        act_gemma, args_gemma = parse_shell_line("mata gemma model eka pm dala hadla denna")
+        self.assertEqual(act_gemma, "team_config")
+        self.assertEqual(args_gemma[0], "set")
+        self.assertIn("pm=gemma", args_gemma[1])
+
         # Test dynamic role assignment and reset on registry
         with tempfile.TemporaryDirectory() as td_cfg:
             cfg_p = Path(td_cfg) / "team_config.json"
@@ -2679,6 +2685,12 @@ console.log('Playable Verified');
                 self.assertEqual(len(res_msgs), 2)
                 self.assertEqual(reg.role_models["senior_developer"], "qwen2.5-coder:7b")
                 self.assertEqual(reg.role_models["qa_engineer"], "qwen3.5:4b")
+
+                # Test fuzzy model prefix/substring matching (e.g. 'gemma' -> 'gemma4:e2b')
+                reg.available_models = ["gemma4:e2b", "qwen2.5-coder:7b", "qwen3.5:4b"]
+                ok, msg = reg.set_role_model("pm", "gemma")
+                self.assertTrue(ok)
+                self.assertEqual(reg.role_models["project_manager"], "gemma4:e2b")
 
                 # Test reset to defaults
                 reset_msg = reg.reset_to_defaults()

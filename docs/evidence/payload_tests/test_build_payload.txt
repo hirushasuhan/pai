@@ -1,14 +1,14 @@
 ================================================================================
 PAI BUILD PAYLOAD UNIT TESTS (19 TESTS, MILESTONE P2/P3, FINDING EO) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-10T18:16:31.118853+00:00
+Timestamp (UTC): 2026-11-10T18:53:09.442830+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        e280e9c0865c675518e27859502fe79f6a5631e0
-Working Tree:    clean
-Research Tree:   d9aa6dd39c9631ab5ba71ec183567d7bc7cfd3d9
+Git HEAD:        7882c9c71bd059f094ec85c728095bc8fdac3695
+Working Tree:    DIRTY
+Research Tree:   b0efff74a9cc8871750d28e1d1d32cbe9069f117
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -17,7 +17,7 @@ agreement SHA256: e0e477178d61dedc41f182cc1839ed75418b360f77d6a0617fb031da5f31c0
 ================================================================================
 
 Command: python tools/test_build_payload.py
-Exit Code: 0
+Exit Code: 1
 
 STDOUT:
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
@@ -52,7 +52,7 @@ WARNING: no bundled catalog found in tag v1.0.0-rc1
 STDERR:
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
-........sWARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
+...F....sWARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 ..WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 .....WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 .WARNING: bundling external catalog from 'test_catalog.json' into pre-release payload (catalog_source: external)
@@ -64,7 +64,20 @@ WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 .
+======================================================================
+FAIL: test_04_research_tree_invariant_and_hostile_mismatch (__main__.TestBuildPayloadP1.test_04_research_tree_invariant_and_hostile_mismatch)
+Control: correct research tree succeeds. Hostile: tampered research tree fails closed.
 ----------------------------------------------------------------------
-Ran 19 tests in 29.704s
+Traceback (most recent call last):
+  File "C:\Users\hp\Documents\GitHub\personal_agentic_ai\tools\test_build_payload.py", line 219, in test_04_research_tree_invariant_and_hostile_mismatch
+    self.assertEqual(current_res_tree, EXPECTED_RESEARCH_TREE)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'd9aa6dd39c9631ab5ba71ec183567d7bc7cfd3d9' != 'b0efff74a9cc8871750d28e1d1d32cbe9069f117'
+- d9aa6dd39c9631ab5ba71ec183567d7bc7cfd3d9
++ b0efff74a9cc8871750d28e1d1d32cbe9069f117
 
-OK (skipped=1)
+
+----------------------------------------------------------------------
+Ran 19 tests in 31.264s
+
+FAILED (failures=1, skipped=1)

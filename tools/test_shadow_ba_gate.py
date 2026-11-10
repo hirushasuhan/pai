@@ -88,6 +88,11 @@ class TestFindingBAGate(unittest.TestCase):
 
         def side_effect(cmd, **kwargs):
             if isinstance(cmd, (list, tuple)) and len(cmd) > 0 and cmd[0] == "git":
+                if "status" in cmd:
+                    mock_res = mock.MagicMock()
+                    mock_res.stdout = ""
+                    mock_res.returncode = 0
+                    return mock_res
                 if "diff" in cmd:
                     mock_res = mock.MagicMock()
                     mock_res.returncode = 1

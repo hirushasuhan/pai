@@ -3069,19 +3069,39 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
     has_config_action = any(k in lower_unslashed for k in ("wenas", "maru", "change", "set", "danna", "dala", "configure", "assign", "switch")) or (
         has_model_mention and any(tok.lower().strip(".,;:?!'\"").startswith(("llama", "qwen", "gemma", "mistral", "phi")) for tok in stripped.split())
     )
-    if is_team_scope and (has_model_mention or has_config_action):
+    has_role_direct = any(
+        r in lower_unslashed.split() or f" {r} " in f" {lower_unslashed} "
+        for r in ("pm", "qa", "dev", "coder", "senior", "specialist", "tester", "manager", "lead")
+    ) or any(r in lower_unslashed for r in ("project manager", "senior dev", "specialist dev", "qa engineer"))
+    has_model_family = any(
+        tok.lower().strip(".,;:?!'\"").startswith(("llama", "qwen", "gemma", "mistral", "phi"))
+        for tok in stripped.split()
+    )
+    has_assign_verb = any(k in lower_unslashed for k in ("dala", "danna", "set", "wenas", "maru", "change", "hadla", "assign", "switch", "configure", "put"))
+    is_role_model_assignment = has_role_direct and has_model_family and (has_assign_verb or "=" in stripped)
+
+    if (is_team_scope and (has_model_mention or has_config_action)) or is_role_model_assignment:
         assignments = []
         for word in stripped.split():
             if "=" in word and any(r in word.lower().split("=")[0] for r in ("pm", "dev", "coder", "senior", "ui", "specialist", "qa", "tester", "manager", "lead")):
                 assignments.append(word)
         if assignments:
             return "team_config", ["set", " ".join(assignments)]
-        for r_key in ("pm", "senior dev", "senior", "dev", "coder", "ui", "specialist", "qa"):
-            if r_key in lower_unslashed:
+        for r_key in ("project manager", "senior dev", "specialist dev", "qa engineer", "pm", "dev", "coder", "ui", "specialist", "qa", "senior"):
+            if r_key in lower_unslashed.split() or f" {r_key} " in f" {lower_unslashed} ":
                 for tok in stripped.split():
                     clean_tok = tok.strip(".,;:?!'\"")
                     if any(clean_tok.lower().startswith(m_prefix) for m_prefix in ("llama", "qwen", "gemma", "mistral", "phi")):
-                        return "team_config", ["set", f"{r_key.replace(' ', '_')}={clean_tok}"]
+                        canon_key = r_key
+                        if r_key == "project manager":
+                            canon_key = "pm"
+                        elif r_key == "senior dev":
+                            canon_key = "dev"
+                        elif r_key in ("specialist dev", "specialist"):
+                            canon_key = "ui"
+                        elif r_key == "qa engineer":
+                            canon_key = "qa"
+                        return "team_config", ["set", f"{canon_key}={clean_tok}"]
         return "team_config", ["help", ""]
 
     # Check for natural language multi-agent intent
