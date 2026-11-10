@@ -1,14 +1,14 @@
 ================================================================================
 PAI LAUNCHER AND PORTABLE ZIP TESTS (21 TESTS, MILESTONE P2) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-10T18:56:17.787392+00:00
+Timestamp (UTC): 2026-11-10T20:22:15.278540+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        d928c6fb0b0e1c3219c354b60c3c77ac66cdd845
+Git HEAD:        70071d9a3c2cee5f4e96274cac34c64ba02c2162
 Working Tree:    clean
-Research Tree:   b0efff74a9cc8871750d28e1d1d32cbe9069f117
+Research Tree:   eaf3cc425e0a8b7527dac188aae3c19420530657
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -78,6 +78,6 @@ STDERR:
 .WARNING: bundling working-tree catalog from 'research\catalog.json' into pre-release payload (catalog_source: working-tree)
 .
 ----------------------------------------------------------------------
-Ran 21 tests in 85.371s
+Ran 21 tests in 79.328s
 
 OK
