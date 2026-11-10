@@ -1098,6 +1098,130 @@ def edit_target_file(
     return True, msg, updated_content
 
 
+def resolve_target_dir(target_str: str) -> Path:
+    """
+    Resolves a target directory path, expanding ~ and special folders (Downloads, Desktop, Documents).
+    """
+    clean = target_str.strip().strip('"').strip("'")
+    if not clean:
+        return Path.cwd() / "my_project"
+
+    user_home = Path.home()
+    c_lower = clean.lower()
+    for prefix, folder in [
+        ("downloads\\", user_home / "Downloads"),
+        ("downloads/", user_home / "Downloads"),
+        ("desktop\\", user_home / "Desktop"),
+        ("desktop/", user_home / "Desktop"),
+        ("documents\\", user_home / "Documents"),
+        ("documents/", user_home / "Documents"),
+    ]:
+        if c_lower.startswith(prefix):
+            remainder = clean[len(prefix):]
+            return (folder / remainder).resolve()
+
+    if c_lower == "downloads":
+        return user_home / "Downloads"
+    if c_lower == "desktop":
+        return user_home / "Desktop"
+    if c_lower == "documents":
+        return user_home / "Documents"
+
+    return Path(clean).expanduser().resolve()
+
+
+def parse_natural_folder_intent(line: str) -> Optional[Tuple[str, str]]:
+    """
+    Detects natural language intent to create a folder or project.
+    Returns (target_dir_str, original_prompt) or None.
+    Handles English, Sinhala/Singlish, and directory references (Downloads, Desktop, Documents).
+    """
+    stripped = line.strip()
+    lower = stripped.lower()
+
+    # Informational questions should route to chat, not create folders
+    if any(q in lower for q in ("how to", "how do", "kohomada", "what is", "mokakda", "explain", "pahasili", "why")):
+        return None
+
+    folder_triggers = (
+        "create folder", "make folder", "new folder", "add folder",
+        "folder ekak", "folder hada", "hadanna folder", "folder hadanna",
+        "create project", "new project", "start project", "aluth project", "project ekak"
+    )
+    is_trigger = any(t in lower for t in folder_triggers) or lower.startswith(("mkdir ", "folder ", "project "))
+    if not is_trigger:
+        return None
+
+    # 1. Determine base directory
+    user_home = Path.home()
+    if "downloads" in lower:
+        base = user_home / "Downloads"
+    elif "desktop" in lower:
+        base = user_home / "Desktop"
+    elif "documents" in lower:
+        base = user_home / "Documents"
+    else:
+        base = Path.cwd()
+
+    # 2. Extract folder name
+    cand_name = None
+    # Check for quotes first
+    quote_match = re.search(r'["\']([^"\']+)["\']', stripped)
+    if quote_match and any(k in lower for k in ("folder", "project", "mkdir")):
+        val = quote_match.group(1).strip()
+        if "\\" in val or "/" in val:
+            cand_name = val.split("\\")[-1].split("/")[-1]
+        else:
+            cand_name = val
+
+    if not cand_name:
+        # Patterns in English & Sinhala:
+        # 1. name it as <name> / named <name> / called <name>
+        m = re.search(r'(?:name\s+it\s+(?:as\s+)?|named\s+(?:as\s+)?|called\s+(?:as\s+)?)\s*([a-zA-Z0-9_\-\s]+)', stripped, re.I)
+        if m:
+            cand_name = m.group(1).strip()
+
+    if not cand_name:
+        # 2. <name> kiyala / <name> namata
+        m = re.search(r'([a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+)?)\s+(?:kiyala|namata|kiyana\s+namata)', stripped, re.I)
+        if m:
+            extracted = m.group(1).strip()
+            cleaned = re.sub(r'\b(folder|project|ekak|hadala|hadanna|aluth|in|downloads|desktop|documents)\b', '', extracted, flags=re.I).strip()
+            if cleaned:
+                cand_name = cleaned
+
+    if not cand_name:
+        # 3. create folder <name> in downloads OR create folder <name>
+        m = re.search(r'(?:create\s+folder|make\s+folder|new\s+folder|create\s+project|new\s+project)\s+(?:in\s+\w+\s+)?(?:called\s+|named\s+)?([a-zA-Z0-9_\-\s]+)', stripped, re.I)
+        if m:
+            raw = m.group(1).strip()
+            cleaned = re.sub(r'\b(in\s+downloads|in\s+desktop|in\s+documents|downloads|desktop|documents)\b', '', raw, flags=re.I).strip()
+            cleaned = re.sub(r'\b(name\s+it\s+as|name\s+it|as|called|named)\b', '', cleaned, flags=re.I).strip()
+            if cleaned:
+                cand_name = cleaned
+
+    if not cand_name:
+        # 4. Check if the last token is an explicit name
+        tokens = stripped.split()
+        stopwords = {
+            'ekak', 'hadala', 'hadanna', 'patan', 'ganna', 'aluth', 'new', 'in', 'as',
+            'a', 'an', 'the', 'project', 'folder', 'karanna', 'danna', 'methana',
+            'downloads', 'desktop', 'documents', 'eke', 'wala', 'namata', 'kiyala'
+        }
+        for t in reversed(tokens):
+            clean_t = t.strip('.,;:?!"\'')
+            if clean_t and clean_t.lower() not in stopwords:
+                cand_name = clean_t
+                break
+
+    if not cand_name:
+        cand_name = "my_project"
+
+    cand_name = re.sub(r'^(?:a|an|the)\s+', '', cand_name, flags=re.I).strip()
+    target_path = base / cand_name
+    return str(target_path), stripped
+
+
 def create_project_scaffold(
     target_dir_str: str,
     project_type_or_prompt: str = "",
@@ -1109,10 +1233,7 @@ def create_project_scaffold(
     Returns (success, message, created_files).
     """
     clean_target = target_dir_str.strip().strip('"').strip("'")
-    if not clean_target:
-        clean_target = "my_project"
-
-    target_path = Path(clean_target).expanduser().resolve()
+    target_path = resolve_target_dir(clean_target)
     try:
         target_path.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -1121,8 +1242,10 @@ def create_project_scaffold(
     prompt_lower = (project_type_or_prompt or "").lower()
     created_files: List[str] = []
 
+    is_threejs = any(k in prompt_lower for k in ("three", "threejs", "treejs", "tree.js", "3d", "webgl"))
+
     # 1. Web / HTML / Game project
-    if any(k in prompt_lower for k in ("web", "html", "game", "threejs", "frontend", "canvas", "css", "js")) or not prompt_lower:
+    if any(k in prompt_lower for k in ("web", "html", "game", "threejs", "frontend", "canvas", "css", "js")) or not prompt_lower or is_threejs:
         index_html = target_path / "index.html"
         style_css = target_path / "style.css"
         script_js = target_path / "script.js"
@@ -1130,45 +1253,149 @@ def create_project_scaffold(
 
         title = target_path.name.replace("_", " ").replace("-", " ").title()
         if not index_html.exists():
-            index_html.write_text(
-                f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-                f"  <meta charset=\"UTF-8\">\n"
-                f"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-                f"  <title>{title}</title>\n"
-                f"  <link rel=\"stylesheet\" href=\"style.css\">\n"
-                f"</head>\n<body>\n"
-                f"  <div id=\"app\">\n"
-                f"    <h1>{title}</h1>\n"
-                f"    <canvas id=\"mainCanvas\"></canvas>\n"
-                f"  </div>\n"
-                f"  <script src=\"script.js\"></script>\n"
-                f"</body>\n</html>\n",
-                encoding="utf-8"
-            )
+            if is_threejs:
+                html_body = (
+                    f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+                    f"  <meta charset=\"UTF-8\">\n"
+                    f"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+                    f"  <title>{title} (3D Three.js)</title>\n"
+                    f"  <link rel=\"stylesheet\" href=\"style.css\">\n"
+                    f"  <script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"></script>\n"
+                    f"</head>\n<body>\n"
+                    f"  <div id=\"overlay\" style=\"position:absolute;top:16px;left:16px;color:#00ff88;font-family:sans-serif;z-index:10;text-shadow:0 0 8px rgba(0,255,136,0.5);\">\n"
+                    f"    <h1 style=\"margin:0;\">{title}</h1>\n"
+                    f"    <p style=\"margin:4px 0 0;\">3D Web Game powered by Three.js</p>\n"
+                    f"  </div>\n"
+                    f"  <script src=\"script.js\"></script>\n"
+                    f"</body>\n</html>\n"
+                )
+            else:
+                html_body = (
+                    f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+                    f"  <meta charset=\"UTF-8\">\n"
+                    f"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+                    f"  <title>{title}</title>\n"
+                    f"  <link rel=\"stylesheet\" href=\"style.css\">\n"
+                    f"</head>\n<body>\n"
+                    f"  <div id=\"app\">\n"
+                    f"    <h1>{title}</h1>\n"
+                    f"    <canvas id=\"mainCanvas\"></canvas>\n"
+                    f"  </div>\n"
+                    f"  <script src=\"script.js\"></script>\n"
+                    f"</body>\n</html>\n"
+                )
+            index_html.write_text(html_body, encoding="utf-8")
             created_files.append("index.html")
 
         if not style_css.exists():
-            style_css.write_text(
-                "body {\n  margin: 0;\n  padding: 0;\n  background: #111;\n  color: #fff;\n  font-family: sans-serif;\n  display: flex;\n  justify-content: center;\n  align-items: center;\n  min-height: 100vh;\n}\n#app {\n  text-align: center;\n}\ncanvas {\n  border: 1px solid #333;\n  border-radius: 8px;\n  background: #000;\n}\n",
-                encoding="utf-8"
-            )
+            if is_threejs:
+                css_body = (
+                    "body {\n"
+                    "  margin: 0;\n"
+                    "  padding: 0;\n"
+                    "  overflow: hidden;\n"
+                    "  background: #0d0d1a;\n"
+                    "}\n"
+                    "canvas {\n"
+                    "  display: block;\n"
+                    "  width: 100vw;\n"
+                    "  height: 100vh;\n"
+                    "}\n"
+                )
+            else:
+                css_body = (
+                    "body {\n"
+                    "  margin: 0;\n"
+                    "  padding: 0;\n"
+                    "  background: #111;\n"
+                    "  color: #fff;\n"
+                    "  font-family: sans-serif;\n"
+                    "  display: flex;\n"
+                    "  justify-content: center;\n"
+                    "  align-items: center;\n"
+                    "  min-height: 100vh;\n"
+                    "}\n"
+                    "#app {\n"
+                    "  text-align: center;\n"
+                    "}\n"
+                    "canvas {\n"
+                    "  border: 1px solid #333;\n"
+                    "  border-radius: 8px;\n"
+                    "  background: #000;\n"
+                    "}\n"
+                )
+            style_css.write_text(css_body, encoding="utf-8")
             created_files.append("style.css")
 
         if not script_js.exists():
-            js_content = (
-                f"// {title} - Main JavaScript Entry\n"
-                f"console.log('{title} initialized.');\n"
-                "window.addEventListener('DOMContentLoaded', () => {\n"
-                "  const canvas = document.getElementById('mainCanvas');\n"
-                "  if (canvas) {\n"
-                "    canvas.width = 800;\n"
-                "    canvas.height = 600;\n"
-                "    const ctx = canvas.getContext('2d');\n"
-                "    ctx.fillStyle = '#00f';\n"
-                "    ctx.fillRect(50, 50, 100, 100);\n"
-                "  }\n"
-                "});\n"
-            )
+            if is_threejs:
+                js_content = (
+                    f"// {title} - Three.js 3D Game\n"
+                    f"console.log('{title} 3D initialized.');\n\n"
+                    "window.addEventListener('DOMContentLoaded', () => {\n"
+                    "  if (typeof THREE === 'undefined') {\n"
+                    "    console.warn('Three.js CDN not loaded; falling back to canvas.');\n"
+                    "    return;\n"
+                    "  }\n\n"
+                    "  // 1. Scene, Camera, Renderer\n"
+                    "  const scene = new THREE.Scene();\n"
+                    "  scene.background = new THREE.Color(0x0d0d1a);\n"
+                    "  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);\n"
+                    "  camera.position.set(0, 2, 5);\n\n"
+                    "  const renderer = new THREE.WebGLRenderer({ antialias: true });\n"
+                    "  renderer.setSize(window.innerWidth, window.innerHeight);\n"
+                    "  renderer.setPixelRatio(window.devicePixelRatio);\n"
+                    "  document.body.appendChild(renderer.domElement);\n\n"
+                    "  // 2. Lighting\n"
+                    "  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);\n"
+                    "  scene.add(ambientLight);\n"
+                    "  const pointLight = new THREE.PointLight(0x00ff88, 2, 50);\n"
+                    "  pointLight.position.set(5, 5, 5);\n"
+                    "  scene.add(pointLight);\n\n"
+                    "  // 3. 3D Mesh (Neon Cube)\n"
+                    "  const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);\n"
+                    "  const material = new THREE.MeshStandardMaterial({\n"
+                    "    color: 0x00ff88,\n"
+                    "    roughness: 0.2,\n"
+                    "    metalness: 0.8,\n"
+                    "  });\n"
+                    "  const cube = new THREE.Mesh(geometry, material);\n"
+                    "  scene.add(cube);\n\n"
+                    "  // 4. Ground Grid\n"
+                    "  const grid = new THREE.GridHelper(20, 20, 0x00ff88, 0x333355);\n"
+                    "  grid.position.y = -1.5;\n"
+                    "  scene.add(grid);\n\n"
+                    "  // 5. Window Resize Handler\n"
+                    "  window.addEventListener('resize', () => {\n"
+                    "    camera.aspect = window.innerWidth / window.innerHeight;\n"
+                    "    camera.updateProjectionMatrix();\n"
+                    "    renderer.setSize(window.innerWidth, window.innerHeight);\n"
+                    "  });\n\n"
+                    "  // 6. 60 FPS Animation Loop\n"
+                    "  function animate() {\n"
+                    "    requestAnimationFrame(animate);\n"
+                    "    cube.rotation.x += 0.01;\n"
+                    "    cube.rotation.y += 0.015;\n"
+                    "    renderer.render(scene, camera);\n"
+                    "  }\n"
+                    "  animate();\n"
+                    "});\n"
+                )
+            else:
+                js_content = (
+                    f"// {title} - Main JavaScript Entry\n"
+                    f"console.log('{title} initialized.');\n"
+                    "window.addEventListener('DOMContentLoaded', () => {\n"
+                    "  const canvas = document.getElementById('mainCanvas');\n"
+                    "  if (canvas) {\n"
+                    "    canvas.width = 800;\n"
+                    "    canvas.height = 600;\n"
+                    "    const ctx = canvas.getContext('2d');\n"
+                    "    ctx.fillStyle = '#00f';\n"
+                    "    ctx.fillRect(50, 50, 100, 100);\n"
+                    "  }\n"
+                    "});\n"
+                )
             script_js.write_text(js_content, encoding="utf-8")
             created_files.append("script.js")
 
@@ -1867,7 +2094,7 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 return "model_list", []
             return "model_switch", [args[0]]
 
-        if raw_cmd in ("project", "new"):
+        if raw_cmd in ("project", "new", "folder", "mkdir"):
             args = tokens[1:]
             target_dir = args[0] if args else "my_project"
             rest_idx = stripped.find(tokens[0]) + len(tokens[0])
@@ -1987,16 +2214,10 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         except Exception:
             pass
 
-    # Check for unslashed project command
-    if lower_unslashed.startswith("project ") or lower_unslashed.startswith("new project "):
-        try:
-            tokens = tokenize_windows_line(stripped)
-            target = tokens[1] if len(tokens) > 1 and tokens[0].lower() == "project" else (tokens[2] if len(tokens) > 2 else "my_project")
-            idx = stripped.find(target) + len(target)
-            inst = stripped[idx:].strip() if idx < len(stripped) else ""
-            return "project", [target, inst]
-        except Exception:
-            pass
+    # Check for folder / project creation intent (natural language or unslashed command)
+    nat_folder = parse_natural_folder_intent(stripped)
+    if nat_folder is not None:
+        return "project", [nat_folder[0], nat_folder[1]]
 
     # Check for unslashed fix / bugfix command
     if lower_unslashed.startswith("fix ") or lower_unslashed.startswith("bugfix "):
@@ -2023,18 +2244,6 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         if cand:
             return "model_switch", [cand]
         return "model_list", []
-
-    # Check for natural language project creation intent
-    if any(k in lower_unslashed for k in ("folder ekak hadala", "aluth project", "new project", "create project", "start project", "project ekak patan", "hadanna aluth project")):
-        tokens = stripped.split()
-        cand_folder = "my_project"
-        for idx, tok in enumerate(tokens):
-            if tok.lower() in ("folder", "project", "folder:", "called", "in", "namata") and idx + 1 < len(tokens):
-                nxt = tokens[idx + 1].strip(".,;:?!'\"")
-                if nxt and nxt.lower() not in ("ekak", "hadala", "patan", "ganna", "a", "new", "aluth"):
-                    cand_folder = nxt
-                    break
-        return "project", [cand_folder, stripped]
 
     # Check for natural language bug analysis and fix intent
     if any(k in lower_unslashed for k in ("bug", "bugs", "error", "errors", "weradi")) and any(k in lower_unslashed for k in ("hadanna", "fix", "analyze", "check", "balala", "repair", "balanna")):
@@ -2290,7 +2499,7 @@ def run_interactive_shell(
             elif action == "project":
                 target_folder = argv[0] if argv else "my_project"
                 proj_prompt = argv[1] if len(argv) > 1 else ""
-                output_fn(colorize(f"Scaffolding project in '{target_folder}'...", CYAN, color_enabled))
+                output_fn(colorize(f"Creating folder/project in '{target_folder}'...", CYAN, color_enabled))
                 ok, msg, created = create_project_scaffold(target_folder, proj_prompt, stream=stream)
                 color = GREEN if ok else RED
                 output_fn(colorize(msg, color, color_enabled))

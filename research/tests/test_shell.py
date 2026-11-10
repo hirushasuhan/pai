@@ -2027,7 +2027,7 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertTrue(any("--model" in cmd and first in cmd for cmd in executed_argvs))
 
     def test_shell_project_scaffold(self) -> None:
-        """Asserts create_project_scaffold generates web and python project files."""
+        """Asserts create_project_scaffold generates web, 3d, and python project files."""
         from shell import create_project_scaffold, parse_shell_line
 
         with tempfile.TemporaryDirectory() as td:
@@ -2039,6 +2039,16 @@ class TestInteractiveShellADR014(unittest.TestCase):
             self.assertIn("style.css", files_w)
             self.assertIn("script.js", files_w)
             self.assertTrue((web_dir / "index.html").is_file())
+
+            # 3D Three.js game scaffold
+            three_dir = base / "my_3d_game"
+            ok_3d, msg_3d, files_3d = create_project_scaffold(str(three_dir), "create 3d web game with threejs")
+            self.assertTrue(ok_3d)
+            self.assertIn("index.html", files_3d)
+            index_content = (three_dir / "index.html").read_text(encoding="utf-8")
+            self.assertIn("three.min.js", index_content)
+            script_content = (three_dir / "script.js").read_text(encoding="utf-8")
+            self.assertIn("THREE.Scene", script_content)
 
             py_dir = base / "my_python_app"
             ok_p, msg_p, files_p = create_project_scaffold(str(py_dir), "python script")
@@ -2052,8 +2062,28 @@ class TestInteractiveShellADR014(unittest.TestCase):
         self.assertEqual(act_proj, "project")
         self.assertEqual(args_proj[0], "test_app")
 
+        act_fld, args_fld = parse_shell_line("/folder my_custom_folder")
+        self.assertEqual(act_fld, "project")
+
+        act_mk, args_mk = parse_shell_line("/mkdir test_dir")
+        self.assertEqual(act_mk, "project")
+
         act_nat, args_nat = parse_shell_line("methana folder ekak hadala aluth project ekak patan ganna my_game")
         self.assertEqual(act_nat, "project")
+
+        # Natural language folder creation in Downloads
+        act_dl, args_dl = parse_shell_line("create folder in downloads name it as my game")
+        self.assertEqual(act_dl, "project")
+        self.assertIn("my game", args_dl[0].lower())
+        self.assertIn("downloads", args_dl[0].lower())
+
+        act_dl2, args_dl2 = parse_shell_line("make folder in downloads called my game")
+        self.assertEqual(act_dl2, "project")
+        self.assertIn("my game", args_dl2[0].lower())
+
+        act_dl3, args_dl3 = parse_shell_line("downloads eke my game kiyala folder ekak hadanna")
+        self.assertEqual(act_dl3, "project")
+        self.assertIn("my game", args_dl3[0].lower())
 
     def test_shell_bug_analysis_and_fix(self) -> None:
         """Asserts analyze_and_fix_bugs finds issues, creates backup, and writes fixed code."""
