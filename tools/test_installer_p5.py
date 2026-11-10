@@ -928,8 +928,10 @@ class TestInstallerP5(unittest.TestCase):
         # Install and check launcher icon resource and assets directory
         install_target = Path(self.tmp_dir) / "PAI_Icon_Target"
         sub = self._create_isolated_reg_subkey("Test_PAI_Icon_20", "%USERPROFILE%\\bin")
+        env = os.environ.copy()
+        env["PAI_REG_SUBKEY"] = sub
         cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(proc.returncode, 0, f"Installer failed: {proc.stderr}")
 
         # Assert launcher carries embedded icon resource
