@@ -93,8 +93,8 @@ SHELL_HELP = (
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
     "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
-    "  /project <dir> [type] Scaffold a new project (web/python/custom) in target directory\n"
-    "  /open [path|url]    Open web page, HTML file, or project preview in default browser\n"
+    "  /project [dir]      Scaffold project or show active project status\n"
+    "  /open [path|url]    Open web page, HTML file, or active project in default browser\n"
     "  /skills             List all learned and active agent skills\n"
     "  /skill <name>       View details and prompt guidance for a specific skill\n"
     "  /learn <name> <doc> Teach PAI a new skill to automatically apply in future tasks\n"
@@ -993,21 +993,114 @@ def save_session_output_to_file(target_path_str: str) -> Tuple[bool, str]:
         final_p.parent.mkdir(parents=True, exist_ok=True)
         final_p.write_text(content, encoding="utf-8")
         byte_count = len(content.encode("utf-8"))
+        set_active_project_dir(final_p.parent)
         return True, f"Saved {byte_count:,} bytes to {final_p}"
     except Exception as e:
         return False, f"Failed to save file: {e}"
+
+
+_session_active_project: Optional[Path] = None
+
+
+def get_active_project_dir() -> Optional[Path]:
+    """Returns the currently active project directory in this session, if set and exists."""
+    global _session_active_project
+    if _session_active_project and _session_active_project.is_dir():
+        return _session_active_project
+
+    env_proj = os.environ.get("PAI_ACTIVE_PROJECT")
+    if env_proj:
+        p = Path(env_proj).expanduser().resolve()
+        if p.is_dir():
+            _session_active_project = p
+            return p
+
+    # Check session history for recently created project
+    for h_entry in reversed(get_session_history()):
+        if "[Successfully initialized new project in " in h_entry[2]:
+            m = re.search(r'\[Successfully initialized new project in ([^\]]+)\]', h_entry[2])
+            if m:
+                cand = Path(m.group(1).strip()).resolve()
+                if cand.is_dir():
+                    _session_active_project = cand
+                    return cand
+
+    # Check recent project directory in Downloads
+    user_downloads = Path.home() / "Downloads"
+    if user_downloads.is_dir():
+        recent_candidates = []
+        try:
+            for sub in user_downloads.iterdir():
+                if sub.is_dir() and any((sub / f).is_file() for f in ("index.html", "script.js", "main.py")):
+                    recent_candidates.append(sub)
+            if recent_candidates:
+                recent_candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                _session_active_project = recent_candidates[0]
+                return recent_candidates[0]
+        except Exception:
+            pass
+
+    return None
+
+
+def set_active_project_dir(path: Union[str, Path]) -> Optional[Path]:
+    """Sets the active project directory for this session."""
+    global _session_active_project
+    try:
+        p = Path(path).expanduser().resolve()
+        if p.is_file():
+            p = p.parent
+        if p.is_dir():
+            _session_active_project = p
+            os.environ["PAI_ACTIVE_PROJECT"] = str(p)
+            return p
+    except Exception:
+        pass
+    return None
+
+
+def format_project_status(active_p: Path, color_enabled: bool = False) -> str:
+    """Formats a concise status view of the active project and its key files."""
+    header = colorize(f"📁 Active Project: {active_p}", CYAN, color_enabled)
+    lines = [header]
+    try:
+        files = [f for f in active_p.iterdir() if f.is_file() and not f.name.endswith(".bak")]
+        if files:
+            lines.append("Files in project:")
+            for f in sorted(files, key=lambda x: x.name):
+                sz = f.stat().st_size
+                sz_str = f"{sz} B" if sz < 1024 else f"{sz / 1024:.1f} KB"
+                lines.append(f"  - {f.name} ({sz_str})")
+        else:
+            lines.append("  (No files in this project folder yet)")
+    except Exception:
+        pass
+    tip = colorize("💡 Any modification instructions (e.g. 'make drone faster', 'add sound') will directly update files here.", DIM, color_enabled)
+    lines.append(tip)
+    return "\n".join(lines)
 
 
 def resolve_target_file(target_str: str) -> Optional[Path]:
     """
     Resolves a target file path from string.
     Supports absolute paths, relative paths, special directories (Downloads, Desktop, Documents),
-    and bare filenames by searching cwd, Downloads, Desktop, Documents.
+    and bare filenames by searching active project, cwd, Downloads, Desktop, Documents.
     Returns Path if file exists, None otherwise.
     """
     clean = target_str.strip().strip('"').strip("'")
     if not clean:
         return None
+
+    # 0. Check active project directory first!
+    active_proj = get_active_project_dir()
+    if active_proj and active_proj.is_dir():
+        cand = (active_proj / clean).resolve()
+        if cand.is_file():
+            return cand
+        for ext in (".js", ".html", ".css", ".py", ".json", ".md", ".txt"):
+            cand_ext = (active_proj / f"{clean}{ext}").resolve()
+            if cand_ext.is_file():
+                return cand_ext
 
     try:
         p = Path(clean).expanduser()
@@ -1140,6 +1233,7 @@ def edit_target_file(
 
     try:
         resolved_path.write_text(updated_content, encoding="utf-8")
+        set_active_project_dir(resolved_path.parent)
     except Exception as e:
         return False, f"Error writing updated file '{resolved_path}': {e}", None
 
@@ -1376,6 +1470,7 @@ def create_project_scaffold(
     target_path = resolve_target_dir(clean_target)
     try:
         target_path.mkdir(parents=True, exist_ok=True)
+        set_active_project_dir(target_path)
     except Exception as e:
         return False, f"Error creating directory '{target_path}': {e}", []
 
@@ -2603,13 +2698,21 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("edit", "modify"):
             args = tokens[1:]
+            active_p = get_active_project_dir()
             if not args:
-                return "error", ["Error: /edit requires a target file path and instructions (e.g. /edit Downloads\\game.html add score counter)."]
-            if len(args) == 1:
-                return "error", ["Error: Please provide modification instructions (e.g. /edit Downloads\\game.html add score counter)."]
-            target = args[0]
+                return "error", ["Error: /edit requires a target file path and instructions (e.g. /edit script.js add score counter)."]
             idx = stripped.find(tokens[0]) + len(tokens[0])
             rest = stripped[idx:].strip()
+
+            has_file_indicator = ("." in args[0] or "\\" in args[0] or "/" in args[0])
+            if not has_file_indicator and active_p and ((active_p / "script.js").is_file() or (active_p / "main.py").is_file()):
+                target = str(active_p / "script.js") if (active_p / "script.js").is_file() else str(active_p / "main.py")
+                instructions = rest
+                return "edit", [target, instructions]
+
+            target = args[0]
+            if len(args) == 1:
+                return "error", [f"Error: Please provide modification instructions (e.g. /edit {target} add score counter)."]
             if rest.startswith('"'):
                 end_quote = rest.find('"', 1)
                 instructions = rest[end_quote + 1:].strip() if end_quote != -1 else " ".join(args[1:])
@@ -2635,6 +2738,8 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("project", "new", "folder", "mkdir"):
             args = tokens[1:]
+            if not args and raw_cmd in ("project", "folder"):
+                return "project_status", []
             target_dir = args[0] if args else "my_project"
             rest_idx = stripped.find(tokens[0]) + len(tokens[0])
             rest = stripped[rest_idx:].strip()
@@ -2804,8 +2909,16 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 break
         return "fix", [target, stripped]
 
-    # Check for natural language editing intent referencing an existing file
-    edit_keywords = ("edit", "modify", "wenas", "update", "change")
+    # Check for natural language editing intent referencing an existing file or active project
+    edit_keywords = (
+        "edit", "modify", "wenas", "update", "change", "hadanna",
+        "danna", "ekathu", "wedi", "adu", "improve", "faster", "slower",
+        "increase", "decrease"
+    )
+    is_edit_verb = any(k in lower_unslashed for k in (
+        "edit ", "modify ", "update ", "change ", "wenas", "hadanna",
+        "wedi karanna", "adu karanna", "ekathu karanna", "danna", "add "
+    ))
     if any(k in lower_unslashed for k in edit_keywords):
         try:
             tokens = tokenize_windows_line(stripped)
@@ -2815,6 +2928,24 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                     return "edit", [str(resolved), stripped]
         except Exception:
             pass
+
+        # If no explicit file token, but there is an active project:
+        active_p = get_active_project_dir()
+        if active_p and active_p.is_dir() and (is_edit_verb or any(k in lower_unslashed for k in ("speed", "sound", "audio", "faster", "enemy", "enemies", "laser", "score", "game", "drone", "physics"))):
+            target_f = None
+            if any(k in lower_unslashed for k in ("style", "css", "color", "background", "theme")) and not any(k in lower_unslashed for k in ("speed", "physics", "shoot", "laser", "enemy", "drone")):
+                if (active_p / "style.css").is_file():
+                    target_f = active_p / "style.css"
+            elif any(k in lower_unslashed for k in ("index", "html", "title", "button", "hud", "ui")) and not any(k in lower_unslashed for k in ("speed", "physics", "enemy", "drone", "sound")):
+                if (active_p / "index.html").is_file():
+                    target_f = active_p / "index.html"
+            else:
+                if (active_p / "script.js").is_file():
+                    target_f = active_p / "script.js"
+                elif (active_p / "main.py").is_file():
+                    target_f = active_p / "main.py"
+            if target_f and target_f.is_file():
+                return "edit", [str(target_f), stripped]
 
     # Check for unslashed open / preview / browse command
     if lower_unslashed.startswith("open ") or lower_unslashed.startswith("preview ") or lower_unslashed.startswith("browse "):
@@ -3014,12 +3145,25 @@ def run_interactive_shell(
                 ok, msg, updated_content = edit_target_file(target_str, instructions, stream=stream)
                 color = GREEN if ok else RED
                 output_fn(colorize(msg, color, color_enabled))
+                if ok:
+                    tip = "💡 Tip: Refresh index.html in your browser (or run /open) to see your changes!"
+                    output_fn(colorize(tip, DIM, color_enabled))
                 add_to_session_history(line, msg)
                 if ok and updated_content:
                     _session_chat_turns.append({"role": "user", "content": f"Edit {target_str}: {instructions}"})
                     _session_chat_turns.append({"role": "assistant", "content": f"Updated {target_str}:\n{msg}"})
                     if len(_session_chat_turns) > 12:
                         del _session_chat_turns[:-12]
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "project_status":
+                active_p = get_active_project_dir()
+                if active_p:
+                    output_fn(format_project_status(active_p, color_enabled=color_enabled))
+                else:
+                    output_fn(colorize("No active project currently set. Create one with /project <folder> or specify an existing folder.", YELLOW, color_enabled))
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
@@ -3076,6 +3220,10 @@ def run_interactive_shell(
                 continue
             elif action == "browser_open":
                 target = argv[0] if argv else ""
+                if not target:
+                    active_p = get_active_project_dir()
+                    if active_p and (active_p / "index.html").is_file():
+                        target = str(active_p / "index.html")
                 ok, msg = open_in_browser(target, stream=stream)
                 color = GREEN if ok else RED
                 output_fn(colorize(msg, color, color_enabled))
@@ -3231,6 +3379,31 @@ def run_interactive_shell(
                     # Auto-save generated code if prompt asked to save it
                     if "```" in cmd_out:
                         lower_line = line.lower()
+                        active_p = get_active_project_dir()
+                        if active_p and active_p.is_dir() and any(k in lower_line for k in ("update", "save", "add", "change", "wenas", "hadanna", "project", "folder", "script", "code")):
+                            code_blocks = re.findall(r"```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)\r?\n```", cmd_out)
+                            for lang_tag, block_code in code_blocks:
+                                lang_tag = lang_tag.lower()
+                                target_fname = None
+                                if lang_tag in ("javascript", "js") and (active_p / "script.js").is_file():
+                                    target_fname = "script.js"
+                                elif lang_tag in ("html", "htm") and (active_p / "index.html").is_file():
+                                    target_fname = "index.html"
+                                elif lang_tag == "css" and (active_p / "style.css").is_file():
+                                    target_fname = "style.css"
+                                elif lang_tag in ("python", "py") and (active_p / "main.py").is_file():
+                                    target_fname = "main.py"
+
+                                if target_fname and len(block_code.strip()) > 30:
+                                    target_file = active_p / target_fname
+                                    try:
+                                        bak = target_file.with_suffix(target_file.suffix + ".bak")
+                                        bak.write_text(target_file.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+                                        target_file.write_text(block_code.strip(), encoding="utf-8")
+                                        output_fn(colorize(f"[Auto-synced updated code to {target_file}]", GREEN, color_enabled))
+                                    except Exception:
+                                        pass
+
                         if any(k in lower_line for k in ("and save it", "save it in", "save it to", "save it on", "save it into", "save this in", "save this to", "save that in", "save that to", "save it on that folder")):
                             auto_target = None
                             if any(k in lower_line for k in ("that folder", "this folder", "the folder")):

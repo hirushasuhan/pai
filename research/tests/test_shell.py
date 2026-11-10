@@ -2372,6 +2372,96 @@ class TestInteractiveShellADR014(unittest.TestCase):
                 self.assertGreater(len(captured_skill_hints), 0)
                 self.assertIn("web-3d-threejs", captured_skill_hints[0])
 
+    def test_active_project_tracking_and_natural_file_modification(self) -> None:
+        """Asserts active project tracking, status formatting, and natural file editing on project files."""
+        from shell import (
+            get_active_project_dir,
+            set_active_project_dir,
+            format_project_status,
+            resolve_target_file,
+            parse_shell_line,
+            run_interactive_shell,
+            _session_chat_turns,
+        )
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            proj_dir = Path(td) / "drone_game"
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            script_f = proj_dir / "script.js"
+            index_f = proj_dir / "index.html"
+            script_f.write_text("let speed = 5;\nfunction update() { speed += 1; }", encoding="utf-8")
+            index_f.write_text("<!DOCTYPE html><html><body><h1>Drone</h1></body></html>", encoding="utf-8")
+
+            # Test project dir set & get
+            set_active_project_dir(proj_dir)
+            self.assertEqual(get_active_project_dir(), proj_dir.resolve())
+
+            # Test format_project_status
+            status_text = format_project_status(proj_dir)
+            self.assertIn("Active Project", status_text)
+            self.assertIn("script.js", status_text)
+            self.assertIn("index.html", status_text)
+
+            # Test resolve_target_file checks active project first
+            resolved_js = resolve_target_file("script.js")
+            self.assertIsNotNone(resolved_js)
+            self.assertEqual(resolved_js, script_f.resolve())
+
+            # Test parse_shell_line project_status
+            act, args = parse_shell_line("/project")
+            self.assertEqual(act, "project_status")
+
+            # Test natural modification commands route directly to edit target in active project
+            act_nat, args_nat = parse_shell_line("game eke speed eka wedi karanna")
+            self.assertEqual(act_nat, "edit")
+            self.assertEqual(args_nat[0], str(script_f.resolve()))
+            self.assertEqual(args_nat[1], "game eke speed eka wedi karanna")
+
+            act_nat2, args_nat2 = parse_shell_line("make drone faster and add realistic physics")
+            self.assertEqual(act_nat2, "edit")
+            self.assertEqual(args_nat2[0], str(script_f.resolve()))
+
+            # Test /open with no argument defaults to opening index.html in active project
+            act_open, args_open = parse_shell_line("/open")
+            self.assertEqual(act_open, "browser_open")
+
+            # Test execution in interactive shell
+            def mock_exec_sub(argv):
+                # When edit prompt is sent to chat, return updated javascript block
+                print("```javascript\nlet speed = 25;\nfunction update() { speed += 5; }\n```")
+                return 0
+
+            inputs = iter([
+                "/project",
+                "game eke speed eka wedi karanna",
+                "/open",
+                "/exit",
+            ])
+            outputs: list[str] = []
+            with patch("shell.execute_subcommand", side_effect=mock_exec_sub), \
+                 patch("webbrowser.open", return_value=True), \
+                 patch("pai.enforce_sandbox_boundary"):
+                code = run_interactive_shell(
+                    input_fn=lambda _: next(inputs),
+                    output_fn=outputs.append,
+                    stream=io.StringIO(),
+                )
+                self.assertEqual(code, 0)
+
+            # Verify file was updated on disk and backup created
+            updated_code = script_f.read_text(encoding="utf-8")
+            self.assertIn("speed = 25", updated_code)
+            bak_file = script_f.with_suffix(".js.bak")
+            self.assertTrue(bak_file.is_file())
+            self.assertIn("speed = 5", bak_file.read_text(encoding="utf-8"))
+
+            combined_out = "\n".join(outputs)
+            self.assertIn("Active Project", combined_out)
+            self.assertIn("Successfully updated", combined_out)
+            self.assertIn("Tip: Refresh index.html", combined_out)
+
 
 if __name__ == "__main__":
     unittest.main()
