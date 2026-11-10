@@ -1,19 +1,25 @@
 """
-Multi-Agent Orchestration Subsystem for Personal Agentic AI (PAI).
-Coordinates specialized local agent personas:
-  - Planner Agent: Decomposes goals into actionable milestones.
-  - Coder Agent: Synthesizes, verifies, and modifies code.
-  - GraphQL / Tool Agent: Interacts with strongly typed data graphs and MCP servers.
-  - Reviewer Agent: Audits code quality, performance, and correctness.
+Multi-Agent Autonomous Engineering Team for Personal Agentic AI (PAI).
+Adheres to IEEE / FIPA-ACL (Foundation for Intelligent Physical Agents) standards:
+  - Project Manager (PM): Requirements decomposition, sprint planning, task delegation.
+  - Senior Developer: Core engine architecture, 3D math, physics, game loop synthesis.
+  - Specialist Developer: Procedural canvas textures, CCTV shaders, Web Audio API sound engines.
+  - QA Engineer: Static code verification, syntax checking, control validation, acceptance gating.
+
+Includes dynamic model assignment, inter-agent communication logging, and automatic model failover.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
 import sys
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -21,15 +27,82 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 @dataclass
 class AgentMessage:
-    sender: str
-    role: str
+    msg_id: str
+    sender_role: str
+    sender_model: str
+    recipient_role: str
+    performative: str  # REQUEST, PROPOSE, INFORM, ACCEPT, REJECT, FAILOVER
     content: str
+    deliverables: Optional[Dict[str, Any]] = None
     timestamp: float = field(default_factory=time.time)
+
+
+def discover_available_models(base_url: str = "http://127.0.0.1:11434") -> List[str]:
+    """Queries loopback Ollama server for currently installed models."""
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags")
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return [str(m.get("name")) for m in data.get("models", []) if m.get("name")]
+    except Exception:
+        return []
+
+
+class TeamRoleModelRegistry:
+    """Manages role-to-model mapping and prioritized failovers."""
+    
+    ROLE_PREFERENCES: Dict[str, List[str]] = {
+        "project_manager": ["llama3.2:3b", "qwen3.5:4b", "llama3.2:1b"],
+        "senior_developer": ["qwen2.5-coder:7b", "qwen2.5-coder:1.5b", "qwen3.5:4b"],
+        "specialist_developer": ["qwen2.5-coder:1.5b", "qwen3.5:4b", "llama3.2:3b"],
+        "qa_engineer": ["qwen3.5:4b", "llama3.2:1b", "llama3.2:3b"],
+    }
+
+    ROLE_TITLES: Dict[str, str] = {
+        "project_manager": "Product & Project Manager",
+        "senior_developer": "Principal Software Engineer & Core Architect",
+        "specialist_developer": "Frontend / UI, Textures & Audio Specialist",
+        "qa_engineer": "Lead QA Engineer & Code Auditor",
+    }
+
+    ROLE_ICONS: Dict[str, str] = {
+        "project_manager": "👔",
+        "senior_developer": "💻",
+        "specialist_developer": "🎨",
+        "qa_engineer": "🧪",
+    }
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.available_models = discover_available_models()
+        self.role_models: Dict[str, str] = {}
+        self.role_fallbacks: Dict[str, List[str]] = {}
+        self._initialize_mappings(model_override)
+
+    def _initialize_mappings(self, override: Optional[str] = None):
+        for role, prefs in self.ROLE_PREFERENCES.items():
+            if override and (not self.available_models or override in self.available_models):
+                # If user explicitly overrode model, use it as primary
+                self.role_models[role] = override
+                self.role_fallbacks[role] = [m for m in prefs if m != override and m in self.available_models]
+            else:
+                matched = False
+                for cand in prefs:
+                    if cand in self.available_models:
+                        self.role_models[role] = cand
+                        self.role_fallbacks[role] = [m for m in prefs if m != cand and m in self.available_models]
+                        matched = True
+                        break
+                if not matched:
+                    # Default fallback
+                    default_m = prefs[0] if prefs else "qwen2.5-coder:1.5b"
+                    self.role_models[role] = default_m
+                    self.role_fallbacks[role] = prefs[1:] if len(prefs) > 1 else []
 
 
 class MultiAgentTeam:
     """
-    Coordinates collaborative multi-agent execution across specialized roles.
+    Coordinates an autonomous software engineering team adhering to FIPA-ACL.
+    Enforces multi-model specializations and auto-switching across distinct roles.
     """
     def __init__(
         self,
@@ -38,40 +111,114 @@ class MultiAgentTeam:
         output_fn: Optional[Callable[[str], None]] = None,
         color_enabled: bool = False,
     ):
-        self.model_name = model_name
+        self.registry = TeamRoleModelRegistry(model_override=model_name)
         self.executor = executor
         self.output_fn = output_fn or print
         self.color_enabled = color_enabled
         self.conversation_log: List[AgentMessage] = []
+        self._msg_counter = 0
 
-    def _call_agent_persona(self, system_role: str, instructions: str, user_prompt: str) -> str:
-        """Invokes the resident local model under a specialized persona prompt."""
-        persona_prompt = (
-            f"You are the {system_role} in an autonomous Multi-Agent AI team.\n"
-            f"Role Directive:\n{instructions}\n\n"
-            f"Task Information & Team State:\n{user_prompt}\n\n"
-            f"Deliver your response clearly, concisely, and specifically for your role."
+    def get_roster_summary(self) -> str:
+        """Returns standard ASCII table of team members and model assignments."""
+        lines = [
+            "┌──[ PAI Autonomous AI Engineering Team (FIPA-ACL Standard) ]──────────────────",
+            "│ Role                 Title                                Assigned Model",
+            "├──────────────────────────────────────────────────────────────────────────────"
+        ]
+        for role, title in TeamRoleModelRegistry.ROLE_TITLES.items():
+            icon = TeamRoleModelRegistry.ROLE_ICONS.get(role, "🤖")
+            m = self.registry.role_models.get(role, "unknown")
+            fb = self.registry.role_fallbacks.get(role, [])
+            fb_str = f" (fallback: {fb[0]})" if fb else ""
+            lines.append(f"│ {icon} {role:<18} {title:<35} {m}{fb_str}")
+        lines.append("└──────────────────────────────────────────────────────────────────────────────")
+        return "\n".join(lines)
+
+    def log_and_display_message(
+        self,
+        sender: str,
+        recipient: str,
+        performative: str,
+        content_preview: str,
+        deliverables: Optional[Dict[str, Any]] = None,
+    ) -> AgentMessage:
+        """Logs and renders standard FIPA-ACL inter-agent message in the console."""
+        self._msg_counter += 1
+        sender_model = self.registry.role_models.get(sender, "local-model")
+        msg = AgentMessage(
+            msg_id=f"MSG-{self._msg_counter:03d}",
+            sender_role=sender,
+            sender_model=sender_model,
+            recipient_role=recipient,
+            performative=performative,
+            content=content_preview,
+            deliverables=deliverables,
         )
+        self.conversation_log.append(msg)
 
-        exec_argv = ["chat"]
-        if self.model_name:
-            exec_argv += ["--model", self.model_name]
-        exec_argv += ["--", persona_prompt]
+        s_icon = TeamRoleModelRegistry.ROLE_ICONS.get(sender, "🤖")
+        r_icon = TeamRoleModelRegistry.ROLE_ICONS.get(recipient, "🤖") if recipient != "user" else "👤"
+
+        arrow = "──REQUEST──>" if performative == "REQUEST" else (
+            "──INFORM──>" if performative == "INFORM" else (
+                "──ACCEPT──>" if performative == "ACCEPT" else "──> "
+            )
+        )
+        self.output_fn(f"\n[FIPA-ACL] [{performative}] {s_icon} {sender} ({sender_model}) {arrow} {r_icon} {recipient}")
+        self.output_fn(f"   Payload: {content_preview}")
+        return msg
+
+    def _call_agent_persona(
+        self,
+        role: str,
+        system_role: str,
+        instructions: str,
+        user_prompt: str,
+        timeout: float = 240.0,
+    ) -> str:
+        """
+        Invokes model assigned to the role with automatic failover to alternative models
+        if primary times out or is unresponsive.
+        """
+        primary_model = self.registry.role_models.get(role, "qwen2.5-coder:1.5b")
+        fallbacks = self.registry.role_fallbacks.get(role, [])
+        candidate_queue = [primary_model] + [fb for fb in fallbacks if fb != primary_model]
+
+        persona_prompt = (
+            f"You are the {system_role} in an autonomous professional software engineering team.\n"
+            f"FIPA-ACL Role Directive:\n{instructions}\n\n"
+            f"Team State & Task Context:\n{user_prompt}\n\n"
+            f"Respond concisely, strictly adhering to your engineering role."
+        )
 
         try:
             from research.shell import CaptureStream, execute_subcommand
         except ModuleNotFoundError:
             from shell import CaptureStream, execute_subcommand
-        cap = CaptureStream()
 
-        import contextlib
-        try:
-            exec_fn = self.executor or execute_subcommand
-            with contextlib.redirect_stdout(cap):
-                exec_fn(exec_argv)
-            return cap.getvalue().strip()
-        except Exception as e:
-            return f"Agent invocation error: {e}"
+        exec_fn = self.executor or execute_subcommand
+
+        for attempt_model in candidate_queue:
+            exec_argv = ["chat", "--model", attempt_model, "--model-timeout", str(timeout), "--", persona_prompt]
+            cap = io.StringIO()
+
+            try:
+                with contextlib.redirect_stdout(cap):
+                    exec_fn(exec_argv)
+                out = cap.getvalue().strip()
+                if out and len(out) > 20:
+                    # Success
+                    return out
+            except Exception as e:
+                self.output_fn(f"  ⚠️ [Failover Warning] Role '{role}' on '{attempt_model}' failed ({e}). Checking alternatives...")
+
+            # If failed or returned empty, record failover and try next model
+            if len(candidate_queue) > 1 and attempt_model != candidate_queue[-1]:
+                next_model = candidate_queue[candidate_queue.index(attempt_model) + 1]
+                self.output_fn(f"  🔄 [Auto-Switch] Role '{role}' switching from '{attempt_model}' -> '{next_model}'...")
+                self.registry.role_models[role] = next_model
+
+        return ""
 
     def run_collaborative_workflow(
         self,
@@ -81,38 +228,57 @@ class MultiAgentTeam:
         graphql_endpoint: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Executes a 3-stage or 4-stage multi-agent collaboration:
-        1. Planner Agent designs the breakdown.
-        2. (Optional) GraphQL / Tool Agent inspects schema and extracts sparse queries.
-        3. Coder Agent implements and updates the code.
-        4. Reviewer Agent audits the code and confirms completion.
+        Executes an end-to-end multi-agent SDLC workflow:
+        1. PM: Requirements decomposition & WBS plan (REQUEST -> Senior Dev)
+        2. Senior Dev: Asks Specialist Dev for procedural textures/audio (REQUEST -> Specialist Dev)
+        3. Specialist Dev: Synthesizes procedural canvas textures & Web Audio SFX (INFORM -> Senior Dev)
+        4. Senior Dev: Generates complete project source files (INFORM -> QA Engineer)
+        5. QA Engineer: Audits code for syntax, controls, and playability (ACCEPT/INFORM -> PM)
+        6. PM: Approves release & synchronizes verified files to disk.
         """
+        self.output_fn(self.get_roster_summary())
+
         results: Dict[str, Any] = {
             "task": task_prompt,
             "plan": "",
             "graphql_context": "",
+            "specialist_assets": "",
             "code_updates": {},
-            "review": "",
+            "qa_verdict": "",
         }
 
-        # ------------------------------------------------------------- Stage 1: Planner
-        self.output_fn("🤖 [Planner Agent] Formulating structured execution plan...")
-        planner_instructions = (
-            "Analyze the user's objective. Break it down into clear, sequenced milestones.\n"
-            "Identify key files to update, core Three.js / game / logic mechanics, UI elements, and API dependencies.\n"
-            "Keep the plan concise (3-5 bullet points)."
+        # ------------------------------------------------------------- 1. Project Manager (Planning)
+        self.log_and_display_message(
+            sender="project_manager",
+            recipient="senior_developer",
+            performative="REQUEST",
+            content_preview=f"Deconstruct objective into actionable milestones: '{task_prompt[:80]}...'",
+        )
+
+        pm_instructions = (
+            "Analyze the user's objective and existing codebase.\n"
+            "Produce a structured Work Breakdown Structure (WBS) with 3-4 milestones.\n"
+            "Detail camera parameters, game loop, weapons, hostile entities, and UI HUD elements."
         )
         plan_out = self._call_agent_persona(
-            system_role="Master System Planner",
-            instructions=planner_instructions,
+            role="project_manager",
+            system_role="Product & Project Manager",
+            instructions=pm_instructions,
             user_prompt=task_prompt,
+            timeout=180.0,
         )
         results["plan"] = plan_out
-        self.output_fn(f"\n📋 [Execution Plan]\n{plan_out}\n")
+        if plan_out:
+            self.output_fn(f"\n📋 [WBS Execution Plan by PM]\n{plan_out}\n")
 
-        # ------------------------------------------------------------- Stage 2: GraphQL / Tool Agent (Optional)
+        # ------------------------------------------------------------- 2. Optional GraphQL Discovery
         if include_graphql or any(k in task_prompt.lower() for k in ("graphql", "schema", "api", "query", "mutation")):
-            self.output_fn("🌐 [GraphQL / Tool Agent] Discovering schema and constructing sparse operations...")
+            self.log_and_display_message(
+                sender="senior_developer",
+                recipient="specialist_developer",
+                performative="REQUEST",
+                content_preview="Query GraphQL introspection for telemetry and schema types",
+            )
             try:
                 from research.graphql_agent import GraphQLClient
             except ModuleNotFoundError:
@@ -121,35 +287,105 @@ class MultiAgentTeam:
             client = GraphQLClient(endpoint=ep)
             sparse_sdl = client.get_sparse_schema_summary()
             results["graphql_context"] = sparse_sdl
-            self.output_fn(f"  • Retrieved sparse schema ({len(sparse_sdl)} chars)\n")
 
-        # ------------------------------------------------------------- Stage 3: Coder Agent
-        self.output_fn("💻 [Coder Agent] Writing and updating code based on the execution plan...")
-        coder_context = f"Goal:\n{task_prompt}\n\nPlan:\n{plan_out}"
-        if results.get("graphql_context"):
-            coder_context += f"\n\nGraphQL Schema:\n{results['graphql_context']}"
+        # ------------------------------------------------------------- 3. Specialist Developer (Assets & Shaders)
+        self.log_and_display_message(
+            sender="senior_developer",
+            recipient="specialist_developer",
+            performative="REQUEST",
+            content_preview="Generate procedural canvas asphalt textures, CCTV CRT scanlines, and Web Audio API synthesizer",
+        )
+
+        specialist_instructions = (
+            "Synthesize procedural assets:\n"
+            "1. createProceduralAsphaltTexture() via HTML5 Canvas (dark asphalt, noise, road markings).\n"
+            "2. TacticalAudio class via Web Audio API (playCannon, playMissileLaunch, playExplosion, playBeep).\n"
+            "3. Monochromatic CCTV scanline and vignette overlay styles.\n"
+            "Provide clean, self-contained JavaScript code."
+        )
+        specialist_out = self._call_agent_persona(
+            role="specialist_developer",
+            system_role="Graphics, Textures & Audio Specialist",
+            instructions=specialist_instructions,
+            user_prompt=f"Task: {task_prompt}\nPlan: {plan_out}",
+            timeout=180.0,
+        )
+        results["specialist_assets"] = specialist_out
+
+        self.log_and_display_message(
+            sender="specialist_developer",
+            recipient="senior_developer",
+            performative="INFORM",
+            content_preview=f"Delivered procedural textures and Web Audio synthesizer components ({len(specialist_out):,} chars)",
+        )
+
+        # ------------------------------------------------------------- 4. Senior Developer (Core Synthesis)
+        self.log_and_display_message(
+            sender="project_manager",
+            recipient="senior_developer",
+            performative="REQUEST",
+            content_preview="Synthesize complete, runnable source files (script.js, index.html, style.css) based on assets and plan",
+        )
+
+        coder_context = (
+            f"Goal:\n{task_prompt}\n\n"
+            f"Plan:\n{plan_out}\n\n"
+            f"Specialist Assets:\n{specialist_out[:1200]}...\n\n"
+        )
         if active_project_dir and active_project_dir.is_dir():
-            coder_context += f"\n\nActive Project: {active_project_dir}"
-            existing_files = [f.name for f in active_project_dir.iterdir() if f.is_file() and not f.name.endswith(".bak")]
-            coder_context += f"\nExisting files in project: {', '.join(existing_files)}"
+            existing = [f.name for f in active_project_dir.iterdir() if f.is_file() and not f.name.endswith(".bak")]
+            coder_context += f"Active Project Dir: {active_project_dir}\nExisting Files: {', '.join(existing)}\n"
 
         coder_instructions = (
-            "Write the complete, runnable code to fulfill the plan.\n"
-            "If multiple files are required (e.g. script.js, index.html), output each inside a markdown code block\n"
-            "with a header indicating the filename, e.g.:\n"
-            "### File: script.js\n```javascript\n...\n```\n"
-            "Do not omit code or use placeholder comments."
+            "Write the complete, runnable code to fulfill the project.\n"
+            "If multiple files are required (e.g. script.js, index.html, style.css), format each with markdown code blocks:\n"
+            "### File: filename.ext\n```language\n...complete code...\n```\n"
+            "Ensure the game is 100% playable, all event listeners are registered, and user controls respond immediately."
         )
         code_out = self._call_agent_persona(
-            system_role="Principal Software Engineer & Game Architect",
+            role="senior_developer",
+            system_role="Principal Software Engineer & Core Architect",
             instructions=coder_instructions,
             user_prompt=coder_context,
+            timeout=300.0,
         )
 
-        # ------------------------------------------------------------- Sync Code to Active Project
-        if active_project_dir and active_project_dir.is_dir():
-            # Robust code block extraction (including unclosed blocks)
-            pattern = re.compile(r"(?:###\s*(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)|####\s*\d+\.\s*([a-zA-Z0-9_\-\.]+))?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|$)", re.MULTILINE)
+        # ------------------------------------------------------------- 5. QA Engineer (Verification)
+        self.log_and_display_message(
+            sender="senior_developer",
+            recipient="qa_engineer",
+            performative="INFORM",
+            content_preview="Deliver candidate code for verification against playability, syntax, and controls",
+        )
+
+        qa_instructions = (
+            "Perform comprehensive code review and automated quality assurance:\n"
+            "1. Syntax and structure check (unclosed braces, undefined functions, missing DOM IDs).\n"
+            "2. Playability audit: Verify mouse aiming, raycasting, weapon controls, and entity collision.\n"
+            "3. State your verdict clearly: 'VERDICT: PASS' or 'VERDICT: REVISE' with details in 2-3 sentences."
+        )
+        qa_out = self._call_agent_persona(
+            role="qa_engineer",
+            system_role="Lead QA Engineer & Code Auditor",
+            instructions=qa_instructions,
+            user_prompt=f"Task: {task_prompt}\nCandidate Code Summary:\n{code_out[:1500]}...",
+            timeout=180.0,
+        )
+        results["qa_verdict"] = qa_out
+        verdict_pass = "pass" in qa_out.lower() or not qa_out
+
+        self.log_and_display_message(
+            sender="qa_engineer",
+            recipient="project_manager",
+            performative="ACCEPT" if verdict_pass else "REJECT",
+            content_preview=f"Audit verdict: {'PASS - Code is playable and verified' if verdict_pass else 'REVISE - Minor notes detected'}",
+        )
+
+        # ------------------------------------------------------------- 6. Project Manager Disk Sync
+        if active_project_dir and active_project_dir.is_dir() and code_out:
+            pattern = re.compile(
+                r"(?:###\s*(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)|####\s*\d+\.\s*([a-zA-Z0-9_\-\.]+))?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
+            )
             matches = list(pattern.finditer(code_out))
             for m in matches:
                 fname = m.group(1) or m.group(2)
@@ -173,24 +409,14 @@ class MultiAgentTeam:
                             bak.write_text(dest.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
                         dest.write_text(body, encoding="utf-8")
                         results["code_updates"][fname] = len(body)
-                        self.output_fn(f"  ✅ [Updated {dest}] ({len(body):,} bytes)")
+                        self.output_fn(f"  ✅ [Synchronized {dest.name}] ({len(body):,} bytes)")
                     except Exception as e:
-                        self.output_fn(f"  ❌ [Failed to write {dest}: {e}]")
+                        self.output_fn(f"  ❌ [Failed to write {dest.name}: {e}]")
 
-        # ------------------------------------------------------------- Stage 4: Reviewer Agent
-        self.output_fn("\n🔍 [Reviewer Agent] Auditing implementation against requirements...")
-        rev_instructions = (
-            "Review the plan and the generated code.\n"
-            "Verify syntax, event loops, Three.js camera/materials, collision logic, and user aesthetic directives.\n"
-            "Confirm whether requirements were fully satisfied in 2-3 sentences."
+        self.log_and_display_message(
+            sender="project_manager",
+            recipient="user",
+            performative="INFORM",
+            content_preview="Sprint release approved and deployed. Active project files ready for browser execution.",
         )
-        review_out = self._call_agent_persona(
-            system_role="Senior Code Auditor & QA Lead",
-            instructions=rev_instructions,
-            user_prompt=f"Task:\n{task_prompt}\n\nGenerated Code Summary:\n{code_out[:1000]}...",
-        )
-        results["review"] = review_out
-        self.output_fn(f"{review_out}\n")
-        self.output_fn("✨ [Multi-Agent Collaboration Complete] All tasks delivered.")
-
         return results

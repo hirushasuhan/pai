@@ -2578,6 +2578,76 @@ console.log('CCTV Drone Weapons Active');
             self.assertIn("Model Context Protocol", combined_out)
             self.assertIn("Tip: Refresh index.html", combined_out)
 
+    def test_multimodel_team_fipa_acl_and_auto_failover(self) -> None:
+        """Verifies multi-model autonomous team roster, FIPA-ACL messaging, and model failover."""
+        from shell import parse_shell_line
+        try:
+            from research.multi_agent import MultiAgentTeam, TeamRoleModelRegistry
+        except ModuleNotFoundError:
+            from multi_agent import MultiAgentTeam, TeamRoleModelRegistry
+
+        # 1. Test natural language parsing for developer team and playability fixes
+        act_team, args_team = parse_shell_line("developer team eka use karala meka hadanna")
+        self.assertEqual(act_team, "multi_agent")
+        self.assertIn("developer team", args_team[0])
+
+        act_play, args_play = parse_shell_line(
+            "it's not playble fix it and Add more textures to this. The drone doesn't need to be visible."
+        )
+        self.assertEqual(act_play, "edit")
+
+        act_stat, args_stat = parse_shell_line("/team status")
+        self.assertEqual(act_stat, "multi_agent")
+        self.assertEqual(args_stat[0], "status")
+
+        # 2. Test Team Roster & Model Registry
+        registry = TeamRoleModelRegistry()
+        self.assertIn("project_manager", registry.role_models)
+        self.assertIn("senior_developer", registry.role_models)
+        self.assertIn("specialist_developer", registry.role_models)
+        self.assertIn("qa_engineer", registry.role_models)
+
+        team = MultiAgentTeam()
+        summary = team.get_roster_summary()
+        self.assertIn("PAI Autonomous AI Engineering Team", summary)
+        self.assertIn("FIPA-ACL Standard", summary)
+        self.assertIn("project_manager", summary)
+        self.assertIn("senior_developer", summary)
+        self.assertIn("qa_engineer", summary)
+
+        # 3. Test FIPA-ACL Message Logging & Performatives
+        msg = team.log_and_display_message(
+            sender="project_manager",
+            recipient="senior_developer",
+            performative="REQUEST",
+            content_preview="Implement Three.js CCTV FLIR simulation",
+        )
+        self.assertEqual(msg.performative, "REQUEST")
+        self.assertEqual(msg.sender_role, "project_manager")
+        self.assertEqual(msg.recipient_role, "senior_developer")
+        self.assertEqual(len(team.conversation_log), 1)
+
+        # 4. Test MultiAgent Team workflow execution with mock executor
+        with tempfile.TemporaryDirectory() as td:
+            p_dir = Path(td)
+            (p_dir / "script.js").write_text("// initial", encoding="utf-8")
+
+            def mock_team_exec(argv):
+                # When senior developer is called, output complete code
+                print("""### File: script.js
+```javascript
+// CCTV Three.js Simulation
+const audio = { playCannon: () => {} };
+console.log('Playable Verified');
+```""")
+                return 0
+
+            team_mock = MultiAgentTeam(executor=mock_team_exec)
+            res = team_mock.run_collaborative_workflow("Build CCTV Game", active_project_dir=p_dir)
+            self.assertIn("script.js", res["code_updates"])
+            self.assertIn("Playable Verified", (p_dir / "script.js").read_text(encoding="utf-8"))
+            self.assertTrue((p_dir / "script.js.bak").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

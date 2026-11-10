@@ -1080,9 +1080,9 @@ def call_model_generate(
     """
     if timeout is None:
         try:
-            timeout = float(os.environ.get("PAI_MODEL_TIMEOUT", "120.0"))
+            timeout = float(os.environ.get("PAI_MODEL_TIMEOUT", "300.0"))
         except Exception:
-            timeout = 120.0
+            timeout = 300.0
     url = base_url or os.environ.get("PAI_MODEL_URL", "http://127.0.0.1:11434")
     parts = urllib.parse.urlsplit(url)
     hostname = (parts.hostname or "").lower()
@@ -3237,6 +3237,7 @@ def cmd_chat(args) -> int:
         f"User Message:\n{user_prompt}\n"
     )
 
+    raw_reply = None
     try:
         raw_reply = call_model_generate(
             model_name=model_name,
@@ -3247,16 +3248,38 @@ def cmd_chat(args) -> int:
         )
     except Exception as e:
         is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
-        if getattr(args, "json", False):
-            print(json.dumps({
-                "success": False,
-                "error": "GENERATOR_ERROR",
-                "detail": str(e),
-                "is_timeout": is_timeout,
-            }, indent=2))
-        else:
-            print(f"Error: Model generation failed: {e}", file=sys.stderr)
-        return 2
+        # Resilient Model Failover: If primary model times out or fails, auto-switch to eligible alternative
+        fallback_candidates = ["qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"]
+        for fb_m in fallback_candidates:
+            if fb_m == model_name:
+                continue
+            try:
+                if not getattr(args, "json", False):
+                    print(f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'...", file=sys.stderr)
+                raw_reply = call_model_generate(
+                    model_name=fb_m,
+                    prompt=chat_prompt,
+                    timeout=getattr(args, "model_timeout", None) or 180.0,
+                    temperature=getattr(args, "temperature", 0.0),
+                    seed=getattr(args, "seed", 42),
+                )
+                if raw_reply and raw_reply.strip():
+                    model_name = fb_m
+                    break
+            except Exception:
+                continue
+
+        if not raw_reply or not raw_reply.strip():
+            if getattr(args, "json", False):
+                print(json.dumps({
+                    "success": False,
+                    "error": "GENERATOR_ERROR",
+                    "detail": str(e),
+                    "is_timeout": is_timeout,
+                }, indent=2))
+            else:
+                print(f"Error: Model generation failed: {e}", file=sys.stderr)
+            return 2
 
     if getattr(args, "json", False):
         payload = {

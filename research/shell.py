@@ -91,7 +91,8 @@ SHELL_HELP = (
     "Personal Agentic AI (PAI) Interactive Shell Commands:\n"
     "  /chat <prompt>      Chat with the assistant (or enter prompt directly without slash)\n"
     "  /code <prompt>      Generate and verify Python code against sandbox tests\n"
-    "  /agent <prompt>     Run multi-agent collaboration (Planner, Coder, Reviewer, Tools)\n"
+    "  /team [status|prompt] Run autonomous Multi-Model Developer Team (PM, Senior Dev, Specialist Dev, QA)\n"
+    "  /agent <prompt>     Alias for /team multi-agent collaborative workflow\n"
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
     "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
     "  /project [dir]      Scaffold project or show active project status\n"
@@ -1212,16 +1213,36 @@ def edit_target_file(
     else:
         exec_fn = executor
 
+    candidate_models: List[Optional[str]] = [_active_model_override]
+    for fb in ("qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"):
+        if fb not in candidate_models:
+            candidate_models.append(fb)
+
+    model_out = ""
     spinner = ThinkingSpinner(stream)
-    capture = CaptureStream(stream, on_first_write=spinner.stop)
     try:
         spinner.start()
-        chat_cmd = ["chat"]
-        if _active_model_override:
-            chat_cmd += ["--model", _active_model_override]
-        chat_cmd += ["--", edit_prompt]
-        with contextlib.redirect_stdout(capture):
-            exec_fn(chat_cmd)
+        for idx, m_cand in enumerate(candidate_models):
+            chat_cmd = ["chat"]
+            if m_cand:
+                chat_cmd += ["--model", m_cand]
+            chat_cmd += ["--model-timeout", "300.0", "--", edit_prompt]
+            capture = CaptureStream(stream, on_first_write=spinner.stop)
+            try:
+                with contextlib.redirect_stdout(capture):
+                    exec_fn(chat_cmd)
+                cand_out = capture.getvalue().strip()
+                if cand_out and len(cand_out) >= 10 and "```" in cand_out:
+                    model_out = cand_out
+                    break
+            except Exception:
+                pass
+
+            if not model_out and idx < len(candidate_models) - 1:
+                next_m = candidate_models[idx + 1]
+                if m_cand and next_m:
+                    stream.write(f"\n⚠️ Model '{m_cand}' timed out or was unresponsive. Auto-switching to fallback model '{next_m}'...\n")
+                    stream.flush()
     except KeyboardInterrupt:
         return False, "Operation cancelled by user.", None
     except Exception as e:
@@ -1229,7 +1250,6 @@ def edit_target_file(
     finally:
         spinner.stop()
 
-    model_out = capture.getvalue()
     if not model_out or not model_out.strip():
         return False, "Error: Model returned empty response.", None
 
@@ -2825,7 +2845,7 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
             args = tokens[1:]
             rest = stripped[len(tokens[0]):].strip()
             if not rest:
-                return "error", ["Error: /agent requires a task prompt (e.g. /agent Build a drone mission dashboard with GraphQL and Three.js)."]
+                return "multi_agent", ["status"]
             return "multi_agent", [rest]
 
         if raw_cmd == "mcp":
@@ -3037,7 +3057,7 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         return "skill_learn", [cand_name, stripped]
 
     # Check for natural language multi-agent intent
-    if lower_unslashed.startswith("agent ") or lower_unslashed.startswith("team ") or any(k in lower_unslashed for k in ("agent team", "multi agent", "agents use karala", "agents la")):
+    if lower_unslashed.startswith("agent ") or lower_unslashed.startswith("team ") or any(k in lower_unslashed for k in ("agent team", "multi agent", "agents use karala", "agents la", "developer team", "dev team", "team eka", "team ekata", "team ekath", "team ekath ekka")):
         return "multi_agent", [stripped]
 
     # Check for natural language editing intent referencing an existing file or active project
@@ -3049,12 +3069,14 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         "texture", "textures", "missile", "missiles", "bullet", "bullets",
         "hellfire", "cctv", "camera", "tank", "tanks", "drone", "game",
         "sound", "audio", "hud", "ui", "physics", "shoot", "laser", "enemy",
-        "enemies", "weapon", "weapons", "graphics", "view", "controls"
+        "enemies", "weapon", "weapons", "graphics", "view", "controls",
+        "playable", "playble", "not playable", "not playble", "fix", "fix it"
     )
     is_edit_verb = any(k in lower_unslashed for k in (
         "edit ", "modify ", "update ", "change ", "wenas", "hadanna",
         "wedi karanna", "adu karanna", "ekathu karanna", "danna", "add ",
-        "make it", "put ", "texture", "missile", "bullet", "cctv", "shoot", "fire"
+        "make it", "put ", "texture", "missile", "bullet", "cctv", "shoot", "fire",
+        "playable", "playble", "fix", "fix it"
     ))
     if not is_creation_intent and any(k in lower_unslashed for k in edit_keywords):
         try:
@@ -3325,7 +3347,6 @@ def run_interactive_shell(
             elif action == "multi_agent":
                 agent_prompt = argv[0] if argv else ""
                 active_p = get_active_project_dir()
-                output_fn(colorize("🚀 Launching Multi-Agent Team: Planner, Coder, GraphQL/Tool, Reviewer...", CYAN, color_enabled))
                 try:
                     from research.multi_agent import MultiAgentTeam
                 except ModuleNotFoundError:
@@ -3335,8 +3356,12 @@ def run_interactive_shell(
                     output_fn=output_fn,
                     color_enabled=color_enabled,
                 )
-                res = team.run_collaborative_workflow(agent_prompt, active_project_dir=active_p)
-                add_to_session_history(line, f"[Multi-Agent workflow completed for: {agent_prompt}]")
+                if agent_prompt.strip().lower() in ("status", "roster", "info", "models", ""):
+                    output_fn(team.get_roster_summary())
+                else:
+                    output_fn(colorize("🚀 Launching Autonomous Engineering Team (FIPA-ACL Standard)...", CYAN, color_enabled))
+                    res = team.run_collaborative_workflow(agent_prompt, active_project_dir=active_p)
+                    add_to_session_history(line, f"[Multi-Agent workflow completed for: {agent_prompt}]")
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
