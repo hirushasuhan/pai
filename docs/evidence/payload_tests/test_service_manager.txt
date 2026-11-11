@@ -1,14 +1,14 @@
 ================================================================================
 PAI MANAGED OLLAMA SERVICE LIFECYCLE TESTS (8 TESTS, ADR-014, FINDINGS DS, DT, DU, EA) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-11T11:59:12.492397+00:00
+Timestamp (UTC): 2026-11-11T12:54:37.341828+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        be47364865bdcd7de4a41c4e628f5be7c91bc4b5
+Git HEAD:        b07c31e80c0900c986387ec4172e392c2b79cd18
 Working Tree:    clean
-Research Tree:   3b7f7f6fc8322465b112f287be2cbac8b7ea309a
+Research Tree:   6d0a47768645a82d49cefea6870e6ff089b1f4cf
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -24,6 +24,6 @@ STDOUT:
 STDERR:
 ........
 ----------------------------------------------------------------------
-Ran 8 tests in 0.850s
+Ran 8 tests in 1.048s
 
 OK
