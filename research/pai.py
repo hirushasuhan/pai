@@ -3247,31 +3247,47 @@ def cmd_chat(args) -> int:
             seed=getattr(args, "seed", 42),
         )
     except Exception as e:
-        is_timeout = "timeout" in str(e).lower() or "timed out" in str(e).lower()
-        # Resilient Model Failover: If primary model times out or fails, auto-switch to eligible alternative
-        fallback_candidates = ["qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"]
-        for fb_m in fallback_candidates:
-            if fb_m == model_name:
-                continue
-            try:
-                if not getattr(args, "json", False):
-                    warn_msg = f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'..."
-                    try:
-                        print(warn_msg, file=sys.stderr)
-                    except UnicodeEncodeError:
-                        print(warn_msg.replace("⚠️", "[WARN]").encode("ascii", errors="replace").decode("ascii"), file=sys.stderr)
-                raw_reply = call_model_generate(
-                    model_name=fb_m,
-                    prompt=chat_prompt,
-                    timeout=getattr(args, "model_timeout", None) or 180.0,
-                    temperature=getattr(args, "temperature", 0.0),
-                    seed=getattr(args, "seed", 42),
-                )
-                if raw_reply and raw_reply.strip():
-                    model_name = fb_m
-                    break
-            except Exception:
-                continue
+        err_lower = str(e).lower()
+        is_timeout = "timeout" in err_lower or "timed out" in err_lower
+        offline_tokens = (
+            "is not running",
+            "service is not running",
+            "connection refused",
+            "10061",
+            "failed to establish a new connection",
+            "pai setup",
+            "start ollama",
+        )
+        is_service_offline = any(tok in err_lower for tok in offline_tokens)
+        disable_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER", "").strip().lower() in ("1", "true", "yes")
+        # Resilient Model Failover: Only switch models when Ollama is reachable and failover is enabled.
+        if not is_service_offline and not disable_failover:
+            fallback_candidates = ["qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"]
+            for fb_m in fallback_candidates:
+                if fb_m == model_name:
+                    continue
+                try:
+                    if not getattr(args, "json", False):
+                        warn_msg = f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'..."
+                        try:
+                            print(warn_msg, file=sys.stderr)
+                        except UnicodeEncodeError:
+                            print(warn_msg.replace("⚠️", "[WARN]").encode("ascii", errors="replace").decode("ascii"), file=sys.stderr)
+                    raw_reply = call_model_generate(
+                        model_name=fb_m,
+                        prompt=chat_prompt,
+                        timeout=getattr(args, "model_timeout", None) or 180.0,
+                        temperature=getattr(args, "temperature", 0.0),
+                        seed=getattr(args, "seed", 42),
+                    )
+                    if raw_reply and raw_reply.strip():
+                        model_name = fb_m
+                        break
+                except Exception as inner_e:
+                    if any(tok in str(inner_e).lower() for tok in offline_tokens):
+                        e = inner_e
+                        break
+                    continue
 
         if not raw_reply or not raw_reply.strip():
             if getattr(args, "json", False):

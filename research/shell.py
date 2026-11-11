@@ -1231,30 +1231,62 @@ def edit_target_file(
     else:
         exec_fn = executor
 
+    if executor is None and getattr(stream, "isatty", lambda: False)() and sys.stdin.isatty():
+        try:
+            try:
+                from research.service_manager import OllamaServiceManager
+            except ModuleNotFoundError:
+                from service_manager import OllamaServiceManager
+            sm = OllamaServiceManager.get_instance()
+            if not sm.is_running(timeout=0.5):
+                ok_svc, msg_svc = sm.ensure_service_running()
+                if not ok_svc:
+                    return False, f"Error: {msg_svc}", None
+        except Exception:
+            pass
+
     candidate_models: List[Optional[str]] = [_active_model_override]
     for fb in ("qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"):
         if fb not in candidate_models:
             candidate_models.append(fb)
 
     model_out = ""
+    last_err = ""
     spinner = ThinkingSpinner(stream)
+    prev_disable_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
+    os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
     try:
         spinner.start()
         for idx, m_cand in enumerate(candidate_models):
             chat_cmd = ["chat"]
             if m_cand:
                 chat_cmd += ["--model", m_cand]
+                if "gemma" in m_cand.lower():
+                    chat_cmd.append("--gemma4-opt-in")
             chat_cmd += ["--model-timeout", "300.0", "--", edit_prompt]
             capture = CaptureStream(stream, on_first_write=spinner.stop)
+            cap_err = io.StringIO()
             try:
-                with contextlib.redirect_stdout(capture):
-                    exec_fn(chat_cmd)
+                with contextlib.redirect_stdout(capture), contextlib.redirect_stderr(cap_err):
+                    ret = exec_fn(chat_cmd)
+                rc = ret if isinstance(ret, int) else 0
                 cand_out = capture.getvalue().strip()
-                if cand_out and len(cand_out) >= 10 and "```" in cand_out:
+                err_txt = cap_err.getvalue().strip()
+                if rc == 0 and cand_out and len(cand_out) >= 10 and "```" in cand_out:
                     model_out = cand_out
                     break
-            except Exception:
-                pass
+                if err_txt:
+                    last_err = err_txt
+                    low_err = err_txt.lower()
+                    if any(t in low_err for t in ("is not running", "connection refused", "10061", "pai setup", "start ollama")):
+                        spinner.stop()
+                        return False, err_txt, None
+            except Exception as e:
+                last_err = str(e)
+                low_err = last_err.lower()
+                if any(t in low_err for t in ("is not running", "connection refused", "10061", "pai setup", "start ollama")):
+                    spinner.stop()
+                    return False, f"Error: {e}", None
 
             if not model_out and idx < len(candidate_models) - 1:
                 next_m = candidate_models[idx + 1]
@@ -1268,9 +1300,13 @@ def edit_target_file(
         return False, f"Error generating file update: {e}", None
     finally:
         spinner.stop()
+        if prev_disable_failover is None:
+            os.environ.pop("PAI_DISABLE_CHAT_FAILOVER", None)
+        else:
+            os.environ["PAI_DISABLE_CHAT_FAILOVER"] = prev_disable_failover
 
     if not model_out or not model_out.strip():
-        return False, "Error: Model returned empty response.", None
+        return False, (last_err or "Error: Model returned empty response."), None
 
     import re
     # Robust extraction pattern supporting closed and unclosed blocks, and file headers
@@ -3607,6 +3643,26 @@ def run_interactive_shell(
                         os.environ.pop("PAI_SKILL_HINTS", None)
                 else:
                     os.environ.pop("PAI_SKILL_HINTS", None)
+
+                if cmd_name == "chat" and input_fn is input and getattr(stream, "isatty", lambda: False)() and sys.stdin.isatty():
+                    try:
+                        try:
+                            from research.service_manager import OllamaServiceManager
+                        except ModuleNotFoundError:
+                            from service_manager import OllamaServiceManager
+                        sm = OllamaServiceManager.get_instance()
+                        if not sm.is_running(timeout=0.5):
+                            ok_svc, msg_svc = sm.ensure_service_running()
+                            if not ok_svc:
+                                output_fn(colorize(f"Error: {msg_svc}", RED, color_enabled))
+                                os.environ.pop("PAI_CHAT_HISTORY", None)
+                                os.environ.pop("PAI_SKILL_HINTS", None)
+                                cols, _ = get_terminal_dimensions()
+                                sep_char = "─" if can_encode_blocks(stream) else "-"
+                                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                                continue
+                    except Exception:
+                        pass
 
                 spinner = ThinkingSpinner(stream) if cmd_name == "chat" else None
                 capture = CaptureStream(stream, on_first_write=spinner.stop if spinner else None)

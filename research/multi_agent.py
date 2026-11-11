@@ -100,6 +100,7 @@ class TeamRoleModelRegistry:
     }
 
     def __init__(self, model_override: Optional[str] = None):
+        self._model_override = model_override
         self.available_models = discover_available_models()
         self.role_models: Dict[str, str] = {}
         self.role_fallbacks: Dict[str, List[str]] = {}
@@ -107,6 +108,20 @@ class TeamRoleModelRegistry:
         self._initialize_mappings(model_override)
         if not model_override:
             self.load_saved_config()
+
+    def refresh_available_models(self) -> None:
+        """Re-discovers installed Ollama models and refreshes fallback lists while keeping custom roles."""
+        self.available_models = discover_available_models()
+        saved_custom = {r: self.role_models[r] for r in self.custom_roles if r in self.role_models}
+        self._initialize_mappings(self._model_override)
+        for r, m in saved_custom.items():
+            self.role_models[r] = m
+            self.custom_roles.add(r)
+            prefs = self.ROLE_PREFERENCES.get(r, [])
+            if self.available_models:
+                self.role_fallbacks[r] = [fb for fb in prefs if fb != m and fb in self.available_models]
+            else:
+                self.role_fallbacks[r] = [fb for fb in prefs if fb != m]
 
     @staticmethod
     def get_config_path() -> Path:
@@ -346,6 +361,32 @@ class MultiAgentTeam:
         self.color_enabled = color_enabled
         self.conversation_log: List[AgentMessage] = []
         self._msg_counter = 0
+        self._service_offline = False
+        self._last_error = ""
+
+    @staticmethod
+    def _is_service_offline_error(text: str) -> bool:
+        low = (text or "").lower()
+        return any(
+            tok in low
+            for tok in (
+                "is not running",
+                "service is not running",
+                "connection refused",
+                "10061",
+                "failed to establish a new connection",
+                "pai setup",
+                "start ollama",
+            )
+        )
+
+    @staticmethod
+    def _extract_concise_error(text: str) -> str:
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        for ln in reversed(lines):
+            if ln.lower().startswith("error:"):
+                return ln[6:].strip() or ln
+        return lines[-1] if lines else ""
 
     def get_roster_summary(self) -> str:
         """Returns standard ASCII table of team members and model assignments."""
@@ -427,29 +468,56 @@ class MultiAgentTeam:
             from shell import CaptureStream, execute_subcommand
 
         exec_fn = self.executor or execute_subcommand
+        prev_disable_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
+        os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
+        try:
+            for attempt_model in candidate_queue:
+                exec_argv = ["chat", "--model", attempt_model, "--model-timeout", str(timeout)]
+                if "gemma" in attempt_model.lower():
+                    exec_argv.append("--gemma4-opt-in")
+                exec_argv += ["--", persona_prompt]
+                cap_out = io.StringIO()
+                cap_err = io.StringIO()
+                rc = 0
+                err_text = ""
 
-        for attempt_model in candidate_queue:
-            exec_argv = ["chat", "--model", attempt_model, "--model-timeout", str(timeout)]
-            if "gemma" in attempt_model.lower():
-                exec_argv.append("--gemma4-opt-in")
-            exec_argv += ["--", persona_prompt]
-            cap = io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(cap_out), contextlib.redirect_stderr(cap_err):
+                        ret = exec_fn(exec_argv)
+                    rc = ret if isinstance(ret, int) else 0
+                    out = cap_out.getvalue().strip()
+                    err_text = cap_err.getvalue().strip()
+                    if rc == 0 and out and len(out) > 20:
+                        # Success
+                        return out
+                except Exception as e:
+                    rc = 1
+                    err_text = f"{cap_err.getvalue().strip()} {e}".strip()
 
-            try:
-                with contextlib.redirect_stdout(cap):
-                    exec_fn(exec_argv)
-                out = cap.getvalue().strip()
-                if out and len(out) > 20:
-                    # Success
-                    return out
-            except Exception as e:
-                self.output_fn(f"  ⚠️ [Failover Warning] Role '{role}' on '{attempt_model}' failed ({e}). Checking alternatives...")
+                if self._is_service_offline_error(err_text):
+                    self._service_offline = True
+                    self._last_error = self._extract_concise_error(err_text) or (
+                        "Local AI service (Ollama) is not running on 127.0.0.1:11434. "
+                        "Run 'pai setup' or start Ollama from the Start Menu."
+                    )
+                    self.output_fn(f"  ❌ [{role}] {self._last_error}")
+                    break
 
-            # If failed or returned empty, record failover and try next model
-            if len(candidate_queue) > 1 and attempt_model != candidate_queue[-1]:
-                next_model = candidate_queue[candidate_queue.index(attempt_model) + 1]
-                self.output_fn(f"  🔄 [Auto-Switch] Role '{role}' switching from '{attempt_model}' -> '{next_model}'...")
-                self.registry.role_models[role] = next_model
+                err_note = self._extract_concise_error(err_text)
+                if err_note:
+                    self._last_error = err_note
+                    self.output_fn(f"  ⚠️ [Failover Warning] Role '{role}' on '{attempt_model}' failed ({err_note}). Checking alternatives...")
+
+                # If failed or returned empty, record failover and try next model
+                if len(candidate_queue) > 1 and attempt_model != candidate_queue[-1]:
+                    next_model = candidate_queue[candidate_queue.index(attempt_model) + 1]
+                    self.output_fn(f"  🔄 [Auto-Switch] Role '{role}' switching from '{attempt_model}' -> '{next_model}'...")
+                    self.registry.role_models[role] = next_model
+        finally:
+            if prev_disable_failover is None:
+                os.environ.pop("PAI_DISABLE_CHAT_FAILOVER", None)
+            else:
+                os.environ["PAI_DISABLE_CHAT_FAILOVER"] = prev_disable_failover
 
         return ""
 
@@ -519,8 +587,6 @@ class MultiAgentTeam:
         5. QA Engineer: Audits code for syntax, controls, and playability (ACCEPT/INFORM -> PM)
         6. PM: Approves release & synchronizes verified files to disk.
         """
-        self.output_fn(self.get_roster_summary())
-
         results: Dict[str, Any] = {
             "task": task_prompt,
             "plan": "",
@@ -529,6 +595,30 @@ class MultiAgentTeam:
             "code_updates": {},
             "qa_verdict": "",
         }
+        self._service_offline = False
+        self._last_error = ""
+
+        if self.executor is None:
+            try:
+                try:
+                    from research.service_manager import OllamaServiceManager
+                except ModuleNotFoundError:
+                    from service_manager import OllamaServiceManager
+                sm = OllamaServiceManager.get_instance()
+                if not sm.is_running(timeout=1.0):
+                    ok_svc, svc_msg = sm.ensure_service_running()
+                    if ok_svc:
+                        self.registry.refresh_available_models()
+                    elif sys.stdin.isatty() and sys.stdout.isatty():
+                        self._service_offline = True
+                        self._last_error = svc_msg
+                        self.output_fn(f"\n❌ [Team Aborted] {svc_msg}")
+                        results["error"] = svc_msg
+                        return results
+            except Exception:
+                pass
+
+        self.output_fn(self.get_roster_summary())
 
         # Collect codebase context from active project if present
         codebase_ctx = self._collect_codebase_context(active_project_dir) if active_project_dir else ""
@@ -558,6 +648,10 @@ class MultiAgentTeam:
             timeout=180.0,
         )
         results["plan"] = plan_out
+        if self._service_offline:
+            self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
+            results["error"] = self._last_error
+            return results
         if plan_out:
             self.output_fn(f"\n📋 [WBS Execution Plan by PM]\n{plan_out}\n")
 
@@ -605,13 +699,25 @@ class MultiAgentTeam:
             timeout=180.0,
         )
         results["specialist_assets"] = specialist_out
+        if self._service_offline:
+            self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
+            results["error"] = self._last_error
+            return results
 
-        self.log_and_display_message(
-            sender="specialist_developer",
-            recipient="senior_developer",
-            performative="INFORM",
-            content_preview=f"Delivered procedural textures and Web Audio synthesizer components ({len(specialist_out):,} chars)",
-        )
+        if specialist_out:
+            self.log_and_display_message(
+                sender="specialist_developer",
+                recipient="senior_developer",
+                performative="INFORM",
+                content_preview=f"Delivered procedural textures and Web Audio synthesizer components ({len(specialist_out):,} chars)",
+            )
+        else:
+            self.log_and_display_message(
+                sender="specialist_developer",
+                recipient="senior_developer",
+                performative="REJECT",
+                content_preview="No specialist output generated; escalating directly to Senior Developer",
+            )
 
         # ------------------------------------------------------------- 4. Senior Developer (Core Synthesis)
         self.log_and_display_message(
@@ -645,6 +751,21 @@ class MultiAgentTeam:
             user_prompt=coder_context,
             timeout=300.0,
         )
+        if self._service_offline:
+            self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
+            results["error"] = self._last_error
+            return results
+        if not code_out or not code_out.strip():
+            err_detail = self._last_error or "Senior Developer did not produce runnable source files."
+            self.log_and_display_message(
+                sender="senior_developer",
+                recipient="project_manager",
+                performative="REJECT",
+                content_preview=f"Code synthesis failed: {err_detail}",
+            )
+            self.output_fn(f"\n❌ [Team Aborted] {err_detail}")
+            results["error"] = err_detail
+            return results
 
         # ------------------------------------------------------------- 5. QA Engineer (Verification)
         self.log_and_display_message(
@@ -672,7 +793,11 @@ class MultiAgentTeam:
             timeout=180.0,
         )
         results["qa_verdict"] = qa_out
-        verdict_pass = "pass" in qa_out.lower() or not qa_out
+        if self._service_offline:
+            self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
+            results["error"] = self._last_error
+            return results
+        verdict_pass = bool(code_out.strip()) and "pass" in qa_out.lower()
 
         self.log_and_display_message(
             sender="qa_engineer",

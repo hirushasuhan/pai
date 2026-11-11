@@ -2740,6 +2740,95 @@ console.log('Playable Verified');
                 self.assertIn("reset", reset_msg)
                 self.assertEqual(len(reg.custom_roles), 0)
 
+        # 6. Regression: Team aborts cleanly on service-offline errors (no 48x failover loop or fake PASS)
+        with tempfile.TemporaryDirectory() as td_off:
+            off_dir = Path(td_off)
+            orig_script = off_dir / "script.js"
+            orig_script.write_text("// preserve existing game", encoding="utf-8")
+            offline_logs = []
+            exec_calls = []
+
+            def mock_offline_exec(argv):
+                exec_calls.append((argv, os.environ.get("PAI_DISABLE_CHAT_FAILOVER")))
+                print(
+                    "Error: Model generation failed: Local AI service (Ollama) is not running on 127.0.0.1:11434. Run 'pai setup' or start Ollama from the Start Menu.",
+                    file=sys.stderr,
+                )
+                return 2
+
+            team_offline = MultiAgentTeam(executor=mock_offline_exec, output_fn=offline_logs.append)
+            res_offline = team_offline.run_collaborative_workflow("make realistic", active_project_dir=off_dir)
+            self.assertEqual(len(exec_calls), 1, "Team must abort after single offline detection instead of retrying 4x3x4 times")
+            self.assertEqual(exec_calls[0][1], "1", "MultiAgentTeam must set PAI_DISABLE_CHAT_FAILOVER=1 during child chat")
+            self.assertNotIn("PAI_DISABLE_CHAT_FAILOVER", os.environ)
+            joined_offline = "\n".join(offline_logs)
+            self.assertIn("Team Aborted", joined_offline)
+            self.assertNotIn("Auto-Switch", joined_offline)
+            self.assertNotIn("Audit verdict: PASS", joined_offline)
+            self.assertIn("not running", res_offline.get("error", ""))
+            self.assertEqual(orig_script.read_text(encoding="utf-8"), "// preserve existing game")
+
+        # 7. Regression: Interactive TTY preflight starts/prompts Ollama before redirect_stdout
+        from unittest.mock import MagicMock
+        try:
+            from research.service_manager import OllamaServiceManager
+        except ModuleNotFoundError:
+            from service_manager import OllamaServiceManager
+        fake_sm = MagicMock()
+        fake_sm.is_running.return_value = False
+        fake_sm.ensure_service_running.return_value = (
+            False,
+            "Local AI service (Ollama) is not running on 127.0.0.1:11434.",
+        )
+        preflight_logs = []
+        with patch.object(OllamaServiceManager, "get_instance", return_value=fake_sm), \
+             patch("sys.stdin.isatty", return_value=True), \
+             patch("sys.stdout.isatty", return_value=True):
+            team_tty = MultiAgentTeam(executor=None, output_fn=preflight_logs.append)
+            res_tty = team_tty.run_collaborative_workflow("fix game")
+            fake_sm.ensure_service_running.assert_called_once()
+            self.assertIn("not running", res_tty.get("error", ""))
+
+        # 8. Regression: refresh_available_models keeps custom roles while updating live tags
+        with tempfile.TemporaryDirectory() as td_ref:
+            with patch.object(TeamRoleModelRegistry, "get_config_path", return_value=Path(td_ref) / "team.json"), \
+                 patch(f"{TeamRoleModelRegistry.__module__}.discover_available_models", side_effect=[[], ["gemma4:e2b", "qwen2.5-coder:7b", "qwen3.5:4b"]]):
+                reg_ref = TeamRoleModelRegistry()
+                self.assertEqual(reg_ref.available_models, [])
+                reg_ref.set_role_model("pm", "gemma4:e2b", persist=False)
+                reg_ref.refresh_available_models()
+                self.assertEqual(reg_ref.role_models["project_manager"], "gemma4:e2b")
+                self.assertEqual(reg_ref.available_models, ["gemma4:e2b", "qwen2.5-coder:7b", "qwen3.5:4b"])
+
+        # 9. Regression: pai.cmd_chat skips fallback loop when service offline or PAI_DISABLE_CHAT_FAILOVER=1
+        import contextlib
+        from argparse import Namespace
+        try:
+            from research import pai as pai_mod
+        except ModuleNotFoundError:
+            import pai as pai_mod
+        chat_args = Namespace(model="llama3.2:3b", gemma4_opt_in=False, prompt="hello", json=False, model_timeout=5.0, temperature=0.0, seed=42)
+        with patch.object(pai_mod, "enforce_sandbox_boundary"), \
+             patch.object(pai_mod, "call_model_generate", side_effect=RuntimeError("Local AI service (Ollama) is not running on 127.0.0.1:11434.")) as mock_gen:
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                rc_off = pai_mod.cmd_chat(chat_args)
+            self.assertEqual(rc_off, 2)
+            self.assertEqual(mock_gen.call_count, 1)
+            self.assertNotIn("Auto-switching to fallback model", err_buf.getvalue())
+
+        with patch.dict(os.environ, {"PAI_DISABLE_CHAT_FAILOVER": "1"}), \
+             patch.object(pai_mod, "enforce_sandbox_boundary"), \
+             patch.object(pai_mod, "call_model_generate", side_effect=RuntimeError("timed out")) as mock_gen_to:
+            out_buf2 = io.StringIO()
+            err_buf2 = io.StringIO()
+            with contextlib.redirect_stdout(out_buf2), contextlib.redirect_stderr(err_buf2):
+                rc_to = pai_mod.cmd_chat(chat_args)
+            self.assertEqual(rc_to, 2)
+            self.assertEqual(mock_gen_to.call_count, 1)
+            self.assertNotIn("Auto-switching to fallback model", err_buf2.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
