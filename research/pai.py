@@ -3255,7 +3255,11 @@ def cmd_chat(args) -> int:
                 continue
             try:
                 if not getattr(args, "json", False):
-                    print(f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'...", file=sys.stderr)
+                    warn_msg = f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'..."
+                    try:
+                        print(warn_msg, file=sys.stderr)
+                    except UnicodeEncodeError:
+                        print(warn_msg.replace("⚠️", "[WARN]").encode("ascii", errors="replace").decode("ascii"), file=sys.stderr)
                 raw_reply = call_model_generate(
                     model_name=fb_m,
                     prompt=chat_prompt,

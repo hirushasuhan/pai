@@ -273,6 +273,66 @@ class MultiAgentTeam:
     Coordinates an autonomous software engineering team adhering to FIPA-ACL.
     Enforces multi-model specializations and auto-switching across distinct roles.
     """
+    _ASCII_FALLBACK_MAP = {
+        "👔": "[PM]",
+        "💻": "[DEV]",
+        "🎨": "[UI]",
+        "🧪": "[QA]",
+        "🤖": "[BOT]",
+        "👤": "[USER]",
+        "🚀": "[*]",
+        "📋": "[PLAN]",
+        "✅": "[OK]",
+        "⚠️": "[WARN]",
+        "⚠": "[WARN]",
+        "🔄": "[SWITCH]",
+        "❌": "[FAIL]",
+        "🔌": "[MCP]",
+        "💡": "[TIP]",
+        "📁": "[DIR]",
+        "┌": "+",
+        "├": "+",
+        "└": "+",
+        "─": "-",
+        "│": "|",
+        "•": "*",
+        "──": "--",
+        "══": "==",
+        "═": "=",
+    }
+
+    @classmethod
+    def _safe_text(cls, text: str, encoding: Optional[str] = None) -> str:
+        import sys
+        enc = encoding or getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            text.encode(enc)
+            return text
+        except (UnicodeEncodeError, LookupError):
+            sanitized = text
+            for src, dst in cls._ASCII_FALLBACK_MAP.items():
+                sanitized = sanitized.replace(src, dst)
+            try:
+                return sanitized.encode(enc, errors="replace").decode(enc, errors="replace")
+            except LookupError:
+                return sanitized.encode("ascii", errors="replace").decode("ascii", errors="replace")
+
+    @classmethod
+    def _make_safe_output(cls, raw_fn: Optional[Callable[[str], None]]) -> Callable[[str], None]:
+        fn = raw_fn or print
+
+        def _safe_emit(msg: str = "") -> None:
+            text = str(msg)
+            if fn is print:
+                fn(cls._safe_text(text))
+                return
+            try:
+                fn(text)
+            except UnicodeEncodeError:
+                fn(cls._safe_text(text, encoding="ascii"))
+
+        return _safe_emit
+
     def __init__(
         self,
         model_name: Optional[str] = None,
@@ -282,7 +342,7 @@ class MultiAgentTeam:
     ):
         self.registry = TeamRoleModelRegistry(model_override=model_name)
         self.executor = executor
-        self.output_fn = output_fn or print
+        self.output_fn = self._make_safe_output(output_fn)
         self.color_enabled = color_enabled
         self.conversation_log: List[AgentMessage] = []
         self._msg_counter = 0

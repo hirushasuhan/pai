@@ -1064,6 +1064,23 @@ def set_active_project_dir(path: Union[str, Path]) -> Optional[Path]:
     return None
 
 
+def _safe_console_emit(emit_fn, text: str) -> None:
+    """Calls emit_fn(text) and falls back to ASCII-safe tags if stream encoding rejects Unicode."""
+    try:
+        emit_fn(text)
+    except UnicodeEncodeError:
+        sanitized = (
+            text.replace("⚠️", "[WARN]")
+            .replace("⚠", "[WARN]")
+            .replace("📁", "[DIR]")
+            .replace("💡", "[TIP]")
+            .replace("🚀", "[*]")
+            .replace("🔌", "[MCP]")
+            .replace("•", "*")
+        )
+        emit_fn(sanitized.encode("ascii", errors="replace").decode("ascii"))
+
+
 def format_project_status(active_p: Path, color_enabled: bool = False) -> str:
     """Formats a concise status view of the active project and its key files."""
     header = colorize(f"📁 Active Project: {active_p}", CYAN, color_enabled)
@@ -1242,7 +1259,8 @@ def edit_target_file(
             if not model_out and idx < len(candidate_models) - 1:
                 next_m = candidate_models[idx + 1]
                 if m_cand and next_m:
-                    stream.write(f"\n⚠️ Model '{m_cand}' timed out or was unresponsive. Auto-switching to fallback model '{next_m}'...\n")
+                    warn_line = f"\n⚠️ Model '{m_cand}' timed out or was unresponsive. Auto-switching to fallback model '{next_m}'...\n"
+                    _safe_console_emit(stream.write, warn_line)
                     stream.flush()
     except KeyboardInterrupt:
         return False, "Operation cancelled by user.", None
@@ -3307,7 +3325,7 @@ def run_interactive_shell(
                 output_fn(colorize(msg, color, color_enabled))
                 if ok:
                     tip = "💡 Tip: Refresh index.html in your browser (or run /open) to see your changes!"
-                    output_fn(colorize(tip, DIM, color_enabled))
+                    _safe_console_emit(output_fn, colorize(tip, DIM, color_enabled))
                 add_to_session_history(line, msg)
                 if ok and updated_content:
                     _session_chat_turns.append({"role": "user", "content": f"Edit {target_str}: {instructions}"})
@@ -3407,7 +3425,7 @@ def run_interactive_shell(
                 if agent_prompt.strip().lower() in ("status", "roster", "info", "models", ""):
                     output_fn(team.get_roster_summary())
                 else:
-                    output_fn(colorize("🚀 Launching Autonomous Engineering Team (FIPA-ACL Standard)...", CYAN, color_enabled))
+                    _safe_console_emit(output_fn, colorize("🚀 Launching Autonomous Engineering Team (FIPA-ACL Standard)...", CYAN, color_enabled))
                     res = team.run_collaborative_workflow(agent_prompt, active_project_dir=active_p)
                     add_to_session_history(line, f"[Multi-Agent workflow completed for: {agent_prompt}]")
                 cols, _ = get_terminal_dimensions()
@@ -3584,7 +3602,7 @@ def run_interactive_shell(
                             skill_blocks.append(f"- Skill: {s.get('name')}\n  Description: {s.get('description')}\n  Guidance:\n{s.get('guidance')}")
                         os.environ["PAI_SKILL_HINTS"] = "\n\n".join(skill_blocks)
                         top_s = matched_skills[0]
-                        output_fn(colorize(f"💡 Active Skill Applied: {top_s['name']} - {top_s['description']}", CYAN, color_enabled))
+                        _safe_console_emit(output_fn, colorize(f"💡 Active Skill Applied: {top_s['name']} - {top_s['description']}", CYAN, color_enabled))
                     else:
                         os.environ.pop("PAI_SKILL_HINTS", None)
                 else:
