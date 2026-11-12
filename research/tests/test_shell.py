@@ -2898,7 +2898,7 @@ console.log('Playable Verified');
 
                 ok_fix, msg_fix, fixed_list = analyze_and_fix_bugs(str(py_file), "fix off-by-one", stream=io.StringIO(), executor=repair_executor)
                 self.assertTrue(ok_fix, msg_fix)
-                self.assertIn(str(py_file), fixed_list)
+                self.assertIn(str(py_file.resolve()), [str(Path(p).resolve()) for p in fixed_list])
                 self.assertEqual(len(seen_prompts), 2)
                 self.assertIn("index.html", seen_prompts[0])
                 self.assertIn("total = 1", py_file.read_text(encoding="utf-8"))
