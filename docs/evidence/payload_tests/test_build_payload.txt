@@ -1,14 +1,14 @@
 ================================================================================
 PAI BUILD PAYLOAD UNIT TESTS (19 TESTS, MILESTONE P2/P3, FINDING EO) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-12T14:56:28.077794+00:00
+Timestamp (UTC): 2026-11-12T16:03:59.610740+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        f8e6e69257283f790494a7fc64554dcca9a3c800
+Git HEAD:        581c955c5ac0e571f74aefec16019f647158a371
 Working Tree:    clean
-Research Tree:   b200068859a736eb5875e243dd1a83ee5129d5af
+Research Tree:   ed0790476d86df146ede870e21b7672e74f6e123
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -65,6 +65,6 @@ WARNING: no bundled catalog found in tag v1.0.0-rc1
 WARNING: no bundled catalog found in tag v1.0.0-rc1
 .
 ----------------------------------------------------------------------
-Ran 19 tests in 27.692s
+Ran 19 tests in 27.535s
 
 OK (skipped=1)
