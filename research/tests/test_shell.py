@@ -3019,6 +3019,62 @@ console.log('Playable Verified');
             self.assertFalse(ok_bad)
             self.assertIn("Unsupported automation request", msg_bad)
 
+        # 7. Weather queries routed to Google Search instead of offline LLM repetition
+        act_w, argv_w = parse_shell_line("mata ada wether eka hoyala denna")
+        self.assertEqual(act_w, "automate")
+        self.assertEqual(argv_w[0], "auto")
+        w_intent = auto_mod.parse_automation_intent("mata ada wether eka hoyala denna")
+        self.assertIsNotNone(w_intent)
+        self.assertEqual(w_intent.get("kind"), "web_search")
+        self.assertEqual(w_intent.get("engine"), "google")
+        self.assertEqual(w_intent.get("query"), "weather today")
+
+        weather_urls = []
+        with patch.object(auto_mod.webbrowser, "open", side_effect=lambda url, new=2: weather_urls.append(url) or True):
+            ok_w, msg_w = auto_mod.execute_automation_task("mata ada wether eka hoyala denna", stream=io.StringIO())
+            self.assertTrue(ok_w)
+            self.assertIn("google.com/search?q=weather+today", weather_urls[0])
+
+        # 8. WhatsApp desktop app launch & message parsing
+        act_wa1, _ = parse_shell_line("whatsapp eke Kasun ta Hello kiyala yawanna")
+        self.assertEqual(act_wa1, "automate")
+        act_wa2, argv_wa2 = parse_shell_line("/whatsapp Kasun ta Meeting postponed")
+        self.assertEqual(act_wa2, "automate")
+        self.assertEqual(argv_wa2[0], "whatsapp")
+        act_wa3, argv_wa3 = parse_shell_line("/wa 0712345678 On my way")
+        self.assertEqual(act_wa3, "automate")
+        self.assertEqual(argv_wa3[0], "whatsapp")
+        act_wa4, _ = parse_shell_line("open whatsapp")
+        self.assertEqual(act_wa4, "automate")
+
+        parsed_contact = auto_mod.parse_whatsapp_intent("whatsapp eke Kasun ta Hello kiyala yawanna")
+        self.assertEqual(parsed_contact["contact"], "Kasun")
+        self.assertEqual(parsed_contact["message"], "Hello")
+
+        parsed_num = auto_mod.parse_whatsapp_intent("/wa 0712345678 On my way")
+        self.assertEqual(parsed_num["phone"], "0712345678")
+        self.assertEqual(parsed_num["message"], "On my way")
+
+        with patch.object(auto_mod, "copy_to_clipboard", return_value=True) as mock_wa_clip, \
+             patch.object(auto_mod.webbrowser, "open", return_value=True):
+            ok_wa, msg_wa = auto_mod.execute_automation_task(
+                "whatsapp eke Kasun ta Hello kiyala yawanna",
+                stream=io.StringIO(),
+            )
+            self.assertTrue(ok_wa, msg_wa)
+            self.assertIn("WhatsApp", msg_wa)
+            mock_wa_clip.assert_called_with("Hello")
+
+        # 9. Anti-repetition loop truncation defense
+        try:
+            from pai import _truncate_repetitive_loops
+        except ModuleNotFoundError:
+            from research.pai import _truncate_repetitive_loops
+        looping_14k = "Mata ada wether eka hoyala denna. " * 300
+        truncated = _truncate_repetitive_loops(looping_14k)
+        self.assertLess(len(truncated), 200)
+        self.assertIn("repetitive output loop detected and truncated", truncated)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,7 @@ SHELL_HELP = (
     "  /project [dir]      Scaffold project or show active project status\n"
     "  /open [path|url]    Open web page, HTML file, or active project in default browser\n"
     "  /mail [to/topic]    Draft an email and open browser compose with To, Subject & Body\n"
+    "  /whatsapp [who/msg] Open WhatsApp desktop app or pre-fill message to contact/phone\n"
     "  /auto <instruction> Automate web search, web apps, folders, Notepad typing, or safe apps\n"
     "  /mcp [status|tools] Inspect connected Model Context Protocol servers and tools\n"
     "  /graphql <query>    Execute GraphQL operation or inspect schema via introspection\n"
@@ -3338,8 +3339,13 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 fix_inst = rest[idx2:].strip() if len(args) > 1 else ""
             return "fix", [target_file_or_dir, fix_inst]
 
-        if raw_cmd in ("auto", "automate", "mail", "email"):
-            sub_kind = "mail" if raw_cmd in ("mail", "email") else "auto"
+        if raw_cmd in ("auto", "automate", "mail", "email", "whatsapp", "wa"):
+            if raw_cmd in ("mail", "email"):
+                sub_kind = "mail"
+            elif raw_cmd in ("whatsapp", "wa"):
+                sub_kind = "whatsapp"
+            else:
+                sub_kind = "auto"
             auto_prompt = stripped[len(tokens[0]):].strip()
             return "automate", [sub_kind, auto_prompt]
 

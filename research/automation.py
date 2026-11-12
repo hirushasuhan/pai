@@ -11,6 +11,7 @@ automation without third-party GUI dependencies or ctypes imports:
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import os
@@ -40,7 +41,6 @@ _WEB_SHORTCUTS: Dict[str, str] = {
     "maps": "https://maps.google.com/",
     "google maps": "https://maps.google.com/",
     "translate": "https://translate.google.com/",
-    "whatsapp": "https://web.whatsapp.com/",
     "chatgpt": "https://chatgpt.com/",
     "outlook": "https://outlook.live.com/mail/",
     "docs": "https://docs.google.com/",
@@ -64,6 +64,8 @@ _APP_ALLOWLIST: Dict[str, Tuple[str, List[str]]] = {
     "vs code": ("VS Code", ["code"]),
     "terminal": ("Windows Terminal", ["wt.exe"]),
     "powershell": ("PowerShell", ["powershell.exe"]),
+    "whatsapp": ("WhatsApp", ["explorer.exe", "whatsapp:"]),
+    "whatsapp desktop": ("WhatsApp", ["explorer.exe", "whatsapp:"]),
 }
 
 _FOLDER_MAP: Dict[str, str] = {
@@ -105,13 +107,16 @@ def _emit(stream: Any, msg: str) -> None:
 
 
 def format_automation_help() -> str:
-    """Return concise help text for /auto and /mail commands."""
+    """Return concise help text for /auto, /mail, and /whatsapp commands."""
     return (
-        "Computer & Browser Automation (/auto, /mail):\n"
-        "  /mail <recipient/topic>   - Draft email and open Gmail/Outlook compose with To, Subject & Body\n"
-        "  /auto <instruction>       - Automate browser search, web apps, folders, Notepad typing, or safe apps\n"
+        "Computer & Browser Automation (/auto, /mail, /whatsapp):\n"
+        "  /mail [to/topic]          - Draft email and open Gmail/Outlook compose with To, Subject & Body\n"
+        "  /whatsapp [who/msg]       - Open WhatsApp desktop app or pre-fill message to contact/phone\n"
+        "  /auto <instruction>       - Automate browser search, weather, web apps, folders, or safe apps\n"
         "Examples:\n"
         "  mail ekak danna john@example.com ta meeting eka postpone karanna kiyala\n"
+        "  whatsapp eke Kasun ta Hello kiyala yawanna\n"
+        "  mata ada wether eka hoyala denna\n"
         "  youtube eke python tutorial search karanna\n"
         "  notepad open karala Hello Hirusha type karanna\n"
         "  open calculator | open downloads | copy Hello World to clipboard\n"
@@ -520,6 +525,174 @@ def _extract_search_query(text: str, site_kw: str) -> str:
     return re.sub(r"\s+", " ", q).strip(" ,.;:?!'\"")
 
 
+def _extract_weather_query(text: str) -> str:
+    """Extract location and timing from weather query to construct Google search query."""
+    cleaned = re.sub(
+        r"\b(mata|ada|today|eka|hoyala|balala|denna|kiyanna|how is|what is|the|report|forecast|wether|weather|kaalaguna|kalagune|kaalagunayak|in|for|of|please|pls)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    loc = re.sub(r"\s+", " ", cleaned).strip(" ,.;:?!'\"")
+    is_today = any(w in text.lower() for w in ("ada", "today", "now", "dan"))
+    if loc and is_today:
+        return f"weather {loc} today"
+    if loc:
+        return f"weather {loc}"
+    return "weather today"
+
+
+def parse_whatsapp_intent(prompt: str) -> Dict[str, str]:
+    """Parse WhatsApp recipient (contact name or phone) and message from text."""
+    raw = (prompt or "").strip()
+    text = raw
+    # Strip leading slash commands like /wa or /whatsapp
+    text = re.sub(r"^/(?:whatsapp|wa)\b\s*", "", text, flags=re.IGNORECASE).strip()
+
+    phone = ""
+    phone_match = re.search(r"(\+?\d[\d -]{7,15}\d)", text)
+    if phone_match:
+        phone = re.sub(r"[- ]", "", phone_match.group(1))
+        text = text[:phone_match.start()] + " " + text[phone_match.end():]
+
+    contact = ""
+    if not phone:
+        m_ta = re.search(r"\b([A-Za-z0-9_-]{2,25})\s+ta\b", text, flags=re.IGNORECASE)
+        m_to = re.search(r"\bto\s+([A-Za-z0-9_-]{2,25})\b", text, flags=re.IGNORECASE)
+        reserved = ("whatsapp", "msg", "message", "mail", "email", "desktop", "web", "app")
+        if m_ta and m_ta.group(1).lower() not in reserved:
+            contact = m_ta.group(1).strip()
+            text = text[:m_ta.start()] + " " + text[m_ta.end():]
+        elif m_to and m_to.group(1).lower() not in reserved:
+            contact = m_to.group(1).strip()
+            text = text[:m_to.start()] + " " + text[m_to.end():]
+
+    # Clean conversational filler out of message
+    msg = text
+    msg = re.sub(
+        r"\b(whatsapp|wa|message|msg|ekak|eke|open|karala|karanna|yawanna|danna|send|reply|kiyala|type|please|pls)\b",
+        " ",
+        msg,
+        flags=re.IGNORECASE,
+    )
+    msg = re.sub(r"\s+", " ", msg).strip(" ,.;:?!\"'")
+
+    return {
+        "phone": phone,
+        "contact": contact,
+        "message": msg,
+        "raw": raw,
+    }
+
+
+def open_whatsapp(
+    contact: str = "",
+    phone: str = "",
+    message: str = "",
+    stream: Any = None,
+) -> Tuple[bool, str]:
+    """Open WhatsApp Desktop application or fallback to web, pre-filling contact/message."""
+    copied = copy_to_clipboard(message) if message else False
+
+    # 1. Build desktop URI
+    desktop_uri = "whatsapp:"
+    if phone and message:
+        enc = urllib.parse.quote(message)
+        desktop_uri = f"whatsapp://send?phone={phone}&text={enc}"
+    elif phone:
+        desktop_uri = f"whatsapp://send?phone={phone}"
+    elif message:
+        enc = urllib.parse.quote(message)
+        desktop_uri = f"whatsapp://send?text={enc}"
+
+    # 2. Build web fallback URL
+    if phone and message:
+        enc = urllib.parse.quote(message)
+        web_url = f"https://web.whatsapp.com/send?phone={phone}&text={enc}"
+    elif phone:
+        web_url = f"https://web.whatsapp.com/send?phone={phone}"
+    else:
+        web_url = "https://web.whatsapp.com/"
+
+    opened = False
+    used_desktop = False
+
+    # Attempt desktop launch first on Windows
+    if sys.platform.startswith("win") or os.name == "nt":
+        try:
+            os.startfile(desktop_uri)  # type: ignore[attr-defined]
+            opened = True
+            used_desktop = True
+        except Exception:
+            try:
+                proc = subprocess.run(
+                    ["explorer.exe", desktop_uri],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    opened = True
+                    used_desktop = True
+            except Exception:
+                opened = False
+
+    if not opened:
+        # Fallback to browser WhatsApp Web
+        try:
+            opened = webbrowser.open(web_url, new=2)
+            if not opened and (sys.platform.startswith("win") or os.name == "nt"):
+                os.startfile(web_url)  # type: ignore[attr-defined]
+                opened = True
+        except Exception as exc:
+            return False, f"Failed to open WhatsApp: {exc}"
+
+    # If opened on desktop and contact name is present, trigger safe background search
+    if opened and used_desktop and contact and (sys.platform.startswith("win") or os.name == "nt"):
+        b64_contact = base64.b64encode(contact.encode("utf-8")).decode("ascii")
+        ps_find_contact = (
+            "$ws = New-Object -ComObject WScript.Shell; "
+            "for ($i = 0; $i -lt 12; $i++) { "
+            "Start-Sleep -Milliseconds 300; "
+            "$p = Get-Process -Name *WhatsApp* -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "$ok = $false; "
+            "if ($p) { $ok = $ws.AppActivate($p.Id) } "
+            "if (-not $ok) { $ok = $ws.AppActivate('WhatsApp') } "
+            "if ($ok) { "
+            "Start-Sleep -Milliseconds 250; "
+            "$ws.SendKeys('^f'); "
+            "Start-Sleep -Milliseconds 200; "
+            f"$name = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64_contact}')); "
+            "$ws.SendKeys($name); "
+            "break } "
+            "}"
+        )
+        try:
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_find_contact],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    dest_desc = "WhatsApp Desktop" if used_desktop else "WhatsApp Web in browser"
+    summary_lines = [f"Opened {dest_desc}:"]
+    if contact:
+        summary_lines.append(f"  Contact : {contact}")
+    if phone:
+        summary_lines.append(f"  Phone   : {phone}")
+    if message:
+        summary_lines.append(f"  Message : {message[:80]}{'...' if len(message) > 80 else ''}")
+    if copied:
+        summary_lines.append("  Clipboard: Message copied to clipboard as backup.")
+    msg = "\n".join(summary_lines)
+    _emit(stream, msg)
+    return bool(opened), msg
+
+
 def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Detect whether a prompt should trigger computer/browser automation.
 
@@ -531,6 +704,15 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
     if sub_action == "mail":
         return {"kind": "email", "prompt": raw}
 
+    if sub_action == "whatsapp":
+        return {"kind": "whatsapp", "prompt": raw}
+
+    # Weather queries ("mata ada wether eka hoyala denna", "ada weather", "what is the weather today", "kalagune")
+    weather_keywords = ("weather", "wether", "kaalaguna", "kalagune", "kaalagunayak")
+    if any(k in lower for k in weather_keywords):
+        query = _extract_weather_query(raw)
+        return {"kind": "web_search", "engine": "google", "query": query}
+
     explicit_auto = sub_action == "auto"
 
     if not explicit_auto:
@@ -540,6 +722,10 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
         # Do not hijack if user is explicitly referring to a local project file preview handled elsewhere
         if re.search(r"\b[\w./\\-]+\.(?:html?|css|js|py|md|txt|json)\b", lower):
             return None
+
+    # WhatsApp automation ("open whatsapp", "whatsapp eke Kasun ta Hello kiyala yawanna", "/wa 07123... Hi")
+    if any(k in lower for k in ("whatsapp", "/whatsapp")) or re.search(r"\bwa\b", lower):
+        return {"kind": "whatsapp", "prompt": raw}
 
     # 1. Email automation ("mail ekak danna", "email ekak yawanna", "send email to ...")
     email_phrase = any(
@@ -653,6 +839,15 @@ def execute_automation_task(
         return False, help_txt
 
     kind = intent["kind"]
+    if kind == "whatsapp":
+        info = parse_whatsapp_intent(intent["prompt"])
+        return open_whatsapp(
+            contact=info["contact"],
+            phone=info["phone"],
+            message=info["message"],
+            stream=stream,
+        )
+
     if kind == "email":
         parsed = parse_email_intent(intent["prompt"])
         _emit(stream, "Drafting email and opening browser compose window...")

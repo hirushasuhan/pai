@@ -1066,6 +1066,35 @@ def cmd_route(args: argparse.Namespace) -> int:
     return 0
 
 
+def _truncate_repetitive_loops(text: str) -> str:
+    """Defensively truncate degenerate repetition loops from local LLMs.
+
+    Detects repeating sentences or phrases (e.g. 'Mata ada wether eka hoyala denna. '
+    repeated 10+ times) and collapses them to 2 repetitions followed by a warning.
+    """
+    if not text or len(text) < 150:
+        return text
+
+    # Pattern 1: identical phrase/sentence of 10-300 chars repeating 3+ times consecutively
+    pattern = re.compile(r"((?:[^\n.!?]{10,300}[.!?]?\s*))\1{3,}", re.IGNORECASE)
+    def _repl(match: re.Match) -> str:
+        unit = match.group(1).strip()
+        return f"{unit} {unit}\n\n[PAI: repetitive output loop detected and truncated]"
+
+    collapsed = pattern.sub(_repl, text)
+    if len(collapsed) < len(text) * 0.7:
+        return collapsed
+
+    # Pattern 2: line-level repetition (identical line repeating 3+ times)
+    line_pattern = re.compile(r"(([^\n]{8,}\n))\1{3,}", re.IGNORECASE)
+    def _line_repl(match: re.Match) -> str:
+        line = match.group(1).strip()
+        return f"{line}\n{line}\n\n[PAI: repetitive output loop detected and truncated]\n"
+
+    collapsed = line_pattern.sub(_line_repl, collapsed)
+    return collapsed
+
+
 def call_model_generate(
     model_name: str,
     prompt: str,
@@ -1097,6 +1126,8 @@ def call_model_generate(
     }
     options: Dict[str, Any] = {
         "num_predict": int(os.environ.get("PAI_NUM_PREDICT", "4096")),
+        "repeat_penalty": float(os.environ.get("PAI_REPEAT_PENALTY", "1.18")),
+        "repeat_last_n": int(os.environ.get("PAI_REPEAT_LAST_N", "64")),
     }
     if temperature is not None:
         options["temperature"] = float(temperature)
@@ -1119,7 +1150,8 @@ def call_model_generate(
     def _execute_req() -> str:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_json = json.loads(resp.read().decode("utf-8"))
-            return str(resp_json.get("response", ""))
+            raw = str(resp_json.get("response", ""))
+            return _truncate_repetitive_loops(raw)
 
     try:
         return _execute_req()
