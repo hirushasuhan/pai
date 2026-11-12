@@ -32,6 +32,7 @@ AppName=Personal Agentic AI (PAI)
 AppVersion={#AppVersion}
 AppPublisher=PAI Project
 DefaultDirName={localappdata}\Programs\PAI
+UsePreviousAppDir=no
 DefaultGroupName=Personal Agentic AI
 DisableProgramGroupPage=yes
 DisableDirPage=no
