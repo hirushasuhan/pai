@@ -1,14 +1,14 @@
 ================================================================================
 PAI PIN CONSISTENCY CHECK TESTS (7 TESTS, MILESTONE D1/D2, FINDINGS GB, GD, GE) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-12T16:24:45.152203+00:00
+Timestamp (UTC): 2026-11-12T17:53:43.492029+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        75d72d2b458b22d812f83eedba793c12feeb6b0a
+Git HEAD:        43040e865739bc29f5a81aed6ca899e066fa15ba
 Working Tree:    clean
-Research Tree:   134acadd198dccacba4c6d109249fb00bed0943a
+Research Tree:   a5448640cf346b1e843e7c6d1afdb5f39cbe83d0
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -24,6 +24,6 @@ STDOUT:
 STDERR:
 .......
 ----------------------------------------------------------------------
-Ran 7 tests in 0.608s
+Ran 7 tests in 0.530s
 
 OK
