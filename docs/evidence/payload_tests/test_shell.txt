@@ -1,14 +1,14 @@
 ================================================================================
 PAI INTERACTIVE TERMINAL SHELL REPL TESTS (35 TESTS, ADR-014, FINDINGS ES, ET, EX, FK, FL, FM, FN, FO, FP) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-11T12:54:39.380600+00:00
+Timestamp (UTC): 2026-11-12T14:32:58.641612+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        b07c31e80c0900c986387ec4172e392c2b79cd18
+Git HEAD:        4a650ce52f5634292a95775bb3000ce1cc0ff576
 Working Tree:    clean
-Research Tree:   6d0a47768645a82d49cefea6870e6ff089b1f4cf
+Research Tree:   910aef033761ae96aed852beb65ae6c45acfd97d
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -21,21 +21,21 @@ Exit Code: 0
 
 STDOUT:
 
-[FIPA-ACL] [REQUEST] 👔 project_manager (llama3.2:3b) ──REQUEST──> 💻 senior_developer
+[FIPA-ACL] [REQUEST] [PM] project_manager (llama3.2:3b) --REQUEST--> [DEV] senior_developer
    Payload: Implement Three.js CCTV FLIR simulation
-┌──[ PAI Autonomous AI Engineering Team (FIPA-ACL Standard) ]──────────────────
-│ Role                 Title                                Assigned Model
-├──────────────────────────────────────────────────────────────────────────────
-│ 👔 project_manager    Product & Project Manager           llama3.2:3b [auto] (fallback: qwen3.5:4b)
-│ 💻 senior_developer   Principal Software Engineer & Core Architect qwen2.5-coder:7b [auto] (fallback: qwen2.5-coder:1.5b)
-│ 🎨 specialist_developer Frontend / UI, Textures & Audio Specialist qwen2.5-coder:1.5b [auto] (fallback: qwen3.5:4b)
-│ 🧪 qa_engineer        Lead QA Engineer & Code Auditor     qwen3.5:4b [auto] (fallback: llama3.2:1b)
-└──────────────────────────────────────────────────────────────────────────────
++--[ PAI Autonomous AI Engineering Team (FIPA-ACL Standard) ]------------------
+| Role                 Title                                Assigned Model
++------------------------------------------------------------------------------
+| [PM] project_manager    Product & Project Manager           llama3.2:3b [auto] (fallback: qwen3.5:4b)
+| [DEV] senior_developer   Principal Software Engineer & Core Architect qwen2.5-coder:7b [auto] (fallback: qwen2.5-coder:1.5b)
+| [UI] specialist_developer Frontend / UI, Textures & Audio Specialist qwen2.5-coder:1.5b [auto] (fallback: qwen3.5:4b)
+| [QA] qa_engineer        Lead QA Engineer & Code Auditor     qwen3.5:4b [auto] (fallback: llama3.2:1b)
++------------------------------------------------------------------------------
 
-[FIPA-ACL] [REQUEST] 👔 project_manager (llama3.2:3b) ──REQUEST──> 💻 senior_developer
+[FIPA-ACL] [REQUEST] [PM] project_manager (llama3.2:3b) --REQUEST--> [DEV] senior_developer
    Payload: Deconstruct objective into actionable milestones: 'Build CCTV Game...'
 
-📋 [WBS Execution Plan by PM]
+[PLAN] [WBS Execution Plan by PM]
 ### File: script.js
 ```javascript
 // CCTV Three.js Simulation
@@ -44,37 +44,37 @@ console.log('Playable Verified');
 ```
 
 
-[FIPA-ACL] [REQUEST] 💻 senior_developer (qwen2.5-coder:7b) ──REQUEST──> 🎨 specialist_developer
+[FIPA-ACL] [REQUEST] [DEV] senior_developer (qwen2.5-coder:7b) --REQUEST--> [UI] specialist_developer
    Payload: Generate procedural canvas asphalt textures, CCTV CRT scanlines, and Web Audio API synthesizer
 
-[FIPA-ACL] [INFORM] 🎨 specialist_developer (qwen2.5-coder:1.5b) ──INFORM──> 💻 senior_developer
+[FIPA-ACL] [INFORM] [UI] specialist_developer (qwen2.5-coder:1.5b) --INFORM--> [DEV] senior_developer
    Payload: Delivered procedural textures and Web Audio synthesizer components (139 chars)
 
-[FIPA-ACL] [REQUEST] 👔 project_manager (llama3.2:3b) ──REQUEST──> 💻 senior_developer
+[FIPA-ACL] [REQUEST] [PM] project_manager (llama3.2:3b) --REQUEST--> [DEV] senior_developer
    Payload: Synthesize complete, runnable source files (script.js, index.html, style.css) based on assets and plan
 
-[FIPA-ACL] [INFORM] 💻 senior_developer (qwen2.5-coder:7b) ──INFORM──> 🧪 qa_engineer
+[FIPA-ACL] [INFORM] [DEV] senior_developer (qwen2.5-coder:7b) --INFORM--> [QA] qa_engineer
    Payload: Deliver candidate code for verification against playability, syntax, and controls
 
-[FIPA-ACL] [REJECT] 🧪 qa_engineer (qwen3.5:4b) ──>  👔 project_manager
+[FIPA-ACL] [REJECT] [QA] qa_engineer (qwen3.5:4b) -->  [PM] project_manager
    Payload: Audit verdict: REVISE - Minor notes detected
-  ✅ [Synchronized script.js] (101 bytes)
+  [OK] [Synchronized script.js] (101 bytes)
 
-[FIPA-ACL] [INFORM] 👔 project_manager (llama3.2:3b) ──INFORM──> 👤 user
+[FIPA-ACL] [INFORM] [PM] project_manager (llama3.2:3b) --INFORM--> [USER] user
    Payload: Sprint release approved and deployed. Active project files ready for browser execution.
-┌──[ PAI Autonomous AI Engineering Team (FIPA-ACL Standard) ]──────────────────
-│ Role                 Title                                Assigned Model
-├──────────────────────────────────────────────────────────────────────────────
-│ 👔 project_manager    Product & Project Manager           llama3.2:3b [auto] (fallback: qwen3.5:4b)
-│ 💻 senior_developer   Principal Software Engineer & Core Architect qwen2.5-coder:7b [auto] (fallback: qwen2.5-coder:1.5b)
-│ 🎨 specialist_developer Frontend / UI, Textures & Audio Specialist qwen2.5-coder:1.5b [auto] (fallback: qwen3.5:4b)
-│ 🧪 qa_engineer        Lead QA Engineer & Code Auditor     qwen3.5:4b [auto] (fallback: llama3.2:1b)
-└──────────────────────────────────────────────────────────────────────────────
++--[ PAI Autonomous AI Engineering Team (FIPA-ACL Standard) ]------------------
+| Role                 Title                                Assigned Model
++------------------------------------------------------------------------------
+| [PM] project_manager    Product & Project Manager           llama3.2:3b [auto] (fallback: qwen3.5:4b)
+| [DEV] senior_developer   Principal Software Engineer & Core Architect qwen2.5-coder:7b [auto] (fallback: qwen2.5-coder:1.5b)
+| [UI] specialist_developer Frontend / UI, Textures & Audio Specialist qwen2.5-coder:1.5b [auto] (fallback: qwen3.5:4b)
+| [QA] qa_engineer        Lead QA Engineer & Code Auditor     qwen3.5:4b [auto] (fallback: llama3.2:1b)
++------------------------------------------------------------------------------
 
-[FIPA-ACL] [REQUEST] 👔 project_manager (llama3.2:3b) ──REQUEST──> 💻 senior_developer
+[FIPA-ACL] [REQUEST] [PM] project_manager (llama3.2:3b) --REQUEST--> [DEV] senior_developer
    Payload: Deconstruct objective into actionable milestones: 'fix bugs...'
 
-📋 [WBS Execution Plan by PM]
+[PLAN] [WBS Execution Plan by PM]
 ### File: script.js
 ```javascript
 // tiny stub with minimal code
@@ -83,30 +83,30 @@ console.log(a);
 ```
 
 
-[FIPA-ACL] [REQUEST] 💻 senior_developer (qwen2.5-coder:7b) ──REQUEST──> 🎨 specialist_developer
+[FIPA-ACL] [REQUEST] [DEV] senior_developer (qwen2.5-coder:7b) --REQUEST--> [UI] specialist_developer
    Payload: Generate procedural canvas asphalt textures, CCTV CRT scanlines, and Web Audio API synthesizer
 
-[FIPA-ACL] [INFORM] 🎨 specialist_developer (qwen2.5-coder:1.5b) ──INFORM──> 💻 senior_developer
+[FIPA-ACL] [INFORM] [UI] specialist_developer (qwen2.5-coder:1.5b) --INFORM--> [DEV] senior_developer
    Payload: Delivered procedural textures and Web Audio synthesizer components (97 chars)
 
-[FIPA-ACL] [REQUEST] 👔 project_manager (llama3.2:3b) ──REQUEST──> 💻 senior_developer
+[FIPA-ACL] [REQUEST] [PM] project_manager (llama3.2:3b) --REQUEST--> [DEV] senior_developer
    Payload: Synthesize complete, runnable source files (script.js, index.html, style.css) based on assets and plan
 
-[FIPA-ACL] [INFORM] 💻 senior_developer (qwen2.5-coder:7b) ──INFORM──> 🧪 qa_engineer
+[FIPA-ACL] [INFORM] [DEV] senior_developer (qwen2.5-coder:7b) --INFORM--> [QA] qa_engineer
    Payload: Deliver candidate code for verification against playability, syntax, and controls
 
-[FIPA-ACL] [REJECT] 🧪 qa_engineer (qwen3.5:4b) ──>  👔 project_manager
+[FIPA-ACL] [REJECT] [QA] qa_engineer (qwen3.5:4b) -->  [PM] project_manager
    Payload: Audit verdict: REVISE - Minor notes detected
-  ⚠️ [Preserved script.js (4,826 bytes) against tiny stub overwrite (59 bytes). Saved candidate to script.js.candidate]
+  [WARN] [Preserved script.js (4,826 bytes) against tiny stub overwrite (59 bytes). Saved candidate to script.js.candidate]
 
-[FIPA-ACL] [INFORM] 👔 project_manager (llama3.2:3b) ──INFORM──> 👤 user
+[FIPA-ACL] [INFORM] [PM] project_manager (llama3.2:3b) --INFORM--> [USER] user
    Payload: Sprint release approved and deployed. Active project files ready for browser execution.
 
 STDERR:
-.................................................Error: Chat prompt cannot be empty.
+...................................................Error: Chat prompt cannot be empty.
 Error: Chat prompt cannot be empty.
 ....
 ----------------------------------------------------------------------
-Ran 53 tests in 232.322s
+Ran 55 tests in 39.796s
 
 OK
