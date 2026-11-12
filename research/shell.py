@@ -37,7 +37,9 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
@@ -95,9 +97,11 @@ SHELL_HELP = (
     "  /team set <role>=<m> Configure model assigned to a team role (e.g. /team set pm=llama3.2:3b)\n"
     "  /agent <prompt>     Alias for /team multi-agent collaborative workflow\n"
     "  /edit <file> <prompt> Edit an existing file (HTML, Python, JS, etc.) with instructions\n"
-    "  /fix <file|dir>     Analyze code for bugs, logic errors, and auto-fix with backup\n"
+    "  /fix [file|dir] [note] Analyze active project or target for bugs, auto-fix with backup\n"
     "  /project [dir]      Scaffold project or show active project status\n"
     "  /open [path|url]    Open web page, HTML file, or active project in default browser\n"
+    "  /mail [to/topic]    Draft an email and open browser compose with To, Subject & Body\n"
+    "  /auto <instruction> Automate web search, web apps, folders, Notepad typing, or safe apps\n"
     "  /mcp [status|tools] Inspect connected Model Context Protocol servers and tools\n"
     "  /graphql <query>    Execute GraphQL operation or inspect schema via introspection\n"
     "  /skills             List all learned and active agent skills\n"
@@ -1159,6 +1163,281 @@ def resolve_target_file(target_str: str) -> Optional[Path]:
     return None
 
 
+_TRUNCATION_PLACEHOLDER_PATTERNS = (
+    "... rest of",
+    "... remaining",
+    "... existing code",
+    "... existing implementation",
+    "rest of the code remains",
+    "remaining code unchanged",
+    "truncated for brevity",
+    "// ...",
+    "/* ...",
+    "# ... rest",
+    "# ... existing",
+    "<!-- ... existing",
+)
+
+
+def _collect_sibling_project_context(
+    project_dir: Optional[Path],
+    exclude_names: Optional[set] = None,
+    max_chars: int = 3500,
+) -> str:
+    """Gather concise context snippets from key sibling project files."""
+    if not project_dir or not project_dir.is_dir():
+        return ""
+    excludes = {n.lower() for n in (exclude_names or set())}
+    priority_names = ("index.html", "style.css", "script.js", "main.py", "app.py", "package.json")
+    candidates: List[Path] = []
+    seen = set()
+    for name in priority_names:
+        p = project_dir / name
+        if p.is_file() and p.name.lower() not in excludes:
+            candidates.append(p)
+            seen.add(p.resolve())
+    exts = {".html", ".htm", ".css", ".js", ".py", ".ts", ".json"}
+    try:
+        for p in sorted(project_dir.iterdir()):
+            if p.is_file() and p.suffix.lower() in exts and p.name.lower() not in excludes:
+                rp = p.resolve()
+                if rp not in seen:
+                    candidates.append(p)
+                    seen.add(rp)
+    except Exception:
+        pass
+
+    chunks: List[str] = []
+    remaining = max_chars
+    lang_map = {"html": "html", "htm": "html", "css": "css", "js": "javascript", "py": "python", "ts": "typescript", "json": "json"}
+    for p in candidates:
+        if remaining <= 200:
+            break
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        if not text.strip():
+            continue
+        budget = min(1400, remaining)
+        snippet = text[:budget]
+        if len(text) > budget:
+            snippet += "\n..."
+        lang = lang_map.get(p.suffix.lstrip(".").lower(), "text")
+        chunks.append(f"\nProject sibling file '{p.name}':\n```{lang}\n{snippet}\n```\n")
+        remaining -= len(chunks[-1])
+    return "".join(chunks)
+
+
+def _has_truncation_stub_marker(original: str, candidate: str) -> bool:
+    """Detect lazy placeholder stubs or severe truncation relative to a substantial original file."""
+    cand_stripped = (candidate or "").strip()
+    if not cand_stripped:
+        return True
+    orig_stripped = (original or "").strip()
+    cand_lower = cand_stripped.lower()
+    orig_lower = orig_stripped.lower()
+    for pat in _TRUNCATION_PLACEHOLDER_PATTERNS:
+        if pat in cand_lower and pat not in orig_lower:
+            return True
+
+    orig_lines = orig_stripped.splitlines()
+    cand_lines = cand_stripped.splitlines()
+    if len(orig_lines) >= 30 and len(orig_stripped) >= 800:
+        if len(cand_stripped) < len(orig_stripped) * 0.25 and len(cand_lines) < 10:
+            return True
+    return False
+
+
+def _verify_generated_syntax(file_path: Path, content: str) -> Optional[str]:
+    """Validate basic syntax of generated code for .py, .json, .js, and .html files."""
+    suffix = file_path.suffix.lower()
+    if suffix == ".py":
+        import ast
+        try:
+            ast.parse(content)
+        except SyntaxError as exc:
+            return f"Python SyntaxError at line {exc.lineno}: {exc.msg}"
+        return None
+
+    if suffix == ".json":
+        try:
+            json.loads(content)
+        except Exception as exc:
+            return f"JSON parse error: {exc}"
+        return None
+
+    if suffix in (".js", ".mjs"):
+        node_bin = shutil.which("node")
+        if node_bin:
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".js",
+                    encoding="utf-8",
+                    delete=False,
+                ) as tf:
+                    tf.write(content)
+                    tmp_path = Path(tf.name)
+                proc = subprocess.run(
+                    [node_bin, "--check", str(tmp_path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=8,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    err = (proc.stderr or proc.stdout or "JavaScript syntax error").strip()
+                    return err.splitlines()[0][:240]
+                return None
+            except Exception:
+                pass
+            finally:
+                if tmp_path is not None:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        # Lightweight fallback delimiter balance check ignoring quotes & comments
+        pairs = {"(": ")", "{": "}", "[": "]"}
+        closing = {")": "(", "}": "{", "]": "["}
+        stack: List[str] = []
+        i = 0
+        n = len(content)
+        in_str: Optional[str] = None
+        in_line_comment = False
+        in_block_comment = False
+        escaped = False
+        while i < n:
+            ch = content[i]
+            nxt = content[i + 1] if i + 1 < n else ""
+            if in_line_comment:
+                if ch == "\n":
+                    in_line_comment = False
+                i += 1
+                continue
+            if in_block_comment:
+                if ch == "*" and nxt == "/":
+                    in_block_comment = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if in_str is not None:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == in_str:
+                    in_str = None
+                i += 1
+                continue
+            if ch == "/" and nxt == "/":
+                in_line_comment = True
+                i += 2
+                continue
+            if ch == "/" and nxt == "*":
+                in_block_comment = True
+                i += 2
+                continue
+            if ch in ("'", '"', "`"):
+                in_str = ch
+                i += 1
+                continue
+            if ch in pairs:
+                stack.append(ch)
+            elif ch in closing:
+                if not stack or stack[-1] != closing[ch]:
+                    return f"Unbalanced delimiter '{ch}' in JavaScript"
+                stack.pop()
+            i += 1
+        if stack:
+            return f"Unclosed delimiter '{stack[-1]}' in JavaScript"
+        return None
+
+    if suffix in (".html", ".htm"):
+        lower_c = content.lower()
+        if lower_c.count("<script") > lower_c.count("</script>"):
+            return "Unclosed <script> tag in HTML"
+        return None
+
+    return None
+
+
+def _is_ollama_offline_text(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "not running on 127.0.0.1" in lower
+        or "local ai service (ollama) is not running" in lower
+        or "connection refused" in lower
+        or "failed to connect to ollama" in lower
+    )
+
+
+def _preflight_ollama_interactive(stream: Any) -> Tuple[bool, str]:
+    """Ensure local Ollama service is reachable before launching background spinners."""
+    if not (getattr(stream, "isatty", lambda: False)() and sys.stdin.isatty()):
+        return True, ""
+    try:
+        try:
+            from research.service_manager import OllamaServiceManager
+        except ModuleNotFoundError:
+            from service_manager import OllamaServiceManager
+        sm = OllamaServiceManager.get_instance()
+        if not sm.is_running(timeout=0.5):
+            return sm.ensure_service_running()
+    except Exception:
+        pass
+    return True, ""
+
+
+def _repair_code_syntax(
+    fpath: Path,
+    broken_code: str,
+    syntax_err: str,
+    exec_fn: Callable[[List[str]], int],
+    stream: Any,
+) -> Optional[str]:
+    """Attempt one targeted self-repair pass when generated code fails syntax validation."""
+    suffix = fpath.suffix.lstrip(".").lower() or "text"
+    repair_prompt = (
+        f"The code generated for '{fpath.name}' has a syntax error:\n{syntax_err}\n\n"
+        f"Fix ONLY the syntax error while preserving all logic and return ONLY the complete valid file "
+        f"inside a single ```{suffix} ... ``` code block:\n"
+        f"```{suffix}\n{broken_code}\n```"
+    )
+    cap = CaptureStream(stream)
+    cap_err = io.StringIO()
+    cmd = ["chat"]
+    if _active_model_override:
+        cmd += ["--model", _active_model_override]
+    cmd += ["--", repair_prompt]
+    prev_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
+    os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
+    try:
+        with contextlib.redirect_stdout(cap), contextlib.redirect_stderr(cap_err):
+            rc = exec_fn(cmd)
+        if rc != 0:
+            return None
+        out = cap.getvalue()
+        m = re.search(r"```(?:[a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:\r?\n```|\Z)", out)
+        candidate = m.group(1).strip() if m else out.strip()
+        if candidate and _verify_generated_syntax(fpath, candidate) is None:
+            return candidate
+    except Exception:
+        return None
+    finally:
+        if prev_failover is None:
+            os.environ.pop("PAI_DISABLE_CHAT_FAILOVER", None)
+        else:
+            os.environ["PAI_DISABLE_CHAT_FAILOVER"] = prev_failover
+    return None
+
+
 def edit_target_file(
     target_str: str,
     instructions: str,
@@ -1205,13 +1484,7 @@ def edit_target_file(
     lang = lang_map.get(suffix, suffix or "text")
 
     active_parent = resolved_path.parent
-    other_context = ""
-    if (active_parent / "index.html").is_file() and resolved_path.name != "index.html":
-        try:
-            h_snip = (active_parent / "index.html").read_text(encoding="utf-8", errors="replace")[:1000]
-            other_context += f"\nProject index.html overview:\n```html\n{h_snip}...\n```\n"
-        except Exception:
-            pass
+    other_context = _collect_sibling_project_context(active_parent, exclude_names={resolved_path.name})
 
     edit_prompt = (
         f"You are an expert programmer and game developer modifying the project in '{active_parent.name}'.\n"
@@ -1316,7 +1589,9 @@ def edit_target_file(
     extracted_blocks = list(block_pattern.finditer(model_out))
 
     updated_files = []
+    candidate_warnings = []
     primary_updated_content = None
+    exec_for_repair = executor if executor is not None else execute_subcommand
 
     if extracted_blocks:
         for m in extracted_blocks:
@@ -1338,9 +1613,30 @@ def edit_target_file(
             if len(body) > 15:
                 dest = active_parent / fname
                 try:
+                    existing_text = dest.read_text(encoding="utf-8", errors="replace") if dest.is_file() else ""
+                    if existing_text and _has_truncation_stub_marker(existing_text, body):
+                        cand_path = dest.with_name(dest.name + ".candidate")
+                        cand_path.write_text(body, encoding="utf-8")
+                        candidate_warnings.append(
+                            f"[Skipped overwriting {dest.name}: model returned an incomplete stub/snippet; saved draft to {cand_path}]"
+                        )
+                        continue
+                    syntax_err = _verify_generated_syntax(dest, body)
+                    if syntax_err is not None:
+                        repaired = _repair_code_syntax(dest, body, syntax_err, exec_for_repair, stream)
+                        if repaired is not None and not (existing_text and _has_truncation_stub_marker(existing_text, repaired)):
+                            body = repaired
+                        else:
+                            cand_path = dest.with_name(dest.name + ".candidate")
+                            cand_path.write_text(body, encoding="utf-8")
+                            candidate_warnings.append(
+                                f"[Skipped overwriting {dest.name} due to {syntax_err}; saved candidate to {cand_path}]"
+                            )
+                            continue
+
                     if dest.is_file():
                         bak = dest.with_suffix(dest.suffix + ".bak")
-                        bak.write_text(dest.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+                        bak.write_text(existing_text, encoding="utf-8")
                     dest.write_text(body, encoding="utf-8")
                     updated_files.append(dest)
                     if dest == resolved_path or primary_updated_content is None:
@@ -1348,8 +1644,39 @@ def edit_target_file(
                 except Exception:
                     pass
 
+    if not updated_files and candidate_warnings:
+        return False, "\n".join(candidate_warnings), None
+
     if not updated_files:
         updated_content = model_out.strip()
+        if _has_truncation_stub_marker(original_content, updated_content):
+            cand_path = resolved_path.with_name(resolved_path.name + ".candidate")
+            try:
+                cand_path.write_text(updated_content, encoding="utf-8")
+            except Exception:
+                pass
+            return (
+                False,
+                f"Model output looked incomplete/truncated; original file preserved and draft saved to {cand_path}.",
+                None,
+            )
+        syntax_err = _verify_generated_syntax(resolved_path, updated_content)
+        if syntax_err is not None:
+            repaired = _repair_code_syntax(resolved_path, updated_content, syntax_err, exec_for_repair, stream)
+            if repaired is not None and not _has_truncation_stub_marker(original_content, repaired):
+                updated_content = repaired
+            else:
+                cand_path = resolved_path.with_name(resolved_path.name + ".candidate")
+                try:
+                    cand_path.write_text(updated_content, encoding="utf-8")
+                except Exception:
+                    pass
+                return (
+                    False,
+                    f"Generated edit failed validation ({syntax_err}); original file preserved and draft saved to {cand_path}.",
+                    None,
+                )
+
         bak_path = resolved_path.with_suffix(resolved_path.suffix + ".bak")
         try:
             bak_path.write_text(original_content, encoding="utf-8")
@@ -1367,6 +1694,7 @@ def edit_target_file(
     msg_lines = []
     for uf in updated_files:
         msg_lines.append(f"[Successfully updated {uf}]")
+    msg_lines.extend(candidate_warnings)
     bak_note = f"[Backup saved to {resolved_path.with_suffix(resolved_path.suffix + '.bak')}]"
     msg_lines.append(bak_note)
 
@@ -2231,12 +2559,16 @@ def analyze_and_fix_bugs(
 ) -> Tuple[bool, str, List[str]]:
     """
     Analyzes a target file or project folder for bugs, errors, and logic flaws,
-    creates .bak backup(s), and applies fixes directly to the file(s).
+    creates .bak backup(s), validates syntax, and applies fixes directly to the file(s).
     Returns (success, report, fixed_files).
     """
-    clean_target = target_str.strip().strip('"').strip("'")
-    if not clean_target:
-        clean_target = "."
+    clean_target = (target_str or "").strip().strip('"').strip("'")
+    if not clean_target or clean_target == ".":
+        active_p = get_active_project_dir()
+        if active_p and active_p.is_dir():
+            clean_target = str(active_p)
+        else:
+            clean_target = "."
 
     resolved = resolve_target_file(clean_target)
     is_file = resolved is not None and resolved.is_file()
@@ -2255,25 +2587,48 @@ def analyze_and_fix_bugs(
 
     if is_file:
         files_to_check = [resolved]
+        project_dir = resolved.parent
     else:
-        exts = (".html", ".htm", ".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".rs", ".json")
+        project_dir = resolved
+        exts = (".js", ".py", ".html", ".htm", ".css", ".jsx", ".ts", ".tsx", ".rs", ".json")
+        priority_order = ("script.js", "main.py", "app.py", "index.html", "style.css", "package.json")
         files_to_check = []
-        for p in resolved.rglob("*"):
+        seen_paths = set()
+        for pname in priority_order:
+            pp = resolved / pname
+            if pp.is_file():
+                files_to_check.append(pp)
+                seen_paths.add(pp.resolve())
+        for p in sorted(resolved.rglob("*")):
             if p.is_file() and p.suffix.lower() in exts:
                 parts = p.parts
                 if any(j in parts for j in (".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build")):
                     continue
-                files_to_check.append(p)
+                if p.name.endswith(".bak") or p.name.endswith(".candidate"):
+                    continue
+                rp = p.resolve()
+                if rp not in seen_paths:
+                    files_to_check.append(p)
+                    seen_paths.add(rp)
                 if len(files_to_check) >= 5:
                     break
+        # Note: preserve existing project layout; prioritize main entry files up to 5 files
+        files_to_check = files_to_check[:5]
 
     if not files_to_check:
         return False, f"No code files found in '{resolved}' to analyze.", []
 
     if executor is None:
+        ok_svc, msg_svc = _preflight_ollama_interactive(stream)
+        if not ok_svc:
+            return False, f"Error: {msg_svc}", []
         exec_fn = execute_subcommand
     else:
         exec_fn = executor
+
+    block_pattern = re.compile(
+        r"(?:(?:###|####)\s*(?:\d+\.\s*)?(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)[^\n]*\r?\n)?```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:\r?\n```|\Z)"
+    )
 
     for fpath in files_to_check:
         try:
@@ -2292,31 +2647,37 @@ def analyze_and_fix_bugs(
         suffix = fpath.suffix.lstrip(".").lower()
         lang_map = {
             "html": "html", "htm": "html", "py": "python",
-            "js": "javascript", "ts": "typescript", "rs": "rust", "css": "css",
+            "js": "javascript", "ts": "typescript", "rs": "rust", "css": "css", "json": "json",
         }
         lang = lang_map.get(suffix, suffix or "text")
+        sibling_ctx = _collect_sibling_project_context(project_dir, exclude_names={fpath.name}, max_chars=2600)
 
         fix_prompt = (
             f"You are an expert software debugger and code quality auditor.\n"
-            f"Analyze the following file '{fpath.name}' for bugs, syntax errors, and runtime issues:\n"
-            f"```{lang}\n{orig_content}\n```\n\n"
+            f"Analyze the following file '{fpath.name}' for bugs, syntax errors, and runtime/gameplay issues:\n"
+            f"```{lang}\n{orig_content}\n```\n"
+            f"{sibling_ctx}\n"
             f"User notes / issues:\n{instructions or 'Identify and fix all bugs, syntax errors, broken imports, and logic flaws.'}\n\n"
             f"Tasks:\n"
-            f"1. State what bugs or issues were found and how they were fixed.\n"
-            f"2. Output the complete, fixed code inside a single ```{lang} ... ``` code block.\n"
-            f"Provide the complete ready-to-run file without any omissions."
+            f"1. State clearly what bugs or issues were found and how they were fixed.\n"
+            f"2. Output the COMPLETE fixed file(s) inside fenced code block(s) (```\n{lang} ... ```) with NO placeholders or '... rest of code' omissions.\n"
+            f"If a fix also requires updating a sibling file in the project, label each block with '### File: <filename>' above its code block."
         )
 
         spinner = ThinkingSpinner(stream)
         capture = CaptureStream(stream, on_first_write=spinner.stop)
+        stderr_buf = io.StringIO()
+        prev_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
+        os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
+        rc = 0
         try:
             spinner.start()
             chat_cmd = ["chat"]
             if _active_model_override:
                 chat_cmd += ["--model", _active_model_override]
             chat_cmd += ["--", fix_prompt]
-            with contextlib.redirect_stdout(capture):
-                exec_fn(chat_cmd)
+            with contextlib.redirect_stdout(capture), contextlib.redirect_stderr(stderr_buf):
+                rc = exec_fn(chat_cmd)
         except KeyboardInterrupt:
             return False, "Operation cancelled by user.", fixed_files
         except Exception as e:
@@ -2324,42 +2685,107 @@ def analyze_and_fix_bugs(
             continue
         finally:
             spinner.stop()
+            if prev_failover is None:
+                os.environ.pop("PAI_DISABLE_CHAT_FAILOVER", None)
+            else:
+                os.environ["PAI_DISABLE_CHAT_FAILOVER"] = prev_failover
 
         model_out = capture.getvalue()
+        err_out = stderr_buf.getvalue()
+        if rc != 0 or _is_ollama_offline_text(err_out) or _is_ollama_offline_text(model_out):
+            err_msg = (err_out or model_out or f"Model command failed (exit code {rc})").strip()
+            if _is_ollama_offline_text(err_msg):
+                return False, f"Error: {err_msg}", fixed_files
+            if not model_out.strip():
+                reports.append(f"Error analyzing '{fpath.name}': {err_msg}")
+                continue
+
         if not model_out or not model_out.strip():
             continue
 
-        import re
-        code_blocks = re.findall(r"```(?:\w+)?\r?\n(.*?)\r?\n```", model_out, re.DOTALL)
-        if code_blocks:
-            fixed_code = max(code_blocks, key=len)
-            explanation = model_out.split("```")[0].strip()
+        extracted = list(block_pattern.finditer(model_out))
+        explanation = model_out.split("```")[0].strip() if "```" in model_out else "Applied bug fixes to file."
+        expl_text = "\n".join(explanation.splitlines()[:6]) if explanation else "Identified and resolved code issues."
+
+        candidate_writes: List[Tuple[Path, str, str]] = []
+        if extracted:
+            for m in extracted:
+                blk_fname = m.group(1)
+                blk_body = m.group(3).strip()
+                if len(blk_body) <= 10:
+                    continue
+                if blk_fname:
+                    dest_p = project_dir / Path(blk_fname).name
+                    if not dest_p.is_file() and fpath.name.lower() == Path(blk_fname).name.lower():
+                        dest_p = fpath
+                else:
+                    dest_p = fpath
+                existing_t = dest_p.read_text(encoding="utf-8", errors="replace") if dest_p.is_file() else orig_content
+                candidate_writes.append((dest_p, blk_body, existing_t))
         else:
-            fixed_code = model_out.strip()
-            explanation = "Applied bug fixes to file."
+            candidate_writes.append((fpath, model_out.strip(), orig_content))
 
-        bak_path = fpath.with_suffix(fpath.suffix + ".bak")
-        try:
-            bak_path.write_text(orig_content, encoding="utf-8")
-        except Exception:
-            pass
+        # Keep only the longest block per destination file so explanatory snippets don't clobber main fix
+        best_by_dest: Dict[Path, Tuple[str, str]] = {}
+        for dest_p, blk_body, existing_t in candidate_writes:
+            prev_pair = best_by_dest.get(dest_p)
+            if prev_pair is None or len(blk_body) > len(prev_pair[0]):
+                best_by_dest[dest_p] = (blk_body, existing_t)
 
-        try:
-            fpath.write_text(fixed_code, encoding="utf-8")
-            fixed_files.append(str(fpath))
-            summary_header = f"=== Bug Fix Report: {fpath.name} ==="
-            expl_text = "\n".join(explanation.splitlines()[:6]) if explanation else "Identified and resolved code issues."
-            reports.append(
-                f"{summary_header}\n"
-                f"{expl_text}\n"
-                f"[Updated: {fpath}]\n"
-                f"[Backup: {bak_path}]"
-            )
-        except Exception as e:
-            reports.append(f"Error writing fixed file '{fpath}': {e}")
+        for dest_p, (fixed_code, existing_t) in best_by_dest.items():
+            if existing_t and _has_truncation_stub_marker(existing_t, fixed_code):
+                cand_path = dest_p.with_name(dest_p.name + ".candidate")
+                try:
+                    cand_path.write_text(fixed_code, encoding="utf-8")
+                except Exception:
+                    pass
+                reports.append(
+                    f"=== Bug Fix Skipped (Incomplete Output): {dest_p.name} ===\n"
+                    f"Model output looked truncated/stubbed; original preserved.\n"
+                    f"[Draft saved: {cand_path}]"
+                )
+                continue
+
+            syntax_err = _verify_generated_syntax(dest_p, fixed_code)
+            if syntax_err is not None:
+                repaired = _repair_code_syntax(dest_p, fixed_code, syntax_err, exec_fn, stream)
+                if repaired is not None and not (existing_t and _has_truncation_stub_marker(existing_t, repaired)):
+                    fixed_code = repaired
+                else:
+                    cand_path = dest_p.with_name(dest_p.name + ".candidate")
+                    try:
+                        cand_path.write_text(fixed_code, encoding="utf-8")
+                    except Exception:
+                        pass
+                    reports.append(
+                        f"=== Bug Fix Rejected (Syntax Validation Failed): {dest_p.name} ===\n"
+                        f"{syntax_err}\n[Draft saved: {cand_path}]"
+                    )
+                    continue
+
+            bak_path = dest_p.with_suffix(dest_p.suffix + ".bak")
+            try:
+                if existing_t:
+                    bak_path.write_text(existing_t, encoding="utf-8")
+            except Exception:
+                pass
+
+            try:
+                dest_p.write_text(fixed_code, encoding="utf-8")
+                if str(dest_p) not in fixed_files:
+                    fixed_files.append(str(dest_p))
+                reports.append(
+                    f"=== Bug Fix Report: {dest_p.name} ===\n"
+                    f"{expl_text}\n"
+                    f"[Updated: {dest_p}]\n"
+                    f"[Backup: {bak_path}]"
+                )
+            except Exception as e:
+                reports.append(f"Error writing fixed file '{dest_p}': {e}")
 
     if not fixed_files:
-        return False, "No fixes applied. (Code was clean or model returned empty response)", []
+        detail = "\n\n".join(reports) if reports else "No fixes applied. (Code was clean or model returned empty response)"
+        return False, detail, []
 
     return True, "\n\n".join(reports), fixed_files
 
@@ -2881,15 +3307,41 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
 
         if raw_cmd in ("fix", "bugfix"):
             args = tokens[1:]
-            target_file_or_dir = args[0] if args else "."
+            active_p = get_active_project_dir()
             rest_idx = stripped.find(tokens[0]) + len(tokens[0])
             rest = stripped[rest_idx:].strip()
-            if len(args) > 1:
-                idx2 = rest.find(args[0]) + len(args[0])
-                fix_inst = rest[idx2:].strip()
+            if not args:
+                target_file_or_dir = str(active_p) if (active_p and active_p.is_dir()) else "."
+                return "fix", [target_file_or_dir, ""]
+            first = args[0]
+            looks_like_path = (
+                first == "."
+                or "." in first
+                or "\\" in first
+                or "/" in first
+                or resolve_target_file(first) is not None
+                or Path(first).expanduser().exists()
+            )
+            if looks_like_path:
+                target_file_or_dir = first
+                if len(args) > 1:
+                    idx2 = rest.find(first) + len(first)
+                    fix_inst = rest[idx2:].strip()
+                else:
+                    fix_inst = ""
+            elif active_p and active_p.is_dir():
+                target_file_or_dir = str(active_p)
+                fix_inst = rest
             else:
-                fix_inst = ""
+                target_file_or_dir = first
+                idx2 = rest.find(first) + len(first)
+                fix_inst = rest[idx2:].strip() if len(args) > 1 else ""
             return "fix", [target_file_or_dir, fix_inst]
+
+        if raw_cmd in ("auto", "automate", "mail", "email"):
+            sub_kind = "mail" if raw_cmd in ("mail", "email") else "auto"
+            auto_prompt = stripped[len(tokens[0]):].strip()
+            return "automate", [sub_kind, auto_prompt]
 
         if raw_cmd in ("open", "preview", "browse"):
             args = tokens[1:]
@@ -3050,16 +3502,29 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         return "model_list", []
 
     # Check for natural language bug analysis and fix intent
-    if any(k in lower_unslashed for k in ("bug", "bugs", "error", "errors", "weradi")) and any(k in lower_unslashed for k in ("hadanna", "fix", "analyze", "check", "balala", "repair", "balanna")):
-        target = "."
+    is_info_question = lower_unslashed.startswith(("what is ", "explain ", "how does ", "why does "))
+    if (
+        not is_info_question
+        and any(k in lower_unslashed for k in (
+            "bug", "bugs", "error", "errors", "weradi", "waradi", "awul",
+            "not working", "wada karanne na", "wada na", "hariyata wada",
+        ))
+        and any(k in lower_unslashed for k in (
+            "hadanna", "fix", "analyze", "check", "balala", "repair", "balanna", "debug", "resolve", "karanna"
+        ))
+    ):
+        active_p = get_active_project_dir()
+        target = str(active_p) if (active_p and active_p.is_dir()) else "."
         for tok in stripped.split():
             clean_tok = tok.strip(".,;:?!'\"")
+            if not clean_tok:
+                continue
             res = resolve_target_file(clean_tok)
             if res is not None:
                 target = str(res)
                 break
             cand_p = Path(clean_tok).expanduser()
-            if cand_p.is_dir() or cand_p.is_file():
+            if (clean_tok in (".", "..") or "\\" in clean_tok or "/" in clean_tok) and (cand_p.is_dir() or cand_p.is_file()):
                 target = str(cand_p.resolve())
                 break
         return "fix", [target, stripped]
@@ -3162,6 +3627,17 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
     if lower_unslashed.startswith("agent ") or lower_unslashed.startswith("team ") or any(k in lower_unslashed for k in ("agent team", "multi agent", "agents use karala", "agents la", "developer team", "dev team", "team eka", "team ekata", "team ekath", "team ekath ekka")):
         return "multi_agent", [stripped]
 
+    # Check for natural-language computer/browser automation intent (email compose, web search, apps, clipboard)
+    try:
+        try:
+            from research.automation import parse_automation_intent as _parse_auto_intent
+        except ModuleNotFoundError:
+            from automation import parse_automation_intent as _parse_auto_intent
+        if _parse_auto_intent(stripped) is not None:
+            return "automate", ["auto", stripped]
+    except Exception:
+        pass
+
     # Check for natural language editing intent referencing an existing file or active project
     is_creation_intent = lower_unslashed.startswith(("create ", "make a ", "build a ", "i want to create", "create a ", "make an "))
     edit_keywords = (
@@ -3172,13 +3648,14 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         "hellfire", "cctv", "camera", "tank", "tanks", "drone", "game",
         "sound", "audio", "hud", "ui", "physics", "shoot", "laser", "enemy",
         "enemies", "weapon", "weapons", "graphics", "view", "controls",
-        "playable", "playble", "not playable", "not playble", "fix", "fix it"
+        "playable", "playble", "not playable", "not playble", "fix", "fix it",
+        "feature", "aluth", "level", "health", "ammo", "score", "karanna"
     )
     is_edit_verb = any(k in lower_unslashed for k in (
         "edit ", "modify ", "update ", "change ", "wenas", "hadanna",
         "wedi karanna", "adu karanna", "ekathu karanna", "danna", "add ",
         "make it", "put ", "texture", "missile", "bullet", "cctv", "shoot", "fire",
-        "playable", "playble", "fix", "fix it"
+        "playable", "playble", "fix", "fix it", "aluth", "feature", "karanna"
     ))
     if not is_creation_intent and any(k in lower_unslashed for k in edit_keywords):
         try:
@@ -3195,7 +3672,8 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
         if active_p and active_p.is_dir() and (is_edit_verb or any(k in lower_unslashed for k in (
             "speed", "sound", "audio", "faster", "enemy", "enemies", "laser",
             "score", "game", "drone", "physics", "missile", "bullet", "cctv",
-            "camera", "tank", "texture", "textures", "weapon", "weapons", "view"
+            "camera", "tank", "texture", "textures", "weapon", "weapons", "view",
+            "level", "health", "ammo", "feature", "hud", "ui"
         ))):
             target_f = None
             if any(k in lower_unslashed for k in ("style", "css", "color", "background", "theme")) and not any(k in lower_unslashed for k in ("speed", "physics", "shoot", "laser", "enemy", "drone", "missile", "cctv")):
@@ -3441,6 +3919,30 @@ def run_interactive_shell(
                 ok, msg = open_in_browser(target, stream=stream)
                 color = GREEN if ok else RED
                 output_fn(colorize(msg, color, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "automate":
+                sub_action = argv[0] if argv else "auto"
+                auto_prompt = argv[1] if len(argv) > 1 else ""
+                try:
+                    try:
+                        from research.automation import execute_automation_task
+                    except ModuleNotFoundError:
+                        from automation import execute_automation_task
+                    ok, msg = execute_automation_task(
+                        auto_prompt,
+                        sub_action=sub_action,
+                        stream=stream,
+                        executor=execute_subcommand,
+                    )
+                except Exception as exc:
+                    ok, msg = False, f"Automation error: {exc}"
+                if not msg:
+                    msg = "Automation finished."
+                output_fn(colorize("Automation complete." if ok else msg, GREEN if ok else RED, color_enabled))
                 add_to_session_history(line, msg)
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
@@ -3695,7 +4197,7 @@ def run_interactive_shell(
                     if "```" in cmd_out:
                         lower_line = line.lower()
                         active_p = get_active_project_dir()
-                        if active_p and active_p.is_dir() and any(k in lower_line for k in ("update", "save", "add", "change", "wenas", "hadanna", "project", "folder", "script", "code", "drone", "game")):
+                        if active_p and active_p.is_dir() and any(k in lower_line for k in ("update", "save", "add", "change", "wenas", "hadanna", "project", "folder", "script", "code", "drone", "game", "fix", "bug", "improve", "make", "karanna")):
                             block_pattern = re.compile(
                                 r"(?:(?:###|####)\s*(?:\d+\.\s*)?(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)[^\n]*\r?\n)?```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:\r?\n```|\Z)"
                             )
@@ -3714,10 +4216,23 @@ def run_interactive_shell(
                                         target_fname = "main.py"
 
                                 if target_fname and len(block_code) > 20:
-                                    target_file = active_p / target_fname
+                                    target_file = active_p / Path(target_fname).name
                                     try:
-                                        bak = target_file.with_suffix(target_file.suffix + ".bak")
-                                        bak.write_text(target_file.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+                                        existing_t = target_file.read_text(encoding="utf-8", errors="replace") if target_file.is_file() else ""
+                                        if existing_t and _has_truncation_stub_marker(existing_t, block_code):
+                                            cand = target_file.with_name(target_file.name + ".candidate")
+                                            cand.write_text(block_code, encoding="utf-8")
+                                            output_fn(colorize(f"[Skipped incomplete auto-sync for {target_file.name}; saved draft to {cand}]", YELLOW, color_enabled))
+                                            continue
+                                        syntax_err = _verify_generated_syntax(target_file, block_code)
+                                        if syntax_err is not None:
+                                            cand = target_file.with_name(target_file.name + ".candidate")
+                                            cand.write_text(block_code, encoding="utf-8")
+                                            output_fn(colorize(f"[Skipped auto-sync due to {syntax_err}; saved candidate to {cand}]", YELLOW, color_enabled))
+                                            continue
+                                        if existing_t:
+                                            bak = target_file.with_suffix(target_file.suffix + ".bak")
+                                            bak.write_text(existing_t, encoding="utf-8")
                                         target_file.write_text(block_code, encoding="utf-8")
                                         output_fn(colorize(f"[Auto-synced updated code to {target_file}]", GREEN, color_enabled))
                                     except Exception:

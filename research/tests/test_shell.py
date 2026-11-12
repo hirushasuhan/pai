@@ -2830,5 +2830,181 @@ console.log('Playable Verified');
             self.assertNotIn("Auto-switching to fallback model", err_buf2.getvalue())
 
 
+    def test_project_edit_fix_accuracy_and_safeguards(self) -> None:
+        """Asserts active-project /fix resolution, sibling context, stub guard, and syntax self-repair."""
+        from shell import (
+            parse_shell_line,
+            set_active_project_dir,
+            edit_target_file,
+            analyze_and_fix_bugs,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "demo_game"
+            proj.mkdir()
+            (proj / "index.html").write_text("<html><body><canvas id='c'></canvas><script src='script.js'></script></body></html>", encoding="utf-8")
+            (proj / "style.css").write_text("body { background: #111; color: #fff; }", encoding="utf-8")
+            # Substantial Python file (> 30 lines and > 800 chars) to test truncation guard + syntax self-repair
+            orig_py_lines = ["def step(x: int) -> int:", "    total = 0"] + [f"    total += {i}" for i in range(32)] + ["    return total + x"]
+            orig_py = "\n".join(orig_py_lines) + "\n"
+            py_file = proj / "main.py"
+            py_file.write_text(orig_py, encoding="utf-8")
+
+            set_active_project_dir(proj)
+            try:
+                # 1. /fix with non-path instruction routes to active project directory
+                act_f, argv_f = parse_shell_line("/fix bullets miss target")
+                self.assertEqual(act_f, "fix")
+                self.assertEqual(Path(argv_f[0]).resolve(), proj.resolve())
+                self.assertIn("bullets miss target", argv_f[1])
+
+                # 2. Existing explicit non-existent path contract in /fix remains intact
+                act_p, argv_p = parse_shell_line("/fix Downloads\\game.html fix score")
+                self.assertEqual(act_p, "fix")
+                self.assertEqual(argv_p[0], "Downloads\\game.html")
+
+                # 3. Natural Singlish bug fix routes to active project
+                act_nl, argv_nl = parse_shell_line("mee project eke bug ekak thiyenawa wada karanne na fix karanna")
+                self.assertEqual(act_nl, "fix")
+                self.assertEqual(Path(argv_nl[0]).resolve(), proj.resolve())
+
+                # 4. Natural edit trigger without naming a file routes to active project
+                act_ed, argv_ed = parse_shell_line("aluth level feature ekak ekathu karanna")
+                self.assertEqual(act_ed, "edit")
+                self.assertEqual(Path(argv_ed[0]).parent.resolve(), proj.resolve())
+
+                # 5. Stub/placeholder output is NOT allowed to clobber substantial file
+                def stub_executor(cmd):
+                    print("```python\ndef step(x):\n    # ... rest of code remains unchanged ...\n    return x\n```")
+                    return 0
+
+                out_s = io.StringIO()
+                ok_stub, msg_stub, _ = edit_target_file(str(py_file), "add turbo mode", stream=out_s, executor=stub_executor)
+                self.assertFalse(ok_stub)
+                self.assertEqual(py_file.read_text(encoding="utf-8"), orig_py)
+                self.assertTrue((proj / "main.py.candidate").is_file())
+
+                # 6. SyntaxError triggers self-repair retry and passes
+                seen_prompts = []
+
+                def repair_executor(cmd):
+                    seen_prompts.append(cmd[-1])
+                    if len(seen_prompts) == 1:
+                        print("Fixing bug...\n```python\ndef step(x: int) -> int:\n    return (x + 1\n```")
+                    else:
+                        fixed_lines = ["def step(x: int) -> int:", "    total = 1"] + [f"    total += {i}" for i in range(32)] + ["    return total + x"]
+                        print("```python\n" + "\n".join(fixed_lines) + "\n```")
+                    return 0
+
+                ok_fix, msg_fix, fixed_list = analyze_and_fix_bugs(str(py_file), "fix off-by-one", stream=io.StringIO(), executor=repair_executor)
+                self.assertTrue(ok_fix, msg_fix)
+                self.assertIn(str(py_file), fixed_list)
+                self.assertEqual(len(seen_prompts), 2)
+                self.assertIn("index.html", seen_prompts[0])
+                self.assertIn("total = 1", py_file.read_text(encoding="utf-8"))
+
+                # 7. Offline executor aborts cleanly without clobbering files
+                def offline_executor(cmd):
+                    print("Error: Local AI service (Ollama) is not running on 127.0.0.1:11434.", file=sys.stderr)
+                    return 2
+
+                ok_off, msg_off, _ = analyze_and_fix_bugs(str(proj), "fix", stream=io.StringIO(), executor=offline_executor)
+                self.assertFalse(ok_off)
+                self.assertIn("not running", msg_off.lower())
+            finally:
+                set_active_project_dir(None)
+
+    def test_computer_and_email_automation(self) -> None:
+        """Asserts natural Singlish/English email compose, browser search, and allowlisted app automation."""
+        import automation as auto_mod
+        from shell import parse_shell_line
+
+        # 1. Natural & slash routing checks
+        act_m1, argv_m1 = parse_shell_line("john@example.com ta meeting postponed kiyala mail ekak danna")
+        self.assertEqual(act_m1, "automate")
+        self.assertEqual(argv_m1[0], "auto")
+
+        act_m2, argv_m2 = parse_shell_line("/mail sarah@acme.com Project update ready")
+        self.assertEqual(act_m2, "automate")
+        self.assertEqual(argv_m2[0], "mail")
+
+        act_yt, _ = parse_shell_line("youtube eke python asyncio search karanna")
+        self.assertEqual(act_yt, "automate")
+
+        act_np, _ = parse_shell_line("notepad open karala Hello Hirusha type karanna")
+        self.assertEqual(act_np, "automate")
+
+        # Non-regression: informational question & HTML preview stay routed correctly
+        act_q, _ = parse_shell_line("what is an email protocol")
+        self.assertEqual(act_q, "chat")
+        act_html, _ = parse_shell_line("game.html browser eke open karanna")
+        self.assertEqual(act_html, "browser_open")
+
+        # 2. Compose URLs
+        gmail_url = auto_mod.build_compose_url(to="john@example.com", subject="Meeting Update", body="Hi John,\nLet's meet tomorrow.")
+        self.assertIn("https://mail.google.com/mail/?view=cm&fs=1", gmail_url)
+        self.assertIn("john%40example.com", gmail_url)
+        self.assertIn("Meeting%20Update", gmail_url)
+
+        outlook_url = auto_mod.build_compose_url(to="a@b.com", subject="Hi", body="Test", provider="outlook")
+        self.assertIn("outlook.live.com/mail/0/deeplink/compose", outlook_url)
+
+        # 3. Email execution uses AI draft when available and opens browser compose
+        opened_urls = []
+
+        def ai_email_exec(cmd):
+            print("SUBJECT: Meeting Rescheduled\nBODY:\nHi John,\n\nCould we move our meeting to tomorrow afternoon?\n\nBest regards,")
+            return 0
+
+        with patch.object(auto_mod.webbrowser, "open", side_effect=lambda url, new=2: opened_urls.append(url) or True), \
+             patch.object(auto_mod, "copy_to_clipboard", return_value=True):
+            ok_mail, msg_mail = auto_mod.execute_automation_task(
+                "john@example.com ta meeting postponed kiyala mail ekak danna",
+                stream=io.StringIO(),
+                executor=ai_email_exec,
+            )
+            self.assertTrue(ok_mail, msg_mail)
+            self.assertEqual(len(opened_urls), 1)
+            self.assertIn("Meeting%20Rescheduled", opened_urls[0])
+            self.assertIn("john%40example.com", opened_urls[0])
+
+            # 4. Offline email falls back to built-in template and still opens browser compose
+            opened_urls.clear()
+            ok_fb, _ = auto_mod.execute_automation_task(
+                "jane@example.com ta invoice reminder mail ekak danna",
+                sub_action="mail",
+                stream=io.StringIO(),
+                executor=None,
+            )
+            self.assertTrue(ok_fb)
+            self.assertEqual(len(opened_urls), 1)
+            self.assertIn("jane%40example.com", opened_urls[0])
+
+            # 5. YouTube search automation
+            opened_urls.clear()
+            ok_yt, _ = auto_mod.execute_automation_task("youtube eke python asyncio search karanna", stream=io.StringIO())
+            self.assertTrue(ok_yt)
+            self.assertIn("youtube.com/results?search_query=python+asyncio", opened_urls[0])
+
+        # 6. Notepad + Calculator safe allowlist & arbitrary command refusal
+        with patch.object(auto_mod, "copy_to_clipboard", return_value=True) as mock_clip, \
+             patch.object(auto_mod.subprocess, "Popen") as mock_popen:
+            ok_np, msg_np = auto_mod.execute_automation_task(
+                "notepad open karala Hello Hirusha type karanna",
+                stream=io.StringIO(),
+            )
+            self.assertTrue(ok_np, msg_np)
+            mock_clip.assert_called_once_with("Hello Hirusha")
+            self.assertGreaterEqual(mock_popen.call_count, 1)
+
+            ok_bad, msg_bad = auto_mod.execute_automation_task(
+                "rm -rf /",
+                sub_action="auto",
+                stream=io.StringIO(),
+            )
+            self.assertFalse(ok_bad)
+            self.assertIn("Unsupported automation request", msg_bad)
+
+
 if __name__ == "__main__":
     unittest.main()
