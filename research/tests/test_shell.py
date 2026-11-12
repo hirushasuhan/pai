@@ -2968,7 +2968,7 @@ console.log('Playable Verified');
             self.assertIn("Meeting%20Rescheduled", opened_urls[0])
             self.assertIn("john%40example.com", opened_urls[0])
 
-            # 4. Offline email falls back to built-in template and still opens browser compose
+            # 4. Offline & looping-AI email falls back cleanly to built-in template
             opened_urls.clear()
             ok_fb, _ = auto_mod.execute_automation_task(
                 "jane@example.com ta invoice reminder mail ekak danna",
@@ -2979,6 +2979,20 @@ console.log('Playable Verified');
             self.assertTrue(ok_fb)
             self.assertEqual(len(opened_urls), 1)
             self.assertIn("jane%40example.com", opened_urls[0])
+
+            def looping_ai_exec(cmd):
+                print("SUBJECT: Bad Loop\nBODY:\n" + ("kiyala meeting ila date ila " * 30))
+                return 0
+
+            opened_urls.clear()
+            ok_loop, _ = auto_mod.execute_automation_task(
+                "john@example.com ta meeting postponed kiyala mail ekak danna",
+                stream=io.StringIO(),
+                executor=looping_ai_exec,
+            )
+            self.assertTrue(ok_loop)
+            self.assertNotIn("Bad%20Loop", opened_urls[0])
+            self.assertIn("Meeting%20postponed", opened_urls[0])
 
             # 5. YouTube search automation
             opened_urls.clear()

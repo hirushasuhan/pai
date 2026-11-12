@@ -292,8 +292,25 @@ def _build_fallback_email(prompt: str, parsed: Dict[str, str]) -> Tuple[str, str
     return subject, body
 
 
+def _is_repetitive_or_corrupt_draft(subject: str, body: str) -> bool:
+    """Reject hallucinated repetition loops or oversized drafts unsuitable for compose URLs."""
+    if not subject or not body:
+        return True
+    if len(body) > 1500:
+        return True
+    lower_all = f"{subject} {body}".lower()
+    if any(leak in lower_all for leak in ("kiyala", "ekak danna", "ekak yawanna")):
+        return True
+    words = re.findall(r"[a-zA-Z]+", body.lower())
+    if len(words) >= 24:
+        unique_ratio = len(set(words)) / len(words)
+        if unique_ratio < 0.35:
+            return True
+    return False
+
+
 def _parse_ai_email_draft(raw_text: str) -> Optional[Tuple[str, str]]:
-    """Parse SUBJECT: ... and BODY: ... from AI output."""
+    """Parse SUBJECT: ... and BODY: ... from AI output with sanity/loop checks."""
     if not raw_text or not raw_text.strip():
         return None
     subj = ""
@@ -304,7 +321,7 @@ def _parse_ai_email_draft(raw_text: str) -> Optional[Tuple[str, str]]:
     m_body = re.search(r"(?ims)^\s*BODY\s*:\s*\n?(.+)$", raw_text)
     if m_body:
         body = m_body.group(1).strip()
-    if subj and body:
+    if subj and body and not _is_repetitive_or_corrupt_draft(subj[:160], body):
         return subj[:160], body
     return None
 
@@ -327,13 +344,15 @@ def compose_email_with_model(
         subj, body = _build_fallback_email(prompt, info)
         return subj, body, False
 
+    clean_topic = info.get("topic") or prompt
+    recipient_hint = info.get("to") or "(unspecified)"
     ai_prompt = (
-        "Draft a clear, natural email based on the user's request (which may be in English or Singlish). "
+        "Write a concise, polite English email in under 100 words with NO repetition. "
         "Output ONLY two sections in this exact format and nothing else:\n"
         "SUBJECT: <concise subject line>\n"
-        "BODY:\n<complete ready-to-send email body>\n\n"
-        f"Recipient: {info['to'] or '(unspecified)'}\n"
-        f"User request: {prompt}"
+        "BODY:\n<3 to 5 clear sentences ready to send>\n\n"
+        f"Recipient: {recipient_hint}\n"
+        f"Topic: {clean_topic}"
     )
 
     prev_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
