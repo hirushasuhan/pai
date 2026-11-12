@@ -432,10 +432,16 @@ def _open_notepad_and_type(text: str) -> Tuple[bool, str]:
         # Non-blocking background PowerShell helper reads nothing from user args;
         # text is already placed on clipboard safely via stdin above.
         ps_paste = (
-            "Start-Sleep -Milliseconds 700; "
             "$ws = New-Object -ComObject WScript.Shell; "
-            "if ($ws.AppActivate('Untitled - Notepad') -or $ws.AppActivate('Notepad')) { "
-            "Start-Sleep -Milliseconds 150; $ws.SendKeys('^v') }"
+            "for ($i = 0; $i -lt 16; $i++) { "
+            "Start-Sleep -Milliseconds 250; "
+            "$p = Get-Process -Name Notepad -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1; "
+            "$ok = $false; "
+            "if ($p) { $ok = $ws.AppActivate($p.Id) } "
+            "if (-not $ok) { $ok = ($ws.AppActivate('Untitled - Notepad') -or $ws.AppActivate('Notepad')) } "
+            "if ($ok) { Start-Sleep -Milliseconds 200; $ws.SendKeys('^v'); break } "
+            "}"
         )
         try:
             subprocess.Popen(
