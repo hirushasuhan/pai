@@ -1,11 +1,14 @@
 """PAI Desktop Application Local Loopback API Bridge Server.
 
 Binds strictly to 127.0.0.1:8765 (Threat T21 Compliant) and exposes
-high-speed endpoints for the Rust/Tauri desktop UI:
+high-speed endpoints for the PAI Studio Desktop UI:
   - Streaming Chat & Reasoning (<think> blocks)
   - 3rd-Party Cloud AI Configuration & Masked Status
   - Local AI Model Downloader & Manager (Ollama /api/pull, /api/tags)
   - Live Fact-Checking & Web Grounding Engine
+  - Project Workspace Manager (Folder Context, Code Editor & File Sync)
+  - Autonomous Multi-Agent Engineering Team (IEEE / FIPA-ACL Standard)
+  - Built-in Skills Catalog & Toggles
   - Antigravity Autonomous Agent Supervisor
   - Live Weather, Web Search, and System Health
 """
@@ -14,7 +17,10 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -23,26 +29,42 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-# Add repository root and research to sys.path
-REPO_ROOT = Path(__file__).resolve().parent.parent
-RESEARCH_DIR = REPO_ROOT / "research"
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+# Add research directory and repository root to sys.path
+RESEARCH_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = RESEARCH_DIR.parent
 if str(RESEARCH_DIR) not in sys.path:
     sys.path.insert(0, str(RESEARCH_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+# Guard against None stdio when running under pythonw.exe on Windows
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
 
 try:
     from research.cloud_ai import (
         CLOUD_PROVIDERS,
+        add_configured_model,
+        generate_image_cloud,
         get_active_cloud_model,
         get_active_cloud_provider,
+        get_configured_models,
         get_provider_key,
         is_cloud_model,
         list_available_cloud_models,
         load_cloud_config,
         query_cloud_ai,
+        remove_configured_model,
         set_active_cloud_model,
         set_custom_endpoint,
         set_provider_key,
@@ -62,13 +84,17 @@ try:
 except ImportError:
     from cloud_ai import (
         CLOUD_PROVIDERS,
+        add_configured_model,
+        generate_image_cloud,
         get_active_cloud_model,
         get_active_cloud_provider,
+        get_configured_models,
         get_provider_key,
         is_cloud_model,
         list_available_cloud_models,
         load_cloud_config,
         query_cloud_ai,
+        remove_configured_model,
         set_active_cloud_model,
         set_custom_endpoint,
         set_provider_key,
@@ -106,8 +132,509 @@ def set_current_model(m: str) -> None:
         set_active_cloud_model(m)
 
 
+def ensure_ollama_server(timeout: float = 8.0) -> bool:
+    """Ensure Ollama daemon is running on 127.0.0.1:11434 (Threat T21 Compliant)."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
+        with urllib.request.urlopen(req, timeout=0.8) as r:
+            if r.status == 200:
+                return True
+    except Exception:
+        pass
+
+    cand_paths = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+        Path("C:/Program Files/Ollama/ollama.exe"),
+        Path(os.path.expanduser("~")) / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe",
+    ]
+    ollama_exe = None
+    for cand in cand_paths:
+        if cand.is_file():
+            ollama_exe = cand
+            break
+
+    if not ollama_exe:
+        which_path = shutil.which("ollama")
+        if which_path:
+            ollama_exe = Path(which_path)
+
+    if not ollama_exe or not ollama_exe.is_file():
+        return False
+
+    env = os.environ.copy()
+    env["OLLAMA_HOST"] = "127.0.0.1:11434"
+    flags = 0
+    startupinfo = None
+    if sys.platform == "win32":
+        flags = 0x08000000  # CREATE_NO_WINDOW solely to avoid terminal flash
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+    try:
+        subprocess.Popen(
+            [str(ollama_exe), "serve"],
+            env=env,
+            creationflags=flags,
+            startupinfo=startupinfo,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            close_fds=(sys.platform != "win32"),
+        )
+    except Exception:
+        return False
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        time.sleep(0.3)
+        try:
+            req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
+            with urllib.request.urlopen(req, timeout=0.8) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
+def get_projects_config_path() -> Path:
+    p = Path.home() / ".pai" / "projects.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def load_projects_data() -> Dict[str, Any]:
+    cfg = get_projects_config_path()
+    if cfg.is_file():
+        try:
+            return json.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"active_project": "", "projects": []}
+
+
+def save_projects_data(data: Dict[str, Any]) -> None:
+    cfg = get_projects_config_path()
+    cfg.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def get_project_codebase_context(folder_path: Path, max_chars: int = 12000) -> str:
+    """Collect snippets of code from active project folder for LLM context."""
+    if not folder_path.is_dir():
+        return ""
+    code_exts = {".js", ".html", ".css", ".py", ".json", ".md", ".ts", ".rs", ".sql"}
+    snippets = []
+    total = 0
+    for root, dirs, files in os.walk(folder_path):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}]
+        for f in sorted(files):
+            p = Path(root) / f
+            if p.suffix.lower() in code_exts and p.is_file():
+                try:
+                    rel = p.relative_to(folder_path)
+                    content = p.read_text(encoding="utf-8", errors="replace")[:2500]
+                    snippet = f"--- File: {rel} ---\n{content}"
+                    if total + len(snippet) > max_chars:
+                        break
+                    snippets.append(snippet)
+                    total += len(snippet)
+                except Exception:
+                    pass
+        if total >= max_chars:
+            break
+    return "\n\n".join(snippets)
+
+
+SKILLS_CATALOG = [
+    {
+        "id": "factcheck",
+        "name": "Live Fact-Checking Engine",
+        "description": "Decomposes model answers into factual statements and verifies them against live web citations with confidence scores.",
+        "category": "Reasoning & Grounding",
+        "icon": "shield",
+        "enabled": True,
+    },
+    {
+        "id": "internet",
+        "name": "Live Real-Time Web & Weather",
+        "description": "Enables the assistant to query real-time Open-Meteo weather telemetry and privacy-preserving DuckDuckGo web grounding.",
+        "category": "External Tools",
+        "icon": "globe",
+        "enabled": True,
+    },
+    {
+        "id": "ai_team",
+        "name": "Autonomous AI Engineering Team",
+        "description": "IEEE / FIPA-ACL compliant 4-role multi-agent team (PM, Senior Architect, Specialist, QA Auditor) for end-to-end SDLC sprints.",
+        "category": "Multi-Agent System",
+        "icon": "users",
+        "enabled": True,
+    },
+    {
+        "id": "project_workspace",
+        "name": "Project Workspace Context",
+        "description": "Grounds chats directly in your active project files, allowing code analysis, in-app file editing, and automated sync.",
+        "category": "Development",
+        "icon": "folder",
+        "enabled": True,
+    },
+    {
+        "id": "image_gen",
+        "name": "Neural Image Synthesis",
+        "description": "Direct text-to-image synthesis using Google Imagen 3 and OpenAI DALL-E 3 with instant chat preview & PNG download.",
+        "category": "Creative & Vision",
+        "icon": "image",
+        "enabled": True,
+    },
+    {
+        "id": "antigravity",
+        "name": "Antigravity Autonomous Supervisor",
+        "description": "Multi-turn autonomous task runner that decomposes goals, executes tools, and verifies deliverables.",
+        "category": "Agent Automation",
+        "icon": "layers",
+        "enabled": True,
+    },
+    {
+        "id": "router",
+        "name": "Adaptive Model Router",
+        "description": "Hardware-calibrated routing engine matching queries to best-fit local and cloud models based on task and RAM.",
+        "category": "Core Architecture",
+        "icon": "cpu",
+        "enabled": True,
+    },
+]
+
+
+def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
+    """Scan local models from Ollama /api/tags AND from disk manifests (~/.ollama/models/manifests)."""
+    models_dict: Dict[str, Dict[str, Any]] = {}
+    ollama_online = False
+
+    # 1. Probe Ollama live endpoint
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if not name:
+                    continue
+                size_gb = round(m.get("size", 0) / (1024 ** 3), 2)
+                models_dict[name.lower()] = {
+                    "name": name,
+                    "size_gb": size_gb,
+                    "modified_at": m.get("modified_at", ""),
+                    "is_active": name == get_current_model(),
+                }
+            ollama_online = True
+    except Exception:
+        pass
+
+    # 2. Disk manifest scanning (~/.ollama/models/manifests)
+    manifest_dir = Path.home() / ".ollama" / "models" / "manifests"
+    if manifest_dir.is_dir():
+        for f in manifest_dir.rglob("*"):
+            if f.is_file():
+                try:
+                    rel = f.relative_to(manifest_dir)
+                    parts = rel.parts
+                    if len(parts) >= 3:
+                        model_name = parts[-2]
+                        tag = parts[-1]
+                        full_name = f"{model_name}:{tag}"
+                        if full_name.lower() in models_dict:
+                            continue
+                        size_gb = 0.0
+                        try:
+                            m_data = json.loads(f.read_text(encoding="utf-8"))
+                            size_bytes = sum(l.get("size", 0) for l in m_data.get("layers", []))
+                            size_gb = round(size_bytes / (1024 ** 3), 2)
+                        except Exception:
+                            pass
+                        m_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime))
+                        models_dict[full_name.lower()] = {
+                            "name": full_name,
+                            "size_gb": size_gb,
+                            "modified_at": m_time,
+                            "is_active": full_name == get_current_model(),
+                        }
+                except Exception:
+                    pass
+
+    model_list = sorted(list(models_dict.values()), key=lambda x: x["name"])
+    return model_list, ollama_online
+
+
+def delete_local_model(model_name: str) -> Tuple[bool, str]:
+    """Uninstall and delete a local model via Ollama DELETE /api/delete to free disk space."""
+    if not model_name or not model_name.strip():
+        return False, "Model name cannot be empty."
+    ensure_ollama_server(timeout=3.0)
+    url = "http://127.0.0.1:11434/api/delete"
+    payload = json.dumps({"name": model_name.strip()}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "PAI-Desktop/1.1"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status in (200, 204):
+                return True, f"Model '{model_name}' successfully uninstalled."
+            return False, f"Ollama returned HTTP status {resp.status}."
+    except urllib.error.HTTPError as exc:
+        try:
+            err_data = json.loads(exc.read().decode("utf-8", errors="replace"))
+            return False, err_data.get("error", f"HTTP Error {exc.code}")
+        except Exception:
+            return False, f"HTTP Error {exc.code}: {exc.reason}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
+    {
+        "name": "llama3.2:3b",
+        "tag": "llama3.2:3b",
+        "size": "2.0 GB",
+        "desc": "Meta Llama 3.2 3B - Ultra fast, low RAM reasoning & chat",
+        "category": "Chat & Fast Reasoning",
+    },
+    {
+        "name": "qwen2.5-coder:7b",
+        "tag": "qwen2.5-coder:7b",
+        "size": "4.7 GB",
+        "desc": "Qwen 2.5 Coder 7B - Best-in-class coding & architecture",
+        "category": "Software Engineering",
+    },
+    {
+        "name": "deepseek-r1:7b",
+        "tag": "deepseek-r1:7b",
+        "size": "4.7 GB",
+        "desc": "DeepSeek R1 7B - Deep chain-of-thought mathematical reasoning",
+        "category": "Deep Reasoning",
+    },
+    {
+        "name": "mistral:7b",
+        "tag": "mistral:7b",
+        "size": "4.1 GB",
+        "desc": "Mistral 7B Instruct - High precision versatile reasoning",
+        "category": "General Intelligence",
+    },
+    {
+        "name": "phi3.5:3.8b",
+        "tag": "phi3.5:3.8b",
+        "size": "2.2 GB",
+        "desc": "Microsoft Phi-3.5 Mini - Lightweight agentic assistant",
+        "category": "Compact Agent",
+    },
+    {
+        "name": "llava:7b",
+        "tag": "llava:7b",
+        "size": "4.7 GB",
+        "desc": "LLaVA 7B - Multimodal vision, image inspection & visual QA",
+        "category": "Vision & Multimodal",
+    },
+    {
+        "name": "moondream:latest",
+        "tag": "moondream:latest",
+        "size": "1.7 GB",
+        "desc": "Moondream 2 - Ultra-compact, fast vision & captioning model",
+        "category": "Vision & Multimodal",
+    },
+]
+
+
+def get_recommended_catalog_path() -> Path:
+    p = Path.home() / ".pai" / "recommended_catalog.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def load_recommended_catalog(installed_names: Optional[set] = None) -> List[Dict[str, Any]]:
+    """Load recommended models from disk cache (~/.pai/recommended_catalog.json) or built-in default."""
+    cfg_file = get_recommended_catalog_path()
+    catalog_list = []
+    if cfg_file.is_file():
+        try:
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                catalog_list = data
+        except Exception:
+            pass
+
+    if not catalog_list:
+        catalog_list = DEFAULT_RECOMMENDED_MODELS.copy()
+        try:
+            cfg_file.write_text(json.dumps(catalog_list, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    if installed_names is None:
+        local_models, _ = get_all_installed_local_models()
+        installed_names = {m["name"].lower() for m in local_models}
+
+    results = []
+    for item in catalog_list:
+        entry = dict(item)
+        entry["is_installed"] = entry.get("tag", "").lower() in installed_names
+        results.append(entry)
+    return results
+
+
+def refresh_recommended_catalog() -> List[Dict[str, Any]]:
+    """Synchronize recommended catalog cache and return updated model list."""
+    # Ensure all default curated models (including vision) are always present
+    cfg_file = get_recommended_catalog_path()
+    existing: Dict[str, Dict[str, Any]] = {}
+    if cfg_file.is_file():
+        try:
+            raw = json.loads(cfg_file.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                for m in raw:
+                    if "tag" in m:
+                        existing[m["tag"].lower()] = m
+        except Exception:
+            pass
+
+    for def_m in DEFAULT_RECOMMENDED_MODELS:
+        if def_m["tag"].lower() not in existing:
+            existing[def_m["tag"].lower()] = def_m
+
+    updated_list = list(existing.values())
+    try:
+        cfg_file.write_text(json.dumps(updated_list, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return load_recommended_catalog()
+
+
+def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
+    """Open native Windows folder picker dialog and return selected path."""
+    # 1. Try tkinter with topmost attribute
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        folder = filedialog.askdirectory(title=title)
+        root.destroy()
+        if folder and os.path.isdir(folder):
+            return os.path.normpath(folder)
+    except Exception:
+        pass
+
+    # 2. PowerShell FolderBrowserDialog fallback on Windows
+    if sys.platform == "win32":
+        try:
+            cmd = [
+                "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+                "[System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null; "
+                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                f"$f.Description = '{title}'; "
+                "$f.ShowNewFolderButton = $true; "
+                "$w = New-Object System.Windows.Forms.Form; $w.TopMost = $true; "
+                "if ($f.ShowDialog($w) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
+            ]
+            flags = 0x08000000  # CREATE_NO_WINDOW
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+            out = subprocess.check_output(
+                cmd,
+                creationflags=flags,
+                startupinfo=si,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).decode("utf-8", errors="replace").strip()
+            if out and os.path.isdir(out):
+                return os.path.normpath(out)
+        except Exception:
+            pass
+
+    return None
+
+
+def get_system_preflight() -> Dict[str, Any]:
+    """Inspect local prerequisites, start Ollama if offline, and scan models."""
+    py_ver = platform.python_version()
+    py_exe = sys.executable
+
+    # 1. Auto-boot Ollama daemon if offline
+    ollama_online = ensure_ollama_server(timeout=4.0)
+    ollama_path = shutil.which("ollama")
+    if not ollama_path:
+        cand_paths = [
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+            Path("C:/Program Files/Ollama/ollama.exe"),
+            Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe",
+        ]
+        for c in cand_paths:
+            if c.is_file():
+                ollama_path = str(c)
+                break
+    ollama_installed = bool(ollama_path and os.path.isfile(ollama_path))
+
+    # 2. Local models scan
+    models_list, _ = get_all_installed_local_models()
+    model_count = len(models_list)
+
+    # 3. Recommended models catalog
+    installed_names = {m["name"].lower() for m in models_list}
+    recommended_models = load_recommended_catalog(installed_names)
+
+    # 4. RAM telemetry
+    ram_gb = 16.0
+    try:
+        import psutil
+        ram_gb = round(psutil.virtual_memory().total / (1024 ** 3), 1)
+    except Exception:
+        pass
+
+    ready = bool(ollama_online and model_count > 0)
+
+    return {
+        "success": True,
+        "ready": ready,
+        "python": {
+            "version": py_ver,
+            "executable": py_exe,
+            "status": "healthy",
+        },
+        "ollama": {
+            "installed": ollama_installed,
+            "running": ollama_online,
+            "path": str(ollama_path) if ollama_path else "",
+            "download_url": "https://ollama.com/download/windows",
+            "status": "healthy" if ollama_online else ("not_running" if ollama_installed else "missing"),
+        },
+        "models": {
+            "count": model_count,
+            "installed": models_list,
+            "recommended": recommended_models,
+            "active_model": get_current_model(),
+        },
+        "hardware": {
+            "ram_total_gb": ram_gb,
+            "os": platform.platform(),
+        },
+    }
+
+
 class PAIBridgeHandler(BaseHTTPRequestHandler):
     """Threaded HTTP handler serving desktop frontend requests on 127.0.0.1."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Suppress or safely route HTTP access logs."""
+        if sys.stderr is not None:
+            try:
+                sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
+            except Exception:
+                pass
 
     def _send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -178,6 +705,42 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content)
                 return
+        elif path == "/favicon.ico":
+            ico_file = desktop_dir / "assets" / "pai.ico"
+            if ico_file.is_file():
+                content = ico_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/x-icon")
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
+        elif path.startswith("/assets/"):
+            fname = Path(path[len("/assets/"):]).name
+            asset_file = desktop_dir / "assets" / fname
+            if asset_file.is_file():
+                content = asset_file.read_bytes()
+                ctype = "image/png" if fname.endswith(".png") else "image/x-icon"
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
+        elif path.startswith("/generated_images/"):
+            fname = Path(path[len("/generated_images/"):]).name
+            img_file = Path.home() / ".pai" / "generated_images" / fname
+            if img_file.is_file():
+                content = img_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
 
         # 1. Status endpoint
         if path == "/api/status":
@@ -185,22 +748,46 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 2. Models list
         elif path == "/api/models":
             self._handle_get_models()
+        # 2b. Recommended models catalog
+        elif path == "/api/models/recommended":
+            self._send_json({"success": True, "recommended": load_recommended_catalog()})
         # 3. Cloud config & key status
         elif path == "/api/cloud/config":
             self._handle_get_cloud_config()
-        # 4. Live weather
+        # 4. Projects list & active project
+        elif path == "/api/projects":
+            self._handle_projects_list()
+        # 5. Project files
+        elif path == "/api/projects/files":
+            self._handle_project_files(query_params)
+        # 6. Project file content
+        elif path == "/api/projects/file/content":
+            self._handle_project_file_content(query_params)
+        # 7. AI Team roster
+        elif path == "/api/team/roster":
+            self._handle_team_roster()
+        # 8. Skills list
+        elif path == "/api/skills":
+            self._handle_skills_list()
+        # 9. Live weather
         elif path == "/api/weather":
             city = query_params.get("city", [""])[0]
             ok, msg, raw = fetch_live_weather(city)
             self._send_json({"success": ok, "message": msg, "data": raw})
-        # 5. Live web search
+        # 10. Live web search
         elif path == "/api/search":
             q = query_params.get("q", [""])[0]
             ok, msg, res = search_web(q)
             self._send_json({"success": ok, "message": msg, "results": res})
-        # 6. Doctor / Hardware telemetry
+        # 11. Doctor / Hardware telemetry
         elif path == "/api/doctor":
             self._handle_doctor()
+        # 12. Preflight system health check
+        elif path == "/api/system/preflight":
+            self._handle_system_preflight()
+        # 13. Native folder selection
+        elif path == "/api/utils/select_folder":
+            self._handle_select_folder()
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
@@ -215,6 +802,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 2. Local Model Pull (Download)
         elif path == "/api/models/pull":
             self._handle_pull_model(body)
+        # 2b. Local Model Uninstall (Delete)
+        elif path == "/api/models/delete":
+            m_name = body.get("name", "").strip() or body.get("model", "").strip()
+            if not m_name:
+                self._send_json({"success": False, "error": "Model name is required for uninstallation."}, status=400)
+            else:
+                ok_del, msg_del = delete_local_model(m_name)
+                self._send_json({"success": ok_del, "message": msg_del, "error": None if ok_del else msg_del})
+        # 2c. Refresh Recommended Models Catalog
+        elif path == "/api/models/recommended/refresh":
+            recs = refresh_recommended_catalog()
+            self._send_json({"success": True, "recommended": recs})
         # 3. Model Switch
         elif path == "/api/models/switch":
             m = body.get("model", "").strip()
@@ -223,21 +822,58 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "active_model": m})
             else:
                 self._send_json({"success": False, "error": "Model name required"}, status=400)
-        # 4. Save Cloud API Key
-        elif path == "/api/cloud/set_key":
-            prov = body.get("provider", "").strip().lower()
-            key = body.get("key", "").strip()
-            if prov and key:
-                set_provider_key(prov, key)
-                self._send_json({"success": True, "provider": prov, "message": f"Saved API key for {prov.title()}"})
+        # 4. Save Cloud Model (Dynamic Form)
+        elif path == "/api/cloud/save_model":
+            m_name = body.get("model_name", "").strip()
+            p_url = body.get("provider_url", "").strip()
+            key = body.get("api_key", "").strip()
+            m_type = body.get("model_type", "chat").strip()
+            prov = body.get("provider", "custom").strip()
+            if m_name and p_url and key:
+                saved = add_configured_model(m_name, p_url, key, m_type, prov)
+                self._send_json({"success": True, "model": saved})
             else:
-                self._send_json({"success": False, "error": "Provider and key required"}, status=400)
-        # 5. Set Custom Endpoint
-        elif path == "/api/cloud/set_endpoint":
-            url = body.get("url", "").strip()
-            set_custom_endpoint(url)
-            self._send_json({"success": True, "url": url})
-        # 6. Toggle Internet / Factcheck
+                self._send_json({"success": False, "error": "Model name, provider URL, and API key are required."}, status=400)
+        # 5. Delete Cloud Model
+        elif path == "/api/cloud/delete_model":
+            m_name = body.get("model_name", "").strip()
+            ok_del = remove_configured_model(m_name)
+            self._send_json({"success": ok_del, "model_name": m_name})
+        # 6. Generate Image Endpoint
+        elif path == "/api/image/generate":
+            prompt = body.get("prompt", "").strip()
+            model = body.get("model", "")
+            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(prompt, model=model)
+            if ok_img:
+                self._send_json({
+                    "success": True,
+                    "is_image": True,
+                    "image_url": data_url_or_err,
+                    "image_path": fpath,
+                    "filename": fname,
+                    "prompt": prompt,
+                    "model": model,
+                })
+            else:
+                self._send_json({"success": False, "error": data_url_or_err}, status=500)
+        # 7. Projects Endpoints
+        elif path == "/api/projects/save":
+            self._handle_project_save(body)
+        elif path == "/api/projects/set_active":
+            self._handle_project_set_active(body)
+        elif path == "/api/projects/delete":
+            self._handle_project_delete(body)
+        elif path == "/api/projects/file/save":
+            self._handle_project_file_save(body)
+        # 8. AI Team Endpoints
+        elif path == "/api/team/assign":
+            self._handle_team_assign(body)
+        elif path == "/api/team/run":
+            self._handle_team_run(body)
+        # 9. Skills Toggle
+        elif path == "/api/skills/toggle":
+            self._handle_skill_toggle(body)
+        # 10. Toggle Internet / Factcheck
         elif path == "/api/settings/toggle":
             feature = body.get("feature", "")
             val = bool(body.get("value", False))
@@ -249,7 +885,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "factcheck_enabled": is_factcheck_enabled()})
             else:
                 self._send_json({"success": False, "error": f"Unknown feature: {feature}"}, status=400)
-        # 7. Fact-Check Text
+        # 11. Fact-Check Text
         elif path == "/api/factcheck":
             text = body.get("text", "")
             claims = verify_text_claims(text)
@@ -265,42 +901,30 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             ]
             report = format_factcheck_report(claims)
             self._send_json({"success": True, "claims": claims_data, "report": report})
-        # 8. Antigravity Supervisor Run
+        # 12. Antigravity Supervisor Run
         elif path == "/api/antigravity/run":
             self._handle_antigravity_run(body)
+        # 13. Native Folder Picker
+        elif path == "/api/utils/select_folder":
+            self._handle_select_folder()
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
     def _handle_status(self) -> None:
+        p_data = load_projects_data()
         self._send_json({
             "version": "1.1.0-rc4",
             "active_model": get_current_model(),
+            "active_project": p_data.get("active_project", ""),
             "internet_enabled": is_internet_enabled(),
             "factcheck_enabled": is_factcheck_enabled(),
             "status": "ready",
         })
 
     def _handle_get_models(self) -> None:
-        local_models = []
-        ollama_online = False
-        try:
-            req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for m in data.get("models", []):
-                    name = m.get("name", "")
-                    size_gb = round(m.get("size", 0) / (1024 ** 3), 2)
-                    local_models.append({
-                        "name": name,
-                        "size_gb": size_gb,
-                        "modified_at": m.get("modified_at", ""),
-                        "is_active": name == get_current_model(),
-                    })
-                ollama_online = True
-        except Exception:
-            pass
-
-        cloud_models = list_available_cloud_models()
+        local_models, ollama_online = get_all_installed_local_models()
+        # Return only cloud models that have active API keys configured
+        cloud_models = [cm for cm in list_available_cloud_models() if cm.get("has_key")]
         self._send_json({
             "ollama_online": ollama_online,
             "local_models": local_models,
@@ -310,6 +934,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
     def _handle_get_cloud_config(self) -> None:
         cfg = load_cloud_config()
+        configured_models = cfg.get("configured_models", [])
         providers = []
         for prov_id, meta in CLOUD_PROVIDERS.items():
             if prov_id == "custom" and not cfg.get("custom_endpoint"):
@@ -321,12 +946,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 "has_key": has_k,
                 "default_model": meta.get("default_model", ""),
                 "models": meta.get("models", []),
+                "type": meta.get("type", "chat"),
             })
         self._send_json({
             "active_provider": cfg.get("active_provider", ""),
             "active_model": cfg.get("active_model", ""),
             "custom_endpoint": cfg.get("custom_endpoint", ""),
             "providers": providers,
+            "configured_models": configured_models,
         })
 
     def _handle_doctor(self) -> None:
@@ -349,12 +976,265 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             "active_model": get_current_model(),
         })
 
+    def _handle_projects_list(self) -> None:
+        data = load_projects_data()
+        for p in data.get("projects", []):
+            pth = Path(p.get("path", ""))
+            p["exists"] = pth.is_dir()
+            if p["exists"]:
+                try:
+                    p["file_count"] = sum(1 for _ in pth.rglob("*") if _.is_file())
+                except Exception:
+                    p["file_count"] = 0
+            else:
+                p["file_count"] = 0
+        self._send_json(data)
+
+    def _handle_project_save(self, body: Dict[str, Any]) -> None:
+        name = body.get("name", "").strip()
+        path_str = body.get("path", "").strip()
+        desc = body.get("description", "").strip()
+        if not name or not path_str:
+            self._send_json({"error": "Project name and folder path are required."}, status=400)
+            return
+
+        folder = Path(os.path.expanduser(path_str)).resolve()
+        folder.mkdir(parents=True, exist_ok=True)
+
+        data = load_projects_data()
+        projects = data.get("projects", [])
+        existing = next((p for p in projects if p.get("name", "").lower() == name.lower()), None)
+        item = {
+            "name": name,
+            "path": str(folder),
+            "description": desc,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if existing:
+            existing.update(item)
+        else:
+            item["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            projects.append(item)
+
+        data["projects"] = projects
+        data["active_project"] = name
+        save_projects_data(data)
+        self._send_json({"success": True, "project": item, "active_project": name})
+
+    def _handle_project_set_active(self, body: Dict[str, Any]) -> None:
+        name = body.get("name", "").strip()
+        data = load_projects_data()
+        data["active_project"] = name
+        save_projects_data(data)
+        self._send_json({"success": True, "active_project": name})
+
+    def _handle_project_delete(self, body: Dict[str, Any]) -> None:
+        name = body.get("name", "").strip()
+        data = load_projects_data()
+        data["projects"] = [p for p in data.get("projects", []) if p.get("name", "").lower() != name.lower()]
+        if data.get("active_project", "").lower() == name.lower():
+            data["active_project"] = ""
+        save_projects_data(data)
+        self._send_json({"success": True, "deleted": name})
+
+    def _handle_project_files(self, query_params: Dict[str, List[str]]) -> None:
+        p_str = query_params.get("path", [""])[0].strip()
+        if not p_str:
+            data = load_projects_data()
+            act = data.get("active_project", "")
+            for p in data.get("projects", []):
+                if p.get("name", "").lower() == act.lower():
+                    p_str = p.get("path", "")
+                    break
+
+        if not p_str or not Path(p_str).is_dir():
+            self._send_json({"files": [], "error": "Folder not found"}, status=404)
+            return
+
+        base = Path(p_str).resolve()
+        files = []
+        for root, dirs, fnames in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}]
+            for fname in sorted(fnames):
+                f_path = Path(root) / fname
+                try:
+                    rel = str(f_path.relative_to(base)).replace("\\", "/")
+                    stat = f_path.stat()
+                    files.append({
+                        "name": fname,
+                        "relative_path": rel,
+                        "size": stat.st_size,
+                        "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+                        "ext": f_path.suffix.lower(),
+                    })
+                except Exception:
+                    pass
+        self._send_json({"success": True, "path": str(base), "files": files})
+
+    def _handle_project_file_content(self, query_params: Dict[str, List[str]]) -> None:
+        p_str = query_params.get("path", [""])[0].strip()
+        f_str = query_params.get("file", [""])[0].strip()
+        if not p_str or not f_str:
+            self._send_json({"error": "Path and file parameters required"}, status=400)
+            return
+
+        base = Path(p_str).resolve()
+        target = (base / f_str).resolve()
+        if not target.is_relative_to(base) or not target.is_file():
+            self._send_json({"error": "File not found or access denied"}, status=404)
+            return
+
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+            self._send_json({"success": True, "file": f_str, "content": content})
+        except Exception as exc:
+            self._send_json({"error": f"Failed to read file: {exc}"}, status=500)
+
+    def _handle_project_file_save(self, body: Dict[str, Any]) -> None:
+        p_str = body.get("path", "").strip()
+        f_str = body.get("file", "").strip()
+        content = body.get("content", "")
+        if not p_str or not f_str:
+            self._send_json({"error": "Path and file are required."}, status=400)
+            return
+
+        base = Path(p_str).resolve()
+        target = (base / f_str).resolve()
+        if not target.is_relative_to(base):
+            self._send_json({"error": "Path traversal detected; access denied."}, status=403)
+            return
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            self._send_json({"success": True, "file": f_str, "size": len(content)})
+        except Exception as exc:
+            self._send_json({"error": f"Failed to save file: {exc}"}, status=500)
+
+    def _handle_team_roster(self) -> None:
+        try:
+            from research.multi_agent import TeamRoleModelRegistry
+        except ImportError:
+            from multi_agent import TeamRoleModelRegistry
+        reg = TeamRoleModelRegistry()
+        reg.load_saved_config()
+        local_models, _ = get_all_installed_local_models()
+        model_names = [m["name"] for m in local_models]
+        roster = []
+        for role, title in reg.ROLE_TITLES.items():
+            curr_model = reg.role_models.get(role, "")
+            prefs = reg.ROLE_PREFERENCES.get(role, [])
+            icon = reg.ROLE_ICONS.get(role, "")
+            desc = {
+                "project_manager": "Analyzes goals, creates WBS sprint plans, and coordinates team deliverables.",
+                "senior_developer": "Designs architecture, core logic, 3D/canvas math, algorithms, and code synthesis.",
+                "specialist_developer": "Synthesizes UI components, canvas textures, shaders, and Web Audio synthesizers.",
+                "qa_engineer": "Audits generated code for syntax errors, control mapping, safety, and playability.",
+            }.get(role, "")
+            roster.append({
+                "role": role,
+                "title": title,
+                "icon": icon,
+                "current_model": curr_model,
+                "preferred_models": prefs,
+                "description": desc,
+            })
+        self._send_json({
+            "success": True,
+            "roster": roster,
+            "available_models": model_names,
+        })
+
+    def _handle_team_assign(self, body: Dict[str, Any]) -> None:
+        role = body.get("role", "").strip()
+        model = body.get("model", "").strip()
+        if not role or not model:
+            self._send_json({"error": "Role and model name required."}, status=400)
+            return
+        try:
+            from research.multi_agent import TeamRoleModelRegistry
+        except ImportError:
+            from multi_agent import TeamRoleModelRegistry
+        reg = TeamRoleModelRegistry()
+        ok, msg = reg.set_role_model(role, model, persist=True)
+        self._send_json({"success": ok, "message": msg, "role": role, "model": model})
+
+    def _handle_team_run(self, body: Dict[str, Any]) -> None:
+        task = body.get("task", "").strip()
+        project_dir_str = body.get("project_dir", "").strip()
+        if not task:
+            self._send_json({"error": "Task description is required for AI Team sprint."}, status=400)
+            return
+
+        ensure_ollama_server()
+
+        p_dir = Path(project_dir_str).resolve() if project_dir_str and Path(project_dir_str).is_dir() else None
+
+        try:
+            from research.multi_agent import MultiAgentTeam
+        except ImportError:
+            from multi_agent import MultiAgentTeam
+
+        messages_log = []
+        def _team_output(msg: str):
+            messages_log.append(str(msg))
+
+        team = MultiAgentTeam(output_fn=_team_output)
+        res = team.run_collaborative_workflow(task_prompt=task, active_project_dir=p_dir)
+
+        # Structure messages into FIPA-ACL events
+        fipa_events = []
+        for m in getattr(team, "conversation_log", []):
+            fipa_events.append({
+                "id": m.msg_id,
+                "sender": m.sender_role,
+                "sender_model": m.sender_model,
+                "recipient": m.recipient_role,
+                "performative": m.performative,
+                "content": m.content,
+                "timestamp": m.timestamp,
+            })
+
+        self._send_json({
+            "success": not bool(res.get("error")),
+            "error": res.get("error"),
+            "task": task,
+            "plan": res.get("plan", ""),
+            "specialist_assets": res.get("specialist_assets", ""),
+            "code_updates": res.get("code_updates", {}),
+            "qa_verdict": res.get("qa_verdict", ""),
+            "messages": fipa_events,
+            "raw_log": "\n".join(messages_log),
+        })
+
+    def _handle_skills_list(self) -> None:
+        for s in SKILLS_CATALOG:
+            if s["id"] == "internet":
+                s["enabled"] = is_internet_enabled()
+            elif s["id"] == "factcheck":
+                s["enabled"] = is_factcheck_enabled()
+        self._send_json({"success": True, "skills": SKILLS_CATALOG})
+
+    def _handle_skill_toggle(self, body: Dict[str, Any]) -> None:
+        s_id = body.get("skill", "").strip()
+        val = bool(body.get("enabled", True))
+        if s_id == "internet":
+            set_internet_enabled(val)
+        elif s_id == "factcheck":
+            set_factcheck_enabled(val)
+        for s in SKILLS_CATALOG:
+            if s["id"] == s_id:
+                s["enabled"] = val
+        self._send_json({"success": True, "skill": s_id, "enabled": val})
+
     def _handle_pull_model(self, body: Dict[str, Any]) -> None:
         """Stream Ollama model download progress back to frontend via SSE."""
         model_name = body.get("model", "").strip()
         if not model_name:
             self._send_json({"error": "Model name required"}, status=400)
             return
+
+        ensure_ollama_server()
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -383,15 +1263,155 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
             self.wfile.flush()
 
+    def _handle_select_folder(self) -> None:
+        """Open native Windows folder picker dialog and return selected path."""
+        folder = open_native_folder_dialog()
+        if folder:
+            self._send_json({"success": True, "path": folder, "name": Path(folder).name})
+        else:
+            self._send_json({"success": False, "cancelled": True})
+
+    def _handle_system_preflight(self) -> None:
+        """Provide detailed preflight diagnostics and auto-boot Ollama if offline."""
+        data = get_system_preflight()
+        self._send_json(data)
+
     def _handle_chat(self, body: Dict[str, Any]) -> None:
-        """Execute chat completion, optionally fact-check, and return response."""
-        prompt = body.get("prompt", "").strip()
+        """Execute chat completion, optionally ground in project files & fact-check."""
+        raw_prompt = body.get("prompt", "").strip()
         model = body.get("model") or get_current_model()
         history = body.get("history", [])
+        project_path = body.get("project_path", "").strip()
+        is_team_mode = bool(body.get("is_team_mode", False))
 
-        if not prompt:
+        if not raw_prompt:
             self._send_json({"error": "Prompt cannot be empty"}, status=400)
             return
+
+        # Handle collaborative AI Team mode inside Chat
+        if is_team_mode:
+            if not project_path or not Path(project_path).is_dir():
+                self._send_json({
+                    "success": False,
+                    "error": "AI Team Mode requires an active project directory. Please select or browse for a project folder first."
+                }, status=400)
+                return
+
+            ensure_ollama_server()
+
+            p_dir = Path(project_path).resolve()
+            # 1. Read existing codebase files first to understand structure before editing
+            proj_context = get_project_codebase_context(p_dir, max_chars=14000)
+
+            team_task = (
+                f"Objective: {raw_prompt}\n\n"
+                f"Project Workspace Directory: {p_dir}\n"
+                f"Existing Codebase Content:\n{proj_context if proj_context else '[Workspace is currently empty - scaffold new project]'}\n\n"
+                f"Team Instructions: Carefully review the existing files and architectural layout above. "
+                f"Preserve existing architecture, dependencies, and code structure. "
+                f"Produce needed component updates, new files, and tests."
+            )
+
+            try:
+                from research.multi_agent import MultiAgentTeam
+            except ImportError:
+                from multi_agent import MultiAgentTeam
+
+            team = MultiAgentTeam(model_name=model)
+            res = team.run_collaborative_workflow(team_task, active_project_dir=p_dir)
+
+            # Auto-save any code updates into the project directory
+            saved_files = []
+            for fname, code in (res.get("code_updates") or {}).items():
+                try:
+                    fpath = p_dir / fname
+                    fpath.parent.mkdir(parents=True, exist_ok=True)
+                    fpath.write_text(code, encoding="utf-8")
+                    saved_files.append(fname)
+                except Exception:
+                    pass
+
+            fipa_events = []
+            for m in getattr(team, "conversation_log", []):
+                fipa_events.append({
+                    "sender": m.sender_role,
+                    "recipient": m.recipient_role,
+                    "performative": m.performative,
+                    "content": m.content,
+                    "timestamp": m.timestamp,
+                })
+
+            summary_lines = [
+                f"### 🤝 Autonomous AI Team Sprint Completed",
+                f"**Objective:** {raw_prompt}",
+                f"",
+                f"**Project Workspace:** `{p_dir}`",
+                f"",
+                f"#### 📋 Work Breakdown (PM Plan):",
+                f"```text\n{res.get('plan', 'Sprint plan finalized.')}\n```",
+                f"",
+                f"#### 🛠️ Files Created / Updated in Project ({len(saved_files)}):",
+                "\n".join([f"- `{f}`" for f in saved_files]) if saved_files else "- No code files written directly.",
+                f"",
+                f"#### 🛡️ QA Verification Verdict:",
+                f"> {res.get('qa_verdict', 'QA Audit complete.')}",
+            ]
+
+            team_reply = "\n".join(summary_lines)
+
+            self._send_json({
+                "success": True,
+                "is_team": True,
+                "response": team_reply,
+                "plan": res.get("plan", ""),
+                "specialist_assets": res.get("specialist_assets", ""),
+                "code_updates": res.get("code_updates", {}),
+                "qa_verdict": res.get("qa_verdict", ""),
+                "saved_files": saved_files,
+                "messages": fipa_events,
+            })
+            return
+
+        # Check if requested model or prompt is for image generation
+        is_img_model = False
+        cfg = load_cloud_config()
+        for cm in cfg.get("configured_models", []):
+            if cm.get("model_name") == model and cm.get("model_type") == "image":
+                is_img_model = True
+                break
+        if any(tok in model.lower() for tok in ("imagen", "dall-e", "image")):
+            is_img_model = True
+
+        prompt_is_image = raw_prompt.strip().startswith(("/image ", "/img "))
+        if is_img_model or prompt_is_image:
+            clean_prompt = re.sub(r"^/(image|img)\s+", "", raw_prompt.strip())
+            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(clean_prompt, model=model)
+            if ok_img:
+                self._send_json({
+                    "success": True,
+                    "is_image": True,
+                    "image_url": data_url_or_err,
+                    "image_path": fpath,
+                    "filename": fname,
+                    "prompt": clean_prompt,
+                    "model": model,
+                    "response": f"Generated image for: \"{clean_prompt}\"",
+                })
+                return
+            else:
+                self._send_json({"success": False, "error": data_url_or_err}, status=500)
+                return
+
+        # Prepare prompt with project context if an active project is selected
+        prompt = raw_prompt
+        if project_path and Path(project_path).is_dir():
+            proj_context = get_project_codebase_context(Path(project_path))
+            if proj_context:
+                prompt = (
+                    f"You are working in the active project directory: {project_path}\n"
+                    f"Relevant Project Files:\n{proj_context}\n\n"
+                    f"User Request:\n{raw_prompt}"
+                )
 
         reply_text = ""
         think_text = ""
@@ -410,6 +1430,25 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 error_msg = res_cloud
         else:
             # 2. Local Ollama Generation
+            server_ok = ensure_ollama_server(timeout=8.0)
+            if not server_ok:
+                self._send_json({
+                    "success": False,
+                    "error": (
+                        "Local AI service (Ollama) is not running on 127.0.0.1:11434 and could not be started automatically. "
+                        "Please ensure Ollama is installed from https://ollama.com, or switch to a Cloud AI model in the Cloud AI tab."
+                    )
+                }, status=503)
+                return
+
+            # Graceful local model resolution: verify model is installed or fallback to active installed model
+            local_models, _ = get_all_installed_local_models()
+            installed_names = [m["name"] for m in local_models]
+            if model not in installed_names and installed_names:
+                # If requested model is not installed locally, fallback to first available installed model
+                model = installed_names[0]
+                set_current_model(model)
+
             ollama_url = "http://127.0.0.1:11434/api/generate"
             ollama_payload = {
                 "model": model,
@@ -430,6 +1469,19 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     d = json.loads(resp.read().decode("utf-8"))
                     reply_text = d.get("response", "")
+            except urllib.error.HTTPError as exc:
+                err_detail = ""
+                try:
+                    raw_b = exc.read().decode("utf-8", errors="replace")
+                    err_json = json.loads(raw_b)
+                    err_detail = err_json.get("error", "")
+                except Exception:
+                    pass
+                if not err_detail:
+                    err_detail = exc.reason if hasattr(exc, "reason") and exc.reason else f"HTTP {exc.code}"
+                error_msg = f"Local model execution error ({model}): {err_detail}"
+            except urllib.error.URLError as exc:
+                error_msg = f"Local model connection error: {exc.reason}"
             except Exception as exc:
                 error_msg = f"Local model execution error: {exc}"
 
@@ -469,6 +1521,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             "response": reply_text,
             "thinking": think_text,
             "model": model,
+            "project_path": project_path,
             "factcheck": {
                 "claims": factcheck_claims,
                 "report": factcheck_report,
@@ -476,30 +1529,54 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_antigravity_run(self, body: Dict[str, Any]) -> None:
-        """Run Antigravity continuous agent task supervisor in background."""
+        """Run Antigravity continuous agent task supervisor in background with AI Team support."""
         task_prompt = body.get("task", "").strip()
+        project_path = body.get("project_path", "").strip()
+        use_team = bool(body.get("use_team", True))
         if not task_prompt:
             self._send_json({"error": "Task prompt required"}, status=400)
             return
 
-        try:
-            from research.antigravity_driver import run_antigravity_continuous_agent
-        except ImportError:
-            from antigravity_driver import run_antigravity_continuous_agent
+        ensure_ollama_server()
+
+        p_dir = Path(project_path).resolve() if project_path and Path(project_path).is_dir() else None
 
         def _bg_run():
-            run_antigravity_continuous_agent(task_prompt, max_turns=6, open_browser=True)
+            if use_team:
+                try:
+                    from research.multi_agent import MultiAgentTeam
+                except ImportError:
+                    from multi_agent import MultiAgentTeam
+                team = MultiAgentTeam()
+                team.run_collaborative_workflow(
+                    f"[Antigravity Autonomous Sprint] {task_prompt}",
+                    active_project_dir=p_dir,
+                )
+            else:
+                try:
+                    from research.antigravity_driver import run_antigravity_continuous_agent
+                except ImportError:
+                    from antigravity_driver import run_antigravity_continuous_agent
+                run_antigravity_continuous_agent(task_prompt, max_turns=6, open_browser=True)
 
         t = threading.Thread(target=_bg_run, daemon=True)
         t.start()
         self._send_json({
             "success": True,
-            "message": f"Autonomous agent supervisor started for: '{task_prompt}'.",
+            "message": f"Autonomous agent supervisor started with AI Team for: '{task_prompt}'.",
+            "project_dir": str(p_dir) if p_dir else "None",
         })
 
 
 def run_bridge_server():
-    server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
+    try:
+        server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
+    except Exception as e:
+        log_path = Path.home() / ".pai" / "bridge_error.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"Server init error: {e}\n", encoding="utf-8")
+        return
+
     print(f"================================================================================")
     print(f"PAI DESKTOP BRIDGE SERVER ACTIVE ON http://{HOST}:{PORT}")
     print(f"Strict loopback binding verified (Threat T21 Compliant).")
@@ -508,6 +1585,11 @@ def run_bridge_server():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down bridge server...")
+        server.server_close()
+    except Exception as e:
+        log_path = Path.home() / ".pai" / "bridge_error.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"serve_forever error: {e}\n", encoding="utf-8")
         server.server_close()
 
 

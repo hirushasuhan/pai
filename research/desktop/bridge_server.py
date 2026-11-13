@@ -164,13 +164,18 @@ def ensure_ollama_server(timeout: float = 8.0) -> bool:
     env = os.environ.copy()
     env["OLLAMA_HOST"] = "127.0.0.1:11434"
     flags = 0
+    startupinfo = None
     if sys.platform == "win32":
-        flags = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        flags = 0x08000000  # CREATE_NO_WINDOW solely to avoid terminal flash
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
     try:
         subprocess.Popen(
             [str(ollama_exe), "serve"],
             env=env,
             creationflags=flags,
+            startupinfo=startupinfo,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -361,6 +366,152 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
     return model_list, ollama_online
 
 
+def delete_local_model(model_name: str) -> Tuple[bool, str]:
+    """Uninstall and delete a local model via Ollama DELETE /api/delete to free disk space."""
+    if not model_name or not model_name.strip():
+        return False, "Model name cannot be empty."
+    ensure_ollama_server(timeout=3.0)
+    url = "http://127.0.0.1:11434/api/delete"
+    payload = json.dumps({"name": model_name.strip()}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "PAI-Desktop/1.1"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status in (200, 204):
+                return True, f"Model '{model_name}' successfully uninstalled."
+            return False, f"Ollama returned HTTP status {resp.status}."
+    except urllib.error.HTTPError as exc:
+        try:
+            err_data = json.loads(exc.read().decode("utf-8", errors="replace"))
+            return False, err_data.get("error", f"HTTP Error {exc.code}")
+        except Exception:
+            return False, f"HTTP Error {exc.code}: {exc.reason}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
+    {
+        "name": "llama3.2:3b",
+        "tag": "llama3.2:3b",
+        "size": "2.0 GB",
+        "desc": "Meta Llama 3.2 3B - Ultra fast, low RAM reasoning & chat",
+        "category": "Chat & Fast Reasoning",
+    },
+    {
+        "name": "qwen2.5-coder:7b",
+        "tag": "qwen2.5-coder:7b",
+        "size": "4.7 GB",
+        "desc": "Qwen 2.5 Coder 7B - Best-in-class coding & architecture",
+        "category": "Software Engineering",
+    },
+    {
+        "name": "deepseek-r1:7b",
+        "tag": "deepseek-r1:7b",
+        "size": "4.7 GB",
+        "desc": "DeepSeek R1 7B - Deep chain-of-thought mathematical reasoning",
+        "category": "Deep Reasoning",
+    },
+    {
+        "name": "mistral:7b",
+        "tag": "mistral:7b",
+        "size": "4.1 GB",
+        "desc": "Mistral 7B Instruct - High precision versatile reasoning",
+        "category": "General Intelligence",
+    },
+    {
+        "name": "phi3.5:3.8b",
+        "tag": "phi3.5:3.8b",
+        "size": "2.2 GB",
+        "desc": "Microsoft Phi-3.5 Mini - Lightweight agentic assistant",
+        "category": "Compact Agent",
+    },
+    {
+        "name": "llava:7b",
+        "tag": "llava:7b",
+        "size": "4.7 GB",
+        "desc": "LLaVA 7B - Multimodal vision, image inspection & visual QA",
+        "category": "Vision & Multimodal",
+    },
+    {
+        "name": "moondream:latest",
+        "tag": "moondream:latest",
+        "size": "1.7 GB",
+        "desc": "Moondream 2 - Ultra-compact, fast vision & captioning model",
+        "category": "Vision & Multimodal",
+    },
+]
+
+
+def get_recommended_catalog_path() -> Path:
+    p = Path.home() / ".pai" / "recommended_catalog.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def load_recommended_catalog(installed_names: Optional[set] = None) -> List[Dict[str, Any]]:
+    """Load recommended models from disk cache (~/.pai/recommended_catalog.json) or built-in default."""
+    cfg_file = get_recommended_catalog_path()
+    catalog_list = []
+    if cfg_file.is_file():
+        try:
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                catalog_list = data
+        except Exception:
+            pass
+
+    if not catalog_list:
+        catalog_list = DEFAULT_RECOMMENDED_MODELS.copy()
+        try:
+            cfg_file.write_text(json.dumps(catalog_list, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    if installed_names is None:
+        local_models, _ = get_all_installed_local_models()
+        installed_names = {m["name"].lower() for m in local_models}
+
+    results = []
+    for item in catalog_list:
+        entry = dict(item)
+        entry["is_installed"] = entry.get("tag", "").lower() in installed_names
+        results.append(entry)
+    return results
+
+
+def refresh_recommended_catalog() -> List[Dict[str, Any]]:
+    """Synchronize recommended catalog cache and return updated model list."""
+    # Ensure all default curated models (including vision) are always present
+    cfg_file = get_recommended_catalog_path()
+    existing: Dict[str, Dict[str, Any]] = {}
+    if cfg_file.is_file():
+        try:
+            raw = json.loads(cfg_file.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                for m in raw:
+                    if "tag" in m:
+                        existing[m["tag"].lower()] = m
+        except Exception:
+            pass
+
+    for def_m in DEFAULT_RECOMMENDED_MODELS:
+        if def_m["tag"].lower() not in existing:
+            existing[def_m["tag"].lower()] = def_m
+
+    updated_list = list(existing.values())
+    try:
+        cfg_file.write_text(json.dumps(updated_list, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return load_recommended_catalog()
+
+
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
     """Open native Windows folder picker dialog and return selected path."""
     # 1. Try tkinter with topmost attribute
@@ -381,7 +532,7 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
     if sys.platform == "win32":
         try:
             cmd = [
-                "powershell", "-NoProfile", "-Command",
+                "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
                 "[System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null; "
                 "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
                 f"$f.Description = '{title}'; "
@@ -389,8 +540,17 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
                 "$w = New-Object System.Windows.Forms.Form; $w.TopMost = $true; "
                 "if ($f.ShowDialog($w) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
             ]
-            flags = 0x08000000
-            out = subprocess.check_output(cmd, creationflags=flags).decode("utf-8", errors="replace").strip()
+            flags = 0x08000000  # CREATE_NO_WINDOW
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+            out = subprocess.check_output(
+                cmd,
+                creationflags=flags,
+                startupinfo=si,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).decode("utf-8", errors="replace").strip()
             if out and os.path.isdir(out):
                 return os.path.normpath(out)
         except Exception:
@@ -425,43 +585,7 @@ def get_system_preflight() -> Dict[str, Any]:
 
     # 3. Recommended models catalog
     installed_names = {m["name"].lower() for m in models_list}
-    recommended_models = [
-        {
-            "name": "llama3.2:3b",
-            "tag": "llama3.2:3b",
-            "size": "2.0 GB",
-            "desc": "Meta Llama 3.2 3B - Ultra fast, low RAM reasoning & chat",
-            "is_installed": "llama3.2:3b" in installed_names,
-        },
-        {
-            "name": "qwen2.5-coder:7b",
-            "tag": "qwen2.5-coder:7b",
-            "size": "4.7 GB",
-            "desc": "Qwen 2.5 Coder 7B - Best-in-class coding & architecture",
-            "is_installed": "qwen2.5-coder:7b" in installed_names,
-        },
-        {
-            "name": "deepseek-r1:7b",
-            "tag": "deepseek-r1:7b",
-            "size": "4.7 GB",
-            "desc": "DeepSeek R1 7B - Deep chain-of-thought mathematical reasoning",
-            "is_installed": "deepseek-r1:7b" in installed_names,
-        },
-        {
-            "name": "mistral:7b",
-            "tag": "mistral:7b",
-            "size": "4.1 GB",
-            "desc": "Mistral 7B Instruct - High precision versatile reasoning",
-            "is_installed": "mistral:7b" in installed_names,
-        },
-        {
-            "name": "phi3.5:3.8b",
-            "tag": "phi3.5:3.8b",
-            "size": "2.2 GB",
-            "desc": "Microsoft Phi-3.5 Mini - Lightweight agentic assistant",
-            "is_installed": "phi3.5:3.8b" in installed_names,
-        },
-    ]
+    recommended_models = load_recommended_catalog(installed_names)
 
     # 4. RAM telemetry
     ram_gb = 16.0
@@ -624,6 +748,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 2. Models list
         elif path == "/api/models":
             self._handle_get_models()
+        # 2b. Recommended models catalog
+        elif path == "/api/models/recommended":
+            self._send_json({"success": True, "recommended": load_recommended_catalog()})
         # 3. Cloud config & key status
         elif path == "/api/cloud/config":
             self._handle_get_cloud_config()
@@ -675,6 +802,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 2. Local Model Pull (Download)
         elif path == "/api/models/pull":
             self._handle_pull_model(body)
+        # 2b. Local Model Uninstall (Delete)
+        elif path == "/api/models/delete":
+            m_name = body.get("name", "").strip() or body.get("model", "").strip()
+            if not m_name:
+                self._send_json({"success": False, "error": "Model name is required for uninstallation."}, status=400)
+            else:
+                ok_del, msg_del = delete_local_model(m_name)
+                self._send_json({"success": ok_del, "message": msg_del, "error": None if ok_del else msg_del})
+        # 2c. Refresh Recommended Models Catalog
+        elif path == "/api/models/recommended/refresh":
+            recs = refresh_recommended_catalog()
+            self._send_json({"success": True, "recommended": recs})
         # 3. Model Switch
         elif path == "/api/models/switch":
             m = body.get("model", "").strip()
@@ -1302,6 +1441,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 }, status=503)
                 return
 
+            # Graceful local model resolution: verify model is installed or fallback to active installed model
+            local_models, _ = get_all_installed_local_models()
+            installed_names = [m["name"] for m in local_models]
+            if model not in installed_names and installed_names:
+                # If requested model is not installed locally, fallback to first available installed model
+                model = installed_names[0]
+                set_current_model(model)
+
             ollama_url = "http://127.0.0.1:11434/api/generate"
             ollama_payload = {
                 "model": model,
@@ -1322,6 +1469,19 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     d = json.loads(resp.read().decode("utf-8"))
                     reply_text = d.get("response", "")
+            except urllib.error.HTTPError as exc:
+                err_detail = ""
+                try:
+                    raw_b = exc.read().decode("utf-8", errors="replace")
+                    err_json = json.loads(raw_b)
+                    err_detail = err_json.get("error", "")
+                except Exception:
+                    pass
+                if not err_detail:
+                    err_detail = exc.reason if hasattr(exc, "reason") and exc.reason else f"HTTP {exc.code}"
+                error_msg = f"Local model execution error ({model}): {err_detail}"
+            except urllib.error.URLError as exc:
+                error_msg = f"Local model connection error: {exc.reason}"
             except Exception as exc:
                 error_msg = f"Local model execution error: {exc}"
 

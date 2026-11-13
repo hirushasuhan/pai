@@ -8,8 +8,34 @@ const API_BASE = "http://127.0.0.1:8765";
 // State
 let currentTab = "chat";
 let activeModel = "llama3.2:3b";
+let activeProjectPath = "";
+let activeProjectName = "";
+let currentOpenFile = "";
 let chatHistory = [];
 let availableModels = [];
+let projectsData = { active_project: "", projects: [] };
+let teamRosterData = [];
+let currentDeliverables = { plan: "", specialist: "", code: {}, qa: "" };
+
+// SVG Icon Library
+const SVG_ICONS = {
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+  alert: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`,
+  info: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`,
+  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`,
+  pm: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>`,
+  dev: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`,
+  specialist: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>`,
+  qa: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>`,
+  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
+  globe: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`,
+  image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
+  layers: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
+  cpu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>`,
+};
 
 // DOM Elements
 const navItems = document.querySelectorAll(".nav-item");
@@ -17,17 +43,55 @@ const tabViews = document.querySelectorAll(".tab-view");
 const serverStatusDot = document.getElementById("server-status-dot");
 const serverStatusText = document.getElementById("server-status-text");
 const headerModelSelect = document.getElementById("header-model-select");
+const headerProjectSelect = document.getElementById("header-project-select");
+const btnHeaderBrowseFolder = document.getElementById("btn-header-browse-folder");
+const toggleTeamMode = document.getElementById("toggle-team-mode");
 const toggleInternet = document.getElementById("toggle-internet");
 const toggleFactcheck = document.getElementById("toggle-factcheck");
+const btnOpenSettings = document.getElementById("btn-open-settings");
 
 // Chat DOM
 const messagesList = document.getElementById("messages-list");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const btnSend = document.getElementById("btn-send");
+const chatProjectBanner = document.getElementById("chat-project-banner");
+const chatProjectName = document.getElementById("chat-project-name");
+const chatProjectPath = document.getElementById("chat-project-path");
+const btnClearChatProj = document.getElementById("btn-clear-chat-proj");
+
+// Projects DOM
+const createProjectForm = document.getElementById("create-project-form");
+const projNameInput = document.getElementById("proj-name-input");
+const projPathInput = document.getElementById("proj-path-input");
+const btnBrowseProjFolder = document.getElementById("btn-browse-proj-folder");
+const btnEmptyBrowseFolder = document.getElementById("btn-empty-browse-folder");
+const projectsListContainer = document.getElementById("projects-list-container");
+const savedProjectsCount = document.getElementById("saved-projects-count");
+const currentOpenFilename = document.getElementById("current-open-filename");
+const btnRefreshFiles = document.getElementById("btn-refresh-files");
+const btnNewFile = document.getElementById("btn-new-file");
+const btnSaveFile = document.getElementById("btn-save-file");
+const fileTreeContainer = document.getElementById("file-tree-container");
+const codeEditorTextarea = document.getElementById("code-editor-textarea");
+
+// Team DOM
+const teamRosterCards = document.getElementById("team-roster-cards");
+const teamSprintForm = document.getElementById("team-sprint-form");
+const teamTaskInput = document.getElementById("team-task-input");
+const btnRunTeam = document.getElementById("btn-run-team");
+const teamTargetProjNote = document.getElementById("team-target-proj-note");
+const teamActivityFeed = document.getElementById("team-activity-feed");
+const teamDeliverableView = document.getElementById("team-deliverable-view");
+const delivTabBtns = document.querySelectorAll(".deliv-tab-btn");
+const btnCopyDeliverable = document.getElementById("btn-copy-deliverable");
+
+// Skills DOM
+const skillsCatalogGrid = document.getElementById("skills-catalog-grid");
 
 // Models DOM
 const installedModelsList = document.getElementById("installed-models-list");
+const recommendedModelsGrid = document.getElementById("recommended-models-grid");
 const btnRefreshModels = document.getElementById("btn-refresh-models");
 const pullModelNameInput = document.getElementById("pull-model-name");
 const btnPullModel = document.getElementById("btn-pull-model");
@@ -37,12 +101,21 @@ const pullStatusText = document.getElementById("pull-status-text");
 const pullPercentText = document.getElementById("pull-percent-text");
 
 // Cloud DOM
-const btnSaveKeys = document.querySelectorAll(".btn-save-key");
+const cloudForm = document.getElementById("cloud-model-form");
+const cfgModelName = document.getElementById("cfg-model-name");
+const cfgProviderUrl = document.getElementById("cfg-provider-url");
+const cfgApiKey = document.getElementById("cfg-api-key");
+const btnToggleKeyVis = document.getElementById("btn-toggle-key-visibility");
+const saveStatusNotice = document.getElementById("save-model-status");
+const configuredModelsList = document.getElementById("configured-models-list");
+const configuredCountSpan = document.getElementById("configured-count");
 
 // Antigravity DOM
 const antigravityTaskInput = document.getElementById("antigravity-task-input");
 const btnRunAntigravity = document.getElementById("btn-run-antigravity");
 const antigravityLog = document.getElementById("antigravity-log");
+const toggleAgTeamMode = document.getElementById("toggle-ag-team-mode");
+const agTargetWorkspaceBadge = document.getElementById("ag-target-workspace-badge");
 
 // Tools DOM
 const toolWeatherCity = document.getElementById("tool-weather-city");
@@ -52,19 +125,75 @@ const toolSearchQuery = document.getElementById("tool-search-query");
 const btnRunSearch = document.getElementById("btn-run-search");
 const searchResultBox = document.getElementById("search-result-box");
 
+// Toast Container & Modals
+const toastContainer = document.getElementById("toast-container");
+const settingsModal = document.getElementById("settings-modal");
+const btnCloseSettings = document.getElementById("btn-close-settings");
+const btnSaveSettings = document.getElementById("btn-save-settings");
+const btnResetSettings = document.getElementById("btn-reset-settings");
+const settingFontFamily = document.getElementById("setting-font-family");
+const settingFontSize = document.getElementById("setting-font-size");
+
+const preflightModal = document.getElementById("preflight-modal");
+const btnClosePreflight = document.getElementById("btn-close-preflight");
+const btnDismissPreflight = document.getElementById("btn-dismiss-preflight");
+const preflightStatusItems = document.getElementById("preflight-status-items");
+const preflightActionBox = document.getElementById("preflight-action-box");
+const preflightActionText = document.getElementById("preflight-action-text");
+const preflightActionButtons = document.getElementById("preflight-action-buttons");
+
 // Initial Setup
 document.addEventListener("DOMContentLoaded", () => {
+  applyStoredSettings();
   setupNavigation();
   setupChat();
+  setupProjects();
+  setupTeam();
+  setupSkills();
   setupModels();
   setupCloudKeys();
   setupAntigravity();
   setupTools();
-  checkServerHealth();
+  setupSettingsModal();
+  checkStartupPreflight();
   setInterval(checkServerHealth, 5000);
 });
 
-// 1. Navigation
+// Toast Notification System
+function showToast(message, type = "info", title = "", duration = 4000) {
+  if (!toastContainer) return;
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  
+  const iconSvg = type === "success" ? SVG_ICONS.check :
+                  type === "error" ? SVG_ICONS.alert :
+                  type === "warning" ? SVG_ICONS.alert : SVG_ICONS.info;
+  
+  const defaultTitle = type === "success" ? "Success" :
+                       type === "error" ? "Error" :
+                       type === "warning" ? "Notice" : "Information";
+
+  toast.innerHTML = `
+    <div class="toast-icon">${iconSvg}</div>
+    <div class="toast-body">
+      <div class="toast-title">${escapeHtml(title || defaultTitle)}</div>
+      <div class="toast-msg">${escapeHtml(message)}</div>
+    </div>
+    <button type="button" class="toast-close" title="Dismiss">&times;</button>
+  `;
+
+  const closeBtn = toast.querySelector(".toast-close");
+  const dismiss = () => {
+    toast.classList.add("toast-hiding");
+    setTimeout(() => toast.remove(), 250);
+  };
+  closeBtn.addEventListener("click", dismiss);
+
+  toastContainer.appendChild(toast);
+  setTimeout(dismiss, duration);
+}
+
+// 1. Navigation & Global Controls
 function setupNavigation() {
   navItems.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -84,219 +213,934 @@ function setupNavigation() {
       const data = await res.json();
       if (data.success) {
         activeModel = selected;
+        showToast(`Switched active model to ${selected}`, "success", "Model Changed");
       }
     } catch (err) {
       console.error("Failed to switch model:", err);
+      showToast(`Failed to switch model: ${err.message}`, "error");
+    }
+  });
+
+  headerProjectSelect.addEventListener("change", async (e) => {
+    const selectedPath = e.target.value;
+    await activateProject(selectedPath);
+  });
+
+  btnHeaderBrowseFolder.addEventListener("click", async () => {
+    await browseAndActivateProjectFolder();
+  });
+
+  toggleTeamMode.addEventListener("change", async (e) => {
+    if (toggleTeamMode.checked) {
+      if (!activeProjectPath) {
+        showToast("AI Team mode requires an active project directory to read and write code.", "warning", "Project Needed");
+        const picked = await browseAndActivateProjectFolder();
+        if (!picked) {
+          toggleTeamMode.checked = false;
+        }
+      } else {
+        showToast(`AI Team mode active for: ${activeProjectName}`, "success", "AI Team Active");
+      }
+    } else {
+      showToast("Switched back to standard single-assistant chat mode", "info");
     }
   });
 
   toggleInternet.addEventListener("change", async (e) => {
-    await toggleFeature("internet", e.target.checked);
+    const val = e.target.checked;
+    try {
+      await fetch(`${API_BASE}/api/settings/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feature: "internet", value: val }),
+      });
+      showToast(`Real-Time Internet grounding ${val ? "enabled" : "disabled"}`, "info");
+      loadSkills();
+    } catch (err) {
+      console.error("Internet toggle error:", err);
+    }
   });
 
   toggleFactcheck.addEventListener("change", async (e) => {
-    await toggleFeature("factcheck", e.target.checked);
+    const val = e.target.checked;
+    try {
+      await fetch(`${API_BASE}/api/settings/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feature: "factcheck", value: val }),
+      });
+      showToast(`Live Fact-Checking engine ${val ? "enabled" : "disabled"}`, "info");
+      loadSkills();
+    } catch (err) {
+      console.error("Factcheck toggle error:", err);
+    }
   });
 }
 
 function switchTab(tab) {
   currentTab = tab;
   navItems.forEach((btn) => {
-    btn.classList.toggle("active", btn.getAttribute("data-tab") === tab);
-  });
-  tabViews.forEach((view) => {
-    view.classList.toggle("active", view.id === `view-${tab}`);
+    if (btn.getAttribute("data-tab") === tab) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
   });
 
-  if (tab === "models") loadModelsList();
-  if (tab === "cloud") loadCloudConfig();
+  tabViews.forEach((view) => {
+    if (view.id === `view-${tab}`) {
+      view.classList.add("active");
+    } else {
+      view.classList.remove("active");
+    }
+  });
+
+  if (tab === "models") loadInstalledModels();
+  if (tab === "cloud") loadCloudModels();
+  if (tab === "projects") {
+    loadProjects();
+    if (!activeProjectPath && (!projectsData.projects || projectsData.projects.length === 0)) {
+      showToast("Select a project folder to browse files and enable AI Team features.", "info", "Workspace Setup");
+    }
+  }
+  if (tab === "team") loadTeamRoster();
+  if (tab === "skills") loadSkills();
   if (tab === "tools") loadDoctorTelemetry();
 }
 
-async function toggleFeature(feature, val) {
-  try {
-    await fetch(`${API_BASE}/api/settings/toggle`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ feature, value: val }),
-    });
-  } catch (err) {
-    console.error("Toggle error:", err);
-  }
-}
-
-// 2. Health & Status
-async function checkServerHealth() {
-  try {
-    const res = await fetch(`${API_BASE}/api/status`);
-    if (res.ok) {
-      const data = await res.json();
-      serverStatusDot.classList.add("online");
-      serverStatusText.textContent = `Online (${data.active_model})`;
-      activeModel = data.active_model;
-      toggleInternet.checked = data.internet_enabled;
-      toggleFactcheck.checked = data.factcheck_enabled;
-    } else {
-      setOffline();
-    }
-  } catch (err) {
-    setOffline();
-  }
-}
-
-function setOffline() {
-  serverStatusDot.classList.remove("online");
-  serverStatusText.textContent = "Engine Offline (Start bridge)";
-}
-
-// 3. Chat System
+// 2. Chat System with Native AI Team Integration
 function setupChat() {
-  chatForm.addEventListener("submit", (e) => {
+  chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    sendMessage();
+    const prompt = chatInput.value.trim();
+    if (!prompt) return;
+
+    const isTeam = toggleTeamMode.checked;
+    if (isTeam && !activeProjectPath) {
+      showToast("Please select a project folder before running AI Team mode", "warning", "Workspace Required");
+      await browseAndActivateProjectFolder();
+      if (!activeProjectPath) return;
+    }
+
+    chatInput.value = "";
+    appendUserMessage(prompt);
+    btnSend.disabled = true;
+
+    const botMsgId = "msg-" + Date.now();
+    appendAssistantPlaceholder(botMsgId, isTeam);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          model: activeModel,
+          history: chatHistory,
+          project_path: activeProjectPath,
+          is_team_mode: isTeam,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        if (data.is_image) {
+          updateAssistantMessageImage(botMsgId, data.image_url, data.prompt, data.model, data.filename);
+        } else if (data.is_team) {
+          updateAssistantTeamMessage(botMsgId, data);
+          if (activeProjectPath) {
+            loadProjectFiles(activeProjectPath);
+          }
+        } else {
+          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding);
+        }
+        chatHistory.push({ role: "user", content: prompt });
+        chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
+      } else {
+        updateAssistantError(botMsgId, data.error || "Execution error");
+      }
+    } catch (err) {
+      updateAssistantError(botMsgId, `Server connection error: ${err.message}`);
+    } finally {
+      btnSend.disabled = false;
+      chatInput.focus();
+    }
   });
 
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      chatForm.dispatchEvent(new Event("submit"));
+    }
+  });
+
+  btnClearChatProj.addEventListener("click", () => {
+    activateProject("");
+  });
+}
+
+function appendUserMessage(text) {
+  const msg = document.createElement("div");
+  msg.className = "message user";
+  msg.innerHTML = `
+    <div class="msg-header">
+      <span class="avatar-badge">YOU</span>
+      <span class="msg-author">User</span>
+      <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+    </div>
+    <div class="msg-body">
+      <p>${escapeHtml(text)}</p>
+    </div>
+  `;
+  messagesList.appendChild(msg);
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function appendAssistantPlaceholder(id, isTeam = false) {
+  const msg = document.createElement("div");
+  msg.className = "message assistant";
+  msg.id = id;
+  const title = isTeam ? "Autonomous AI Team (4 Roles)" : "PAI Assistant";
+  const badge = isTeam ? "TEAM" : "PAI";
+  const statusNote = isTeam ? "Reviewing codebase, planning WBS & synthesizing code..." : "Thinking & grounding...";
+
+  msg.innerHTML = `
+    <div class="msg-header">
+      <span class="avatar-badge">${badge}</span>
+      <span class="msg-author">${title}</span>
+      <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+    </div>
+    <div class="msg-body loading-indicator">
+      <span class="dot-flashing"></span>
+      <span class="text-muted" style="margin-left: 8px;">${statusNote}</span>
+    </div>
+  `;
+  messagesList.appendChild(msg);
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function updateAssistantMessage(id, text, factcheck, grounding) {
+  const msg = document.getElementById(id);
+  if (!msg) return;
+  const body = msg.querySelector(".msg-body");
+  body.classList.remove("loading-indicator");
+
+  let html = formatMarkdown(text);
+
+  if (grounding && grounding.length > 0) {
+    html += `
+      <div class="grounding-badge-list">
+        <span class="grounding-label">${SVG_ICONS.globe} Web Citations:</span>
+        ${grounding.map(g => `<a href="${escapeHtml(g.url)}" target="_blank" class="grounding-pill">${escapeHtml(g.title || g.url)}</a>`).join("")}
+      </div>
+    `;
+  }
+
+  if (factcheck && factcheck.report) {
+    html += `
+      <div class="factcheck-box">
+        <div class="factcheck-header">
+          <span class="fc-title">${SVG_ICONS.shield} Real-Time Fact-Check Verdict</span>
+          <span class="fc-score">Trust: ${Math.round((factcheck.score || 1.0) * 100)}%</span>
+        </div>
+        <div class="factcheck-body font-mono-target">${escapeHtml(factcheck.report)}</div>
+      </div>
+    `;
+  }
+
+  body.innerHTML = html;
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function updateAssistantTeamMessage(id, data) {
+  const msg = document.getElementById(id);
+  if (!msg) return;
+  const body = msg.querySelector(".msg-body");
+  body.classList.remove("loading-indicator");
+
+  let filesHtml = "";
+  if (data.saved_files && data.saved_files.length > 0) {
+    filesHtml = `
+      <div class="chat-team-files-list">
+        ${data.saved_files.map(f => `<span class="team-file-pill" onclick="switchTab('projects'); openProjectFile('${activeProjectPath}', '${escapeHtml(f)}');">${SVG_ICONS.file} ${escapeHtml(f)}</span>`).join("")}
+      </div>
+    `;
+  }
+
+  body.innerHTML = `
+    <div class="chat-team-summary">
+      <div class="chat-team-header">
+        <span class="chat-team-title">${SVG_ICONS.users} Multi-Agent Team Sprint Completed</span>
+        <span class="active-badge">4 Roles Synchronized</span>
+      </div>
+      <div>${formatMarkdown(data.response)}</div>
+      ${filesHtml ? `<div class="mt-2"><strong>Saved Code Files (Click to inspect):</strong>${filesHtml}</div>` : ""}
+    </div>
+  `;
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function updateAssistantMessageImage(id, dataUrl, prompt, model, filename) {
+  const msg = document.getElementById(id);
+  if (!msg) return;
+  const body = msg.querySelector(".msg-body");
+  body.classList.remove("loading-indicator");
+
+  body.innerHTML = `
+    <div class="chat-image-card">
+      <div class="image-preview-wrap">
+        <img src="${dataUrl}" alt="${escapeHtml(prompt)}" class="generated-chat-image" onclick="window.open('${dataUrl}', '_blank')" />
+      </div>
+      <div class="image-actions">
+        <div class="image-info">
+          <span class="image-prompt-badge">"${escapeHtml(prompt)}"</span>
+          <span class="image-model-badge">${SVG_ICONS.image} ${escapeHtml(model)}</span>
+        </div>
+        <a href="${dataUrl}" download="${escapeHtml(filename || 'pai-generated.png')}" class="btn btn-sm btn-download-image">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Download PNG
+        </a>
+      </div>
+    </div>
+  `;
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function updateAssistantError(id, errText) {
+  const msg = document.getElementById(id);
+  if (!msg) return;
+  const body = msg.querySelector(".msg-body");
+  body.classList.remove("loading-indicator");
+  body.innerHTML = `<p class="error-text">Error: ${escapeHtml(errText)}</p>`;
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+// 3. Project Workspace System with Native Windows Folder Picker
+function setupProjects() {
+  createProjectForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = projNameInput.value.trim();
+    const folderPath = projPathInput.value.trim();
+    if (!name || !folderPath) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/projects/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, path: folderPath }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Saved project "${name}"`, "success", "Workspace Added");
+        projNameInput.value = "";
+        projPathInput.value = "";
+        await loadProjects();
+        await activateProject(folderPath);
+      } else {
+        showToast(data.error || "Failed to save project", "error");
+      }
+    } catch (err) {
+      showToast(`Error saving project: ${err.message}`, "error");
+    }
+  });
+
+  btnBrowseProjFolder.addEventListener("click", async () => {
+    const picked = await openNativeFolderDialog();
+    if (picked) {
+      projPathInput.value = picked.path;
+      if (!projNameInput.value.trim()) {
+        projNameInput.value = picked.name;
+      }
+    }
+  });
+
+  btnEmptyBrowseFolder.addEventListener("click", async () => {
+    await browseAndActivateProjectFolder();
+  });
+
+  btnRefreshFiles.addEventListener("click", () => {
+    if (activeProjectPath) {
+      loadProjectFiles(activeProjectPath);
+      showToast("Refreshed project file tree", "info");
+    }
+  });
+
+  btnNewFile.addEventListener("click", () => {
+    if (!activeProjectPath) {
+      showToast("Please activate a project first", "warning");
+      return;
+    }
+    const fname = prompt("Enter new filename (e.g. index.html or utils.js):");
+    if (fname) {
+      currentOpenFile = fname.trim();
+      currentOpenFilename.textContent = currentOpenFile;
+      codeEditorTextarea.value = "";
+      codeEditorTextarea.removeAttribute("readonly");
+      btnSaveFile.removeAttribute("disabled");
+      codeEditorTextarea.focus();
+    }
+  });
+
+  btnSaveFile.addEventListener("click", async () => {
+    if (!activeProjectPath || !currentOpenFile) return;
+    const content = codeEditorTextarea.value;
+    try {
+      const res = await fetch(`${API_BASE}/api/projects/file/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: activeProjectPath,
+          file: currentOpenFile,
+          content: content,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Saved file "${currentOpenFile}" successfully!`, "success", "File Saved");
+        loadProjectFiles(activeProjectPath);
+      } else {
+        showToast(data.error || "Failed to save file", "error");
+      }
+    } catch (err) {
+      showToast(`Save error: ${err.message}`, "error");
     }
   });
 }
 
-async function sendMessage() {
-  const text = chatInput.value.trim();
-  if (!text) return;
-
-  chatInput.value = "";
-  appendMessage("user", text);
-
-  // Assistant typing placeholder
-  const placeholder = appendMessage("assistant", "Thinking...");
-  const bodyDiv = placeholder.querySelector(".msg-body");
-
+async function openNativeFolderDialog() {
   try {
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: text,
-        model: activeModel,
-        history: chatHistory,
-      }),
-    });
-
+    const res = await fetch(`${API_BASE}/api/utils/select_folder`, { method: "POST" });
     const data = await res.json();
-    if (data.success) {
-      renderAssistantResponse(placeholder, data.response, data.thinking, data.factcheck);
-      chatHistory.push({ role: "user", content: text });
-      chatHistory.push({ role: "assistant", content: data.response });
-    } else {
-      bodyDiv.innerHTML = `<span style="color:var(--accent-red)">Error: ${data.error || "Generation failed"}</span>`;
+    if (data.success && data.path) {
+      return data;
     }
   } catch (err) {
-    bodyDiv.innerHTML = `<span style="color:var(--accent-red)">Connection error: ${err.message}</span>`;
+    console.error("Folder dialog error:", err);
+  }
+  return null;
+}
+
+async function browseAndActivateProjectFolder() {
+  const picked = await openNativeFolderDialog();
+  if (picked) {
+    const name = picked.name || "Workspace";
+    try {
+      await fetch(`${API_BASE}/api/projects/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, path: picked.path }),
+      });
+      await loadProjects();
+      await activateProject(picked.path);
+      return true;
+    } catch (e) {
+      console.error("Save on browse error:", e);
+    }
+  }
+  return false;
+}
+
+async function loadProjects() {
+  try {
+    const res = await fetch(`${API_BASE}/api/projects`);
+    const data = await res.json();
+    if (data.success) {
+      projectsData = data;
+      renderProjectsList(data.projects, data.active_project);
+      populateHeaderProjectDropdown(data.projects, data.active_project);
+
+      activeProjectPath = data.active_project || "";
+      const activeObj = data.projects.find(p => p.path === activeProjectPath);
+      activeProjectName = activeObj ? activeObj.name : "";
+      updateActiveProjectUI();
+
+      if (activeProjectPath) {
+        loadProjectFiles(activeProjectPath);
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load projects:", err);
   }
 }
 
-function appendMessage(role, text) {
-  const msg = document.createElement("div");
-  msg.className = `message ${role}`;
-
-  const header = document.createElement("div");
-  header.className = "msg-header";
-  header.innerHTML = `
-    <span class="avatar-badge">${role === "user" ? "YOU" : "PAI"}</span>
-    <span class="msg-author">${role === "user" ? "User" : "PAI Assistant"}</span>
-    <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-  `;
-
-  const body = document.createElement("div");
-  body.className = "msg-body";
-  body.textContent = text;
-
-  msg.appendChild(header);
-  msg.appendChild(body);
-  messagesList.appendChild(msg);
-  messagesList.scrollTop = messagesList.scrollHeight;
-
-  return msg;
+function populateHeaderProjectDropdown(projects, activePath) {
+  headerProjectSelect.innerHTML = `<option value="">No Active Project (Global)</option>`;
+  projects.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p.path;
+    opt.textContent = `${p.name} (${p.path})`;
+    if (p.path === activePath) opt.selected = true;
+    headerProjectSelect.appendChild(opt);
+  });
 }
 
-function renderAssistantResponse(msgElement, responseText, thinkingText, factcheckData) {
-  const bodyDiv = msgElement.querySelector(".msg-body");
-  bodyDiv.innerHTML = "";
+function renderProjectsList(projects, activePath) {
+  savedProjectsCount.textContent = projects.length;
+  if (projects.length === 0) {
+    projectsListContainer.innerHTML = `<div class="text-muted text-sm" style="padding: 10px;">No projects saved yet. Create one above or click Browse.</div>`;
+    return;
+  }
 
-  // 1. Thinking trace
-  if (thinkingText) {
-    const thinkBox = document.createElement("div");
-    thinkBox.className = "thinking-box";
-    thinkBox.innerHTML = `
-      <div class="thinking-header">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
-        <span>Model Thinking Trace (Click to toggle)</span>
+  projectsListContainer.innerHTML = "";
+  projects.forEach((p) => {
+    const isActive = p.path === activePath;
+    const card = document.createElement("div");
+    card.className = `project-card ${isActive ? "active" : ""}`;
+    card.innerHTML = `
+      <div class="project-card-header">
+        <span class="project-card-name">${escapeHtml(p.name)}</span>
+        ${isActive ? `<span class="project-card-badge">ACTIVE</span>` : ""}
       </div>
-      <div class="thinking-content">${escapeHtml(thinkingText)}</div>
+      <div class="project-card-path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</div>
+      <div class="project-card-actions">
+        ${!isActive ? `<button type="button" class="btn btn-secondary btn-sm btn-activate-proj" data-path="${escapeHtml(p.path)}">Set Active</button>` : ""}
+        <button type="button" class="btn btn-secondary btn-sm btn-del-proj" data-path="${escapeHtml(p.path)}" title="Delete project">&times;</button>
+      </div>
     `;
-    const header = thinkBox.querySelector(".thinking-header");
-    const content = thinkBox.querySelector(".thinking-content");
-    header.addEventListener("click", () => {
-      content.style.display = content.style.display === "none" ? "block" : "none";
+
+    const actBtn = card.querySelector(".btn-activate-proj");
+    if (actBtn) {
+      actBtn.addEventListener("click", () => activateProject(p.path));
+    }
+    const delBtn = card.querySelector(".btn-del-proj");
+    if (delBtn) {
+      delBtn.addEventListener("click", () => deleteProject(p.path));
+    }
+
+    projectsListContainer.appendChild(card);
+  });
+}
+
+async function activateProject(folderPath) {
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/set_active`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: folderPath }),
     });
-    bodyDiv.appendChild(thinkBox);
+    const data = await res.json();
+    if (data.success) {
+      activeProjectPath = folderPath;
+      const projObj = (projectsData.projects || []).find(p => p.path === folderPath);
+      activeProjectName = projObj ? projObj.name : (folderPath ? "Workspace" : "");
+      updateActiveProjectUI();
+      renderProjectsList(projectsData.projects || [], activeProjectPath);
+      headerProjectSelect.value = folderPath;
+      if (folderPath) {
+        showToast(`Workspace set to: ${activeProjectName}`, "success", "Active Project");
+        loadProjectFiles(folderPath);
+      } else {
+        showToast("Switched to Global mode (no active project)", "info");
+        fileTreeContainer.innerHTML = `
+          <div class="file-tree-empty">
+            <p class="text-muted mb-3">No active project workspace selected.</p>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-empty-browse-folder-2">
+              ${SVG_ICONS.folder} <span>Select Project Folder</span>
+            </button>
+          </div>
+        `;
+        document.getElementById("btn-empty-browse-folder-2")?.addEventListener("click", browseAndActivateProjectFolder);
+        codeEditorTextarea.value = "";
+        codeEditorTextarea.setAttribute("readonly", "true");
+        btnSaveFile.setAttribute("disabled", "true");
+        currentOpenFilename.textContent = "Select a file to view or edit";
+      }
+    }
+  } catch (err) {
+    showToast(`Failed to activate project: ${err.message}`, "error");
+  }
+}
+
+async function deleteProject(folderPath) {
+  if (!confirm(`Are you sure you want to remove this project workspace? (Your disk files will not be deleted)`)) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: folderPath }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Project workspace removed", "info");
+      await loadProjects();
+    }
+  } catch (err) {
+    showToast(`Delete error: ${err.message}`, "error");
+  }
+}
+
+function updateActiveProjectUI() {
+  if (activeProjectPath && activeProjectName) {
+    chatProjectBanner.classList.remove("hidden");
+    chatProjectName.textContent = activeProjectName;
+    chatProjectPath.textContent = activeProjectPath;
+    teamTargetProjNote.textContent = `Target: ${activeProjectName} (${activeProjectPath})`;
+    agTargetWorkspaceBadge.textContent = `Target: ${activeProjectName}`;
+  } else {
+    chatProjectBanner.classList.add("hidden");
+    teamTargetProjNote.textContent = "Target: Standalone sprint directory";
+    agTargetWorkspaceBadge.textContent = "Target: Global Workspace";
+  }
+}
+
+async function loadProjectFiles(folderPath) {
+  if (!folderPath) return;
+  fileTreeContainer.innerHTML = `<div class="file-tree-empty text-muted">Loading project files...</div>`;
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/files?path=${encodeURIComponent(folderPath)}`);
+    const data = await res.json();
+    if (data.success) {
+      renderFileTree(data.files, folderPath);
+    } else {
+      fileTreeContainer.innerHTML = `<div class="file-tree-empty error-text">${escapeHtml(data.error)}</div>`;
+    }
+  } catch (err) {
+    fileTreeContainer.innerHTML = `<div class="file-tree-empty error-text">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderFileTree(files, basePath) {
+  if (!files || files.length === 0) {
+    fileTreeContainer.innerHTML = `
+      <div class="file-tree-empty text-muted">
+        <p class="mb-2">No code or text files found in project.</p>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="btnNewFile.click()">Create First File</button>
+      </div>
+    `;
+    return;
   }
 
-  // 2. Main formatted markdown content
-  const contentDiv = document.createElement("div");
-  contentDiv.innerHTML = formatMarkdown(responseText);
-  bodyDiv.appendChild(contentDiv);
+  fileTreeContainer.innerHTML = "";
+  files.forEach((f) => {
+    const item = document.createElement("div");
+    item.className = `file-item ${f === currentOpenFile ? "active" : ""}`;
+    item.innerHTML = `${SVG_ICONS.file} <span>${escapeHtml(f)}</span>`;
+    item.addEventListener("click", () => openProjectFile(basePath, f, item));
+    fileTreeContainer.appendChild(item);
+  });
+}
 
-  // 3. Fact-checking card
-  if (factcheckData && factcheckData.claims && factcheckData.claims.length > 0) {
-    const fcCard = document.createElement("div");
-    fcCard.className = "factcheck-card";
-    
-    let claimsHtml = "";
-    factcheckData.claims.forEach((c) => {
-      let badgeClass = "badge-unverified";
-      let icon = "⚠️ UNVERIFIED";
-      if (c.verdict === "VERIFIED") {
-        badgeClass = "badge-verified";
-        icon = "✅ VERIFIED";
-      } else if (c.verdict === "CONTRADICTED") {
-        badgeClass = "badge-contradicted";
-        icon = "❌ CONTRADICTED";
-      }
+async function openProjectFile(basePath, filename, itemElem) {
+  document.querySelectorAll(".file-item").forEach(el => el.classList.remove("active"));
+  if (itemElem) itemElem.classList.add("active");
 
-      let citationsHtml = "";
-      if (c.citations && c.citations.length > 0) {
-        citationsHtml = c.citations.map(cite => `<a class="cite-link" href="${cite.url}" target="_blank">${cite.title || 'Source'}</a>`).join(", ");
-      }
+  currentOpenFile = filename;
+  currentOpenFilename.textContent = filename;
+  codeEditorTextarea.value = "Loading file content...";
+  codeEditorTextarea.setAttribute("readonly", "true");
+  btnSaveFile.setAttribute("disabled", "true");
 
-      claimsHtml += `
-        <div class="claim-row">
-          <span class="${badgeClass}">[${icon}]</span> ${escapeHtml(c.statement)}
-          ${citationsHtml ? `— Sources: ${citationsHtml}` : ''}
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/file/content?path=${encodeURIComponent(basePath)}&file=${encodeURIComponent(filename)}`);
+    const data = await res.json();
+    if (data.success) {
+      codeEditorTextarea.value = data.content;
+      codeEditorTextarea.removeAttribute("readonly");
+      btnSaveFile.removeAttribute("disabled");
+    } else {
+      codeEditorTextarea.value = `// Error loading file: ${data.error}`;
+      showToast(data.error, "error");
+    }
+  } catch (err) {
+    codeEditorTextarea.value = `// Connection error: ${err.message}`;
+    showToast(err.message, "error");
+  }
+}
+
+// 4. AI Team System (FIPA-ACL Multi-Agent SDLC)
+function setupTeam() {
+  delivTabBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      delivTabBtns.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const tab = btn.getAttribute("data-tab");
+      renderDeliverableTab(tab);
+    });
+  });
+
+  btnCopyDeliverable.addEventListener("click", () => {
+    const activeTab = document.querySelector(".deliv-tab-btn.active")?.getAttribute("data-tab") || "code";
+    let text = "";
+    if (activeTab === "plan") text = currentDeliverables.plan;
+    else if (activeTab === "specialist") text = currentDeliverables.specialist;
+    else if (activeTab === "qa") text = currentDeliverables.qa;
+    else if (activeTab === "code") {
+      text = Object.entries(currentDeliverables.code || {})
+        .map(([fname, c]) => `=== File: ${fname} ===\n${c}\n`)
+        .join("\n\n");
+    }
+    if (text) {
+      navigator.clipboard.writeText(text);
+      showToast("Copied deliverables to clipboard!", "success");
+    }
+  });
+
+  teamSprintForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const task = teamTaskInput.value.trim();
+    if (!task) return;
+
+    btnRunTeam.disabled = true;
+    teamActivityFeed.innerHTML = `
+      <div class="fipa-msg-card inform">
+        <div class="fipa-header">
+          <span class="fipa-badge">COORDINATOR</span>
+          <span class="fipa-agents">PAI MultiAgentTeam &rarr; Engine</span>
         </div>
-      `;
-    });
-
-    fcCard.innerHTML = `
-      <div class="factcheck-header">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-        <span>Live Web Grounding & Fact-Check Audit:</span>
+        <div class="fipa-body">Reviewing existing project codebase and initiating IEEE / FIPA-ACL collaborative sprint for: "${escapeHtml(task)}"...</div>
       </div>
-      <div class="factcheck-claims-list">${claimsHtml}</div>
     `;
-    bodyDiv.appendChild(fcCard);
-  }
 
-  messagesList.scrollTop = messagesList.scrollHeight;
+    try {
+      const res = await fetch(`${API_BASE}/api/team/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task,
+          project_dir: activeProjectPath,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showToast("Team sprint completed successfully!", "success", "Sprint Done");
+        currentDeliverables = {
+          plan: data.plan,
+          specialist: data.specialist_assets,
+          code: data.code_updates,
+          qa: data.qa_verdict,
+        };
+
+        renderTeamMessages(data.messages || []);
+        renderDeliverableTab("plan");
+
+        if (activeProjectPath) {
+          loadProjectFiles(activeProjectPath);
+        }
+      } else {
+        showToast(data.error || "Team sprint failed", "error");
+        const errCard = document.createElement("div");
+        errCard.className = "fipa-msg-card reject";
+        errCard.innerHTML = `
+          <div class="fipa-header">
+            <span class="fipa-badge">ERROR</span>
+            <span class="fipa-agents">Sprint Aborted</span>
+          </div>
+          <div class="fipa-body">${escapeHtml(data.error || "Execution error")}</div>
+        `;
+        teamActivityFeed.appendChild(errCard);
+      }
+    } catch (err) {
+      showToast(`Team sprint connection error: ${err.message}`, "error");
+    } finally {
+      btnRunTeam.disabled = false;
+    }
+  });
 }
 
-// 4. Model Manager
+async function loadTeamRoster() {
+  try {
+    const res = await fetch(`${API_BASE}/api/team/roster`);
+    const data = await res.json();
+    if (data.success) {
+      teamRosterData = data.roster;
+      renderTeamRoster(data.roster, data.available_models);
+    }
+  } catch (err) {
+    console.error("Failed to load team roster:", err);
+  }
+}
+
+function renderTeamRoster(roster, availableModels) {
+  teamRosterCards.innerHTML = "";
+  roster.forEach((member) => {
+    const card = document.createElement("div");
+    card.className = "team-role-card";
+    
+    const iconSvg = member.role === "project_manager" ? SVG_ICONS.pm :
+                    member.role === "senior_developer" ? SVG_ICONS.dev :
+                    member.role === "specialist_developer" ? SVG_ICONS.specialist : SVG_ICONS.qa;
+
+    let modelOptions = availableModels.map(m => `<option value="${m}" ${m === member.current_model ? "selected" : ""}>${m}</option>`).join("");
+    (window.__configuredCloudModels || []).forEach(cm => {
+      modelOptions += `<option value="${cm.model_name}" ${cm.model_name === member.current_model ? "selected" : ""}>${cm.model_name} (Cloud)</option>`;
+    });
+
+    card.innerHTML = `
+      <div class="role-card-header">
+        <div class="role-icon-box">${iconSvg}</div>
+        <div class="role-title-box">
+          <span class="role-title">${escapeHtml(member.title)}</span>
+          <span class="role-tag">${escapeHtml(member.role)}</span>
+        </div>
+      </div>
+      <div class="role-desc">${escapeHtml(member.description)}</div>
+      <div class="role-assignment">
+        <label>Assigned Model:</label>
+        <select class="role-model-select font-mono-target" data-role="${member.role}">
+          ${modelOptions}
+        </select>
+      </div>
+    `;
+
+    const select = card.querySelector(".role-model-select");
+    select.addEventListener("change", async (e) => {
+      const newModel = e.target.value;
+      try {
+        const res = await fetch(`${API_BASE}/api/team/assign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: member.role, model: newModel }),
+        });
+        const d = await res.json();
+        if (d.success) {
+          showToast(`Assigned ${newModel} to ${member.title}`, "success");
+        }
+      } catch (err) {
+        showToast(`Assignment failed: ${err.message}`, "error");
+      }
+    });
+
+    teamRosterCards.appendChild(card);
+  });
+}
+
+function renderTeamMessages(messages) {
+  teamActivityFeed.innerHTML = "";
+  if (!messages || messages.length === 0) {
+    teamActivityFeed.innerHTML = `<div class="text-muted feed-placeholder">Sprint completed without FIPA-ACL log.</div>`;
+    return;
+  }
+
+  messages.forEach((msg) => {
+    const card = document.createElement("div");
+    const perf = (msg.performative || "inform").toLowerCase();
+    card.className = `fipa-msg-card ${perf}`;
+    card.innerHTML = `
+      <div class="fipa-header">
+        <span class="fipa-badge">[${escapeHtml(msg.performative || "INFORM")}]</span>
+        <span class="fipa-agents"><strong>${escapeHtml(msg.sender)}</strong> &rarr; <strong>${escapeHtml(msg.recipient)}</strong></span>
+      </div>
+      <div class="fipa-body">${escapeHtml(msg.content)}</div>
+    `;
+    teamActivityFeed.appendChild(card);
+  });
+  teamActivityFeed.scrollTop = teamActivityFeed.scrollHeight;
+}
+
+function renderDeliverableTab(tab) {
+  if (tab === "plan") {
+    teamDeliverableView.innerHTML = `<pre>${escapeHtml(currentDeliverables.plan || "No WBS plan generated yet.")}</pre>`;
+  } else if (tab === "specialist") {
+    teamDeliverableView.innerHTML = `<pre>${escapeHtml(currentDeliverables.specialist || "No specialist assets generated.")}</pre>`;
+  } else if (tab === "code") {
+    const files = currentDeliverables.code || {};
+    const keys = Object.keys(files);
+    if (keys.length === 0) {
+      teamDeliverableView.innerHTML = `<div class="text-muted">No synthesized code files.</div>`;
+      return;
+    }
+    let html = "";
+    keys.forEach((f) => {
+      html += `<h4>File: <code>${escapeHtml(f)}</code></h4>`;
+      html += `<pre><code>${escapeHtml(files[f])}</code></pre>`;
+    });
+    teamDeliverableView.innerHTML = html;
+  } else if (tab === "qa") {
+    teamDeliverableView.innerHTML = `<pre>${escapeHtml(currentDeliverables.qa || "No QA verdict available.")}</pre>`;
+  }
+}
+
+// 5. Skills System
+function setupSkills() {}
+
+async function loadSkills() {
+  try {
+    const res = await fetch(`${API_BASE}/api/skills`);
+    const data = await res.json();
+    if (data.success) {
+      renderSkillsList(data.skills);
+    }
+  } catch (err) {
+    console.error("Failed to load skills:", err);
+  }
+}
+
+function renderSkillsList(skills) {
+  skillsCatalogGrid.innerHTML = "";
+  skills.forEach((skill) => {
+    const card = document.createElement("div");
+    card.className = `skill-card ${skill.enabled ? "active" : ""}`;
+
+    const iconSvg = SVG_ICONS[skill.icon] || SVG_ICONS.shield;
+
+    card.innerHTML = `
+      <div class="skill-header">
+        <div class="skill-identity">
+          <div class="skill-icon-wrap">${iconSvg}</div>
+          <div class="skill-title-group">
+            <span class="skill-name">${escapeHtml(skill.name)}</span>
+            <span class="skill-cat">${escapeHtml(skill.category)}</span>
+          </div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" class="skill-toggle-input" data-id="${skill.id}" ${skill.enabled ? "checked" : ""} />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="skill-desc">${escapeHtml(skill.description)}</div>
+      <div class="skill-footer">
+        <span class="skill-status-tag ${skill.enabled ? "enabled" : "disabled"}">${skill.enabled ? "ACTIVE" : "INACTIVE"}</span>
+      </div>
+    `;
+
+    const toggle = card.querySelector(".skill-toggle-input");
+    toggle.addEventListener("change", async (e) => {
+      const val = e.target.checked;
+      try {
+        const res = await fetch(`${API_BASE}/api/skills/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skill: skill.id, enabled: val }),
+        });
+        const d = await res.json();
+        if (d.success) {
+          showToast(`Skill "${skill.name}" ${val ? "activated" : "deactivated"}`, "info", "Skill Updated");
+          if (skill.id === "internet") toggleInternet.checked = val;
+          if (skill.id === "factcheck") toggleFactcheck.checked = val;
+          loadSkills();
+        }
+      } catch (err) {
+        showToast(`Failed to toggle skill: ${err.message}`, "error");
+      }
+    });
+
+    skillsCatalogGrid.appendChild(card);
+  });
+}
+
+// 6. Models Management & Recommended Models
 function setupModels() {
-  btnRefreshModels.addEventListener("click", loadModelsList);
+  btnRefreshModels.addEventListener("click", loadInstalledModels);
+
+  const btnRefreshRec = document.getElementById("btn-refresh-recommended");
+  if (btnRefreshRec) {
+    btnRefreshRec.addEventListener("click", async () => {
+      btnRefreshRec.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/models/recommended/refresh`, { method: "POST" });
+        const data = await res.json();
+        if (data.recommended) {
+          renderRecommendedModels(data.recommended);
+          showToast("Recommended models catalog updated to latest releases.", "success", "Catalog Synced");
+        }
+      } catch (err) {
+        showToast(`Failed to refresh catalog: ${err.message}`, "error");
+      } finally {
+        btnRefreshRec.disabled = false;
+      }
+    });
+  }
 
   btnPullModel.addEventListener("click", () => {
     const name = pullModelNameInput.value.trim();
@@ -305,192 +1149,381 @@ function setupModels() {
   });
 }
 
-async function loadModelsList() {
-  installedModelsList.innerHTML = '<div class="loading-spinner">Loading models...</div>';
+async function loadInstalledModels() {
   try {
-    const res = await fetch(`${API_BASE}/api/models`);
+    const res = await fetch(`${API_BASE}/api/system/preflight`);
     const data = await res.json();
-    
-    // Update select in navbar
-    headerModelSelect.innerHTML = "";
-    
-    // Local models
-    const localGroup = document.createElement("optgroup");
-    localGroup.label = "Local Models (Ollama)";
-    data.local_models.forEach((m) => {
-      const opt = document.createElement("option");
-      opt.value = m.name;
-      opt.textContent = `${m.name} (${m.size_gb} GB)`;
-      if (m.name === data.active_model) opt.selected = true;
-      localGroup.appendChild(opt);
-    });
-    headerModelSelect.appendChild(localGroup);
-
-    // Cloud models
-    const cloudGroup = document.createElement("optgroup");
-    cloudGroup.label = "3rd-Party Cloud AI";
-    data.cloud_models.forEach((cm) => {
-      const opt = document.createElement("option");
-      opt.value = cm.model;
-      opt.textContent = `${cm.model} (${cm.display_provider})`;
-      if (cm.model === data.active_model) opt.selected = true;
-      cloudGroup.appendChild(opt);
-    });
-    headerModelSelect.appendChild(cloudGroup);
-
-    // Render installed cards
-    if (data.local_models.length === 0) {
-      installedModelsList.innerHTML = '<div class="text-muted">No local models found. Pull one above!</div>';
-      return;
+    if (data.models) {
+      availableModels = data.models.installed || [];
+      renderInstalledModels(availableModels);
+      populateModelSelectors(availableModels);
+      renderRecommendedModels(data.models.recommended || []);
     }
-
-    installedModelsList.innerHTML = "";
-    data.local_models.forEach((m) => {
-      const card = document.createElement("div");
-      card.className = `model-item-card ${m.is_active ? 'active' : ''}`;
-      card.innerHTML = `
-        <div class="flex-between">
-          <span class="model-item-title">${m.name}</span>
-          ${m.is_active ? '<span class="avatar-badge">Active</span>' : ''}
-        </div>
-        <div class="model-item-meta">Size: ${m.size_gb} GB</div>
-        <button class="btn btn-secondary btn-sm btn-activate-model" data-model="${m.name}">
-          ${m.is_active ? 'Current Model' : 'Switch to this model'}
-        </button>
-      `;
-      card.querySelector(".btn-activate-model").addEventListener("click", () => {
-        headerModelSelect.value = m.name;
-        headerModelSelect.dispatchEvent(new Event("change"));
-        loadModelsList();
-      });
-      installedModelsList.appendChild(card);
-    });
   } catch (err) {
-    installedModelsList.innerHTML = `<div style="color:var(--accent-red)">Error loading models: ${err.message}</div>`;
+    console.error("Models fetch error:", err);
   }
 }
 
-function pullModel(name) {
-  pullProgressContainer.classList.remove("hidden");
-  pullProgressBar.style.width = "0%";
-  pullStatusText.textContent = `Initializing download for ${name}...`;
-  pullPercentText.textContent = "0%";
-  btnPullModel.disabled = true;
+function renderInstalledModels(models) {
+  installedModelsList.innerHTML = "";
+  if (!models || models.length === 0) {
+    installedModelsList.innerHTML = `<div class="text-muted">No models detected. Download a recommended model below.</div>`;
+    return;
+  }
 
-  // Use fetch with streaming reader
-  fetch(`${API_BASE}/api/models/pull`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: name }),
-  })
-    .then((response) => {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+  models.forEach((m) => {
+    const card = document.createElement("div");
+    card.className = `model-card ${m.is_active ? "active" : ""}`;
+    card.innerHTML = `
+      <div class="model-card-header">
+        <span class="model-name font-mono-target">${escapeHtml(m.name)}</span>
+        ${m.is_active ? `<span class="active-badge">Active</span>` : ""}
+      </div>
+      <div class="model-meta">
+        <span>Size: ${m.size_gb} GB</span>
+      </div>
+      <div class="model-actions">
+        ${!m.is_active ? `<button class="btn btn-secondary btn-sm btn-activate-model" data-name="${escapeHtml(m.name)}">Activate</button>` : ""}
+        <button class="btn btn-sm btn-delete-model" data-name="${escapeHtml(m.name)}" title="Uninstall and remove model to free disk space">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          Uninstall
+        </button>
+      </div>
+    `;
 
-      function read() {
-        reader.read().then(({ done, value }) => {
-          if (done) {
-            pullStatusText.textContent = `Download complete for ${name}!`;
-            pullProgressBar.style.width = "100%";
-            pullPercentText.textContent = "100%";
-            btnPullModel.disabled = false;
-            loadModelsList();
-            return;
-          }
-          const chunk = decoder.decode(value);
-          const lines = chunk.split("\n");
-          lines.forEach((l) => {
-            if (l.startsWith("data: ")) {
-              try {
-                const parsed = JSON.parse(l.substring(6));
-                if (parsed.status) {
-                  pullStatusText.textContent = parsed.status;
-                }
-                if (parsed.total && parsed.completed) {
-                  const pct = Math.round((parsed.completed / parsed.total) * 100);
-                  pullProgressBar.style.width = `${pct}%`;
-                  pullPercentText.textContent = `${pct}%`;
-                }
-              } catch (e) {}
-            }
-          });
-          read();
-        });
-      }
-      read();
-    })
-    .catch((err) => {
-      pullStatusText.textContent = `Pull error: ${err.message}`;
-      btnPullModel.disabled = false;
-    });
-}
+    const actBtn = card.querySelector(".btn-activate-model");
+    if (actBtn) {
+      actBtn.addEventListener("click", async () => {
+        await switchModel(m.name);
+      });
+    }
 
-// 5. Cloud AI Keys
-function setupCloudKeys() {
-  btnSaveKeys.forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const prov = btn.getAttribute("data-provider");
-      const input = document.getElementById(`key-${prov}`);
-      const val = input.value.trim();
-      if (!val) return;
-
-      try {
-        const res = await fetch(`${API_BASE}/api/cloud/set_key`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: prov, key: val }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          input.value = "";
-          alert(`Successfully saved API key for ${prov.toUpperCase()}!`);
-          loadCloudConfig();
+    const delBtn = card.querySelector(".btn-delete-model");
+    if (delBtn) {
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Are you sure you want to uninstall and remove '${m.name}'? This will permanently delete the model weights and free ${m.size_gb} GB of disk space.`)) {
+          return;
         }
-      } catch (err) {
-        alert(`Failed to save key: ${err.message}`);
-      }
-    });
+        delBtn.disabled = true;
+        delBtn.textContent = "Removing...";
+        try {
+          const res = await fetch(`${API_BASE}/api/models/delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: m.name }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Model '${m.name}' uninstalled successfully.`, "success", "Model Removed");
+            await loadInstalledModels();
+          } else {
+            showToast(`Failed to uninstall: ${data.error || "Unknown error"}`, "error");
+            delBtn.disabled = false;
+            delBtn.textContent = "Uninstall";
+          }
+        } catch (err) {
+          showToast(`Error uninstalling model: ${err.message}`, "error");
+          delBtn.disabled = false;
+          delBtn.textContent = "Uninstall";
+        }
+      });
+    }
+
+    installedModelsList.appendChild(card);
   });
 }
 
-async function loadCloudConfig() {
-  try {
-    const res = await fetch(`${API_BASE}/api/cloud/config`);
-    const data = await res.json();
-    data.providers.forEach((p) => {
-      const badge = document.getElementById(`${p.id}-badge`);
-      if (badge) {
-        if (p.has_key) {
-          badge.textContent = "Status: Key Ready";
-          badge.className = "card-badge ready";
-        } else {
-          badge.textContent = "Status: No Key";
-          badge.className = "card-badge";
-        }
-      }
-    });
-  } catch (err) {
-    console.error("Cloud config load error:", err);
+function renderRecommendedModels(recs) {
+  if (!recommendedModelsGrid) return;
+  recommendedModelsGrid.innerHTML = "";
+
+  recs.forEach((rec) => {
+    const card = document.createElement("div");
+    card.className = "recommended-model-card";
+    card.innerHTML = `
+      <div class="rec-model-header">
+        <span class="rec-model-name">${escapeHtml(rec.name)}</span>
+        <span class="rec-model-size">${escapeHtml(rec.size)}</span>
+      </div>
+      <div class="rec-model-desc">${escapeHtml(rec.desc)}</div>
+      <div class="rec-model-footer">
+        ${rec.is_installed ? `<span class="active-badge">${SVG_ICONS.check} Installed</span>` : `<button type="button" class="btn btn-primary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}">Install Model</button>`}
+      </div>
+    `;
+
+    const dlBtn = card.querySelector(".btn-download-rec");
+    if (dlBtn) {
+      dlBtn.addEventListener("click", () => {
+        pullModel(rec.tag);
+      });
+    }
+
+    recommendedModelsGrid.appendChild(card);
+  });
+}
+
+function populateModelSelectors(models) {
+  const currentVal = headerModelSelect.value;
+  headerModelSelect.innerHTML = "";
+  let hasSelected = false;
+
+  models.forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m.name;
+    opt.textContent = `${m.name} (Local)`;
+    if ((m.name === currentVal || m.is_active) && !hasSelected) {
+      opt.selected = true;
+      activeModel = m.name;
+      hasSelected = true;
+    }
+    headerModelSelect.appendChild(opt);
+  });
+
+  (window.__configuredCloudModels || []).forEach((cm) => {
+    const opt = document.createElement("option");
+    opt.value = cm.model_name;
+    opt.textContent = `${cm.model_name} (${cm.model_type === "image" ? "Cloud Image" : "Cloud Chat"})`;
+    if (cm.model_name === currentVal && !hasSelected) {
+      opt.selected = true;
+      activeModel = cm.model_name;
+      hasSelected = true;
+    }
+    headerModelSelect.appendChild(opt);
+  });
+
+  // If nothing selected, choose first available model option
+  if (!hasSelected && headerModelSelect.options.length > 0) {
+    headerModelSelect.options[0].selected = true;
+    activeModel = headerModelSelect.options[0].value;
   }
 }
 
-// 6. Antigravity Supervisor
+async function switchModel(modelName) {
+  try {
+    const res = await fetch(`${API_BASE}/api/models/switch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelName }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      activeModel = modelName;
+      headerModelSelect.value = modelName;
+      showToast(`Model switched to ${modelName}`, "success");
+      loadInstalledModels();
+    }
+  } catch (err) {
+    showToast(`Failed to switch model: ${err.message}`, "error");
+  }
+}
+
+function pullModel(modelName) {
+  pullProgressContainer.classList.remove("hidden");
+  pullProgressBar.style.width = "0%";
+  pullStatusText.textContent = `Starting download for ${modelName}...`;
+  pullPercentText.textContent = "0%";
+  btnPullModel.disabled = true;
+
+  fetch(`${API_BASE}/api/models/pull`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: modelName }),
+  }).then(response => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    function read() {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          pullStatusText.textContent = "Download complete!";
+          pullProgressBar.style.width = "100%";
+          pullPercentText.textContent = "100%";
+          btnPullModel.disabled = false;
+          showToast(`Successfully downloaded ${modelName}!`, "success", "Download Complete");
+          loadInstalledModels();
+          return;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const d = JSON.parse(line.substring(6));
+              if (d.status) pullStatusText.textContent = d.status;
+              if (d.total && d.completed) {
+                const pct = Math.round((d.completed / d.total) * 100);
+                pullProgressBar.style.width = `${pct}%`;
+                pullPercentText.textContent = `${pct}%`;
+              }
+            } catch (e) {}
+          }
+        }
+        read();
+      });
+    }
+    read();
+  }).catch(err => {
+    pullStatusText.textContent = `Download error: ${err.message}`;
+    btnPullModel.disabled = false;
+    showToast(`Download failed: ${err.message}`, "error");
+  });
+}
+
+// 7. Cloud Keys & Config
+function setupCloudKeys() {
+  document.querySelectorAll(".preset-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      cfgModelName.value = btn.getAttribute("data-name") || "";
+      cfgProviderUrl.value = btn.getAttribute("data-url") || "";
+      const mtype = btn.getAttribute("data-type") || "chat";
+      const radio = document.querySelector(`input[name="model-type"][value="${mtype}"]`);
+      if (radio) radio.checked = true;
+      cfgApiKey.focus();
+    });
+  });
+
+  btnToggleKeyVis.addEventListener("click", () => {
+    if (cfgApiKey.type === "password") {
+      cfgApiKey.type = "text";
+    } else {
+      cfgApiKey.type = "password";
+    }
+  });
+
+  cloudForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const modelName = cfgModelName.value.trim();
+    const providerUrl = cfgProviderUrl.value.trim();
+    const apiKey = cfgApiKey.value.trim();
+    const modelType = document.querySelector('input[name="model-type"]:checked')?.value || "chat";
+
+    if (!modelName || !providerUrl || !apiKey) {
+      showToast("Please fill in model name, provider URL, and API key", "warning");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/cloud/save_model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: modelName,
+          provider_url: providerUrl,
+          api_key: apiKey,
+          model_type: modelType,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Cloud model "${modelName}" configured & activated!`, "success", "Model Connected");
+        cfgApiKey.value = "";
+        loadCloudModels();
+      } else {
+        showToast(data.error || "Failed to save cloud model", "error");
+      }
+    } catch (err) {
+      showToast(`Save error: ${err.message}`, "error");
+    }
+  });
+}
+
+async function loadCloudModels() {
+  try {
+    const res = await fetch(`${API_BASE}/api/cloud/config`);
+    const data = await res.json();
+    if (data.configured_models) {
+      window.__configuredCloudModels = data.configured_models;
+      renderConfiguredCloudModels(data.configured_models, data.active_model);
+      populateModelSelectors(availableModels);
+    }
+  } catch (err) {
+    console.error("Cloud config error:", err);
+  }
+}
+
+function renderConfiguredCloudModels(models, activeModel) {
+  configuredCountSpan.textContent = `${models.length} model${models.length === 1 ? '' : 's'}`;
+  configuredModelsList.innerHTML = "";
+  if (models.length === 0) {
+    configuredModelsList.innerHTML = `<div class="text-muted">No external models configured yet. Use the form above to add one!</div>`;
+    return;
+  }
+
+  models.forEach((m) => {
+    const card = document.createElement("div");
+    const isActive = m.model_name === activeModel;
+    card.className = `model-card configured-model-card ${isActive ? 'active' : ''}`;
+    card.innerHTML = `
+      <div class="model-card-header">
+        <span class="model-name font-mono-target">${escapeHtml(m.model_name)}</span>
+        <span class="type-badge ${m.model_type}">${m.model_type.toUpperCase()}</span>
+      </div>
+      <div class="model-meta">
+        <span>Endpoint: ${escapeHtml(m.provider_url)}</span>
+      </div>
+      <div class="model-actions">
+        ${!isActive ? `<button class="btn btn-secondary btn-sm btn-activate-cloud-model" data-name="${escapeHtml(m.model_name)}">Activate</button>` : `<span class="active-badge">Active</span>`}
+        <button class="btn btn-secondary btn-sm btn-delete-cloud-model" data-name="${escapeHtml(m.model_name)}" title="Delete Model">&times;</button>
+      </div>
+    `;
+
+    const actBtn = card.querySelector(".btn-activate-cloud-model");
+    if (actBtn) {
+      actBtn.addEventListener("click", () => switchModel(m.model_name));
+    }
+
+    const delBtn = card.querySelector(".btn-delete-cloud-model");
+    if (delBtn) {
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Delete configuration for model "${m.model_name}"?`)) return;
+        try {
+          const res = await fetch(`${API_BASE}/api/cloud/delete_model`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_name: m.model_name }),
+          });
+          const d = await res.json();
+          if (d.success) {
+            showToast(`Model ${m.model_name} removed`, "info");
+            loadCloudModels();
+          }
+        } catch (err) {
+          showToast(`Delete failed: ${err.message}`, "error");
+        }
+      });
+    }
+
+    configuredModelsList.appendChild(card);
+  });
+}
+
+// 8. Antigravity Autonomous Supervisor with AI Team Integration
 function setupAntigravity() {
   btnRunAntigravity.addEventListener("click", async () => {
     const task = antigravityTaskInput.value.trim();
     if (!task) return;
 
+    const useTeam = toggleAgTeamMode ? toggleAgTeamMode.checked : true;
     appendLog(`[START] Running autonomous task supervisor: "${task}"`);
+    if (useTeam) {
+      appendLog(`[AI TEAM] Delegating execution steps to PM, Architect, Specialist & QA...`);
+    }
+
     try {
       const res = await fetch(`${API_BASE}/api/antigravity/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task }),
+        body: JSON.stringify({
+          task,
+          project_path: activeProjectPath,
+          use_team: useTeam,
+        }),
       });
       const data = await res.json();
       if (data.success) {
         appendLog(`[STEERING] ${data.message}`);
-        appendLog(`[STATUS] Continuous supervisor loop iterating across milestones...`);
+        appendLog(`[STATUS] Continuous supervisor loop iterating across SDLC milestones...`);
       } else {
         appendLog(`[ERROR] ${data.error}`);
       }
@@ -508,7 +1541,7 @@ function appendLog(line) {
   antigravityLog.scrollTop = antigravityLog.scrollHeight;
 }
 
-// 7. Tools & Health
+// 9. Tools & Health
 function setupTools() {
   btnGetWeather.addEventListener("click", async () => {
     const city = toolWeatherCity.value.trim() || "Colombo";
@@ -549,25 +1582,204 @@ async function loadDoctorTelemetry() {
   }
 }
 
+// 10. Startup Preflight Check
+async function checkStartupPreflight() {
+  try {
+    const res = await fetch(`${API_BASE}/api/system/preflight`);
+    const data = await res.json();
+    if (data.success) {
+      if (!data.ready) {
+        showPreflightModal(data);
+      }
+      renderRecommendedModels(data.models.recommended || []);
+    }
+  } catch (err) {
+    console.warn("Preflight check warning:", err);
+  }
+}
+
+function showPreflightModal(data) {
+  preflightStatusItems.innerHTML = "";
+
+  const pyItem = document.createElement("div");
+  pyItem.className = "preflight-item";
+  pyItem.innerHTML = `
+    <div class="preflight-item-info">
+      <span class="preflight-item-title">Python Runtime</span>
+      <span class="preflight-item-detail">v${data.python.version}</span>
+    </div>
+    <span class="preflight-badge healthy">Ready</span>
+  `;
+  preflightStatusItems.appendChild(pyItem);
+
+  const olItem = document.createElement("div");
+  olItem.className = "preflight-item";
+  const olHealthy = data.ollama.running;
+  olItem.innerHTML = `
+    <div class="preflight-item-info">
+      <span class="preflight-item-title">Ollama Local Engine</span>
+      <span class="preflight-item-detail">${olHealthy ? "127.0.0.1:11434 Active" : (data.ollama.installed ? "Service Starting..." : "Not Installed")}</span>
+    </div>
+    <span class="preflight-badge ${olHealthy ? 'healthy' : (data.ollama.installed ? 'warning' : 'error')}">
+      ${olHealthy ? 'Online' : (data.ollama.installed ? 'Standby' : 'Missing')}
+    </span>
+  `;
+  preflightStatusItems.appendChild(olItem);
+
+  const mdItem = document.createElement("div");
+  mdItem.className = "preflight-item";
+  const mdCount = data.models.count || 0;
+  mdItem.innerHTML = `
+    <div class="preflight-item-info">
+      <span class="preflight-item-title">Local AI Models</span>
+      <span class="preflight-item-detail">${mdCount} model${mdCount === 1 ? '' : 's'} installed</span>
+    </div>
+    <span class="preflight-badge ${mdCount > 0 ? 'healthy' : 'warning'}">
+      ${mdCount > 0 ? `${mdCount} Available` : 'None Downloaded'}
+    </span>
+  `;
+  preflightStatusItems.appendChild(mdItem);
+
+  if (!data.ollama.installed) {
+    preflightActionBox.classList.remove("hidden");
+    preflightActionText.textContent = "Ollama is required to run local AI models privately on your device.";
+    preflightActionButtons.innerHTML = `
+      <a href="https://ollama.com/download/windows" target="_blank" class="btn btn-primary btn-sm">
+        ${SVG_ICONS.globe} Download Ollama for Windows
+      </a>
+    `;
+  } else if (mdCount === 0) {
+    preflightActionBox.classList.remove("hidden");
+    preflightActionText.textContent = "No local models are currently installed. We recommend installing Meta Llama 3.2 3B (2.0 GB) for fast, lightweight local reasoning.";
+    preflightActionButtons.innerHTML = `
+      <button type="button" class="btn btn-primary btn-sm" id="btn-preflight-pull-llama">
+        ${SVG_ICONS.cpu} Download llama3.2:3b (Recommended)
+      </button>
+    `;
+    document.getElementById("btn-preflight-pull-llama")?.addEventListener("click", () => {
+      preflightModal.classList.add("hidden");
+      switchTab("models");
+      pullModel("llama3.2:3b");
+    });
+  } else {
+    preflightActionBox.classList.add("hidden");
+  }
+
+  preflightModal.classList.remove("hidden");
+}
+
+btnClosePreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
+btnDismissPreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
+
+// 11. Settings & Appearance Modal
+function setupSettingsModal() {
+  btnOpenSettings.addEventListener("click", () => {
+    settingsModal.classList.remove("hidden");
+  });
+
+  btnCloseSettings.addEventListener("click", () => {
+    settingsModal.classList.add("hidden");
+  });
+
+  btnResetSettings.addEventListener("click", () => {
+    settingFontFamily.value = "jetbrains";
+    settingFontSize.value = "13.5px";
+    const radio = document.querySelector('input[name="setting-theme"][value="theme-pai-cyber"]');
+    if (radio) radio.checked = true;
+    applySettings({ font: "jetbrains", size: "13.5px", theme: "theme-pai-cyber" });
+    showToast("Settings reset to defaults", "info");
+  });
+
+  btnSaveSettings.addEventListener("click", () => {
+    const font = settingFontFamily.value;
+    const size = settingFontSize.value;
+    const theme = document.querySelector('input[name="setting-theme"]:checked')?.value || "theme-pai-cyber";
+
+    applySettings({ font, size, theme });
+    localStorage.setItem("pai_settings", JSON.stringify({ font, size, theme }));
+    settingsModal.classList.add("hidden");
+    showToast("Appearance & Developer font updated!", "success", "Settings Saved");
+  });
+}
+
+function applySettings(cfg) {
+  // Fonts
+  document.body.classList.remove("font-jetbrains", "font-fira", "font-cascadia", "font-consolas", "font-inter");
+  document.body.classList.add(`font-${cfg.font || 'jetbrains'}`);
+
+  if (cfg.size) {
+    document.documentElement.style.setProperty("--font-mono-size", cfg.size);
+    if (codeEditorTextarea) codeEditorTextarea.style.fontSize = cfg.size;
+  }
+
+  // Themes
+  document.body.classList.remove("theme-pai-cyber", "theme-electric-cyan", "theme-neon-purple");
+  document.body.classList.add(cfg.theme || "theme-pai-cyber");
+}
+
+function applyStoredSettings() {
+  try {
+    const stored = localStorage.getItem("pai_settings");
+    if (stored) {
+      const cfg = JSON.parse(stored);
+      applySettings(cfg);
+      if (settingFontFamily) settingFontFamily.value = cfg.font || "jetbrains";
+      if (settingFontSize) settingFontSize.value = cfg.size || "13.5px";
+      const radio = document.querySelector(`input[name="setting-theme"][value="${cfg.theme || 'theme-pai-cyber'}"]`);
+      if (radio) radio.checked = true;
+    }
+  } catch (e) {
+    console.warn("Could not read stored settings:", e);
+  }
+}
+
+// Server Health Heartbeat
+async function checkServerHealth() {
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    const data = await res.json();
+    if (data.status === "ready" || data.status === "ok") {
+      serverStatusDot.className = "status-dot online";
+      serverStatusText.textContent = "Engine Ready";
+    } else {
+      serverStatusDot.className = "status-dot offline";
+      serverStatusText.textContent = "Degraded";
+    }
+  } catch (err) {
+    serverStatusDot.className = "status-dot offline";
+    serverStatusText.textContent = "Offline";
+  }
+}
+
 // Helpers
 function escapeHtml(text) {
-  return text
+  if (!text) return "";
+  return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function formatMarkdown(text) {
+  if (!text) return "";
   let html = escapeHtml(text);
   // Code blocks
   html = html.replace(/```([a-z0-9_\-]+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="language-${lang || 'plaintext'}">${code.trim()}</code></pre>`;
+    return `<pre><code class="language-${lang || 'plaintext'} font-mono-target">${code.trim()}</code></pre>`;
   });
   // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code class="font-mono-target">$1</code>');
   // Bold & Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Headings
+  html = html.replace(/^#### (.*?)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+  // Blockquotes
+  html = html.replace(/^> (.*?)$/gm, '<blockquote>$1</blockquote>');
   // Paragraphs
   html = html.replace(/\n\n+/g, '</p><p>');
   html = `<p>${html}</p>`;

@@ -1123,6 +1123,25 @@ function renderSkillsList(skills) {
 function setupModels() {
   btnRefreshModels.addEventListener("click", loadInstalledModels);
 
+  const btnRefreshRec = document.getElementById("btn-refresh-recommended");
+  if (btnRefreshRec) {
+    btnRefreshRec.addEventListener("click", async () => {
+      btnRefreshRec.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/models/recommended/refresh`, { method: "POST" });
+        const data = await res.json();
+        if (data.recommended) {
+          renderRecommendedModels(data.recommended);
+          showToast("Recommended models catalog updated to latest releases.", "success", "Catalog Synced");
+        }
+      } catch (err) {
+        showToast(`Failed to refresh catalog: ${err.message}`, "error");
+      } finally {
+        btnRefreshRec.disabled = false;
+      }
+    });
+  }
+
   btnPullModel.addEventListener("click", () => {
     const name = pullModelNameInput.value.trim();
     if (!name) return;
@@ -1165,6 +1184,10 @@ function renderInstalledModels(models) {
       </div>
       <div class="model-actions">
         ${!m.is_active ? `<button class="btn btn-secondary btn-sm btn-activate-model" data-name="${escapeHtml(m.name)}">Activate</button>` : ""}
+        <button class="btn btn-sm btn-delete-model" data-name="${escapeHtml(m.name)}" title="Uninstall and remove model to free disk space">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          Uninstall
+        </button>
       </div>
     `;
 
@@ -1172,6 +1195,37 @@ function renderInstalledModels(models) {
     if (actBtn) {
       actBtn.addEventListener("click", async () => {
         await switchModel(m.name);
+      });
+    }
+
+    const delBtn = card.querySelector(".btn-delete-model");
+    if (delBtn) {
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Are you sure you want to uninstall and remove '${m.name}'? This will permanently delete the model weights and free ${m.size_gb} GB of disk space.`)) {
+          return;
+        }
+        delBtn.disabled = true;
+        delBtn.textContent = "Removing...";
+        try {
+          const res = await fetch(`${API_BASE}/api/models/delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: m.name }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Model '${m.name}' uninstalled successfully.`, "success", "Model Removed");
+            await loadInstalledModels();
+          } else {
+            showToast(`Failed to uninstall: ${data.error || "Unknown error"}`, "error");
+            delBtn.disabled = false;
+            delBtn.textContent = "Uninstall";
+          }
+        } catch (err) {
+          showToast(`Error uninstalling model: ${err.message}`, "error");
+          delBtn.disabled = false;
+          delBtn.textContent = "Uninstall";
+        }
       });
     }
 
@@ -1211,14 +1265,16 @@ function renderRecommendedModels(recs) {
 function populateModelSelectors(models) {
   const currentVal = headerModelSelect.value;
   headerModelSelect.innerHTML = "";
+  let hasSelected = false;
 
   models.forEach((m) => {
     const opt = document.createElement("option");
     opt.value = m.name;
     opt.textContent = `${m.name} (Local)`;
-    if (m.name === currentVal || m.is_active) {
+    if ((m.name === currentVal || m.is_active) && !hasSelected) {
       opt.selected = true;
       activeModel = m.name;
+      hasSelected = true;
     }
     headerModelSelect.appendChild(opt);
   });
@@ -1227,9 +1283,19 @@ function populateModelSelectors(models) {
     const opt = document.createElement("option");
     opt.value = cm.model_name;
     opt.textContent = `${cm.model_name} (${cm.model_type === "image" ? "Cloud Image" : "Cloud Chat"})`;
-    if (cm.model_name === currentVal) opt.selected = true;
+    if (cm.model_name === currentVal && !hasSelected) {
+      opt.selected = true;
+      activeModel = cm.model_name;
+      hasSelected = true;
+    }
     headerModelSelect.appendChild(opt);
   });
+
+  // If nothing selected, choose first available model option
+  if (!hasSelected && headerModelSelect.options.length > 0) {
+    headerModelSelect.options[0].selected = true;
+    activeModel = headerModelSelect.options[0].value;
+  }
 }
 
 async function switchModel(modelName) {

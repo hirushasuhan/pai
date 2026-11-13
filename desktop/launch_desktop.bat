@@ -1,37 +1,11 @@
 @echo off
-setlocal enabledelayedexpansion
-title PAI Studio Desktop Launcher
-
-echo ========================================================================
-echo                 PAI STUDIO - PERSONAL AGENTIC AI DESKTOP
-echo ========================================================================
-echo Starting local API bridge daemon on http://127.0.0.1:8765...
-
-:: Start background bridge daemon if not already listening
-netstat -ano | findstr "8765" >nul
-if errorlevel 1 (
-    start "" /B python "%~dp0bridge_server.py"
-    timeout /t 2 /nobreak >nul
+setlocal
+set SCRIPT_DIR=%~dp0
+if exist "%SCRIPT_DIR%..\..\python\pythonw.exe" (
+    start "" "%SCRIPT_DIR%..\..\python\pythonw.exe" "%SCRIPT_DIR%..\desktop_launcher.py"
+) else if exist "%SCRIPT_DIR%..\python\pythonw.exe" (
+    start "" "%SCRIPT_DIR%..\python\pythonw.exe" "%SCRIPT_DIR%desktop_launcher.py"
 ) else (
-    echo Bridge server is already active on port 8765.
+    start "" pythonw "%SCRIPT_DIR%..\desktop_launcher.py"
 )
-
-:: Launch standalone native desktop window
-echo Opening PAI Studio in native desktop app window...
-where msedge.exe >nul 2>&1
-if not errorlevel 1 (
-    start "" msedge.exe --app="http://127.0.0.1:8765" --window-size=1280,840
-    goto :done
-)
-
-where chrome.exe >nul 2>&1
-if not errorlevel 1 (
-    start "" chrome.exe --app="http://127.0.0.1:8765" --window-size=1280,840
-    goto :done
-)
-
-:: Fallback default browser
-start "" "http://127.0.0.1:8765"
-
-:done
-echo PAI Studio launched successfully.
+exit /b 0

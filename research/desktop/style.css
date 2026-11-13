@@ -1936,3 +1936,115 @@ body.font-inter {
 .team-file-pill:hover {
   background: rgba(79, 172, 254, 0.25);
 }
+
+/* ==========================================================================
+   Model Uninstall Action Button Styling
+   ========================================================================== */
+.btn-delete-model {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-delete-model:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: var(--accent-red);
+  color: #fff;
+}
+
+/* ==========================================================================
+   Responsive & Adaptive Viewport Media Queries
+   ========================================================================== */
+
+/* Tablet & Compact Viewports: <= 992px */
+@media (max-width: 992px) {
+  .app-sidebar {
+    width: 68px;
+    min-width: 68px;
+    padding: 16px 8px;
+  }
+  .sidebar-header .brand-text,
+  .nav-item span,
+  .system-status {
+    display: none !important;
+  }
+  .sidebar-header {
+    justify-content: center;
+    padding: 0 0 16px 0;
+  }
+  .nav-item {
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .projects-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    height: auto;
+  }
+  .team-dashboard-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .top-nav {
+    padding: 10px 14px;
+    gap: 8px;
+  }
+  .active-model-box,
+  .active-project-box {
+    max-width: 220px;
+  }
+}
+
+/* Mobile & Small Screens: <= 768px */
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+  .app-sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    padding: 8px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .sidebar-header {
+    padding: 0;
+    margin-right: 12px;
+  }
+  .nav-list {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 4px;
+  }
+  .nav-item {
+    padding: 8px 10px;
+  }
+  .top-nav {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 12px;
+  }
+  .active-model-box,
+  .active-project-box {
+    width: 100%;
+    max-width: 100%;
+  }
+  .chat-layout {
+    height: calc(100vh - 160px);
+  }
+  .chat-input-area {
+    padding: 12px;
+  }
+  .modal-content {
+    width: 95vw;
+    padding: 16px;
+  }
+  .recommended-models-grid {
+    grid-template-columns: 1fr;
+  }
+}

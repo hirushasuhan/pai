@@ -79,7 +79,7 @@
           <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
           <span class="nav-label">Model:</span>
           <select id="header-model-select" class="model-select">
-            <option value="llama3.2:3b">llama3.2:3b (Local)</option>
+            <option value="">Loading installed models...</option>
           </select>
         </div>
 
@@ -368,11 +368,17 @@
 
           <!-- Recommended Models (1-Click Install) -->
           <div class="glass-card mb-4">
-            <h3 class="card-title flex-center-gap">
-              <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-              <span>Recommended Models for Coding & Reasoning (1-Click Install)</span>
-            </h3>
-            <p class="text-muted mb-3">High-performance open weights calibrated for coding, fast chat, and deep multi-agent reasoning.</p>
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+              <h3 class="card-title flex-center-gap" style="margin-bottom: 0;">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                <span>Recommended Models for Coding, Reasoning & Vision (1-Click Install)</span>
+              </h3>
+              <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-refresh-recommended" title="Check catalog and refresh recommended models">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <span>Check for Updates</span>
+              </button>
+            </div>
+            <p class="text-muted mb-3">High-performance open weights calibrated for coding, fast chat, deep multi-agent reasoning, and multimodal computer vision.</p>
             <div class="recommended-models-grid" id="recommended-models-grid">
               <div class="loading-spinner">Checking models...</div>
             </div>
