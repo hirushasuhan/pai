@@ -20,22 +20,23 @@ let currentDeliverables = { plan: "", specialist: "", code: {}, qa: "" };
 
 // SVG Icon Library
 const SVG_ICONS = {
-  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
-  alert: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`,
-  info: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`,
-  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
-  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
-  file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`,
-  pm: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>`,
-  dev: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`,
-  specialist: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>`,
-  qa: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>`,
-  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
-  globe: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
-  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`,
-  image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
-  layers: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
-  cpu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>`,
+  check: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+  alert: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`,
+  info: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`,
+  trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+  folder: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  file: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`,
+  pm: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>`,
+  dev: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`,
+  specialist: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>`,
+  qa: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>`,
+  shield: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
+  globe: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+  users: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`,
+  image: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
+  layers: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
+  cpu: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>`,
+  retry: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`,
 };
 
 // DOM Elements
@@ -175,6 +176,14 @@ document.addEventListener("DOMContentLoaded", () => {
   setupTools();
   setupSettingsModal();
   checkStartupPreflight();
+
+  // Immediately populate models, projects, skills and MCP servers on startup
+  loadInstalledModels();
+  loadCloudModels();
+  loadProjects();
+  loadSkills();
+  loadMcpServers();
+
   setInterval(checkServerHealth, 5000);
 });
 
@@ -1367,9 +1376,94 @@ function renderDeliverableTab(tab) {
 }
 
 // 5. Plugins & MCPs Hub System
+const MCP_PRESETS = {
+  filesystem: {
+    name: "filesystem-tools",
+    transport: "stdio",
+    cmd: "npx -y @modelcontextprotocol/server-filesystem ./",
+    desc: "Local workspace sandboxed file inspection and editing"
+  },
+  fetch: {
+    name: "web-fetch",
+    transport: "stdio",
+    cmd: "npx -y @modelcontextprotocol/server-fetch",
+    desc: "Direct web page content extraction and Markdown scraping"
+  },
+  memory: {
+    name: "memory-graph",
+    transport: "stdio",
+    cmd: "npx -y @modelcontextprotocol/server-memory",
+    desc: "Knowledge graph persistence across multi-turn sessions"
+  },
+  sqlite: {
+    name: "sqlite-db",
+    transport: "stdio",
+    cmd: "npx -y @modelcontextprotocol/server-sqlite --db ./workspace.db",
+    desc: "Relational database schema inspection and SQL queries"
+  },
+  sse: {
+    name: "remote-mcp-stream",
+    transport: "sse",
+    cmd: "http://127.0.0.1:8000/sse",
+    desc: "Remote HTTP Server-Sent Events MCP capability provider"
+  }
+};
+
+const PLUGIN_PRESETS = {
+  nextjs: {
+    name: "NextJS Architect",
+    category: "Web Development",
+    desc: "Generates production Next.js 15 App Router components, Tailwind CSS styling, and SSR routes."
+  },
+  fastapi: {
+    name: "FastAPI Backend",
+    category: "API & Backend",
+    desc: "Scaffolds asynchronous Python FastAPI endpoints, Pydantic schemas, and SQLAlchemy models."
+  },
+  qa: {
+    name: "QA Test Suite",
+    category: "Testing & Quality",
+    desc: "Generates automated unit, integration, and end-to-end test cases with pytest and Jest."
+  },
+  security: {
+    name: "Security Auditor",
+    category: "Security & Guardrails",
+    desc: "Scans code for OWASP Top 10 vulnerabilities, leaked API secrets, and unsafe injection patterns."
+  }
+};
+
 function setupSkills() {
   setupMcpForm();
   setupPluginForm();
+
+  // MCP 1-Click Preset Buttons
+  document.querySelectorAll(".btn-mcp-preset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const presetKey = btn.dataset.preset;
+      const p = MCP_PRESETS[presetKey];
+      if (!p) return;
+      mcpNameInput.value = p.name;
+      mcpTransportSelect.value = p.transport;
+      mcpCmdInput.value = p.cmd;
+      mcpDescInput.value = p.desc;
+      showToast(`Applied preset: ${p.name}`, "info", "MCP Preset Loaded");
+      mcpCmdInput.focus();
+    });
+  });
+
+  // Plugin 1-Click Preset Buttons
+  document.querySelectorAll(".btn-plugin-preset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const presetKey = btn.dataset.preset;
+      const p = PLUGIN_PRESETS[presetKey];
+      if (!p) return;
+      pluginNameInput.value = p.name;
+      pluginCatInput.value = p.category;
+      pluginDescInput.value = p.desc;
+      showToast(`Applied preset: ${p.name}`, "info", "Plugin Preset Loaded");
+      pluginDescInput.focus();
+    });
+  });
 }
 
 async function loadSkills() {
@@ -1399,9 +1493,13 @@ async function loadMcpServers() {
 
 function renderMcpServers(servers) {
   if (!mcpServersGrid) return;
+  const enabledCount = servers.filter((s) => s.enabled).length;
   if (mcpServersCount) {
-    const enabledCount = servers.filter((s) => s.enabled).length;
     mcpServersCount.textContent = `${enabledCount} of ${servers.length} Connected`;
+  }
+  const ribbonMcp = document.getElementById("ribbon-mcp-count");
+  if (ribbonMcp) {
+    ribbonMcp.textContent = `${enabledCount} Connected`;
   }
   mcpServersGrid.innerHTML = "";
   if (servers.length === 0) {
@@ -1556,6 +1654,11 @@ function setupPluginForm() {
 
 function renderSkillsList(skills) {
   skillsCatalogGrid.innerHTML = "";
+  const ribbonSkills = document.getElementById("ribbon-skills-count");
+  if (ribbonSkills) {
+    const activeCount = skills.filter((s) => s.enabled).length;
+    ribbonSkills.textContent = `${activeCount} Active`;
+  }
   skills.forEach((skill) => {
     const card = document.createElement("div");
     card.className = `skill-card ${skill.enabled ? "active" : ""}`;
@@ -2105,10 +2208,13 @@ async function checkStartupPreflight() {
   try {
     const res = await fetch(`${API_BASE}/api/system/preflight`);
     const data = await res.json();
-    if (data.success) {
+    if (data.success && data.models) {
       if (!data.ready) {
         showPreflightModal(data);
       }
+      availableModels = data.models.installed || [];
+      renderInstalledModels(availableModels);
+      populateModelSelectors(availableModels);
       renderRecommendedModels(data.models.recommended || []);
     }
   } catch (err) {

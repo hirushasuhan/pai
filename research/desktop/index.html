@@ -369,6 +369,22 @@
             <p>Connect standard Model Context Protocol (MCP) tool servers, configure external integrations, and manage cognitive skills.</p>
           </div>
 
+          <!-- Hub Telemetry Ribbon -->
+          <div class="hub-stat-ribbon">
+            <div class="hub-stat-pill">
+              <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+              <span>MCP Servers: <strong id="ribbon-mcp-count">0 Connected</strong></span>
+            </div>
+            <div class="hub-stat-pill">
+              <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+              <span>Transports: <strong>STDIO & SSE</strong></span>
+            </div>
+            <div class="hub-stat-pill">
+              <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+              <span>Skills Catalog: <strong id="ribbon-skills-count">8 Active</strong></span>
+            </div>
+          </div>
+
           <!-- Section 1: Model Context Protocol (MCP) Servers -->
           <div class="glass-card mb-4">
             <div class="flex-between mb-3">
@@ -379,6 +395,16 @@
               <span class="active-badge" id="mcp-servers-count">0 Connected</span>
             </div>
             <p class="text-muted mb-3">Connect local command-line or SSE-based MCP tool servers into PAI's sandboxed Capability Broker.</p>
+
+            <!-- Quick 1-Click MCP Presets -->
+            <div class="mcp-preset-pills">
+              <span class="preset-pill-label">1-Click Presets:</span>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="filesystem">📁 Filesystem</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="fetch">🌐 Web Fetch</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="memory">🧠 Memory Graph</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sqlite">🗄️ SQLite</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sse">📡 Remote SSE</button>
+            </div>
 
             <!-- Add MCP Server Form -->
             <form id="form-add-mcp" class="mcp-add-form mb-4">
@@ -423,6 +449,15 @@
               </h3>
             </div>
             <p class="text-muted mb-3">Toggle core cognitive skills or install custom agent plugins to augment PAI's capabilities.</p>
+
+            <!-- Quick Custom Plugin Presets -->
+            <div class="mcp-preset-pills">
+              <span class="preset-pill-label">1-Click Presets:</span>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="nextjs">⚡ Next.js Architect</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="fastapi">🐍 FastAPI Backend</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="qa">🧪 QA Test Suite</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="security">🛡️ Security Auditor</button>
+            </div>
 
             <!-- Add Custom Plugin Form -->
             <form id="form-add-plugin" class="plugin-add-form mb-4">

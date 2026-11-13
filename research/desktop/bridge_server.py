@@ -845,7 +845,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self._handle_status()
         # 2. Models list
-        elif path == "/api/models":
+        elif path in ("/api/models", "/api/installed-models"):
             self._handle_get_models()
         # 2b. Recommended models catalog
         elif path == "/api/models/recommended":

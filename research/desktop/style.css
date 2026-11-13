@@ -373,6 +373,25 @@ body {
   height: 13px;
   flex-shrink: 0;
 }
+
+/* Universal SVG sizing constraints to strictly eliminate giant icon blowups */
+.message svg,
+.msg-body svg,
+.grounding-label svg,
+.grounding-badge-list svg,
+.factcheck-box svg,
+.fc-title svg,
+.btn-msg-action svg,
+.image-model-badge svg,
+.role-badge svg {
+  width: 14px !important;
+  height: 14px !important;
+  max-width: 16px !important;
+  max-height: 16px !important;
+  display: inline-block !important;
+  vertical-align: -2px !important;
+  flex-shrink: 0 !important;
+}
 .msg-footer-actions {
   display: flex;
   align-items: center;
@@ -2396,4 +2415,97 @@ body.font-inter {
   .skills-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* MCP & Plugin Quick Preset Pills & Stats Ribbon */
+.hub-stat-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 18px;
+}
+.hub-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.hub-stat-pill strong {
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+}
+.mcp-preset-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.preset-pill-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  font-weight: 600;
+  margin-right: 4px;
+}
+.preset-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font-size: 11px;
+  font-family: var(--font-main);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.preset-pill-btn:hover {
+  background: rgba(0, 242, 254, 0.12);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  transform: translateY(-1px);
+}
+.mcp-transport-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+.mcp-transport-tag.stdio {
+  background: rgba(0, 242, 254, 0.15);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(0, 242, 254, 0.35);
+}
+.mcp-transport-tag.sse {
+  background: rgba(236, 72, 153, 0.15);
+  color: #f472b6;
+  border: 1px solid rgba(236, 72, 153, 0.35);
+}
+.mcp-card-cmd {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #a78bfa;
+  font-family: var(--font-mono);
+  overflow-x: auto;
+  white-space: nowrap;
+  display: block;
+  margin: 6px 0;
 }

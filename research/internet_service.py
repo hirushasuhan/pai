@@ -176,12 +176,15 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
     if clean_q and clean_q.lower() != q.lower():
         search_queries.append(clean_q)
     if any(k in q.lower() for k in ("president", "prime minister", "governor", "leader", "chancellor", "king")):
-        if "president" in q.lower() and any(u in q.lower() for u in ("us", "united states", "u.s.", "america")):
+        if "president" in q.lower() and any(u in q.lower() for u in ("sri lanka", "lanka")):
+            search_queries.insert(0, "President of Sri Lanka")
+            search_queries.insert(1, "List of presidents of Sri Lanka")
+        elif "president" in q.lower() and any(u in q.lower() for u in ("us", "united states", "u.s.", "america")):
             search_queries.insert(0, "List of presidents of the United States")
+            search_queries.insert(1, "President of the United States")
         elif "prime minister" in q.lower() and any(u in q.lower() for u in ("uk", "united kingdom", "u.k.", "britain")):
-            search_queries.insert(0, "List of prime ministers of the United Kingdom")
-        elif "president" in q.lower() and any(u in q.lower() for u in ("sri lanka", "lanka")):
-            search_queries.insert(0, "List of presidents of Sri Lanka")
+            search_queries.insert(0, "Prime Minister of the United Kingdom")
+            search_queries.insert(1, "List of prime ministers of the United Kingdom")
         else:
             search_queries.insert(0, f"List of {clean_q}")
 
@@ -203,7 +206,15 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
                     req_ext = urllib.request.Request(ext_url, headers={"User-Agent": USER_AGENT})
                     with urllib.request.urlopen(req_ext, timeout=timeout) as resp_ext:
                         ext_data = json.loads(resp_ext.read().decode("utf-8"))
-                        for pid, page in ext_data.get("query", {}).get("pages", {}).items():
+                        # Map pages by lowercase title to preserve hit_titles relevance order
+                        page_map = {
+                            (p.get("title") or "").strip().lower(): p
+                            for p in ext_data.get("query", {}).get("pages", {}).values()
+                        }
+                        for ht in hit_titles:
+                            page = page_map.get(ht.strip().lower())
+                            if not page:
+                                continue
                             p_title = page.get("title", "")
                             p_extract = (page.get("extract") or "").strip()
                             if p_title and p_extract:
@@ -304,11 +315,13 @@ def get_live_grounding_context(query: str, timeout: float = 6.0) -> Tuple[bool, 
     ]
     for i, r in enumerate(results[:4], 1):
         lines.append(f"  Source {i}: {r.get('title')} ({r.get('url')})")
-        lines.append(f"  Summary: {r.get('snippet', '')[:400]}")
+        lines.append(f"  Summary: {r.get('snippet', '')[:1200]}")
     lines.append("")
-    lines.append("Instructions: Ground your response strictly in the live internet reference context above. "
-                 "The current year is 2026. Do not claim events in 2026 or earlier are unknown or in the distant future. "
-                 "Cite verified names, dates, and facts from the web references.")
+    lines.append("CRITICAL INSTRUCTIONS: You have active real-time internet web access enabled via PAI Studio. "
+                 "The current year is 2026. Carefully read the live web summaries above (for example, the current officeholder is explicitly named in the summaries). "
+                 "Directly state the verified person, name, and facts found in the sources. "
+                 "Do NOT claim the information is missing, do NOT say 'I do not have access to real-time information', "
+                 "and do NOT say 'I cannot predict future elections'. Answer directly and factually.")
 
     return True, "\n".join(lines), results[:4]
 
