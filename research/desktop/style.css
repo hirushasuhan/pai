@@ -884,3 +884,742 @@ body {
   color: #000 !important;
   font-weight: 600;
 }
+
+
+/* ==========================================================================
+   Project Workspace, AI Team, Skills & Toast Notification Styles
+   ========================================================================== */
+
+/* Utility Icon & Alignment Helpers */
+.flex-center-gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.box-icon {
+  width: 16px;
+  height: 16px;
+  stroke: var(--text-muted);
+  flex-shrink: 0;
+}
+.pill-icon {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+.title-icon {
+  width: 20px;
+  height: 20px;
+  stroke: var(--accent-cyan);
+  flex-shrink: 0;
+}
+.btn-icon {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+.file-icon {
+  width: 16px;
+  height: 16px;
+  stroke: var(--accent-blue);
+  flex-shrink: 0;
+}
+.btn-block {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Top Nav Project Selector */
+.active-project-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.project-select {
+  background: rgba(18, 24, 38, 0.9);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-blue);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+  cursor: pointer;
+  max-width: 260px;
+  text-overflow: ellipsis;
+  transition: border-color 0.2s ease;
+}
+.project-select:hover, .project-select:focus {
+  border-color: var(--accent-blue);
+}
+
+/* Chat Active Project Banner */
+.project-banner {
+  background: rgba(79, 172, 254, 0.08);
+  border: 1px solid rgba(79, 172, 254, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  margin: 12px 20px 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--accent-blue);
+  animation: fadeIn 0.2s ease;
+}
+.project-banner.hidden {
+  display: none !important;
+}
+.banner-icon {
+  width: 16px;
+  height: 16px;
+  stroke: var(--accent-blue);
+  flex-shrink: 0;
+}
+.banner-path {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.btn-clear-proj {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.btn-clear-proj:hover {
+  color: var(--accent-red);
+}
+
+/* ==========================================================================
+   Projects Tab & In-App Code Editor
+   ========================================================================== */
+.projects-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
+  height: calc(100vh - 160px);
+  min-height: 520px;
+}
+.projects-sidebar-col {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 16px;
+}
+.projects-main-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.project-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.project-card:hover {
+  background: rgba(26, 34, 52, 0.8);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.project-card.active {
+  border-color: var(--accent-cyan);
+  background: rgba(0, 242, 254, 0.05);
+  box-shadow: 0 0 12px rgba(0, 242, 254, 0.1);
+}
+.project-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.project-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-main);
+}
+.project-card-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  font-weight: 600;
+}
+.project-card-path {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* In-App Code Editor */
+.editor-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0 !important;
+  overflow: hidden;
+}
+.editor-header {
+  padding: 12px 16px;
+  background: rgba(15, 23, 42, 0.85);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.open-filename {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-main);
+}
+.editor-split-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 0;
+  background: rgba(11, 15, 23, 0.6);
+}
+.file-tree-pane {
+  border-right: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(7, 10, 16, 0.5);
+}
+.file-tree-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  text-align: center;
+}
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+}
+.file-item.active {
+  background: rgba(79, 172, 254, 0.15);
+  color: var(--accent-cyan);
+  font-weight: 500;
+}
+.file-item svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+.code-editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #0d121c;
+}
+.code-editor-textarea {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 16px;
+  resize: none;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+.code-editor-textarea:focus {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* ==========================================================================
+   AI Team Tab & FIPA-ACL Protocol Activity Styles
+   ========================================================================== */
+.team-roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.team-role-card {
+  background: rgba(18, 24, 38, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+.team-role-card:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+}
+.role-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.role-icon-box {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 242, 254, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.role-icon-box svg {
+  width: 22px;
+  height: 22px;
+  stroke: var(--accent-cyan);
+}
+.role-title-box {
+  display: flex;
+  flex-direction: column;
+}
+.role-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-main);
+}
+.role-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.role-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  min-height: 34px;
+}
+.role-assignment {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.role-assignment label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.role-model-select {
+  background: rgba(11, 15, 23, 0.9);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-cyan);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  cursor: pointer;
+}
+.role-model-select:hover, .role-model-select:focus {
+  border-color: var(--accent-cyan);
+}
+
+/* FIPA-ACL Activity Feed */
+.activity-feed-box {
+  background: rgba(11, 15, 23, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  height: 380px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-sans);
+}
+.feed-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 13px;
+}
+.fipa-msg-card {
+  background: rgba(22, 30, 46, 0.65);
+  border-left: 3px solid var(--accent-cyan);
+  border-radius: 4px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: fadeIn 0.2s ease;
+}
+.fipa-msg-card.inform {
+  border-left-color: var(--accent-blue);
+}
+.fipa-msg-card.accept {
+  border-left-color: var(--accent-green);
+}
+.fipa-msg-card.reject {
+  border-left-color: var(--accent-red);
+}
+.fipa-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+}
+.fipa-badge {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 242, 254, 0.15);
+  color: var(--accent-cyan);
+}
+.fipa-msg-card.inform .fipa-badge {
+  background: rgba(79, 172, 254, 0.15);
+  color: var(--accent-blue);
+}
+.fipa-msg-card.accept .fipa-badge {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+}
+.fipa-agents {
+  color: var(--text-dim);
+}
+.fipa-agents strong {
+  color: var(--text-main);
+}
+.fipa-body {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Deliverables Viewer */
+.deliverables-tab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 12px;
+}
+.deliv-tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+.deliv-tab-btn:hover {
+  color: var(--text-main);
+}
+.deliv-tab-btn.active {
+  color: var(--accent-cyan);
+  border-bottom-color: var(--accent-cyan);
+}
+.deliverable-content-box {
+  background: rgba(11, 15, 23, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  height: 334px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cbd5e1;
+}
+.deliverable-content-box pre {
+  background: #080c14;
+  padding: 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+/* ==========================================================================
+   Skills Catalog Tab Styles
+   ========================================================================== */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 18px;
+}
+.skill-card {
+  background: rgba(18, 24, 38, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+.skill-card:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.skill-card.active {
+  border-color: rgba(0, 242, 254, 0.4);
+}
+.skill-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.skill-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.skill-icon-wrap {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 242, 254, 0.08);
+  border: 1px solid rgba(0, 242, 254, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.skill-icon-wrap svg {
+  width: 22px;
+  height: 22px;
+  stroke: var(--accent-cyan);
+}
+.skill-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.skill-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-main);
+}
+.skill-cat {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.skill-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  flex: 1;
+}
+.skill-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.skill-status-tag {
+  font-size: 11px;
+  font-weight: 600;
+}
+.skill-status-tag.enabled {
+  color: var(--accent-green);
+}
+.skill-status-tag.disabled {
+  color: var(--text-dim);
+}
+
+/* Toggle Switch Component */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(255, 255, 255, 0.15);
+  transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 22px;
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #fff;
+  transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 50%;
+}
+input:checked + .slider {
+  background-color: var(--accent-cyan);
+}
+input:checked + .slider:before {
+  transform: translateX(18px);
+  background-color: #0b0f17;
+}
+
+/* ==========================================================================
+   In-App Toast Notification System
+   ========================================================================== */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  background: rgba(18, 24, 38, 0.95);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 300px;
+  max-width: 420px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  transform: translateY(20px);
+  opacity: 0;
+  animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+@keyframes toastSlideIn {
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.toast.toast-hiding {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.toast-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.toast-success .toast-icon {
+  stroke: var(--accent-green);
+}
+.toast-success {
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.toast-error .toast-icon {
+  stroke: var(--accent-red);
+}
+.toast-error {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.toast-warning .toast-icon {
+  stroke: var(--accent-amber);
+}
+.toast-warning {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.toast-info .toast-icon {
+  stroke: var(--accent-cyan);
+}
+.toast-info {
+  border-color: rgba(0, 242, 254, 0.3);
+}
+.toast-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.toast-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.toast-msg {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.toast-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.toast-close:hover {
+  color: var(--text-main);
+}
