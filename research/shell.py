@@ -106,6 +106,7 @@ SHELL_HELP = (
     "  /web <query>        Search live web knowledge and online resources\n"
     "  /internet [on|off]  Check or toggle real-time internet access state\n"
     "  /factcheck [on|off] Automated fact-checking & live web grounding engine\n"
+    "  /desktop            Launch PAI Studio native desktop application\n"
     "  /api [status|set]   Configure 3rd-party Cloud AI providers (Gemini, OpenAI, Groq, DeepSeek)\n"
     "  /mail [to/topic]    Draft an email and open browser compose with To, Subject & Body\n"
     "  /whatsapp [who/msg] Open WhatsApp desktop app or pre-fill message to contact/phone\n"
@@ -3420,6 +3421,9 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 rest_args = ""
             return "factcheck", [sub_cmd, rest_args]
 
+        if raw_cmd in ("desktop", "gui", "studio", "ui"):
+            return "launch_desktop", []
+
         if raw_cmd in ("api", "cloud", "key", "keys"):
             args = tokens[1:]
             sub_cmd = args[0].lower() if args else "status"
@@ -4104,6 +4108,24 @@ def run_interactive_shell(
                             output_fn(colorize(msg, CYAN if color_enabled else "", color_enabled))
                 except Exception as exc:
                     msg = f"Fact check error: {exc}"
+                    output_fn(colorize(msg, RED, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "launch_desktop":
+                import subprocess
+                launcher = Path(__file__).resolve().parent.parent / "desktop" / "launch_desktop.bat"
+                if launcher.is_file():
+                    subprocess.Popen(
+                        ["cmd.exe", "/c", str(launcher)],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+                    )
+                    msg = "🚀 Launching PAI Studio Desktop Application..."
+                    output_fn(colorize(msg, GREEN, color_enabled))
+                else:
+                    msg = "Error: PAI Desktop launcher not found at desktop/launch_desktop.bat."
                     output_fn(colorize(msg, RED, color_enabled))
                 add_to_session_history(line, msg)
                 cols, _ = get_terminal_dimensions()

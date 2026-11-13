@@ -1,0 +1,22 @@
+[package]
+name = "pai-desktop"
+version = "1.1.0"
+description = "Personal Agentic AI (PAI) Native Desktop Application in Rust"
+authors = ["Hirusha Suhan <hirushasuhan@outlook.com>"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true
