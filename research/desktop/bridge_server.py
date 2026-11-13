@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -360,6 +361,146 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
     return model_list, ollama_online
 
 
+def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
+    """Open native Windows folder picker dialog and return selected path."""
+    # 1. Try tkinter with topmost attribute
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        folder = filedialog.askdirectory(title=title)
+        root.destroy()
+        if folder and os.path.isdir(folder):
+            return os.path.normpath(folder)
+    except Exception:
+        pass
+
+    # 2. PowerShell FolderBrowserDialog fallback on Windows
+    if sys.platform == "win32":
+        try:
+            cmd = [
+                "powershell", "-NoProfile", "-Command",
+                "[System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null; "
+                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                f"$f.Description = '{title}'; "
+                "$f.ShowNewFolderButton = $true; "
+                "$w = New-Object System.Windows.Forms.Form; $w.TopMost = $true; "
+                "if ($f.ShowDialog($w) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
+            ]
+            flags = 0x08000000
+            out = subprocess.check_output(cmd, creationflags=flags).decode("utf-8", errors="replace").strip()
+            if out and os.path.isdir(out):
+                return os.path.normpath(out)
+        except Exception:
+            pass
+
+    return None
+
+
+def get_system_preflight() -> Dict[str, Any]:
+    """Inspect local prerequisites, start Ollama if offline, and scan models."""
+    py_ver = platform.python_version()
+    py_exe = sys.executable
+
+    # 1. Auto-boot Ollama daemon if offline
+    ollama_online = ensure_ollama_server(timeout=4.0)
+    ollama_path = shutil.which("ollama")
+    if not ollama_path:
+        cand_paths = [
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+            Path("C:/Program Files/Ollama/ollama.exe"),
+            Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe",
+        ]
+        for c in cand_paths:
+            if c.is_file():
+                ollama_path = str(c)
+                break
+    ollama_installed = bool(ollama_path and os.path.isfile(ollama_path))
+
+    # 2. Local models scan
+    models_list, _ = get_all_installed_local_models()
+    model_count = len(models_list)
+
+    # 3. Recommended models catalog
+    installed_names = {m["name"].lower() for m in models_list}
+    recommended_models = [
+        {
+            "name": "llama3.2:3b",
+            "tag": "llama3.2:3b",
+            "size": "2.0 GB",
+            "desc": "Meta Llama 3.2 3B - Ultra fast, low RAM reasoning & chat",
+            "is_installed": "llama3.2:3b" in installed_names,
+        },
+        {
+            "name": "qwen2.5-coder:7b",
+            "tag": "qwen2.5-coder:7b",
+            "size": "4.7 GB",
+            "desc": "Qwen 2.5 Coder 7B - Best-in-class coding & architecture",
+            "is_installed": "qwen2.5-coder:7b" in installed_names,
+        },
+        {
+            "name": "deepseek-r1:7b",
+            "tag": "deepseek-r1:7b",
+            "size": "4.7 GB",
+            "desc": "DeepSeek R1 7B - Deep chain-of-thought mathematical reasoning",
+            "is_installed": "deepseek-r1:7b" in installed_names,
+        },
+        {
+            "name": "mistral:7b",
+            "tag": "mistral:7b",
+            "size": "4.1 GB",
+            "desc": "Mistral 7B Instruct - High precision versatile reasoning",
+            "is_installed": "mistral:7b" in installed_names,
+        },
+        {
+            "name": "phi3.5:3.8b",
+            "tag": "phi3.5:3.8b",
+            "size": "2.2 GB",
+            "desc": "Microsoft Phi-3.5 Mini - Lightweight agentic assistant",
+            "is_installed": "phi3.5:3.8b" in installed_names,
+        },
+    ]
+
+    # 4. RAM telemetry
+    ram_gb = 16.0
+    try:
+        import psutil
+        ram_gb = round(psutil.virtual_memory().total / (1024 ** 3), 1)
+    except Exception:
+        pass
+
+    ready = bool(ollama_online and model_count > 0)
+
+    return {
+        "success": True,
+        "ready": ready,
+        "python": {
+            "version": py_ver,
+            "executable": py_exe,
+            "status": "healthy",
+        },
+        "ollama": {
+            "installed": ollama_installed,
+            "running": ollama_online,
+            "path": str(ollama_path) if ollama_path else "",
+            "download_url": "https://ollama.com/download/windows",
+            "status": "healthy" if ollama_online else ("not_running" if ollama_installed else "missing"),
+        },
+        "models": {
+            "count": model_count,
+            "installed": models_list,
+            "recommended": recommended_models,
+            "active_model": get_current_model(),
+        },
+        "hardware": {
+            "ram_total_gb": ram_gb,
+            "os": platform.platform(),
+        },
+    }
+
+
 class PAIBridgeHandler(BaseHTTPRequestHandler):
     """Threaded HTTP handler serving desktop frontend requests on 127.0.0.1."""
 
@@ -514,6 +655,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 11. Doctor / Hardware telemetry
         elif path == "/api/doctor":
             self._handle_doctor()
+        # 12. Preflight system health check
+        elif path == "/api/system/preflight":
+            self._handle_system_preflight()
+        # 13. Native folder selection
+        elif path == "/api/utils/select_folder":
+            self._handle_select_folder()
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
@@ -618,6 +765,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 12. Antigravity Supervisor Run
         elif path == "/api/antigravity/run":
             self._handle_antigravity_run(body)
+        # 13. Native Folder Picker
+        elif path == "/api/utils/select_folder":
+            self._handle_select_folder()
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
@@ -974,15 +1124,113 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
             self.wfile.flush()
 
+    def _handle_select_folder(self) -> None:
+        """Open native Windows folder picker dialog and return selected path."""
+        folder = open_native_folder_dialog()
+        if folder:
+            self._send_json({"success": True, "path": folder, "name": Path(folder).name})
+        else:
+            self._send_json({"success": False, "cancelled": True})
+
+    def _handle_system_preflight(self) -> None:
+        """Provide detailed preflight diagnostics and auto-boot Ollama if offline."""
+        data = get_system_preflight()
+        self._send_json(data)
+
     def _handle_chat(self, body: Dict[str, Any]) -> None:
         """Execute chat completion, optionally ground in project files & fact-check."""
         raw_prompt = body.get("prompt", "").strip()
         model = body.get("model") or get_current_model()
         history = body.get("history", [])
         project_path = body.get("project_path", "").strip()
+        is_team_mode = bool(body.get("is_team_mode", False))
 
         if not raw_prompt:
             self._send_json({"error": "Prompt cannot be empty"}, status=400)
+            return
+
+        # Handle collaborative AI Team mode inside Chat
+        if is_team_mode:
+            if not project_path or not Path(project_path).is_dir():
+                self._send_json({
+                    "success": False,
+                    "error": "AI Team Mode requires an active project directory. Please select or browse for a project folder first."
+                }, status=400)
+                return
+
+            ensure_ollama_server()
+
+            p_dir = Path(project_path).resolve()
+            # 1. Read existing codebase files first to understand structure before editing
+            proj_context = get_project_codebase_context(p_dir, max_chars=14000)
+
+            team_task = (
+                f"Objective: {raw_prompt}\n\n"
+                f"Project Workspace Directory: {p_dir}\n"
+                f"Existing Codebase Content:\n{proj_context if proj_context else '[Workspace is currently empty - scaffold new project]'}\n\n"
+                f"Team Instructions: Carefully review the existing files and architectural layout above. "
+                f"Preserve existing architecture, dependencies, and code structure. "
+                f"Produce needed component updates, new files, and tests."
+            )
+
+            try:
+                from research.multi_agent import MultiAgentTeam
+            except ImportError:
+                from multi_agent import MultiAgentTeam
+
+            team = MultiAgentTeam(model_name=model)
+            res = team.run_collaborative_workflow(team_task, active_project_dir=p_dir)
+
+            # Auto-save any code updates into the project directory
+            saved_files = []
+            for fname, code in (res.get("code_updates") or {}).items():
+                try:
+                    fpath = p_dir / fname
+                    fpath.parent.mkdir(parents=True, exist_ok=True)
+                    fpath.write_text(code, encoding="utf-8")
+                    saved_files.append(fname)
+                except Exception:
+                    pass
+
+            fipa_events = []
+            for m in getattr(team, "conversation_log", []):
+                fipa_events.append({
+                    "sender": m.sender_role,
+                    "recipient": m.recipient_role,
+                    "performative": m.performative,
+                    "content": m.content,
+                    "timestamp": m.timestamp,
+                })
+
+            summary_lines = [
+                f"### 🤝 Autonomous AI Team Sprint Completed",
+                f"**Objective:** {raw_prompt}",
+                f"",
+                f"**Project Workspace:** `{p_dir}`",
+                f"",
+                f"#### 📋 Work Breakdown (PM Plan):",
+                f"```text\n{res.get('plan', 'Sprint plan finalized.')}\n```",
+                f"",
+                f"#### 🛠️ Files Created / Updated in Project ({len(saved_files)}):",
+                "\n".join([f"- `{f}`" for f in saved_files]) if saved_files else "- No code files written directly.",
+                f"",
+                f"#### 🛡️ QA Verification Verdict:",
+                f"> {res.get('qa_verdict', 'QA Audit complete.')}",
+            ]
+
+            team_reply = "\n".join(summary_lines)
+
+            self._send_json({
+                "success": True,
+                "is_team": True,
+                "response": team_reply,
+                "plan": res.get("plan", ""),
+                "specialist_assets": res.get("specialist_assets", ""),
+                "code_updates": res.get("code_updates", {}),
+                "qa_verdict": res.get("qa_verdict", ""),
+                "saved_files": saved_files,
+                "messages": fipa_events,
+            })
             return
 
         # Check if requested model or prompt is for image generation
@@ -1121,25 +1369,42 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_antigravity_run(self, body: Dict[str, Any]) -> None:
-        """Run Antigravity continuous agent task supervisor in background."""
+        """Run Antigravity continuous agent task supervisor in background with AI Team support."""
         task_prompt = body.get("task", "").strip()
+        project_path = body.get("project_path", "").strip()
+        use_team = bool(body.get("use_team", True))
         if not task_prompt:
             self._send_json({"error": "Task prompt required"}, status=400)
             return
 
-        try:
-            from research.antigravity_driver import run_antigravity_continuous_agent
-        except ImportError:
-            from antigravity_driver import run_antigravity_continuous_agent
+        ensure_ollama_server()
+
+        p_dir = Path(project_path).resolve() if project_path and Path(project_path).is_dir() else None
 
         def _bg_run():
-            run_antigravity_continuous_agent(task_prompt, max_turns=6, open_browser=True)
+            if use_team:
+                try:
+                    from research.multi_agent import MultiAgentTeam
+                except ImportError:
+                    from multi_agent import MultiAgentTeam
+                team = MultiAgentTeam()
+                team.run_collaborative_workflow(
+                    f"[Antigravity Autonomous Sprint] {task_prompt}",
+                    active_project_dir=p_dir,
+                )
+            else:
+                try:
+                    from research.antigravity_driver import run_antigravity_continuous_agent
+                except ImportError:
+                    from antigravity_driver import run_antigravity_continuous_agent
+                run_antigravity_continuous_agent(task_prompt, max_turns=6, open_browser=True)
 
         t = threading.Thread(target=_bg_run, daemon=True)
         t.start()
         self._send_json({
             "success": True,
-            "message": f"Autonomous agent supervisor started for: '{task_prompt}'.",
+            "message": f"Autonomous agent supervisor started with AI Team for: '{task_prompt}'.",
+            "project_dir": str(p_dir) if p_dir else "None",
         })
 
 

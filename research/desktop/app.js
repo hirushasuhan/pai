@@ -44,8 +44,11 @@ const serverStatusDot = document.getElementById("server-status-dot");
 const serverStatusText = document.getElementById("server-status-text");
 const headerModelSelect = document.getElementById("header-model-select");
 const headerProjectSelect = document.getElementById("header-project-select");
+const btnHeaderBrowseFolder = document.getElementById("btn-header-browse-folder");
+const toggleTeamMode = document.getElementById("toggle-team-mode");
 const toggleInternet = document.getElementById("toggle-internet");
 const toggleFactcheck = document.getElementById("toggle-factcheck");
+const btnOpenSettings = document.getElementById("btn-open-settings");
 
 // Chat DOM
 const messagesList = document.getElementById("messages-list");
@@ -61,6 +64,8 @@ const btnClearChatProj = document.getElementById("btn-clear-chat-proj");
 const createProjectForm = document.getElementById("create-project-form");
 const projNameInput = document.getElementById("proj-name-input");
 const projPathInput = document.getElementById("proj-path-input");
+const btnBrowseProjFolder = document.getElementById("btn-browse-proj-folder");
+const btnEmptyBrowseFolder = document.getElementById("btn-empty-browse-folder");
 const projectsListContainer = document.getElementById("projects-list-container");
 const savedProjectsCount = document.getElementById("saved-projects-count");
 const currentOpenFilename = document.getElementById("current-open-filename");
@@ -86,6 +91,7 @@ const skillsCatalogGrid = document.getElementById("skills-catalog-grid");
 
 // Models DOM
 const installedModelsList = document.getElementById("installed-models-list");
+const recommendedModelsGrid = document.getElementById("recommended-models-grid");
 const btnRefreshModels = document.getElementById("btn-refresh-models");
 const pullModelNameInput = document.getElementById("pull-model-name");
 const btnPullModel = document.getElementById("btn-pull-model");
@@ -108,6 +114,8 @@ const configuredCountSpan = document.getElementById("configured-count");
 const antigravityTaskInput = document.getElementById("antigravity-task-input");
 const btnRunAntigravity = document.getElementById("btn-run-antigravity");
 const antigravityLog = document.getElementById("antigravity-log");
+const toggleAgTeamMode = document.getElementById("toggle-ag-team-mode");
+const agTargetWorkspaceBadge = document.getElementById("ag-target-workspace-badge");
 
 // Tools DOM
 const toolWeatherCity = document.getElementById("tool-weather-city");
@@ -117,11 +125,26 @@ const toolSearchQuery = document.getElementById("tool-search-query");
 const btnRunSearch = document.getElementById("btn-run-search");
 const searchResultBox = document.getElementById("search-result-box");
 
-// Toast Container
+// Toast Container & Modals
 const toastContainer = document.getElementById("toast-container");
+const settingsModal = document.getElementById("settings-modal");
+const btnCloseSettings = document.getElementById("btn-close-settings");
+const btnSaveSettings = document.getElementById("btn-save-settings");
+const btnResetSettings = document.getElementById("btn-reset-settings");
+const settingFontFamily = document.getElementById("setting-font-family");
+const settingFontSize = document.getElementById("setting-font-size");
+
+const preflightModal = document.getElementById("preflight-modal");
+const btnClosePreflight = document.getElementById("btn-close-preflight");
+const btnDismissPreflight = document.getElementById("btn-dismiss-preflight");
+const preflightStatusItems = document.getElementById("preflight-status-items");
+const preflightActionBox = document.getElementById("preflight-action-box");
+const preflightActionText = document.getElementById("preflight-action-text");
+const preflightActionButtons = document.getElementById("preflight-action-buttons");
 
 // Initial Setup
 document.addEventListener("DOMContentLoaded", () => {
+  applyStoredSettings();
   setupNavigation();
   setupChat();
   setupProjects();
@@ -131,7 +154,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setupCloudKeys();
   setupAntigravity();
   setupTools();
-  checkServerHealth();
+  setupSettingsModal();
+  checkStartupPreflight();
   setInterval(checkServerHealth, 5000);
 });
 
@@ -169,7 +193,7 @@ function showToast(message, type = "info", title = "", duration = 4000) {
   setTimeout(dismiss, duration);
 }
 
-// 1. Navigation
+// 1. Navigation & Global Controls
 function setupNavigation() {
   navItems.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -200,6 +224,26 @@ function setupNavigation() {
   headerProjectSelect.addEventListener("change", async (e) => {
     const selectedPath = e.target.value;
     await activateProject(selectedPath);
+  });
+
+  btnHeaderBrowseFolder.addEventListener("click", async () => {
+    await browseAndActivateProjectFolder();
+  });
+
+  toggleTeamMode.addEventListener("change", async (e) => {
+    if (toggleTeamMode.checked) {
+      if (!activeProjectPath) {
+        showToast("AI Team mode requires an active project directory to read and write code.", "warning", "Project Needed");
+        const picked = await browseAndActivateProjectFolder();
+        if (!picked) {
+          toggleTeamMode.checked = false;
+        }
+      } else {
+        showToast(`AI Team mode active for: ${activeProjectName}`, "success", "AI Team Active");
+      }
+    } else {
+      showToast("Switched back to standard single-assistant chat mode", "info");
+    }
   });
 
   toggleInternet.addEventListener("change", async (e) => {
@@ -253,25 +297,37 @@ function switchTab(tab) {
 
   if (tab === "models") loadInstalledModels();
   if (tab === "cloud") loadCloudModels();
-  if (tab === "projects") loadProjects();
+  if (tab === "projects") {
+    loadProjects();
+    if (!activeProjectPath && (!projectsData.projects || projectsData.projects.length === 0)) {
+      showToast("Select a project folder to browse files and enable AI Team features.", "info", "Workspace Setup");
+    }
+  }
   if (tab === "team") loadTeamRoster();
   if (tab === "skills") loadSkills();
   if (tab === "tools") loadDoctorTelemetry();
 }
 
-// 2. Chat System
+// 2. Chat System with Native AI Team Integration
 function setupChat() {
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const prompt = chatInput.value.trim();
     if (!prompt) return;
 
+    const isTeam = toggleTeamMode.checked;
+    if (isTeam && !activeProjectPath) {
+      showToast("Please select a project folder before running AI Team mode", "warning", "Workspace Required");
+      await browseAndActivateProjectFolder();
+      if (!activeProjectPath) return;
+    }
+
     chatInput.value = "";
     appendUserMessage(prompt);
     btnSend.disabled = true;
 
     const botMsgId = "msg-" + Date.now();
-    appendAssistantPlaceholder(botMsgId);
+    appendAssistantPlaceholder(botMsgId, isTeam);
 
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
@@ -282,6 +338,7 @@ function setupChat() {
           model: activeModel,
           history: chatHistory,
           project_path: activeProjectPath,
+          is_team_mode: isTeam,
         }),
       });
 
@@ -289,11 +346,16 @@ function setupChat() {
       if (data.success) {
         if (data.is_image) {
           updateAssistantMessageImage(botMsgId, data.image_url, data.prompt, data.model, data.filename);
+        } else if (data.is_team) {
+          updateAssistantTeamMessage(botMsgId, data);
+          if (activeProjectPath) {
+            loadProjectFiles(activeProjectPath);
+          }
         } else {
           updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding);
         }
         chatHistory.push({ role: "user", content: prompt });
-        chatHistory.push({ role: "assistant", content: data.response || `[Generated Image: ${data.prompt}]` });
+        chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
       } else {
         updateAssistantError(botMsgId, data.error || "Execution error");
       }
@@ -334,19 +396,23 @@ function appendUserMessage(text) {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
-function appendAssistantPlaceholder(id) {
+function appendAssistantPlaceholder(id, isTeam = false) {
   const msg = document.createElement("div");
   msg.className = "message assistant";
   msg.id = id;
+  const title = isTeam ? "Autonomous AI Team (4 Roles)" : "PAI Assistant";
+  const badge = isTeam ? "TEAM" : "PAI";
+  const statusNote = isTeam ? "Reviewing codebase, planning WBS & synthesizing code..." : "Thinking & grounding...";
+
   msg.innerHTML = `
     <div class="msg-header">
-      <span class="avatar-badge">PAI</span>
-      <span class="msg-author">PAI Assistant</span>
+      <span class="avatar-badge">${badge}</span>
+      <span class="msg-author">${title}</span>
       <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
     </div>
     <div class="msg-body loading-indicator">
       <span class="dot-flashing"></span>
-      <span class="text-muted" style="margin-left: 8px;">Thinking & grounding...</span>
+      <span class="text-muted" style="margin-left: 8px;">${statusNote}</span>
     </div>
   `;
   messagesList.appendChild(msg);
@@ -377,12 +443,40 @@ function updateAssistantMessage(id, text, factcheck, grounding) {
           <span class="fc-title">${SVG_ICONS.shield} Real-Time Fact-Check Verdict</span>
           <span class="fc-score">Trust: ${Math.round((factcheck.score || 1.0) * 100)}%</span>
         </div>
-        <div class="factcheck-body">${escapeHtml(factcheck.report)}</div>
+        <div class="factcheck-body font-mono-target">${escapeHtml(factcheck.report)}</div>
       </div>
     `;
   }
 
   body.innerHTML = html;
+  messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function updateAssistantTeamMessage(id, data) {
+  const msg = document.getElementById(id);
+  if (!msg) return;
+  const body = msg.querySelector(".msg-body");
+  body.classList.remove("loading-indicator");
+
+  let filesHtml = "";
+  if (data.saved_files && data.saved_files.length > 0) {
+    filesHtml = `
+      <div class="chat-team-files-list">
+        ${data.saved_files.map(f => `<span class="team-file-pill" onclick="switchTab('projects'); openProjectFile('${activeProjectPath}', '${escapeHtml(f)}');">${SVG_ICONS.file} ${escapeHtml(f)}</span>`).join("")}
+      </div>
+    `;
+  }
+
+  body.innerHTML = `
+    <div class="chat-team-summary">
+      <div class="chat-team-header">
+        <span class="chat-team-title">${SVG_ICONS.users} Multi-Agent Team Sprint Completed</span>
+        <span class="active-badge">4 Roles Synchronized</span>
+      </div>
+      <div>${formatMarkdown(data.response)}</div>
+      ${filesHtml ? `<div class="mt-2"><strong>Saved Code Files (Click to inspect):</strong>${filesHtml}</div>` : ""}
+    </div>
+  `;
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
@@ -421,7 +515,7 @@ function updateAssistantError(id, errText) {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
-// 3. Project Workspace System
+// 3. Project Workspace System with Native Windows Folder Picker
 function setupProjects() {
   createProjectForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -448,6 +542,20 @@ function setupProjects() {
     } catch (err) {
       showToast(`Error saving project: ${err.message}`, "error");
     }
+  });
+
+  btnBrowseProjFolder.addEventListener("click", async () => {
+    const picked = await openNativeFolderDialog();
+    if (picked) {
+      projPathInput.value = picked.path;
+      if (!projNameInput.value.trim()) {
+        projNameInput.value = picked.name;
+      }
+    }
+  });
+
+  btnEmptyBrowseFolder.addEventListener("click", async () => {
+    await browseAndActivateProjectFolder();
   });
 
   btnRefreshFiles.addEventListener("click", () => {
@@ -499,6 +607,39 @@ function setupProjects() {
   });
 }
 
+async function openNativeFolderDialog() {
+  try {
+    const res = await fetch(`${API_BASE}/api/utils/select_folder`, { method: "POST" });
+    const data = await res.json();
+    if (data.success && data.path) {
+      return data;
+    }
+  } catch (err) {
+    console.error("Folder dialog error:", err);
+  }
+  return null;
+}
+
+async function browseAndActivateProjectFolder() {
+  const picked = await openNativeFolderDialog();
+  if (picked) {
+    const name = picked.name || "Workspace";
+    try {
+      await fetch(`${API_BASE}/api/projects/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, path: picked.path }),
+      });
+      await loadProjects();
+      await activateProject(picked.path);
+      return true;
+    } catch (e) {
+      console.error("Save on browse error:", e);
+    }
+  }
+  return false;
+}
+
 async function loadProjects() {
   try {
     const res = await fetch(`${API_BASE}/api/projects`);
@@ -536,7 +677,7 @@ function populateHeaderProjectDropdown(projects, activePath) {
 function renderProjectsList(projects, activePath) {
   savedProjectsCount.textContent = projects.length;
   if (projects.length === 0) {
-    projectsListContainer.innerHTML = `<div class="text-muted text-sm" style="padding: 10px;">No projects saved yet. Create one above to get started.</div>`;
+    projectsListContainer.innerHTML = `<div class="text-muted text-sm" style="padding: 10px;">No projects saved yet. Create one above or click Browse.</div>`;
     return;
   }
 
@@ -590,7 +731,15 @@ async function activateProject(folderPath) {
         loadProjectFiles(folderPath);
       } else {
         showToast("Switched to Global mode (no active project)", "info");
-        fileTreeContainer.innerHTML = `<div class="file-tree-empty text-muted">Activate a project to browse its files.</div>`;
+        fileTreeContainer.innerHTML = `
+          <div class="file-tree-empty">
+            <p class="text-muted mb-3">No active project workspace selected.</p>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-empty-browse-folder-2">
+              ${SVG_ICONS.folder} <span>Select Project Folder</span>
+            </button>
+          </div>
+        `;
+        document.getElementById("btn-empty-browse-folder-2")?.addEventListener("click", browseAndActivateProjectFolder);
         codeEditorTextarea.value = "";
         codeEditorTextarea.setAttribute("readonly", "true");
         btnSaveFile.setAttribute("disabled", "true");
@@ -626,9 +775,11 @@ function updateActiveProjectUI() {
     chatProjectName.textContent = activeProjectName;
     chatProjectPath.textContent = activeProjectPath;
     teamTargetProjNote.textContent = `Target: ${activeProjectName} (${activeProjectPath})`;
+    agTargetWorkspaceBadge.textContent = `Target: ${activeProjectName}`;
   } else {
     chatProjectBanner.classList.add("hidden");
     teamTargetProjNote.textContent = "Target: Standalone sprint directory";
+    agTargetWorkspaceBadge.textContent = "Target: Global Workspace";
   }
 }
 
@@ -650,7 +801,12 @@ async function loadProjectFiles(folderPath) {
 
 function renderFileTree(files, basePath) {
   if (!files || files.length === 0) {
-    fileTreeContainer.innerHTML = `<div class="file-tree-empty text-muted">No text or code files found in project.</div>`;
+    fileTreeContainer.innerHTML = `
+      <div class="file-tree-empty text-muted">
+        <p class="mb-2">No code or text files found in project.</p>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="btnNewFile.click()">Create First File</button>
+      </div>
+    `;
     return;
   }
 
@@ -731,7 +887,7 @@ function setupTeam() {
           <span class="fipa-badge">COORDINATOR</span>
           <span class="fipa-agents">PAI MultiAgentTeam &rarr; Engine</span>
         </div>
-        <div class="fipa-body">Initiating IEEE / FIPA-ACL collaborative sprint for task: "${escapeHtml(task)}"...</div>
+        <div class="fipa-body">Reviewing existing project codebase and initiating IEEE / FIPA-ACL collaborative sprint for: "${escapeHtml(task)}"...</div>
       </div>
     `;
 
@@ -755,13 +911,9 @@ function setupTeam() {
           qa: data.qa_verdict,
         };
 
-        // Render FIPA-ACL messages
         renderTeamMessages(data.messages || []);
-
-        // Render deliverable
         renderDeliverableTab("plan");
 
-        // If files were written and active project matches, reload files
         if (activeProjectPath) {
           loadProjectFiles(activeProjectPath);
         }
@@ -810,7 +962,6 @@ function renderTeamRoster(roster, availableModels) {
                     member.role === "specialist_developer" ? SVG_ICONS.specialist : SVG_ICONS.qa;
 
     let modelOptions = availableModels.map(m => `<option value="${m}" ${m === member.current_model ? "selected" : ""}>${m}</option>`).join("");
-    // Also include configured cloud models
     (window.__configuredCloudModels || []).forEach(cm => {
       modelOptions += `<option value="${cm.model_name}" ${cm.model_name === member.current_model ? "selected" : ""}>${cm.model_name} (Cloud)</option>`;
     });
@@ -826,7 +977,7 @@ function renderTeamRoster(roster, availableModels) {
       <div class="role-desc">${escapeHtml(member.description)}</div>
       <div class="role-assignment">
         <label>Assigned Model:</label>
-        <select class="role-model-select" data-role="${member.role}">
+        <select class="role-model-select font-mono-target" data-role="${member.role}">
           ${modelOptions}
         </select>
       </div>
@@ -901,9 +1052,7 @@ function renderDeliverableTab(tab) {
 }
 
 // 5. Skills System
-function setupSkills() {
-  // Initial load
-}
+function setupSkills() {}
 
 async function loadSkills() {
   try {
@@ -957,7 +1106,6 @@ function renderSkillsList(skills) {
         const d = await res.json();
         if (d.success) {
           showToast(`Skill "${skill.name}" ${val ? "activated" : "deactivated"}`, "info", "Skill Updated");
-          // Sync header toggles if it's internet or factcheck
           if (skill.id === "internet") toggleInternet.checked = val;
           if (skill.id === "factcheck") toggleFactcheck.checked = val;
           loadSkills();
@@ -971,7 +1119,7 @@ function renderSkillsList(skills) {
   });
 }
 
-// 6. Models Management
+// 6. Models Management & Recommended Models
 function setupModels() {
   btnRefreshModels.addEventListener("click", loadInstalledModels);
 
@@ -984,12 +1132,13 @@ function setupModels() {
 
 async function loadInstalledModels() {
   try {
-    const res = await fetch(`${API_BASE}/api/models`);
+    const res = await fetch(`${API_BASE}/api/system/preflight`);
     const data = await res.json();
     if (data.models) {
-      availableModels = data.models;
-      renderInstalledModels(data.models);
-      populateModelSelectors(data.models);
+      availableModels = data.models.installed || [];
+      renderInstalledModels(availableModels);
+      populateModelSelectors(availableModels);
+      renderRecommendedModels(data.models.recommended || []);
     }
   } catch (err) {
     console.error("Models fetch error:", err);
@@ -998,8 +1147,8 @@ async function loadInstalledModels() {
 
 function renderInstalledModels(models) {
   installedModelsList.innerHTML = "";
-  if (models.length === 0) {
-    installedModelsList.innerHTML = `<div class="text-muted">No models detected. Pull one above.</div>`;
+  if (!models || models.length === 0) {
+    installedModelsList.innerHTML = `<div class="text-muted">No models detected. Download a recommended model below.</div>`;
     return;
   }
 
@@ -1008,7 +1157,7 @@ function renderInstalledModels(models) {
     card.className = `model-card ${m.is_active ? "active" : ""}`;
     card.innerHTML = `
       <div class="model-card-header">
-        <span class="model-name">${escapeHtml(m.name)}</span>
+        <span class="model-name font-mono-target">${escapeHtml(m.name)}</span>
         ${m.is_active ? `<span class="active-badge">Active</span>` : ""}
       </div>
       <div class="model-meta">
@@ -1030,6 +1179,35 @@ function renderInstalledModels(models) {
   });
 }
 
+function renderRecommendedModels(recs) {
+  if (!recommendedModelsGrid) return;
+  recommendedModelsGrid.innerHTML = "";
+
+  recs.forEach((rec) => {
+    const card = document.createElement("div");
+    card.className = "recommended-model-card";
+    card.innerHTML = `
+      <div class="rec-model-header">
+        <span class="rec-model-name">${escapeHtml(rec.name)}</span>
+        <span class="rec-model-size">${escapeHtml(rec.size)}</span>
+      </div>
+      <div class="rec-model-desc">${escapeHtml(rec.desc)}</div>
+      <div class="rec-model-footer">
+        ${rec.is_installed ? `<span class="active-badge">${SVG_ICONS.check} Installed</span>` : `<button type="button" class="btn btn-primary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}">Install Model</button>`}
+      </div>
+    `;
+
+    const dlBtn = card.querySelector(".btn-download-rec");
+    if (dlBtn) {
+      dlBtn.addEventListener("click", () => {
+        pullModel(rec.tag);
+      });
+    }
+
+    recommendedModelsGrid.appendChild(card);
+  });
+}
+
 function populateModelSelectors(models) {
   const currentVal = headerModelSelect.value;
   headerModelSelect.innerHTML = "";
@@ -1045,7 +1223,6 @@ function populateModelSelectors(models) {
     headerModelSelect.appendChild(opt);
   });
 
-  // Also include configured cloud models in header selector
   (window.__configuredCloudModels || []).forEach((cm) => {
     const opt = document.createElement("option");
     opt.value = cm.model_name;
@@ -1081,11 +1258,6 @@ function pullModel(modelName) {
   pullPercentText.textContent = "0%";
   btnPullModel.disabled = true;
 
-  const eventSource = new EventSource(`${API_BASE}/api/models/pull`, {
-    withCredentials: false,
-  });
-
-  // Fallback to POST fetch streaming if EventSource is not preferred
   fetch(`${API_BASE}/api/models/pull`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1218,7 +1390,7 @@ function renderConfiguredCloudModels(models, activeModel) {
     card.className = `model-card configured-model-card ${isActive ? 'active' : ''}`;
     card.innerHTML = `
       <div class="model-card-header">
-        <span class="model-name">${escapeHtml(m.model_name)}</span>
+        <span class="model-name font-mono-target">${escapeHtml(m.model_name)}</span>
         <span class="type-badge ${m.model_type}">${m.model_type.toUpperCase()}</span>
       </div>
       <div class="model-meta">
@@ -1260,23 +1432,32 @@ function renderConfiguredCloudModels(models, activeModel) {
   });
 }
 
-// 8. Antigravity Autonomous Supervisor
+// 8. Antigravity Autonomous Supervisor with AI Team Integration
 function setupAntigravity() {
   btnRunAntigravity.addEventListener("click", async () => {
     const task = antigravityTaskInput.value.trim();
     if (!task) return;
 
+    const useTeam = toggleAgTeamMode ? toggleAgTeamMode.checked : true;
     appendLog(`[START] Running autonomous task supervisor: "${task}"`);
+    if (useTeam) {
+      appendLog(`[AI TEAM] Delegating execution steps to PM, Architect, Specialist & QA...`);
+    }
+
     try {
       const res = await fetch(`${API_BASE}/api/antigravity/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task }),
+        body: JSON.stringify({
+          task,
+          project_path: activeProjectPath,
+          use_team: useTeam,
+        }),
       });
       const data = await res.json();
       if (data.success) {
         appendLog(`[STEERING] ${data.message}`);
-        appendLog(`[STATUS] Continuous supervisor loop iterating across milestones...`);
+        appendLog(`[STATUS] Continuous supervisor loop iterating across SDLC milestones...`);
       } else {
         appendLog(`[ERROR] ${data.error}`);
       }
@@ -1335,12 +1516,163 @@ async function loadDoctorTelemetry() {
   }
 }
 
+// 10. Startup Preflight Check
+async function checkStartupPreflight() {
+  try {
+    const res = await fetch(`${API_BASE}/api/system/preflight`);
+    const data = await res.json();
+    if (data.success) {
+      if (!data.ready) {
+        showPreflightModal(data);
+      }
+      renderRecommendedModels(data.models.recommended || []);
+    }
+  } catch (err) {
+    console.warn("Preflight check warning:", err);
+  }
+}
+
+function showPreflightModal(data) {
+  preflightStatusItems.innerHTML = "";
+
+  const pyItem = document.createElement("div");
+  pyItem.className = "preflight-item";
+  pyItem.innerHTML = `
+    <div class="preflight-item-info">
+      <span class="preflight-item-title">Python Runtime</span>
+      <span class="preflight-item-detail">v${data.python.version}</span>
+    </div>
+    <span class="preflight-badge healthy">Ready</span>
+  `;
+  preflightStatusItems.appendChild(pyItem);
+
+  const olItem = document.createElement("div");
+  olItem.className = "preflight-item";
+  const olHealthy = data.ollama.running;
+  olItem.innerHTML = `
+    <div class="preflight-item-info">
+      <span class="preflight-item-title">Ollama Local Engine</span>
+      <span class="preflight-item-detail">${olHealthy ? "127.0.0.1:11434 Active" : (data.ollama.installed ? "Service Starting..." : "Not Installed")}</span>
+    </div>
+    <span class="preflight-badge ${olHealthy ? 'healthy' : (data.ollama.installed ? 'warning' : 'error')}">
+      ${olHealthy ? 'Online' : (data.ollama.installed ? 'Standby' : 'Missing')}
+    </span>
+  `;
+  preflightStatusItems.appendChild(olItem);
+
+  const mdItem = document.createElement("div");
+  mdItem.className = "preflight-item";
+  const mdCount = data.models.count || 0;
+  mdItem.innerHTML = `
+    <div class="preflight-item-info">
+      <span class="preflight-item-title">Local AI Models</span>
+      <span class="preflight-item-detail">${mdCount} model${mdCount === 1 ? '' : 's'} installed</span>
+    </div>
+    <span class="preflight-badge ${mdCount > 0 ? 'healthy' : 'warning'}">
+      ${mdCount > 0 ? `${mdCount} Available` : 'None Downloaded'}
+    </span>
+  `;
+  preflightStatusItems.appendChild(mdItem);
+
+  if (!data.ollama.installed) {
+    preflightActionBox.classList.remove("hidden");
+    preflightActionText.textContent = "Ollama is required to run local AI models privately on your device.";
+    preflightActionButtons.innerHTML = `
+      <a href="https://ollama.com/download/windows" target="_blank" class="btn btn-primary btn-sm">
+        ${SVG_ICONS.globe} Download Ollama for Windows
+      </a>
+    `;
+  } else if (mdCount === 0) {
+    preflightActionBox.classList.remove("hidden");
+    preflightActionText.textContent = "No local models are currently installed. We recommend installing Meta Llama 3.2 3B (2.0 GB) for fast, lightweight local reasoning.";
+    preflightActionButtons.innerHTML = `
+      <button type="button" class="btn btn-primary btn-sm" id="btn-preflight-pull-llama">
+        ${SVG_ICONS.cpu} Download llama3.2:3b (Recommended)
+      </button>
+    `;
+    document.getElementById("btn-preflight-pull-llama")?.addEventListener("click", () => {
+      preflightModal.classList.add("hidden");
+      switchTab("models");
+      pullModel("llama3.2:3b");
+    });
+  } else {
+    preflightActionBox.classList.add("hidden");
+  }
+
+  preflightModal.classList.remove("hidden");
+}
+
+btnClosePreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
+btnDismissPreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
+
+// 11. Settings & Appearance Modal
+function setupSettingsModal() {
+  btnOpenSettings.addEventListener("click", () => {
+    settingsModal.classList.remove("hidden");
+  });
+
+  btnCloseSettings.addEventListener("click", () => {
+    settingsModal.classList.add("hidden");
+  });
+
+  btnResetSettings.addEventListener("click", () => {
+    settingFontFamily.value = "jetbrains";
+    settingFontSize.value = "13.5px";
+    const radio = document.querySelector('input[name="setting-theme"][value="theme-pai-cyber"]');
+    if (radio) radio.checked = true;
+    applySettings({ font: "jetbrains", size: "13.5px", theme: "theme-pai-cyber" });
+    showToast("Settings reset to defaults", "info");
+  });
+
+  btnSaveSettings.addEventListener("click", () => {
+    const font = settingFontFamily.value;
+    const size = settingFontSize.value;
+    const theme = document.querySelector('input[name="setting-theme"]:checked')?.value || "theme-pai-cyber";
+
+    applySettings({ font, size, theme });
+    localStorage.setItem("pai_settings", JSON.stringify({ font, size, theme }));
+    settingsModal.classList.add("hidden");
+    showToast("Appearance & Developer font updated!", "success", "Settings Saved");
+  });
+}
+
+function applySettings(cfg) {
+  // Fonts
+  document.body.classList.remove("font-jetbrains", "font-fira", "font-cascadia", "font-consolas", "font-inter");
+  document.body.classList.add(`font-${cfg.font || 'jetbrains'}`);
+
+  if (cfg.size) {
+    document.documentElement.style.setProperty("--font-mono-size", cfg.size);
+    if (codeEditorTextarea) codeEditorTextarea.style.fontSize = cfg.size;
+  }
+
+  // Themes
+  document.body.classList.remove("theme-pai-cyber", "theme-electric-cyan", "theme-neon-purple");
+  document.body.classList.add(cfg.theme || "theme-pai-cyber");
+}
+
+function applyStoredSettings() {
+  try {
+    const stored = localStorage.getItem("pai_settings");
+    if (stored) {
+      const cfg = JSON.parse(stored);
+      applySettings(cfg);
+      if (settingFontFamily) settingFontFamily.value = cfg.font || "jetbrains";
+      if (settingFontSize) settingFontSize.value = cfg.size || "13.5px";
+      const radio = document.querySelector(`input[name="setting-theme"][value="${cfg.theme || 'theme-pai-cyber'}"]`);
+      if (radio) radio.checked = true;
+    }
+  } catch (e) {
+    console.warn("Could not read stored settings:", e);
+  }
+}
+
 // Server Health Heartbeat
 async function checkServerHealth() {
   try {
     const res = await fetch(`${API_BASE}/api/status`);
     const data = await res.json();
-    if (data.status === "ok") {
+    if (data.status === "ready" || data.status === "ok") {
       serverStatusDot.className = "status-dot online";
       serverStatusText.textContent = "Engine Ready";
     } else {
@@ -1369,13 +1701,19 @@ function formatMarkdown(text) {
   let html = escapeHtml(text);
   // Code blocks
   html = html.replace(/```([a-z0-9_\-]+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="language-${lang || 'plaintext'}">${code.trim()}</code></pre>`;
+    return `<pre><code class="language-${lang || 'plaintext'} font-mono-target">${code.trim()}</code></pre>`;
   });
   // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code class="font-mono-target">$1</code>');
   // Bold & Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Headings
+  html = html.replace(/^#### (.*?)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+  // Blockquotes
+  html = html.replace(/^> (.*?)$/gm, '<blockquote>$1</blockquote>');
   // Paragraphs
   html = html.replace(/\n\n+/g, '</p><p>');
   html = `<p>${html}</p>`;
