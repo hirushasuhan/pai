@@ -33,6 +33,18 @@ if str(RESEARCH_DIR) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# Guard against None stdio when running under pythonw.exe on Windows
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+
 try:
     from research.cloud_ai import (
         CLOUD_PROVIDERS,
@@ -176,6 +188,14 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
 
 class PAIBridgeHandler(BaseHTTPRequestHandler):
     """Threaded HTTP handler serving desktop frontend requests on 127.0.0.1."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Suppress or safely route HTTP access logs."""
+        if sys.stderr is not None:
+            try:
+                sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
+            except Exception:
+                pass
 
     def _send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -659,7 +679,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
 
 def run_bridge_server():
-    server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
+    try:
+        server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
+    except Exception as e:
+        log_path = Path.home() / ".pai" / "bridge_error.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"Server init error: {e}\n", encoding="utf-8")
+        return
+
     print(f"================================================================================")
     print(f"PAI DESKTOP BRIDGE SERVER ACTIVE ON http://{HOST}:{PORT}")
     print(f"Strict loopback binding verified (Threat T21 Compliant).")
@@ -668,6 +695,11 @@ def run_bridge_server():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down bridge server...")
+        server.server_close()
+    except Exception as e:
+        log_path = Path.home() / ".pai" / "bridge_error.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"serve_forever error: {e}\n", encoding="utf-8")
         server.server_close()
 
 

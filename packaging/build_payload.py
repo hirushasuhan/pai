@@ -50,7 +50,7 @@ DEFAULT_PLATFORM = "win-x64" if sys.platform == "win32" else "linux-x64"
 # Evaluated tree invariants established in Release N (v1.0.0-rc1, commit 8ce81cb)
 EXPECTED_CORE_TREE = "14c60746ca9a41d91aafd88cc0c7d98719cfe3a9"
 # Pre-freeze pinned research tree for v1.1.0-rc4
-EXPECTED_RESEARCH_TREE = "9b71e2e4c597a22b86e53e08d3396a5321659939"
+EXPECTED_RESEARCH_TREE = "f6bd587185c8b0c8103a064daa25bf1ddf0d3618"
 # Historical baseline research tree for v1.0.0-rc1 tag
 RC1_RESEARCH_TREE = "506e520b33a0af8c3f0276114483ce26b9bd3787"
 EXPECTED_BINARY_SHA256 = "6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe"
@@ -434,12 +434,13 @@ def extract_embed_python_zip(
         if not dll_file.name.lower().startswith("python"):
             shutil.copy2(str(dll_file), str(dlls_dir / dll_file.name))
 
-    # Configure *._pth files with Lib, DLLs, ., and ..\research
+    # Configure *._pth files with Lib, DLLs, ., .., and ..\research
     pth_files = list(dest.glob("*._pth"))
     pth_lines = [
         ".",
         ".\\Lib",
         ".\\DLLs",
+        "..",
         "..\\research",
     ]
     if not pth_files:
@@ -694,9 +695,9 @@ def build_payload(
         if embed_p.is_dir():
             target_py = out / "python"
             shutil.copytree(str(embed_p), str(target_py), dirs_exist_ok=True)
-            # Ensure ._pth lists Lib, DLLs, ., and ..\research for isolated imports (Findings BN, BW)
+            # Ensure ._pth lists Lib, DLLs, ., .., and ..\research for isolated imports (Findings BN, BW)
             pth_files = list(target_py.glob("*._pth"))
-            pth_lines = [".", ".\\Lib", ".\\DLLs", "..\\research"]
+            pth_lines = [".", ".\\Lib", ".\\DLLs", "..", "..\\research"]
             if not pth_files:
                 (target_py / "python._pth").write_text("\n".join(pth_lines) + "\n", encoding="utf-8")
             else:

@@ -15,8 +15,29 @@ import threading
 import time
 import urllib.request
 import webbrowser
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional, Tuple
+
+# Ensure search paths include research and repo/install root
+_CURR_DIR = Path(__file__).resolve().parent
+_INSTALL_ROOT = _CURR_DIR.parent
+if str(_CURR_DIR) not in sys.path:
+    sys.path.insert(0, str(_CURR_DIR))
+if str(_INSTALL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_INSTALL_ROOT))
+
+# Guard against None stdio when running under pythonw.exe on Windows
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
 
 BRIDGE_URL = "http://127.0.0.1:8765"
 
@@ -34,54 +55,35 @@ def is_bridge_server_running(timeout: float = 0.5) -> bool:
         return False
 
 
-def start_bridge_server() -> bool:
-    """Start bridge server if not already active."""
+def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer]]:
+    """Start bridge server if not already active. Returns (ok, server_instance)."""
     if is_bridge_server_running():
-        return True
+        return True, None
 
-    # 1. Try starting as in-process daemon thread
     try:
-        from research.desktop.bridge_server import run_bridge_server
-    except ImportError:
         try:
-            from desktop.bridge_server import run_bridge_server
+            from research.desktop.bridge_server import HOST, PORT, PAIBridgeHandler
         except ImportError:
-            run_bridge_server = None
+            from desktop.bridge_server import HOST, PORT, PAIBridgeHandler
 
-    if run_bridge_server is not None:
-        t = threading.Thread(target=run_bridge_server, daemon=True)
+        server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
         t.start()
-        # Wait up to 3 seconds for server to be responsive
+
         for _ in range(30):
             time.sleep(0.1)
             if is_bridge_server_running():
-                return True
+                return True, server
+    except Exception:
+        pass
 
-    # 2. Fallback to background subprocess
-    curr_dir = Path(__file__).resolve().parent
-    server_script = curr_dir / "desktop" / "bridge_server.py"
-    if not server_script.is_file():
-        server_script = curr_dir.parent / "desktop" / "bridge_server.py"
-
-    if server_script.is_file():
-        py_exe = sys.executable or "python"
-        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        subprocess.Popen(
-            [py_exe, str(server_script)],
-            creationflags=flags,
-        )
-        for _ in range(30):
-            time.sleep(0.1)
-            if is_bridge_server_running():
-                return True
-
-    return is_bridge_server_running()
+    return is_bridge_server_running(), None
 
 
 def find_browser_app_executable() -> Optional[str]:
-    """Find Microsoft Edge or Chrome executable for standalone App Mode."""
+    """Find Microsoft Edge, Chrome, or Brave executable for standalone App Mode."""
     # Check PATH
-    for candidate in ("msedge", "msedge.exe", "chrome", "chrome.exe"):
+    for candidate in ("msedge", "msedge.exe", "chrome", "chrome.exe", "brave", "brave.exe"):
         found = shutil.which(candidate)
         if found:
             return found
@@ -94,6 +96,7 @@ def find_browser_app_executable() -> Optional[str]:
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
     ]
     for p in std_paths:
         if os.path.isfile(p):
@@ -102,27 +105,63 @@ def find_browser_app_executable() -> Optional[str]:
     return None
 
 
-def launch_desktop_app() -> Tuple[bool, str]:
+def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
     """Launch PAI Studio in native desktop window."""
-    ok_server = start_bridge_server()
+    ok_server, server_instance = start_bridge_server()
     if not ok_server:
         return False, "Could not start local desktop bridge server on 127.0.0.1:8765."
 
     browser_exe = find_browser_app_executable()
+    proc = None
     if browser_exe:
         try:
-            subprocess.Popen([
-                browser_exe,
-                f"--app={BRIDGE_URL}",
-                "--window-size=1280,840",
-            ])
-            return True, f"PAI Studio Desktop opened in native app mode ({os.path.basename(browser_exe)})."
+            profile_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PAI" / "desktop_profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            flags = 0
+            if sys.platform == "win32":
+                flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+            proc = subprocess.Popen(
+                [
+                    browser_exe,
+                    f"--app={BRIDGE_URL}",
+                    f"--user-data-dir={profile_dir}",
+                    "--window-size=1280,840",
+                ],
+                creationflags=flags,
+            )
+            msg = f"PAI Studio Desktop opened in native app mode ({os.path.basename(browser_exe)})."
         except Exception:
-            pass
+            proc = None
 
-    # Fallback to system default browser
-    try:
-        webbrowser.open(BRIDGE_URL)
-        return True, "PAI Studio Desktop opened in default web browser."
-    except Exception as exc:
-        return False, f"Failed to open browser: {exc}"
+    if proc is None:
+        try:
+            webbrowser.open(BRIDGE_URL)
+            msg = "PAI Studio Desktop opened in default web browser."
+        except Exception as exc:
+            return False, f"Failed to open browser: {exc}"
+
+    if wait_for_exit and server_instance is not None:
+        if proc is not None:
+            try:
+                proc.wait()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                server_instance.shutdown()
+                server_instance.server_close()
+        else:
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                server_instance.shutdown()
+                server_instance.server_close()
+
+    return True, msg
+
+
+if __name__ == "__main__":
+    ok, msg = launch_desktop_app(wait_for_exit=True)
+    if not ok:
+        print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
