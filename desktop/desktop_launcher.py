@@ -115,8 +115,6 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
     proc = None
     if browser_exe:
         try:
-            profile_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PAI" / "desktop_profile"
-            profile_dir.mkdir(parents=True, exist_ok=True)
             flags = 0
             if sys.platform == "win32":
                 flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
@@ -124,8 +122,9 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
                 [
                     browser_exe,
                     f"--app={BRIDGE_URL}",
-                    f"--user-data-dir={profile_dir}",
                     "--window-size=1280,840",
+                    "--no-first-run",
+                    "--no-default-browser-check",
                 ],
                 creationflags=flags,
             )
