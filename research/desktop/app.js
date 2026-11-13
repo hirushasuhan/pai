@@ -134,6 +134,24 @@ const btnResetSettings = document.getElementById("btn-reset-settings");
 const settingFontFamily = document.getElementById("setting-font-family");
 const settingFontSize = document.getElementById("setting-font-size");
 
+// Slash Commands DOM
+const slashCommandsPopup = document.getElementById("slash-commands-popup");
+const slashCommandsList = document.getElementById("slash-commands-list");
+
+// MCP & Plugins DOM
+const formAddMcp = document.getElementById("form-add-mcp");
+const mcpNameInput = document.getElementById("mcp-name-input");
+const mcpTransportSelect = document.getElementById("mcp-transport-select");
+const mcpCmdInput = document.getElementById("mcp-cmd-input");
+const mcpDescInput = document.getElementById("mcp-desc-input");
+const mcpServersGrid = document.getElementById("mcp-servers-grid");
+const mcpServersCount = document.getElementById("mcp-servers-count");
+
+const formAddPlugin = document.getElementById("form-add-plugin");
+const pluginNameInput = document.getElementById("plugin-name-input");
+const pluginCatInput = document.getElementById("plugin-cat-input");
+const pluginDescInput = document.getElementById("plugin-desc-input");
+
 const preflightModal = document.getElementById("preflight-modal");
 const btnClosePreflight = document.getElementById("btn-close-preflight");
 const btnDismissPreflight = document.getElementById("btn-dismiss-preflight");
@@ -304,16 +322,220 @@ function switchTab(tab) {
     }
   }
   if (tab === "team") loadTeamRoster();
-  if (tab === "skills") loadSkills();
+  if (tab === "skills") {
+    loadSkills();
+    loadMcpServers();
+  }
   if (tab === "tools") loadDoctorTelemetry();
 }
 
-// 2. Chat System with Native AI Team Integration
+// 2. Chat System with Native AI Team & Slash Commands Integration
+const SLASH_COMMANDS = [
+  { cmd: "/internet on", desc: "Enable live real-time internet web access & RAG", cat: "Grounding" },
+  { cmd: "/internet off", desc: "Disable internet access (strictly offline mode)", cat: "Grounding" },
+  { cmd: "/factcheck on", desc: "Enable real-time fact-checking & audit engine", cat: "Auditing" },
+  { cmd: "/factcheck off", desc: "Disable automated fact-checking", cat: "Auditing" },
+  { cmd: "/team", desc: "Toggle autonomous 4-role AI engineering team", cat: "Agents" },
+  { cmd: "/image", desc: "Generate image with Google Imagen 3 or DALL-E 3", cat: "Creative" },
+  { cmd: "/weather", desc: "Fetch live real-time weather telemetry", cat: "Tools" },
+  { cmd: "/web", desc: "Search live web knowledge and display citations", cat: "Tools" },
+  { cmd: "/mcp", desc: "Manage Model Context Protocol (MCP) servers & tools", cat: "System" },
+  { cmd: "/models", desc: "Open Model Manager to pull or switch local models", cat: "System" },
+  { cmd: "/projects", desc: "Open Project Workspace context & in-app file editor", cat: "System" },
+  { cmd: "/clear", desc: "Clear current conversation history", cat: "Chat" },
+  { cmd: "/help", desc: "Display all available commands and keyboard shortcuts", cat: "Help" },
+];
+let activeSlashIndex = 0;
+
+function setupSlashCommands() {
+  if (!slashCommandsPopup || !slashCommandsList || !chatInput) return;
+
+  function renderSlashList(filterText = "") {
+    const q = filterText.toLowerCase();
+    const filtered = SLASH_COMMANDS.filter((item) =>
+      !q || item.cmd.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q)
+    );
+
+    slashCommandsList.innerHTML = "";
+    if (filtered.length === 0) {
+      slashCommandsList.innerHTML = `<div class="slash-item empty">No matching slash commands</div>`;
+      return;
+    }
+
+    activeSlashIndex = Math.min(activeSlashIndex, filtered.length - 1);
+    if (activeSlashIndex < 0) activeSlashIndex = 0;
+
+    filtered.forEach((item, idx) => {
+      const el = document.createElement("div");
+      el.className = `slash-item ${idx === activeSlashIndex ? "active" : ""}`;
+      el.innerHTML = `
+        <div class="slash-item-left">
+          <span class="slash-cmd-pill font-mono-target">${escapeHtml(item.cmd)}</span>
+          <span class="slash-cmd-desc">${escapeHtml(item.desc)}</span>
+        </div>
+        <span class="slash-cmd-cat">${escapeHtml(item.cat)}</span>
+      `;
+      el.addEventListener("click", () => {
+        applySlashCommand(item.cmd);
+      });
+      el.addEventListener("mouseenter", () => {
+        activeSlashIndex = idx;
+        updateActiveSlashItem();
+      });
+      slashCommandsList.appendChild(el);
+    });
+  }
+
+  function updateActiveSlashItem() {
+    const items = slashCommandsList.querySelectorAll(".slash-item:not(.empty)");
+    items.forEach((item, idx) => {
+      if (idx === activeSlashIndex) {
+        item.classList.add("active");
+        item.scrollIntoView({ block: "nearest" });
+      } else {
+        item.classList.remove("active");
+      }
+    });
+  }
+
+  function applySlashCommand(cmd) {
+    chatInput.value = cmd + (cmd.includes(" ") ? "" : " ");
+    slashCommandsPopup.classList.add("hidden");
+    chatInput.focus();
+    chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+  }
+
+  chatInput.addEventListener("input", () => {
+    const val = chatInput.value;
+    if (val.startsWith("/")) {
+      activeSlashIndex = 0;
+      renderSlashList(val);
+      slashCommandsPopup.classList.remove("hidden");
+    } else {
+      slashCommandsPopup.classList.add("hidden");
+    }
+  });
+
+  chatInput.addEventListener("keydown", (e) => {
+    if (slashCommandsPopup.classList.contains("hidden")) return;
+
+    const items = slashCommandsList.querySelectorAll(".slash-item:not(.empty)");
+    if (!items.length) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeSlashIndex = (activeSlashIndex + 1) % items.length;
+      updateActiveSlashItem();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeSlashIndex = (activeSlashIndex - 1 + items.length) % items.length;
+      updateActiveSlashItem();
+    } else if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      const activeEl = slashCommandsList.querySelector(".slash-item.active .slash-cmd-pill");
+      if (activeEl) {
+        e.preventDefault();
+        applySlashCommand(activeEl.textContent.trim());
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      slashCommandsPopup.classList.add("hidden");
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!slashCommandsPopup.contains(e.target) && e.target !== chatInput) {
+      slashCommandsPopup.classList.add("hidden");
+    }
+  });
+}
+
 function setupChat() {
+  setupSlashCommands();
+
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (slashCommandsPopup && !slashCommandsPopup.classList.contains("hidden")) {
+      slashCommandsPopup.classList.add("hidden");
+    }
     const prompt = chatInput.value.trim();
     if (!prompt) return;
+
+    // Intercept client-side interactive slash commands
+    const lowerPrompt = prompt.toLowerCase();
+    if (lowerPrompt === "/clear") {
+      chatHistory = [];
+      messagesList.innerHTML = `
+        <div class="message assistant welcome">
+          <div class="msg-header">
+            <span class="avatar-badge">PAI</span>
+            <span class="msg-author">Personal Agentic AI Assistant</span>
+            <span class="msg-time">Just now</span>
+          </div>
+          <div class="msg-body">
+            <p>Conversation cleared. Ready for your next instruction!</p>
+          </div>
+        </div>
+      `;
+      chatInput.value = "";
+      showToast("Conversation cleared", "info");
+      return;
+    }
+    if (lowerPrompt === "/team") {
+      toggleTeamMode.checked = !toggleTeamMode.checked;
+      toggleTeamMode.dispatchEvent(new Event("change"));
+      chatInput.value = "";
+      showToast(`AI Team mode ${toggleTeamMode.checked ? "activated" : "deactivated"}`, "info");
+      return;
+    }
+    if (lowerPrompt === "/internet on" || lowerPrompt === "/internet off") {
+      const val = lowerPrompt.endsWith("on");
+      toggleInternet.checked = val;
+      toggleInternet.dispatchEvent(new Event("change"));
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/factcheck on" || lowerPrompt === "/factcheck off") {
+      const val = lowerPrompt.endsWith("on");
+      toggleFactcheck.checked = val;
+      toggleFactcheck.dispatchEvent(new Event("change"));
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/mcp" || lowerPrompt === "/plugins" || lowerPrompt === "/skills") {
+      switchTab("skills");
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/models") {
+      switchTab("models");
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/projects") {
+      switchTab("projects");
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/help") {
+      chatInput.value = "";
+      appendUserMessage("/help");
+      const botId = "msg-" + Date.now();
+      appendAssistantPlaceholder(botId, false);
+      const helpText = `### 💡 Available Slash Commands\n\n` +
+        `- \`/internet [on|off]\` : Toggle real-time web grounding and RAG\n` +
+        `- \`/factcheck [on|off]\` : Toggle automated claim verification and audit engine\n` +
+        `- \`/team\` : Toggle autonomous 4-role AI engineering team\n` +
+        `- \`/image <prompt>\` : Synthesize image with Google Imagen 3 or DALL-E 3\n` +
+        `- \`/weather [city]\` : Fetch live real-time Open-Meteo weather forecast\n` +
+        `- \`/web <query>\` : Search Wikipedia & DuckDuckGo with live web citations\n` +
+        `- \`/mcp\` : Open Model Context Protocol (MCP) servers & plugins hub\n` +
+        `- \`/models\` : Open Model Manager to pull or switch local models\n` +
+        `- \`/projects\` : Open active project workspace context\n` +
+        `- \`/clear\` : Clear current conversation history\n\n` +
+        `*Tip:* Type \`/\` in the chat box anytime to trigger the interactive auto-complete popup!`;
+      updateAssistantMessage(botId, helpText, null, []);
+      return;
+    }
 
     const isTeam = toggleTeamMode.checked;
     if (isTeam && !activeProjectPath) {
@@ -437,11 +659,15 @@ function updateAssistantMessage(id, text, factcheck, grounding) {
   }
 
   if (factcheck && factcheck.report) {
+    const trustPct = (typeof factcheck.score === "number")
+      ? Math.round(factcheck.score * 100)
+      : (factcheck.fidelity !== undefined ? factcheck.fidelity : 0);
+    const trustClass = trustPct >= 70 ? "trust-high" : (trustPct >= 35 ? "trust-med" : "trust-low");
     html += `
-      <div class="factcheck-box">
+      <div class="factcheck-box ${trustClass}">
         <div class="factcheck-header">
           <span class="fc-title">${SVG_ICONS.shield} Real-Time Fact-Check Verdict</span>
-          <span class="fc-score">Trust: ${Math.round((factcheck.score || 1.0) * 100)}%</span>
+          <span class="fc-score ${trustClass}">Trust: ${trustPct}%</span>
         </div>
         <div class="factcheck-body font-mono-target">${escapeHtml(factcheck.report)}</div>
       </div>
@@ -1051,8 +1277,11 @@ function renderDeliverableTab(tab) {
   }
 }
 
-// 5. Skills System
-function setupSkills() {}
+// 5. Plugins & MCPs Hub System
+function setupSkills() {
+  setupMcpForm();
+  setupPluginForm();
+}
 
 async function loadSkills() {
   try {
@@ -1066,13 +1295,189 @@ async function loadSkills() {
   }
 }
 
+async function loadMcpServers() {
+  if (!mcpServersGrid) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/mcp/list`);
+    const data = await res.json();
+    if (data.success) {
+      renderMcpServers(data.servers || []);
+    }
+  } catch (err) {
+    console.error("Failed to load MCP servers:", err);
+  }
+}
+
+function renderMcpServers(servers) {
+  if (!mcpServersGrid) return;
+  if (mcpServersCount) {
+    const enabledCount = servers.filter((s) => s.enabled).length;
+    mcpServersCount.textContent = `${enabledCount} of ${servers.length} Connected`;
+  }
+  mcpServersGrid.innerHTML = "";
+  if (servers.length === 0) {
+    mcpServersGrid.innerHTML = `
+      <div class="text-muted p-3">No Model Context Protocol (MCP) servers connected yet. Add one using the connection form above!</div>
+    `;
+    return;
+  }
+
+  servers.forEach((srv) => {
+    const card = document.createElement("div");
+    card.className = `mcp-server-card ${srv.enabled ? "active" : ""}`;
+    const transportBadge = srv.transport === "sse"
+      ? `<span class="transport-badge sse">SSE</span>`
+      : `<span class="transport-badge stdio">STDIO</span>`;
+
+    card.innerHTML = `
+      <div class="mcp-card-header">
+        <div class="mcp-identity">
+          <div class="mcp-icon-wrap">${SVG_ICONS.cpu || SVG_ICONS.shield}</div>
+          <div class="mcp-title-wrap">
+            <span class="mcp-name font-mono-target">${escapeHtml(srv.name)}</span>
+            ${transportBadge}
+          </div>
+        </div>
+        <div class="mcp-actions">
+          <label class="switch">
+            <input type="checkbox" class="mcp-toggle-input" data-name="${escapeHtml(srv.name)}" ${srv.enabled ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+          <button type="button" class="btn btn-secondary btn-icon-only btn-sm btn-delete-mcp" data-name="${escapeHtml(srv.name)}" title="Disconnect MCP Server">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          </button>
+        </div>
+      </div>
+      <div class="mcp-desc">${escapeHtml(srv.description || "Custom MCP Tool Server")}</div>
+      <div class="mcp-cmd-box font-mono-target">${escapeHtml(srv.command)}</div>
+    `;
+
+    const toggle = card.querySelector(".mcp-toggle-input");
+    toggle.addEventListener("change", async (e) => {
+      const val = e.target.checked;
+      try {
+        const res = await fetch(`${API_BASE}/api/mcp/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: srv.name, enabled: val }),
+        });
+        const d = await res.json();
+        if (d.success) {
+          showToast(`MCP Server "${srv.name}" ${val ? "enabled" : "disabled"}`, "info");
+          loadMcpServers();
+        }
+      } catch (err) {
+        showToast(`Failed to toggle MCP server: ${err.message}`, "error");
+      }
+    });
+
+    const btnDel = card.querySelector(".btn-delete-mcp");
+    btnDel.addEventListener("click", async () => {
+      if (!confirm(`Are you sure you want to disconnect MCP server "${srv.name}"?`)) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/mcp/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: srv.name }),
+        });
+        const d = await res.json();
+        if (d.success) {
+          showToast(`Disconnected MCP Server "${srv.name}"`, "success");
+          loadMcpServers();
+        }
+      } catch (err) {
+        showToast(`Failed to remove MCP server: ${err.message}`, "error");
+      }
+    });
+
+    mcpServersGrid.appendChild(card);
+  });
+}
+
+function setupMcpForm() {
+  if (!formAddMcp) return;
+  formAddMcp.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = mcpNameInput.value.trim();
+    const transport = mcpTransportSelect.value;
+    const command = mcpCmdInput.value.trim();
+    const description = mcpDescInput.value.trim();
+
+    if (!name || !command) {
+      showToast("Server name and command/URL are required", "warning");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/mcp/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, transport, command, description }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`MCP Server "${name}" connected!`, "success", "MCP Connected");
+        mcpNameInput.value = "";
+        mcpCmdInput.value = "";
+        mcpDescInput.value = "";
+        loadMcpServers();
+      } else {
+        showToast(`Failed to connect MCP server: ${data.error || "Unknown error"}`, "error");
+      }
+    } catch (err) {
+      showToast(`Connection error: ${err.message}`, "error");
+    }
+  });
+}
+
+function setupPluginForm() {
+  if (!formAddPlugin) return;
+  formAddPlugin.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = pluginNameInput.value.trim();
+    const category = pluginCatInput.value.trim() || "Custom Extensions";
+    const description = pluginDescInput.value.trim();
+
+    if (!name || !description) {
+      showToast("Plugin name and description are required", "warning");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/plugins/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, category, description }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Plugin "${name}" added!`, "success", "Plugin Installed");
+        pluginNameInput.value = "";
+        pluginCatInput.value = "";
+        pluginDescInput.value = "";
+        loadSkills();
+      } else {
+        showToast(`Failed to add plugin: ${data.error || "Unknown error"}`, "error");
+      }
+    } catch (err) {
+      showToast(`Failed to add plugin: ${err.message}`, "error");
+    }
+  });
+}
+
 function renderSkillsList(skills) {
   skillsCatalogGrid.innerHTML = "";
   skills.forEach((skill) => {
     const card = document.createElement("div");
     card.className = `skill-card ${skill.enabled ? "active" : ""}`;
 
-    const iconSvg = SVG_ICONS[skill.icon] || SVG_ICONS.shield;
+    const iconSvg = SVG_ICONS[skill.icon] || SVG_ICONS.zap || SVG_ICONS.shield;
+    const isCustom = !["internet", "factcheck", "file_doctor", "git_ops"].includes(skill.id);
+    const deleteBtnHtml = isCustom ? `
+      <button type="button" class="btn btn-secondary btn-icon-only btn-sm btn-delete-plugin" data-id="${escapeHtml(skill.id)}" title="Delete plugin">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+      </button>
+    ` : '';
 
     card.innerHTML = `
       <div class="skill-header">
@@ -1083,10 +1488,13 @@ function renderSkillsList(skills) {
             <span class="skill-cat">${escapeHtml(skill.category)}</span>
           </div>
         </div>
-        <label class="switch">
-          <input type="checkbox" class="skill-toggle-input" data-id="${skill.id}" ${skill.enabled ? "checked" : ""} />
-          <span class="slider"></span>
-        </label>
+        <div class="flex-center-gap">
+          <label class="switch">
+            <input type="checkbox" class="skill-toggle-input" data-id="${skill.id}" ${skill.enabled ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+          ${deleteBtnHtml}
+        </div>
       </div>
       <div class="skill-desc">${escapeHtml(skill.description)}</div>
       <div class="skill-footer">
@@ -1114,6 +1522,27 @@ function renderSkillsList(skills) {
         showToast(`Failed to toggle skill: ${err.message}`, "error");
       }
     });
+
+    const delBtn = card.querySelector(".btn-delete-plugin");
+    if (delBtn) {
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Delete custom plugin "${skill.name}"?`)) return;
+        try {
+          const res = await fetch(`${API_BASE}/api/plugins/delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: skill.id }),
+          });
+          const d = await res.json();
+          if (d.success) {
+            showToast(`Deleted plugin "${skill.name}"`, "success");
+            loadSkills();
+          }
+        } catch (err) {
+          showToast(`Failed to delete plugin: ${err.message}`, "error");
+        }
+      });
+    }
 
     skillsCatalogGrid.appendChild(card);
   });

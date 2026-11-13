@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-USER_AGENT = "PersonalAgenticAI/1.1 (Interactive Assistant; Windows x64)"
+USER_AGENT = "PAIAssistantApp/1.1 (Interactive AI Assistant; Windows x64; contact: pai-dev@localdomain.org)"
 
 _WEATHER_CODE_MAP: Dict[int, Tuple[str, str, str]] = {
     0: ("Clear sky", "පැහැදිලි අහස", "☀️"),
@@ -165,43 +165,57 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
         return False, "Search query cannot be empty.", []
 
     results: List[Dict[str, str]] = []
+    seen_titles = set()
 
-    # 1. Wikipedia Summary Search (Direct title match or search query)
-    wiki_encoded = urllib.parse.quote(q.replace(" ", "_"), safe="")
-    wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_encoded}"
-    req_wiki = urllib.request.Request(wiki_url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req_wiki, timeout=timeout) as resp:
-            w_data = json.loads(resp.read().decode("utf-8"))
-            extract = (w_data.get("extract") or "").strip()
-            title = (w_data.get("title") or q).strip()
-            page_url = w_data.get("content_urls", {}).get("desktop", {}).get("page", f"https://en.wikipedia.org/wiki/{wiki_encoded}")
-            if extract:
-                results.append({
-                    "title": title,
-                    "url": page_url,
-                    "snippet": extract,
-                    "source": "Wikipedia",
-                })
-    except Exception:
-        # Fallback to Wikipedia Full-Text Search API
+    # Expand query abbreviations and clean
+    clean_q = re.sub(r"(?i)\b(who is|who was|what is|tell me about|can you tell me|do you know|the|of|a|an)\b", " ", q)
+    clean_q = re.sub(r"(?i)\bus\b", "United States", clean_q)
+    clean_q = re.sub(r"\s+", " ", clean_q).strip()
+
+    search_queries = [q]
+    if clean_q and clean_q.lower() != q.lower():
+        search_queries.append(clean_q)
+    if any(k in q.lower() for k in ("president", "prime minister", "governor", "leader", "chancellor", "king")):
+        if "president" in q.lower() and any(u in q.lower() for u in ("us", "united states", "u.s.", "america")):
+            search_queries.insert(0, "List of presidents of the United States")
+        elif "prime minister" in q.lower() and any(u in q.lower() for u in ("uk", "united kingdom", "u.k.", "britain")):
+            search_queries.insert(0, "List of prime ministers of the United Kingdom")
+        elif "president" in q.lower() and any(u in q.lower() for u in ("sri lanka", "lanka")):
+            search_queries.insert(0, "List of presidents of Sri Lanka")
+        else:
+            search_queries.insert(0, f"List of {clean_q}")
+
+    # 1. Wikipedia Full-Text Search with Lead Section Extract (exintro + explaintext)
+    for sq in search_queries[:3]:
         try:
-            srch_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(q)}&utf8=&format=json"
+            srch_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(sq)}&utf8=&format=json"
             req_srch = urllib.request.Request(srch_url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req_srch, timeout=timeout) as resp:
                 srch_data = json.loads(resp.read().decode("utf-8"))
                 items = srch_data.get("query", {}).get("search", [])
-                for it in items[:2]:
-                    it_title = it.get("title", "")
-                    raw_snip = it.get("snippet", "")
-                    clean_snip = re.sub(r"<[^>]+>", "", raw_snip).strip()
-                    if it_title and clean_snip:
-                        results.append({
-                            "title": it_title,
-                            "url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(it_title.replace(' ', '_'))}",
-                            "snippet": clean_snip,
-                            "source": "Wikipedia Search",
-                        })
+                hit_titles = [it.get("title") for it in items[:3] if it.get("title") and it.get("title") not in seen_titles]
+                for ht in hit_titles:
+                    seen_titles.add(ht)
+
+                if hit_titles:
+                    titles_param = "|".join(urllib.parse.quote(t) for t in hit_titles)
+                    ext_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&titles={titles_param}&format=json"
+                    req_ext = urllib.request.Request(ext_url, headers={"User-Agent": USER_AGENT})
+                    with urllib.request.urlopen(req_ext, timeout=timeout) as resp_ext:
+                        ext_data = json.loads(resp_ext.read().decode("utf-8"))
+                        for pid, page in ext_data.get("query", {}).get("pages", {}).items():
+                            p_title = page.get("title", "")
+                            p_extract = (page.get("extract") or "").strip()
+                            if p_title and p_extract:
+                                # Split by linebreaks to get paragraphs and preserve officeholder details
+                                paras = [p.strip() for p in re.split(r"\r?\n+", p_extract) if p.strip()]
+                                snippet = " ".join(paras[:3])[:750]
+                                results.append({
+                                    "title": p_title,
+                                    "url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(p_title.replace(' ', '_'))}",
+                                    "snippet": snippet,
+                                    "source": "Wikipedia",
+                                })
         except Exception:
             pass
 
@@ -215,7 +229,8 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
             abstract = (d_data.get("AbstractText") or "").strip()
             heading = (d_data.get("Heading") or q).strip()
             abs_url = d_data.get("AbstractURL") or f"https://duckduckgo.com/?q={ddg_encoded}"
-            if abstract:
+            if abstract and heading not in seen_titles:
+                seen_titles.add(heading)
                 results.append({
                     "title": heading,
                     "url": abs_url,
@@ -224,14 +239,17 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
                 })
 
             # Check related topics
-            for rel in d_data.get("RelatedTopics", [])[:3]:
+            for rel in d_data.get("RelatedTopics", [])[:2]:
                 if isinstance(rel, dict) and "Text" in rel and "FirstURL" in rel:
-                    results.append({
-                        "title": rel.get("FirstURL", "").split("/")[-1].replace("_", " "),
-                        "url": rel.get("FirstURL", ""),
-                        "snippet": rel.get("Text", ""),
-                        "source": "DuckDuckGo Related",
-                    })
+                    rel_title = rel.get("FirstURL", "").split("/")[-1].replace("_", " ")
+                    if rel_title and rel_title not in seen_titles:
+                        seen_titles.add(rel_title)
+                        results.append({
+                            "title": rel_title,
+                            "url": rel.get("FirstURL", ""),
+                            "snippet": rel.get("Text", ""),
+                            "source": "DuckDuckGo",
+                        })
     except Exception:
         pass
 
@@ -245,6 +263,54 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
         lines.append(f"    Link: {r['url']}")
     msg = "\n".join(lines)
     return True, msg, results[:max_results]
+
+
+def get_live_grounding_context(query: str, timeout: float = 6.0) -> Tuple[bool, str, List[Dict[str, str]]]:
+    """Retrieve real-time web context to ground model prompt before generation."""
+    if not is_internet_enabled():
+        return False, "", []
+
+    q = (query or "").strip()
+    if not q or len(q) < 3:
+        return False, "", []
+
+    # Check if query is weather related
+    if any(k in q.lower() for k in ("weather", "kaalaguna", "forecast", "temperature", "rain in", "climate in")):
+        ok_w, msg_w, data_w = fetch_live_weather(q, timeout=timeout)
+        if ok_w:
+            ctx = (
+                f"[REAL-TIME LIVE WEATHER GROUNDING]:\n"
+                f"Current Date: 2026-11-13\n"
+                f"{msg_w}\n\n"
+                f"Instructions: Use this authoritative live weather data to directly answer the user."
+            )
+            cites = [{
+                "title": f"Open-Meteo Weather ({data_w.get('location', 'Global')})",
+                "url": "https://open-meteo.com/",
+                "snippet": msg_w,
+                "source": "Open-Meteo API",
+            }]
+            return True, ctx, cites
+
+    # Perform real-time web search
+    ok_s, msg_s, results = search_web(q, max_results=4, timeout=timeout)
+    if not ok_s or not results:
+        return False, "", []
+
+    lines = [
+        "[REAL-TIME LIVE INTERNET GROUNDING]:",
+        "Current System Date: 2026-11-13 (Year 2026)",
+        "Verified Live Web Sources:",
+    ]
+    for i, r in enumerate(results[:4], 1):
+        lines.append(f"  Source {i}: {r.get('title')} ({r.get('url')})")
+        lines.append(f"  Summary: {r.get('snippet', '')[:400]}")
+    lines.append("")
+    lines.append("Instructions: Ground your response strictly in the live internet reference context above. "
+                 "The current year is 2026. Do not claim events in 2026 or earlier are unknown or in the distant future. "
+                 "Cite verified names, dates, and facts from the web references.")
+
+    return True, "\n".join(lines), results[:4]
 
 
 def fetch_url_text(url: str, max_chars: int = 6000, timeout: float = 8.0) -> Tuple[bool, str]:

@@ -1938,6 +1938,239 @@ body.font-inter {
 }
 
 /* ==========================================================================
+   Slash Commands Floating Autocomplete Popup
+   ========================================================================== */
+.chat-input-area {
+  position: relative;
+}
+
+.slash-commands-popup {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 20px;
+  right: 20px;
+  max-width: 640px;
+  background: rgba(13, 17, 28, 0.96);
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 20px rgba(0, 242, 254, 0.15);
+  backdrop-filter: blur(16px);
+  z-index: 100;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: slideUpFade 0.18s ease-out;
+}
+
+.slash-commands-popup.hidden {
+  display: none !important;
+}
+
+.slash-popup-header {
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.slash-popup-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-cyan);
+}
+
+.slash-popup-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.slash-popup-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.slash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.slash-item:hover,
+.slash-item.selected {
+  background: rgba(0, 242, 254, 0.12);
+  border-left: 3px solid var(--accent-cyan);
+}
+
+.slash-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slash-cmd-pill {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 242, 254, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 242, 254, 0.25);
+}
+
+.slash-cmd-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.slash-cmd-cat {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* ==========================================================================
+   MCP Servers & Plugins Styles
+   ========================================================================== */
+.mcp-add-form,
+.plugin-add-form {
+  background: rgba(18, 24, 38, 0.6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+
+.mcp-servers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.mcp-server-card {
+  background: rgba(15, 20, 32, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease;
+}
+
+.mcp-server-card:hover {
+  border-color: rgba(0, 242, 254, 0.35);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+}
+
+.mcp-server-card.active {
+  border-color: rgba(0, 242, 254, 0.45);
+}
+
+.mcp-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mcp-server-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transport-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.transport-badge.stdio {
+  background: rgba(0, 242, 254, 0.15);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+}
+
+.transport-badge.sse {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--accent-magenta);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.mcp-server-cmd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #94a3b8;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 6px 8px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.mcp-server-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.mcp-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ==========================================================================
+   Fact Check Trust Score Indicators
+   ========================================================================== */
+.fc-score.trust-high {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.fc-score.trust-med {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.fc-score.trust-low {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.factcheck-box.trust-low {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.factcheck-box.trust-high {
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+/* ==========================================================================
    Model Uninstall Action Button Styling
    ========================================================================== */
 .btn-delete-model {
@@ -1990,12 +2223,20 @@ body.font-inter {
     gap: 16px;
   }
   .top-nav {
-    padding: 10px 14px;
+    padding: 8px 12px;
     gap: 8px;
+    flex-wrap: wrap;
+    height: auto;
   }
   .active-model-box,
   .active-project-box {
-    max-width: 220px;
+    max-width: 100%;
+    flex: 1 1 200px;
+  }
+  .slash-commands-popup {
+    left: 10px;
+    right: 10px;
+    max-width: 100%;
   }
 }
 
@@ -2008,43 +2249,49 @@ body.font-inter {
     width: 100%;
     height: auto;
     flex-direction: row;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-right: none;
     border-bottom: 1px solid var(--border-subtle);
   }
   .sidebar-header {
     padding: 0;
-    margin-right: 12px;
+    margin-right: 8px;
   }
   .nav-list {
     flex-direction: row;
     overflow-x: auto;
     gap: 4px;
+    flex: 1;
   }
   .nav-item {
-    padding: 8px 10px;
+    padding: 6px 8px;
   }
   .top-nav {
     flex-wrap: wrap;
     height: auto;
-    padding: 8px 12px;
+    padding: 8px 10px;
+    gap: 6px;
   }
   .active-model-box,
   .active-project-box {
     width: 100%;
     max-width: 100%;
+    flex: 1 1 100%;
   }
   .chat-layout {
-    height: calc(100vh - 160px);
+    height: calc(100vh - 150px);
   }
   .chat-input-area {
-    padding: 12px;
+    padding: 8px 10px;
   }
   .modal-content {
     width: 95vw;
-    padding: 16px;
+    max-height: 90vh;
+    padding: 14px;
   }
-  .recommended-models-grid {
+  .recommended-models-grid,
+  .mcp-servers-grid,
+  .skills-grid {
     grid-template-columns: 1fr;
   }
 }

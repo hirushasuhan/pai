@@ -41,7 +41,7 @@
         </button>
         <button class="nav-item" data-tab="skills">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-          <span>Skills</span>
+          <span>Plugins & MCPs</span>
         </button>
         <button class="nav-item" data-tab="models">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
@@ -163,11 +163,20 @@
             </div>
 
             <div class="chat-input-area">
+              <!-- Floating Slash Commands Popup -->
+              <div id="slash-commands-popup" class="slash-commands-popup hidden">
+                <div class="slash-popup-header">
+                  <span class="slash-popup-title">Available Slash Commands</span>
+                  <span class="slash-popup-hint">Tab / Enter to select &bull; Esc to dismiss</span>
+                </div>
+                <div id="slash-commands-list" class="slash-popup-list"></div>
+              </div>
+
               <form id="chat-form" class="chat-form">
                 <textarea
                   id="chat-input"
                   class="chat-textarea"
-                  placeholder="Ask PAI or type an instruction (e.g. 'Build a React counter component in my project', '/image a cyberpunk laboratory')..."
+                  placeholder="Ask PAI or type an instruction (type / for commands, e.g. /internet, /team, /image, /mcp)..."
                   rows="1"
                 ></textarea>
                 <button type="submit" id="btn-send" class="btn-send" title="Send message">
@@ -347,15 +356,93 @@
           </div>
         </section>
 
-        <!-- 4. SKILLS TAB (Modular Capabilities & Cognitive Extensions) -->
+        <!-- 4. PLUGINS & MCPs TAB (Model Context Protocol & Cognitive Extensions) -->
         <section id="view-skills" class="tab-view">
           <div class="panel-header">
-            <h2>PAI Agentic Skills & Extensions</h2>
-            <p>Manage modular agent capabilities, real-time web grounding, reasoning engines, and autonomous tools.</p>
+            <h2>Plugins & MCP Protocol Hub</h2>
+            <p>Connect standard Model Context Protocol (MCP) tool servers, configure external integrations, and manage cognitive skills.</p>
           </div>
 
-          <div class="skills-grid" id="skills-catalog-grid">
-            <div class="loading-spinner">Loading skills...</div>
+          <!-- Section 1: Model Context Protocol (MCP) Servers -->
+          <div class="glass-card mb-4">
+            <div class="flex-between mb-3">
+              <h3 class="card-title flex-center-gap mb-0">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                <span>Model Context Protocol (MCP) Servers</span>
+              </h3>
+              <span class="active-badge" id="mcp-servers-count">0 Connected</span>
+            </div>
+            <p class="text-muted mb-3">Connect local command-line or SSE-based MCP tool servers into PAI's sandboxed Capability Broker.</p>
+
+            <!-- Add MCP Server Form -->
+            <form id="form-add-mcp" class="mcp-add-form mb-4">
+              <div class="form-row-grid">
+                <div class="form-group">
+                  <label class="form-label">Server Name</label>
+                  <input type="text" id="mcp-name-input" class="form-input" placeholder="e.g. filesystem-tools, sqlite-db" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Transport</label>
+                  <select id="mcp-transport-select" class="form-input">
+                    <option value="stdio">STDIO (Local Subprocess)</option>
+                    <option value="sse">SSE (HTTP / Remote Stream)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group mb-2">
+                <label class="form-label">Execution Command / Endpoint URL</label>
+                <input type="text" id="mcp-cmd-input" class="form-input font-mono-target" placeholder="e.g. npx -y @modelcontextprotocol/server-filesystem ./ or http://localhost:8000/sse" required />
+              </div>
+              <div class="form-group mb-3">
+                <label class="form-label">Description (Optional)</label>
+                <input type="text" id="mcp-desc-input" class="form-input" placeholder="e.g. Local workspace sandboxed file inspection" />
+              </div>
+              <button type="submit" class="btn btn-primary btn-sm flex-center-gap">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Connect MCP Server</span>
+              </button>
+            </form>
+
+            <div class="mcp-servers-grid" id="mcp-servers-grid">
+              <div class="loading-spinner">Loading MCP servers...</div>
+            </div>
+          </div>
+
+          <!-- Section 2: Installed Plugins & Cognitive Skills -->
+          <div class="glass-card mb-4">
+            <div class="flex-between mb-3">
+              <h3 class="card-title flex-center-gap mb-0">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                <span>Installed Plugins & Cognitive Skills</span>
+              </h3>
+            </div>
+            <p class="text-muted mb-3">Toggle core cognitive skills or install custom agent plugins to augment PAI's capabilities.</p>
+
+            <!-- Add Custom Plugin Form -->
+            <form id="form-add-plugin" class="plugin-add-form mb-4">
+              <div class="form-row-grid">
+                <div class="form-group">
+                  <label class="form-label">Plugin Name</label>
+                  <input type="text" id="plugin-name-input" class="form-input" placeholder="e.g. NextJS Scaffold Engine" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Category</label>
+                  <input type="text" id="plugin-cat-input" class="form-input" placeholder="e.g. Web Development" />
+                </div>
+              </div>
+              <div class="form-group mb-3">
+                <label class="form-label">Instructions / Capability Description</label>
+                <input type="text" id="plugin-desc-input" class="form-input" placeholder="e.g. Generates React and Tailwind components with unit tests" required />
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm flex-center-gap">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Add Plugin</span>
+              </button>
+            </form>
+
+            <div class="skills-grid" id="skills-catalog-grid">
+              <div class="loading-spinner">Loading skills...</div>
+            </div>
           </div>
         </section>
 

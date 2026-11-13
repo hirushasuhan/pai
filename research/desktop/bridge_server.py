@@ -20,6 +20,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -77,6 +78,7 @@ try:
     )
     from research.internet_service import (
         fetch_live_weather,
+        get_live_grounding_context,
         is_internet_enabled,
         search_web,
         set_internet_enabled,
@@ -107,6 +109,7 @@ except ImportError:
     )
     from internet_service import (
         fetch_live_weather,
+        get_live_grounding_context,
         is_internet_enabled,
         search_web,
         set_internet_enabled,
@@ -512,6 +515,102 @@ def refresh_recommended_catalog() -> List[Dict[str, Any]]:
     return load_recommended_catalog()
 
 
+def get_mcp_config_path() -> Path:
+    p = Path.home() / ".pai" / "mcp_servers.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def load_mcp_servers() -> List[Dict[str, Any]]:
+    p = get_mcp_config_path()
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    defaults = [
+        {
+            "name": "filesystem-mcp",
+            "command": "npx -y @modelcontextprotocol/server-filesystem ./",
+            "transport": "stdio",
+            "enabled": True,
+            "description": "Local filesystem sandboxed access & directory inspection",
+        },
+        {
+            "name": "sqlite-mcp",
+            "command": "npx -y @modelcontextprotocol/server-sqlite --db-path ./workspace.db",
+            "transport": "stdio",
+            "enabled": False,
+            "description": "Relational SQLite query execution and schema analysis",
+        },
+        {
+            "name": "github-mcp",
+            "command": "npx -y @modelcontextprotocol/server-github",
+            "transport": "stdio",
+            "enabled": False,
+            "description": "GitHub repository, issues, and commit tools",
+        },
+    ]
+    try:
+        p.write_text(json.dumps(defaults, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return defaults
+
+
+def save_mcp_servers(servers: List[Dict[str, Any]]) -> bool:
+    try:
+        p = get_mcp_config_path()
+        p.write_text(json.dumps(servers, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def get_plugins_config_path() -> Path:
+    p = Path.home() / ".pai" / "plugins.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def load_plugins_list() -> List[Dict[str, Any]]:
+    p = get_plugins_config_path()
+    custom_plugins = []
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                custom_plugins = data
+        except Exception:
+            pass
+
+    all_plugins = list(SKILLS_CATALOG)
+    seen_ids = {s["id"] for s in all_plugins}
+    for cp in custom_plugins:
+        if cp.get("id") not in seen_ids:
+            all_plugins.append(cp)
+    return all_plugins
+
+
+def save_custom_plugin(plugin: Dict[str, Any]) -> bool:
+    try:
+        p = get_plugins_config_path()
+        curr = []
+        if p.is_file():
+            try:
+                curr = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                curr = []
+        curr = [x for x in curr if x.get("id") != plugin.get("id")]
+        curr.append(plugin)
+        p.write_text(json.dumps(curr, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
     """Open native Windows folder picker dialog and return selected path."""
     # 1. Try tkinter with topmost attribute
@@ -779,6 +878,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             q = query_params.get("q", [""])[0]
             ok, msg, res = search_web(q)
             self._send_json({"success": ok, "message": msg, "results": res})
+        # 10b. MCP Servers List
+        elif path == "/api/mcp/list":
+            servers = load_mcp_servers()
+            self._send_json({"success": True, "servers": servers})
+        # 10c. Plugins List
+        elif path == "/api/plugins/list":
+            plugins = load_plugins_list()
+            self._send_json({"success": True, "plugins": plugins})
         # 11. Doctor / Hardware telemetry
         elif path == "/api/doctor":
             self._handle_doctor()
@@ -907,6 +1014,78 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 13. Native Folder Picker
         elif path == "/api/utils/select_folder":
             self._handle_select_folder()
+        # 14. MCP Save Server
+        elif path == "/api/mcp/save":
+            name = body.get("name", "").strip()
+            cmd = body.get("command", "").strip()
+            trans = body.get("transport", "stdio").strip()
+            desc = body.get("description", "").strip()
+            if not name or not cmd:
+                self._send_json({"success": False, "error": "Server name and command/URL are required."}, status=400)
+            else:
+                servers = load_mcp_servers()
+                existing = [s for s in servers if s.get("name") != name]
+                existing.append({
+                    "name": name,
+                    "command": cmd,
+                    "transport": trans,
+                    "description": desc or f"Custom {trans.upper()} MCP server",
+                    "enabled": True,
+                })
+                ok_s = save_mcp_servers(existing)
+                self._send_json({"success": ok_s, "servers": existing})
+        # 15. MCP Delete Server
+        elif path == "/api/mcp/delete":
+            name = body.get("name", "").strip()
+            servers = load_mcp_servers()
+            filtered = [s for s in servers if s.get("name") != name]
+            ok_d = save_mcp_servers(filtered)
+            self._send_json({"success": ok_d, "servers": filtered})
+        # 16. MCP Toggle Server
+        elif path == "/api/mcp/toggle":
+            name = body.get("name", "").strip()
+            val = bool(body.get("enabled", True))
+            servers = load_mcp_servers()
+            for s in servers:
+                if s.get("name") == name:
+                    s["enabled"] = val
+            ok_t = save_mcp_servers(servers)
+            self._send_json({"success": ok_t, "servers": servers})
+        # 17. Save Custom Plugin
+        elif path == "/api/plugins/save":
+            p_name = body.get("name", "").strip()
+            p_desc = body.get("description", "").strip()
+            p_cat = body.get("category", "Custom Extensions").strip()
+            if not p_name:
+                self._send_json({"success": False, "error": "Plugin name is required."}, status=400)
+            else:
+                p_id = re.sub(r"[^a-z0-9_]+", "_", p_name.lower()).strip("_")
+                new_plug = {
+                    "id": p_id,
+                    "name": p_name,
+                    "description": p_desc or "Custom agentic plugin extension.",
+                    "category": p_cat,
+                    "icon": "zap",
+                    "enabled": True,
+                }
+                ok_p = save_custom_plugin(new_plug)
+                self._send_json({"success": ok_p, "plugin": new_plug, "plugins": load_plugins_list()})
+        # 18. Delete Custom Plugin
+        elif path == "/api/plugins/delete":
+            p_id = body.get("id", "").strip()
+            cfg_p = get_plugins_config_path()
+            curr = []
+            if cfg_p.is_file():
+                try:
+                    curr = json.loads(cfg_p.read_text(encoding="utf-8"))
+                except Exception:
+                    curr = []
+            filtered = [x for x in curr if x.get("id") != p_id]
+            try:
+                cfg_p.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
+                self._send_json({"success": True, "plugins": load_plugins_list()})
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, status=500)
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
@@ -1208,12 +1387,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_skills_list(self) -> None:
-        for s in SKILLS_CATALOG:
-            if s["id"] == "internet":
-                s["enabled"] = is_internet_enabled()
-            elif s["id"] == "factcheck":
-                s["enabled"] = is_factcheck_enabled()
-        self._send_json({"success": True, "skills": SKILLS_CATALOG})
+        self._send_json({"success": True, "skills": load_plugins_list()})
 
     def _handle_skill_toggle(self, body: Dict[str, Any]) -> None:
         s_id = body.get("skill", "").strip()
@@ -1225,6 +1399,17 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         for s in SKILLS_CATALOG:
             if s["id"] == s_id:
                 s["enabled"] = val
+        # Update custom plugins config if applicable
+        p_cfg = get_plugins_config_path()
+        if p_cfg.is_file():
+            try:
+                plist = json.loads(p_cfg.read_text(encoding="utf-8"))
+                for p in plist:
+                    if p.get("id") == s_id:
+                        p["enabled"] = val
+                p_cfg.write_text(json.dumps(plist, indent=2), encoding="utf-8")
+            except Exception:
+                pass
         self._send_json({"success": True, "skill": s_id, "enabled": val})
 
     def _handle_pull_model(self, body: Dict[str, Any]) -> None:
@@ -1413,6 +1598,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     f"User Request:\n{raw_prompt}"
                 )
 
+        # Real-time Web Grounding: Pre-inject authoritative live internet references
+        grounding_citations = []
+        if is_internet_enabled():
+            has_ground, ground_ctx, cites = get_live_grounding_context(raw_prompt)
+            if has_ground and ground_ctx:
+                prompt = f"{ground_ctx}\n\nUser Question:\n{prompt}"
+                grounding_citations = cites
+
         reply_text = ""
         think_text = ""
         error_msg = ""
@@ -1444,11 +1637,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             # Graceful local model resolution: verify model is installed or fallback to active installed model
             local_models, _ = get_all_installed_local_models()
             installed_names = [m["name"] for m in local_models]
-            if model not in installed_names and installed_names:
-                # If requested model is not installed locally, fallback to first available installed model
-                model = installed_names[0]
+            if model not in installed_names:
+                # Prefer fast, responsive models over heavy 7B models on first run
+                preferred = ["llama3.2:3b", "llama3.2:1b", "qwen2.5-coder:1.5b", "qwen3.5:4b", "gemma4:e2b", "qwen2.5-coder:7b"]
+                picked = None
+                for pref in preferred:
+                    if pref in installed_names:
+                        picked = pref
+                        break
+                model = picked or (installed_names[0] if installed_names else "llama3.2:3b")
                 set_current_model(model)
 
+            ctx_size = 4096 if not project_path else 8192
             ollama_url = "http://127.0.0.1:11434/api/generate"
             ollama_payload = {
                 "model": model,
@@ -1456,34 +1656,71 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 "stream": False,
                 "options": {
                     "temperature": float(body.get("temperature", 0.3)),
-                    "num_ctx": 8192,
+                    "num_ctx": ctx_size,
                 },
             }
-            req = urllib.request.Request(
-                ollama_url,
-                data=json.dumps(ollama_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    d = json.loads(resp.read().decode("utf-8"))
-                    reply_text = d.get("response", "")
-            except urllib.error.HTTPError as exc:
-                err_detail = ""
+            req_data = json.dumps(ollama_payload).encode("utf-8")
+
+            # Execute with automatic retry on transient startup warm-up
+            for attempt in range(2):
+                req = urllib.request.Request(
+                    ollama_url,
+                    data=req_data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
                 try:
-                    raw_b = exc.read().decode("utf-8", errors="replace")
-                    err_json = json.loads(raw_b)
-                    err_detail = err_json.get("error", "")
-                except Exception:
-                    pass
-                if not err_detail:
-                    err_detail = exc.reason if hasattr(exc, "reason") and exc.reason else f"HTTP {exc.code}"
-                error_msg = f"Local model execution error ({model}): {err_detail}"
-            except urllib.error.URLError as exc:
-                error_msg = f"Local model connection error: {exc.reason}"
-            except Exception as exc:
-                error_msg = f"Local model execution error: {exc}"
+                    with urllib.request.urlopen(req, timeout=150) as resp:
+                        d = json.loads(resp.read().decode("utf-8"))
+                        reply_text = d.get("response", "")
+                        error_msg = ""
+                        break
+                except urllib.error.HTTPError as exc:
+                    err_detail = ""
+                    try:
+                        raw_b = exc.read().decode("utf-8", errors="replace")
+                        err_json = json.loads(raw_b)
+                        err_detail = err_json.get("error", "")
+                    except Exception:
+                        pass
+                    if not err_detail:
+                        err_detail = exc.reason if hasattr(exc, "reason") and exc.reason else f"HTTP {exc.code}"
+                    error_msg = f"Local model execution error ({model}): {err_detail}"
+                    break
+                except (TimeoutError, socket.timeout):
+                    error_msg = (
+                        f"Local model response timed out ({model}). "
+                        f"The model took longer than 150 seconds to respond. "
+                        f"If the model was cold-starting into RAM or your hardware is busy, "
+                        f"try asking again or switch to a faster lightweight model (e.g. llama3.2:1b or llama3.2:3b)."
+                    )
+                    break
+                except urllib.error.URLError as exc:
+                    reason_s = str(exc.reason).strip() if getattr(exc, "reason", None) else ""
+                    if not reason_s or "timed out" in reason_s.lower():
+                        error_msg = (
+                            f"Local model connection timed out ({model}). "
+                            f"Ollama took too long to respond. Try asking again or switch to a faster model."
+                        )
+                    else:
+                        error_msg = f"Local model connection error ({model}): {reason_s}"
+                    if attempt == 0:
+                        time.sleep(1.0)
+                        continue
+                    break
+                except Exception as exc:
+                    err_s = str(exc).strip() or exc.__class__.__name__
+                    if "timed out" in err_s.lower() or "timeout" in err_s.lower():
+                        error_msg = (
+                            f"Local model response timed out ({model}). "
+                            f"Ollama took too long to load or compute. Try switching to llama3.2:1b or llama3.2:3b."
+                        )
+                    else:
+                        error_msg = f"Local model execution error ({model}): {err_s}"
+                    if attempt == 0:
+                        time.sleep(1.0)
+                        continue
+                    break
 
         if error_msg and not reply_text:
             self._send_json({"success": False, "error": error_msg}, status=500)
@@ -1498,6 +1735,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 3. Grounding & Fact-Checking Hook
         factcheck_claims = []
         factcheck_report = ""
+        factcheck_score = 1.0
         if is_internet_enabled() and is_factcheck_enabled():
             try:
                 claims = verify_text_claims(reply_text, max_claims=3)
@@ -1513,6 +1751,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                         for c in claims
                     ]
                     factcheck_report = format_factcheck_report(claims)
+                    verified_count = sum(1 for c in claims if c.verdict == "VERIFIED")
+                    factcheck_score = round(verified_count / len(claims), 2)
             except Exception:
                 pass
 
@@ -1522,9 +1762,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             "thinking": think_text,
             "model": model,
             "project_path": project_path,
+            "grounding": grounding_citations,
             "factcheck": {
                 "claims": factcheck_claims,
                 "report": factcheck_report,
+                "score": factcheck_score,
+                "fidelity": int(factcheck_score * 100),
             },
         })
 
