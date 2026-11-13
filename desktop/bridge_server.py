@@ -613,42 +613,24 @@ def save_custom_plugin(plugin: Dict[str, Any]) -> bool:
 
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
     """Open native Windows folder picker dialog and return selected path."""
-    # 1. Try tkinter with topmost attribute
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        folder = filedialog.askdirectory(title=title)
-        root.destroy()
-        if folder and os.path.isdir(folder):
-            return os.path.normpath(folder)
-    except Exception:
-        pass
-
-    # 2. PowerShell FolderBrowserDialog fallback on Windows
+    # Fast native PowerShell FolderBrowserDialog with STA threading
     if sys.platform == "win32":
         try:
             cmd = [
-                "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+                "powershell", "-NoProfile", "-NonInteractive", "-STA", "-Command",
                 "[System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null; "
                 "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
                 f"$f.Description = '{title}'; "
                 "$f.ShowNewFolderButton = $true; "
-                "$w = New-Object System.Windows.Forms.Form; $w.TopMost = $true; "
-                "if ($f.ShowDialog($w) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
+                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
             ]
             flags = 0x08000000  # CREATE_NO_WINDOW
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 0  # SW_HIDE
             out = subprocess.check_output(
                 cmd,
                 creationflags=flags,
-                startupinfo=si,
                 stdin=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                timeout=30.0,
             ).decode("utf-8", errors="replace").strip()
             if out and os.path.isdir(out):
                 return os.path.normpath(out)
@@ -1232,23 +1214,53 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
         base = Path(p_str).resolve()
         files = []
-        for root, dirs, fnames in os.walk(base):
-            dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}]
-            for fname in sorted(fnames):
-                f_path = Path(root) / fname
-                try:
-                    rel = str(f_path.relative_to(base)).replace("\\", "/")
-                    stat = f_path.stat()
-                    files.append({
-                        "name": fname,
-                        "relative_path": rel,
-                        "size": stat.st_size,
-                        "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-                        "ext": f_path.suffix.lower(),
-                    })
-                except Exception:
-                    pass
-        self._send_json({"success": True, "path": str(base), "files": files})
+        max_files = 350
+        excluded_dirs = {
+            ".git", "node_modules", "__pycache__", ".venv", "venv", "env",
+            "dist", "build", "target", ".pai", ".idea", ".vscode", "bin",
+            "obj", "pkg", ".next", "coverage", ".pytest_cache", ".cargo",
+            "target", "debug", "release", ".gemini"
+        }
+        binary_exts = {
+            ".exe", ".dll", ".so", ".dylib", ".bin", ".iso", ".img",
+            ".zip", ".tar", ".gz", ".7z", ".rar", ".png", ".jpg", ".jpeg",
+            ".gif", ".ico", ".webp", ".mp3", ".mp4", ".wav", ".avi",
+            ".pdf", ".docx", ".xlsx", ".pptx", ".pyc", ".pyd", ".wasm",
+            ".pdb", ".obj", ".o", ".a", ".lib", ".class", ".jar"
+        }
+
+        try:
+            for root, dirs, fnames in os.walk(base):
+                # Filter out heavy/build directories in place
+                dirs[:] = [d for d in dirs if d.lower() not in excluded_dirs and not d.startswith(".")]
+                for fname in sorted(fnames):
+                    f_path = Path(root) / fname
+                    ext = f_path.suffix.lower()
+                    if ext in binary_exts:
+                        continue
+                    try:
+                        rel = str(f_path.relative_to(base)).replace("\\", "/")
+                        stat = f_path.stat()
+                        # Skip huge files (> 1.5MB) to prevent browser editor crashes
+                        if stat.st_size > 1536 * 1024:
+                            continue
+                        files.append({
+                            "name": fname,
+                            "relative_path": rel,
+                            "size": stat.st_size,
+                            "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+                            "ext": ext,
+                        })
+                        if len(files) >= max_files:
+                            break
+                    except Exception:
+                        pass
+                if len(files) >= max_files:
+                    break
+        except Exception as exc:
+            pass
+
+        self._send_json({"success": True, "path": str(base), "files": files, "count": len(files)})
 
     def _handle_project_file_content(self, query_params: Dict[str, List[str]]) -> None:
         p_str = query_params.get("path", [""])[0].strip()
@@ -1263,7 +1275,25 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "File not found or access denied"}, status=404)
             return
 
+        # Safeguard: prevent loading files > 1.5 MB into the in-app textarea
         try:
+            stat = target.stat()
+            if stat.st_size > 1536 * 1024:
+                size_mb = round(stat.st_size / (1024 * 1024), 2)
+                self._send_json({
+                    "error": f"File is too large ({size_mb} MB) for in-app editor. Maximum supported size is 1.5 MB."
+                }, status=400)
+                return
+
+            # Check if file is binary by inspecting first 4KB for null bytes
+            with open(target, "rb") as bf:
+                chunk = bf.read(4096)
+                if b"\x00" in chunk:
+                    self._send_json({
+                        "error": "Binary file detected. This file cannot be opened in the text editor."
+                    }, status=400)
+                    return
+
             content = target.read_text(encoding="utf-8", errors="replace")
             self._send_json({"success": True, "file": f_str, "content": content})
         except Exception as exc:

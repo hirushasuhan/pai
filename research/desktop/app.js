@@ -1135,39 +1135,49 @@ function renderFileTree(files, basePath) {
   }
 
   fileTreeContainer.innerHTML = "";
+  const fragment = document.createDocumentFragment();
+
   files.forEach((f) => {
+    const relPath = typeof f === "string" ? f : (f.relative_path || f.name);
+    const displayName = typeof f === "string" ? f : (f.relative_path || f.name);
     const item = document.createElement("div");
-    item.className = `file-item ${f === currentOpenFile ? "active" : ""}`;
-    item.innerHTML = `${SVG_ICONS.file} <span>${escapeHtml(f)}</span>`;
-    item.addEventListener("click", () => openProjectFile(basePath, f, item));
-    fileTreeContainer.appendChild(item);
+    item.className = `file-item ${relPath === currentOpenFile ? "active" : ""}`;
+    item.title = relPath;
+    item.innerHTML = `${SVG_ICONS.file} <span class="font-mono-target">${escapeHtml(displayName)}</span>`;
+    item.addEventListener("click", () => openProjectFile(basePath, relPath, item));
+    fragment.appendChild(item);
   });
+
+  fileTreeContainer.appendChild(fragment);
 }
 
 async function openProjectFile(basePath, filename, itemElem) {
+  if (!basePath || !filename) return;
+  const relFile = typeof filename === "string" ? filename : (filename.relative_path || filename.name);
+
   document.querySelectorAll(".file-item").forEach(el => el.classList.remove("active"));
   if (itemElem) itemElem.classList.add("active");
 
-  currentOpenFile = filename;
-  currentOpenFilename.textContent = filename;
+  currentOpenFile = relFile;
+  currentOpenFilename.textContent = relFile;
   codeEditorTextarea.value = "Loading file content...";
   codeEditorTextarea.setAttribute("readonly", "true");
   btnSaveFile.setAttribute("disabled", "true");
 
   try {
-    const res = await fetch(`${API_BASE}/api/projects/file/content?path=${encodeURIComponent(basePath)}&file=${encodeURIComponent(filename)}`);
+    const res = await fetch(`${API_BASE}/api/projects/file/content?path=${encodeURIComponent(basePath)}&file=${encodeURIComponent(relFile)}`);
     const data = await res.json();
     if (data.success) {
-      codeEditorTextarea.value = data.content;
+      codeEditorTextarea.value = data.content !== undefined ? data.content : "";
       codeEditorTextarea.removeAttribute("readonly");
       btnSaveFile.removeAttribute("disabled");
     } else {
-      codeEditorTextarea.value = `// Error loading file: ${data.error}`;
-      showToast(data.error, "error");
+      codeEditorTextarea.value = `// Notice: ${data.error || "Unable to display file content"}`;
+      showToast(data.error || "Could not open file", "warning", "File Notice");
     }
   } catch (err) {
     codeEditorTextarea.value = `// Connection error: ${err.message}`;
-    showToast(err.message, "error");
+    showToast(`Failed to load file: ${err.message}`, "error");
   }
 }
 
