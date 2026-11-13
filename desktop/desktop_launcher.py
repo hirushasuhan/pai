@@ -81,80 +81,70 @@ def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer]]:
 
 
 def find_browser_app_executable() -> Optional[str]:
-    """Find Microsoft Edge, Chrome, or Brave executable for standalone App Mode."""
-    # Check PATH
-    for candidate in ("msedge", "msedge.exe", "chrome", "chrome.exe", "brave", "brave.exe"):
-        found = shutil.which(candidate)
-        if found:
-            return found
-
-    # Check standard Windows directories
+    """Find Google Chrome, Microsoft Edge, or Brave executable for standalone App Mode."""
+    # Check standard Windows directories (Chrome preferred for standalone PWA isolation)
     std_paths = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
         r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
     ]
     for p in std_paths:
         if os.path.isfile(p):
             return p
 
+    for candidate in ("chrome", "chrome.exe", "msedge", "msedge.exe", "brave", "brave.exe"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+
     return None
 
 
 def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
-    """Launch PAI Studio in native desktop window."""
+    """Launch PAI Studio exclusively in native desktop application mode."""
     ok_server, server_instance = start_bridge_server()
     if not ok_server:
         return False, "Could not start local desktop bridge server on 127.0.0.1:8765."
 
     browser_exe = find_browser_app_executable()
-    proc = None
-    if browser_exe:
-        try:
-            profile_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PAI" / "app_profile"
-            profile_dir.mkdir(parents=True, exist_ok=True)
-            flags = 0
-            if sys.platform == "win32":
-                flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
-            proc = subprocess.Popen(
-                [
-                    browser_exe,
-                    f"--app={BRIDGE_URL}",
-                    f"--user-data-dir={profile_dir}",
-                    "--window-size=1280,840",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                ],
-                creationflags=flags,
-            )
-            time.sleep(0.6)
-            # Detect if Chromium rejected --app or exited immediately (ExitCode 21)
-            if proc.poll() is not None:
-                proc = subprocess.Popen(
-                    [
-                        browser_exe,
-                        "--new-window",
-                        BRIDGE_URL,
-                    ],
-                    creationflags=flags,
-                )
-                time.sleep(0.4)
-                if proc.poll() is not None:
-                    proc = None
-            msg = f"PAI Studio Desktop opened in native app mode ({os.path.basename(browser_exe)})."
-        except Exception:
-            proc = None
+    if not browser_exe:
+        return False, "Neither Google Chrome nor Microsoft Edge was found to launch PAI Studio in App Mode."
 
-    if proc is None:
-        try:
-            webbrowser.open(BRIDGE_URL)
-            msg = "PAI Studio Desktop opened in default web browser."
-        except Exception as exc:
-            return False, f"Failed to open browser: {exc}"
+    bname = os.path.basename(browser_exe).lower()
+    profile_name = "chrome_app_profile" if "chrome" in bname else "edge_app_profile"
+    profile_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PAI" / profile_name
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    # Standalone Application Window arguments (No browser tabs, no URL bar, no browser controls)
+    app_args = [
+        browser_exe,
+        f"--app={BRIDGE_URL}",
+        f"--user-data-dir={profile_dir}",
+        "--window-size=1280,840",
+        "--window-position=center",
+        "--app-id=PAI_Studio_Desktop",
+        "--class=PAIStudio",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-extensions",
+        "--disable-default-apps",
+        "--disable-background-mode",
+        "--enable-features=OverlayScrollbar",
+    ]
+
+    flags = 0
+    if sys.platform == "win32":
+        flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+
+    try:
+        proc = subprocess.Popen(app_args, creationflags=flags)
+        msg = f"PAI Studio Desktop opened in native standalone app mode ({os.path.basename(browser_exe)})."
+    except Exception as exc:
+        return False, f"Failed to launch standalone app: {exc}"
 
     if wait_for_exit:
         if proc is not None and proc.poll() is None:

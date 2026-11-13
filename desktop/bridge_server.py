@@ -786,6 +786,17 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content)
                 return
+        elif path == "/manifest.json":
+            manifest_file = desktop_dir / "manifest.json"
+            if manifest_file.is_file():
+                content = manifest_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
         elif path == "/favicon.ico":
             ico_file = desktop_dir / "assets" / "pai.ico"
             if ico_file.is_file():
