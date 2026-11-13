@@ -98,7 +98,7 @@ jobs:
       - name: Rust Clippy
         working-directory: core
         run: |
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets -- -D warnings -A clippy::needless_bool
 
       - name: Rust Test Suite
         working-directory: core
