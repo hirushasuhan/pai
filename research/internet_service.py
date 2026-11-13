@@ -166,7 +166,7 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
 
     results: List[Dict[str, str]] = []
 
-    # 1. Wikipedia Summary Search
+    # 1. Wikipedia Summary Search (Direct title match or search query)
     wiki_encoded = urllib.parse.quote(q.replace(" ", "_"), safe="")
     wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_encoded}"
     req_wiki = urllib.request.Request(wiki_url, headers={"User-Agent": USER_AGENT})
@@ -184,7 +184,26 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
                     "source": "Wikipedia",
                 })
     except Exception:
-        pass
+        # Fallback to Wikipedia Full-Text Search API
+        try:
+            srch_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(q)}&utf8=&format=json"
+            req_srch = urllib.request.Request(srch_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req_srch, timeout=timeout) as resp:
+                srch_data = json.loads(resp.read().decode("utf-8"))
+                items = srch_data.get("query", {}).get("search", [])
+                for it in items[:2]:
+                    it_title = it.get("title", "")
+                    raw_snip = it.get("snippet", "")
+                    clean_snip = re.sub(r"<[^>]+>", "", raw_snip).strip()
+                    if it_title and clean_snip:
+                        results.append({
+                            "title": it_title,
+                            "url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(it_title.replace(' ', '_'))}",
+                            "snippet": clean_snip,
+                            "source": "Wikipedia Search",
+                        })
+        except Exception:
+            pass
 
     # 2. DuckDuckGo Instant Answer API
     ddg_encoded = urllib.parse.quote_plus(q)

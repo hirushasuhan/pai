@@ -3327,6 +3327,70 @@ console.log('Playable Verified');
             self.assertTrue(ok_q)
             self.assertIn("Google Gemini", ans)
 
+    def test_fact_checker_engine_and_shell_routing(self) -> None:
+        """Asserts that fact-checking claims, entailment scoring, and shell routing function correctly."""
+        try:
+            import research.fact_checker as fact_checker
+        except ModuleNotFoundError:
+            import fact_checker
+
+        from shell import parse_shell_line
+
+        # 1. Shell line parsing
+        act_fc, argv_fc = parse_shell_line("/factcheck on")
+        self.assertEqual(act_fc, "factcheck")
+        self.assertEqual(argv_fc[0], "on")
+
+        act_fc_stat, _ = parse_shell_line("/factcheck")
+        self.assertEqual(act_fc_stat, "factcheck")
+
+        # 2. Claim extraction
+        sample_text = "Sri Lanka is an island in South Asia. The capital is Colombo. Would you like to know more?"
+        claims = fact_checker.extract_verifiable_claims(sample_text)
+        self.assertEqual(len(claims), 2)
+        self.assertNotIn("Would you like to know more?", claims)
+
+        # 3. Entailment verification mock
+        mock_evidence = [{
+            "title": "Sri Lanka",
+            "url": "https://en.wikipedia.org/wiki/Sri_Lanka",
+            "snippet": "Sri Lanka is an island country in South Asia located in the Indian Ocean.",
+            "source": "Wikipedia",
+        }]
+        verdict, conf, cites, notes = fact_checker.evaluate_entailment(
+            "Sri Lanka is an island country in South Asia.",
+            mock_evidence,
+            entities=["Sri Lanka", "South Asia"],
+        )
+        self.assertEqual(verdict, "VERIFIED")
+        self.assertGreaterEqual(conf, 0.7)
+        self.assertEqual(len(cites), 1)
+
+        # 4. Contradiction detection mock
+        verdict_bad, conf_bad, cites_bad, notes_bad = fact_checker.evaluate_entailment(
+            "The capital of Sri Lanka is Tokyo.",
+            mock_evidence,
+            entities=["Sri Lanka", "Tokyo"],
+        )
+        self.assertEqual(verdict_bad, "CONTRADICTED")
+        self.assertGreaterEqual(conf_bad, 0.7)
+
+        # 5. Report formatting
+        report = fact_checker.format_factcheck_report([
+            fact_checker.FactualClaim(
+                statement="Sri Lanka is an island in South Asia.",
+                entities=["Sri Lanka", "South Asia"],
+                keywords=["sri", "lanka", "island"],
+                verdict="VERIFIED",
+                confidence=0.95,
+                citations=mock_evidence,
+                notes="Corroborated by independent reference data.",
+            )
+        ])
+        self.assertIn("FACT-CHECK & WEB GROUNDING ENGINE", report)
+        self.assertIn("VERIFIED", report)
+        self.assertIn("Grounding Fidelity: 100%", report)
+
 
 if __name__ == "__main__":
     unittest.main()

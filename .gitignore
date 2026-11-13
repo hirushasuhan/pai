@@ -39,10 +39,20 @@ bin/
 *.log
 !docs/evidence/*.log
 
-# Secrets - never commit signing material
+# Secrets - never commit signing material, API keys, or credentials
 *.key
 *.pem
+*.token
+*.secret
+*.secrets
 release.key
+cloud_ai.json
+*cloud_ai*.json
+credentials*.json
+tokens*.json
+.env*
+*.env
+local_settings*.json
 
 # Packaging and distribution artifacts
 dist/

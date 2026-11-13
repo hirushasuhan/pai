@@ -105,6 +105,7 @@ SHELL_HELP = (
     "  /weather [city]     Get real-time live weather forecast (Open-Meteo API)\n"
     "  /web <query>        Search live web knowledge and online resources\n"
     "  /internet [on|off]  Check or toggle real-time internet access state\n"
+    "  /factcheck [on|off] Automated fact-checking & live web grounding engine\n"
     "  /api [status|set]   Configure 3rd-party Cloud AI providers (Gemini, OpenAI, Groq, DeepSeek)\n"
     "  /mail [to/topic]    Draft an email and open browser compose with To, Subject & Body\n"
     "  /whatsapp [who/msg] Open WhatsApp desktop app or pre-fill message to contact/phone\n"
@@ -3408,6 +3409,17 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
             action_arg = args[0].lower() if args else ("off" if raw_cmd == "offline" else "status")
             return "internet_toggle", [action_arg]
 
+        if raw_cmd in ("factcheck", "fact-check", "fact", "grounding"):
+            args = tokens[1:]
+            sub_cmd = args[0].lower() if args else "status"
+            rest = stripped[len(tokens[0]):].strip()
+            if len(args) > 1:
+                idx = rest.find(args[0]) + len(args[0])
+                rest_args = rest[idx:].strip()
+            else:
+                rest_args = ""
+            return "factcheck", [sub_cmd, rest_args]
+
         if raw_cmd in ("api", "cloud", "key", "keys"):
             args = tokens[1:]
             sub_cmd = args[0].lower() if args else "status"
@@ -4051,6 +4063,53 @@ def run_interactive_shell(
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
+            elif action == "factcheck":
+                sub_cmd = argv[0] if argv else "status"
+                rest = argv[1] if len(argv) > 1 else ""
+                try:
+                    try:
+                        from research.fact_checker import (
+                            is_factcheck_enabled,
+                            set_factcheck_enabled,
+                            verify_text_claims,
+                            format_factcheck_report,
+                        )
+                    except ModuleNotFoundError:
+                        from fact_checker import (
+                            is_factcheck_enabled,
+                            set_factcheck_enabled,
+                            verify_text_claims,
+                            format_factcheck_report,
+                        )
+                    if sub_cmd in ("on", "1", "enable", "enabled", "yes"):
+                        set_factcheck_enabled(True)
+                        msg = "🛡️ Automated fact-checking ENABLED. AI responses will be verified against live web data."
+                        output_fn(colorize(msg, GREEN, color_enabled))
+                    elif sub_cmd in ("off", "0", "disable", "disabled", "no"):
+                        set_factcheck_enabled(False)
+                        msg = "🛡️ Automated fact-checking DISABLED."
+                        output_fn(colorize(msg, YELLOW, color_enabled))
+                    elif sub_cmd == "status" and not rest:
+                        state_str = "ENABLED" if is_factcheck_enabled() else "DISABLED"
+                        msg = f"Fact-Checking Engine: {state_str}\n  Use /factcheck on|off or /factcheck <statement> to verify a claim."
+                        output_fn(colorize(msg, GREEN if is_factcheck_enabled() else YELLOW, color_enabled))
+                    else:
+                        target_text = (sub_cmd + " " + rest).strip()
+                        claims = verify_text_claims(target_text)
+                        if not claims:
+                            msg = "No verifiable factual claims detected in input or internet access is disabled."
+                            output_fn(colorize(msg, YELLOW, color_enabled))
+                        else:
+                            msg = format_factcheck_report(claims)
+                            output_fn(colorize(msg, CYAN if color_enabled else "", color_enabled))
+                except Exception as exc:
+                    msg = f"Fact check error: {exc}"
+                    output_fn(colorize(msg, RED, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
             elif action == "cloud_api":
                 sub_cmd = argv[0] if argv else "status"
                 rest = argv[1] if len(argv) > 1 else ""
@@ -4355,6 +4414,31 @@ def run_interactive_shell(
                         _session_chat_turns.append({"role": "assistant", "content": cmd_out.strip()})
                     if len(_session_chat_turns) > 12:
                         del _session_chat_turns[:-12]
+
+                    # Grounding & Fact-Checking Engine Hook
+                    if cmd_out and cmd_out.strip():
+                        try:
+                            try:
+                                from research.internet_service import is_internet_enabled
+                                from research.fact_checker import (
+                                    is_factcheck_enabled,
+                                    verify_text_claims,
+                                    format_factcheck_report,
+                                )
+                            except ModuleNotFoundError:
+                                from internet_service import is_internet_enabled
+                                from fact_checker import (
+                                    is_factcheck_enabled,
+                                    verify_text_claims,
+                                    format_factcheck_report,
+                                )
+                            if is_internet_enabled() and is_factcheck_enabled():
+                                fc_claims = verify_text_claims(cmd_out)
+                                if fc_claims:
+                                    report_block = format_factcheck_report(fc_claims)
+                                    output_fn(colorize(report_block, CYAN if color_enabled else "", color_enabled))
+                        except Exception:
+                            pass
 
                     # Auto-save generated code if prompt asked to save it
                     if "```" in cmd_out:
