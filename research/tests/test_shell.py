@@ -3150,14 +3150,20 @@ console.log('Playable Verified');
                     (target_p / "broken.py").write_text("def error in python:\n", encoding="utf-8")
                     mock_res.stdout = "Created initial skeleton in broken.py"
                 else:
-                    # Turn 2: agent fixes broken.py and writes full index.html
+                    # Turn 2: agent fixes broken.py and writes full index.html, script.js, and style.css
                     (target_p / "broken.py").write_text("def fixed():\n    return 42\n", encoding="utf-8")
+                    (target_p / "script.js").write_text(
+                        "// Game Logic\nfunction init() { console.log('started'); requestAnimationFrame(init); }\ninit();\n",
+                        encoding="utf-8",
+                    )
+                    (target_p / "style.css").write_text("body { background: #000; color: #fff; margin: 0; }", encoding="utf-8")
                     (target_p / "index.html").write_text(
-                        "<!DOCTYPE html><html><head><title>3D Game</title></head><body><canvas id='c'></canvas>"
+                        "<!DOCTYPE html><html><head><title>3D Game</title><link rel='stylesheet' href='style.css'></head>"
+                        "<body><canvas id='c'></canvas><script src='script.js'></script>"
                         + "<!-- " + "padding" * 150 + " --></body></html>",
                         encoding="utf-8",
                     )
-                    mock_res.stdout = "Fixed broken.py and generated complete index.html"
+                    mock_res.stdout = "Fixed broken.py, generated complete index.html, script.js, and style.css"
                 return mock_res
 
             fake_bin = base / "fake_agy.exe"
@@ -3174,12 +3180,152 @@ console.log('Playable Verified');
                     "Three.js 3D space flight simulator",
                     stream=out_stream,
                     max_turns=5,
+                    open_browser=False,
                     base_dir=base,
                 )
                 self.assertTrue(ok, msg)
                 self.assertIn("Antigravity Autonomous Task Complete", msg)
                 self.assertIn("index.html", msg)
                 self.assertGreaterEqual(turn_count, 2)
+
+    def test_internet_service_and_weather_routing(self) -> None:
+        """Asserts live internet commands, Open-Meteo weather and online web search."""
+        import internet_service as net_svc
+        from shell import parse_shell_line
+
+        # 1. Shell routing
+        act_w, argv_w = parse_shell_line("/weather Kandy")
+        self.assertEqual(act_w, "automate")
+        self.assertEqual(argv_w[0], "weather")
+        self.assertEqual(argv_w[1], "Kandy")
+
+        act_web, argv_web = parse_shell_line("/web python asyncio")
+        self.assertEqual(act_web, "automate")
+        self.assertEqual(argv_web[0], "web")
+        self.assertEqual(argv_web[1], "python asyncio")
+
+        act_net_on, argv_net_on = parse_shell_line("/internet on")
+        self.assertEqual(act_net_on, "internet_toggle")
+        self.assertEqual(argv_net_on[0], "on")
+
+        act_net_off, argv_net_off = parse_shell_line("/offline")
+        self.assertEqual(act_net_off, "internet_toggle")
+        self.assertEqual(argv_net_off[0], "off")
+
+        # 2. Toggle status
+        orig_net = net_svc.is_internet_enabled()
+        try:
+            net_svc.set_internet_enabled(False)
+            self.assertFalse(net_svc.is_internet_enabled())
+            ok_off, msg_off, _ = net_svc.fetch_live_weather("Colombo")
+            self.assertFalse(ok_off)
+            self.assertIn("disabled", msg_off.lower())
+
+            net_svc.set_internet_enabled(True)
+            self.assertTrue(net_svc.is_internet_enabled())
+
+            # 3. Weather mock
+            mock_geo = (6.9271, 79.8612, "Colombo", "Sri Lanka")
+            fake_weather_json = json.dumps({
+                "current_weather": {
+                    "temperature": 29.8,
+                    "windspeed": 12.5,
+                    "weathercode": 2,
+                    "time": "2026-11-13T06:00",
+                }
+            }).encode("utf-8")
+
+            class FakeWeatherResp:
+                def read(self):
+                    return fake_weather_json
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+
+            with patch.object(net_svc, "geocode_location", return_value=mock_geo), \
+                 patch("urllib.request.urlopen", return_value=FakeWeatherResp()):
+                ok_w, msg_w, data_w = net_svc.fetch_live_weather("Colombo")
+                self.assertTrue(ok_w)
+                self.assertIn("Colombo", msg_w)
+                self.assertIn("29.8", msg_w)
+                self.assertEqual(data_w["temperature_c"], 29.8)
+
+            # 4. Web search mock
+            fake_wiki_json = json.dumps({
+                "title": "FastAPI",
+                "extract": "FastAPI is a modern web framework for Python.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/FastAPI"}},
+            }).encode("utf-8")
+
+            class FakeWikiResp:
+                def read(self):
+                    return fake_wiki_json
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+
+            with patch("urllib.request.urlopen", return_value=FakeWikiResp()):
+                ok_s, msg_s, results_s = net_svc.search_web("FastAPI")
+                self.assertTrue(ok_s)
+                self.assertIn("FastAPI", msg_s)
+                self.assertGreaterEqual(len(results_s), 1)
+        finally:
+            net_svc.set_internet_enabled(orig_net)
+
+    def test_cloud_ai_provider_and_switching(self) -> None:
+        """Asserts 3rd-party Cloud AI provider configuration, key isolation, and model switching."""
+        import cloud_ai
+        from shell import format_models_list, parse_shell_line, switch_active_model
+
+        # 1. Shell routing
+        act_api, argv_api = parse_shell_line("/api status")
+        self.assertEqual(act_api, "cloud_api")
+        self.assertEqual(argv_api[0], "status")
+
+        act_set, argv_set = parse_shell_line("/api set gemini AIzaTestKey999")
+        self.assertEqual(act_set, "cloud_api")
+        self.assertEqual(argv_set[0], "set")
+        self.assertEqual(argv_set[1], "gemini AIzaTestKey999")
+
+        # 2. Cloud model identification
+        self.assertTrue(cloud_ai.is_cloud_model("gemini-2.0-flash"))
+        self.assertTrue(cloud_ai.is_cloud_model("gpt-4o-mini"))
+        self.assertTrue(cloud_ai.is_cloud_model("deepseek-chat"))
+        self.assertFalse(cloud_ai.is_cloud_model("llama3.2:3b"))
+
+        # 3. Model switching
+        ok_sw, msg_sw = switch_active_model("gemini-2.0-flash", stream=io.StringIO())
+        self.assertTrue(ok_sw)
+        self.assertIn("gemini-2.0-flash", msg_sw)
+
+        # 4. Formatted list contains cloud models
+        models_txt = format_models_list()
+        self.assertIn("Cloud AI", models_txt)
+        self.assertIn("gemini-2.0-flash", models_txt)
+
+        # 5. Cloud AI query completion mock
+        fake_cloud_reply = json.dumps({
+            "choices": [{
+                "message": {"content": "Hello! I am Google Gemini running via PAI."},
+                "finish_reason": "stop"
+            }]
+        }).encode("utf-8")
+
+        class FakeCloudResp:
+            def read(self):
+                return fake_cloud_reply
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(cloud_ai, "get_provider_key", return_value="fake_gemini_key"), \
+             patch("urllib.request.urlopen", return_value=FakeCloudResp()):
+            ok_q, ans = cloud_ai.query_cloud_ai("Hello", model="gemini-2.0-flash", provider="gemini")
+            self.assertTrue(ok_q)
+            self.assertIn("Google Gemini", ans)
 
 
 if __name__ == "__main__":

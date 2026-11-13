@@ -109,21 +109,23 @@ def _emit(stream: Any, msg: str) -> None:
 
 
 def format_automation_help() -> str:
-    """Return concise help text for /auto, /mail, /whatsapp, and /antigravity commands."""
+    """Return concise help text for /auto, /mail, /whatsapp, /antigravity, /web, and /weather commands."""
     return (
-        "Computer, Browser & Antigravity Automation (/auto, /mail, /whatsapp, /antigravity):\n"
+        "Computer, Browser & Antigravity Automation (/auto, /mail, /whatsapp, /antigravity, /web, /weather):\n"
         "  /antigravity <prompt>     - Open Antigravity IDE and steer autonomous agy agent until task completion\n"
         "  /agy <prompt>             - Alias for /antigravity\n"
+        "  /weather [city]           - Get real-time live weather forecast (Open-Meteo API)\n"
+        "  /web <query>              - Search live web knowledge and Wikipedia/DuckDuckGo online\n"
         "  /mail [to/topic]          - Draft email and open Gmail/Outlook compose with To, Subject & Body\n"
         "  /whatsapp [who/msg]       - Open WhatsApp desktop app or pre-fill message to contact/phone\n"
         "  /auto <instruction>       - Automate browser search, weather, web apps, folders, or safe apps\n"
         "Examples:\n"
         "  antigravity open karala Three.js 3D game ekak hadanna\n"
         "  /agy create a snake game with sound effects in HTML5 canvas\n"
+        "  mata ada wether eka hoyala denna\n"
+        "  /weather Kandy | /web python asyncio tutorial\n"
         "  mail ekak danna john@example.com ta meeting eka postpone karanna kiyala\n"
         "  whatsapp eke Kasun ta Hello kiyala yawanna\n"
-        "  mata ada wether eka hoyala denna\n"
-        "  youtube eke python tutorial search karanna\n"
         "  notepad open karala Hello Hirusha type karanna\n"
         "  open calculator | open downloads | copy Hello World to clipboard\n"
         "Allowed desktop apps: " + ", ".join(sorted({label for label, _ in _APP_ALLOWLIST.values()}))
@@ -710,6 +712,14 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
     if sub_action in ("antigravity", "agy"):
         return {"kind": "antigravity", "prompt": raw}
 
+    if sub_action in ("web", "search"):
+        clean_q = re.sub(r"^/(?:web|search)\b\s*", "", raw, flags=re.IGNORECASE).strip()
+        return {"kind": "web_knowledge", "query": clean_q or raw}
+
+    if sub_action == "weather":
+        clean_w = re.sub(r"^/weather\b\s*", "", raw, flags=re.IGNORECASE).strip()
+        return {"kind": "weather", "query": clean_w or raw}
+
     if sub_action == "mail":
         return {"kind": "email", "prompt": raw}
 
@@ -860,6 +870,26 @@ def execute_automation_task(
         return False, help_txt
 
     kind = intent["kind"]
+    if kind == "weather":
+        try:
+            from research.internet_service import fetch_live_weather
+        except ModuleNotFoundError:
+            from internet_service import fetch_live_weather
+        _emit(stream, "🌤️ Fetching real-time weather from Open-Meteo...")
+        ok, msg, _ = fetch_live_weather(intent["query"])
+        _emit(stream, msg)
+        return ok, msg
+
+    if kind == "web_knowledge":
+        try:
+            from research.internet_service import search_web
+        except ModuleNotFoundError:
+            from internet_service import search_web
+        _emit(stream, f"🔍 Searching online knowledge for '{intent['query']}'...")
+        ok, msg, _ = search_web(intent["query"])
+        _emit(stream, msg)
+        return ok, msg
+
     if kind == "antigravity":
         try:
             from research.antigravity_driver import run_antigravity_continuous_task

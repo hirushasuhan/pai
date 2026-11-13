@@ -1104,14 +1104,31 @@ def call_model_generate(
     seed: Optional[int] = None,
 ) -> str:
     """
-    Invokes local model server via Ollama /api/generate over local loopback.
-    Enforces Threat T21 / loopback binding invariants.
+    Invokes model generation via local Ollama or 3rd-party Cloud AI (Gemini, OpenAI, Groq, DeepSeek).
+    Enforces Threat T21 / loopback binding invariants for local server.
     """
     if timeout is None:
         try:
             timeout = float(os.environ.get("PAI_MODEL_TIMEOUT", "300.0"))
         except Exception:
             timeout = 300.0
+
+    # 1. Check for 3rd-Party Cloud AI model selection
+    try:
+        try:
+            from research.cloud_ai import is_cloud_model, query_cloud_ai, get_active_cloud_provider
+        except ModuleNotFoundError:
+            from cloud_ai import is_cloud_model, query_cloud_ai, get_active_cloud_provider
+
+        if is_cloud_model(model_name):
+            ok_cloud, reply_cloud = query_cloud_ai(prompt, model=model_name, timeout=timeout)
+            if ok_cloud:
+                return _truncate_repetitive_loops(reply_cloud)
+            raise RuntimeError(f"Cloud AI generation failed: {reply_cloud}")
+    except Exception as c_err:
+        if "is_cloud_model" in locals() and is_cloud_model(model_name):
+            raise
+
     url = base_url or os.environ.get("PAI_MODEL_URL", "http://127.0.0.1:11434")
     parts = urllib.parse.urlsplit(url)
     hostname = (parts.hostname or "").lower()
@@ -1174,17 +1191,30 @@ def call_model_generate(
         )
         if is_conn_refused and hostname in ("127.0.0.1", "localhost", "::1", "[::1]"):
             try:
-                from service_manager import OllamaServiceManager, SERVICE_OFFLINE_GUIDANCE
+                from service_manager import OllamaServiceManager
                 sm = OllamaServiceManager.get_instance()
                 ok, msg = sm.ensure_service_running()
                 if ok:
                     return _execute_req()
-                raise RuntimeError(msg or SERVICE_OFFLINE_GUIDANCE)
-            except Exception as inner_e:
-                if isinstance(inner_e, RuntimeError):
-                    raise
-                from service_manager import SERVICE_OFFLINE_GUIDANCE
-                raise RuntimeError(SERVICE_OFFLINE_GUIDANCE)
+            except Exception:
+                pass
+
+            # Failover to 3rd-Party Cloud AI if configured
+            try:
+                try:
+                    from research.cloud_ai import get_active_cloud_provider, query_cloud_ai
+                except ModuleNotFoundError:
+                    from cloud_ai import get_active_cloud_provider, query_cloud_ai
+                cloud_prov = get_active_cloud_provider()
+                if cloud_prov:
+                    ok_c, res_c = query_cloud_ai(prompt, timeout=timeout)
+                    if ok_c:
+                        return _truncate_repetitive_loops(res_c)
+            except Exception:
+                pass
+
+            from service_manager import SERVICE_OFFLINE_GUIDANCE
+            raise RuntimeError(SERVICE_OFFLINE_GUIDANCE)
         raise RuntimeError(f"Failed to generate from model '{model_name}' at {url}: {e}")
 
 

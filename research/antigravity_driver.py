@@ -119,9 +119,11 @@ def launch_antigravity_ide(project_dir: Path, ide_path: Optional[str] = None) ->
 
 
 def audit_workspace_files(project_dir: Path) -> Dict[str, Any]:
-    """Scan the workspace, checking created files, sizes, and syntax validity."""
+    """Scan the workspace, checking created files, sizes, syntax validity, and referenced assets."""
     files: List[Dict[str, Any]] = []
     syntax_errors: List[str] = []
+    missing_references: List[str] = []
+    stub_files: List[str] = []
 
     for p in project_dir.rglob("*"):
         if (
@@ -131,9 +133,13 @@ def audit_workspace_files(project_dir: Path) -> Dict[str, Any]:
             and not p.name.endswith((".pyc", ".pyo"))
         ):
             try:
-                rel = str(p.relative_to(project_dir))
+                rel = str(p.relative_to(project_dir)).replace("\\", "/")
                 size = p.stat().st_size
                 files.append({"path": rel, "size": size})
+
+                # Check for tiny stub files
+                if size < 120 and rel not in ("style.css", "AGY_TASK.md"):
+                    stub_files.append(rel)
 
                 # Basic syntax checks
                 if p.suffix == ".py" and size > 0:
@@ -159,11 +165,52 @@ def audit_workspace_files(project_dir: Path) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    # Inspect index.html for linked local scripts and stylesheets
+    entry_html = project_dir / "index.html"
+    has_script_logic = False
+    has_style_sheet = False
+    if entry_html.is_file():
+        try:
+            html_text = entry_html.read_text(encoding="utf-8", errors="replace")
+            # Extract script src
+            for m in re.finditer(r'<script\b[^>]*\bsrc=["\']([^"\']+)["\']', html_text, re.IGNORECASE):
+                src = m.group(1).strip()
+                if not src.startswith(("http://", "https://", "//", "data:")):
+                    target_file = project_dir / src
+                    if not target_file.is_file() or target_file.stat().st_size == 0:
+                        missing_references.append(src)
+                    else:
+                        has_script_logic = True
+
+            # Extract link href
+            for m in re.finditer(r'<link\b[^>]*\bhref=["\']([^"\']+)["\']', html_text, re.IGNORECASE):
+                href = m.group(1).strip()
+                if not href.startswith(("http://", "https://", "//", "data:")):
+                    target_file = project_dir / href
+                    if not target_file.is_file() or target_file.stat().st_size == 0:
+                        missing_references.append(href)
+                    else:
+                        has_style_sheet = True
+
+            if "<script" in html_text.lower() and len(html_text) > 800:
+                has_script_logic = True
+        except Exception:
+            pass
+
+    if any(f["path"].endswith(".js") and f["size"] > 150 for f in files):
+        has_script_logic = True
+    if any(f["path"].endswith(".css") and f["size"] > 80 for f in files):
+        has_style_sheet = True
+
     return {
         "files": files,
         "total_files": len(files),
         "total_bytes": sum(f["size"] for f in files),
         "syntax_errors": syntax_errors,
+        "missing_references": missing_references,
+        "stub_files": stub_files,
+        "has_script_logic": has_script_logic,
+        "has_style_sheet": has_style_sheet,
     }
 
 
@@ -172,6 +219,7 @@ def run_antigravity_continuous_task(
     stream: Any = sys.stdout,
     max_turns: int = 10,
     open_ide: bool = True,
+    open_browser: bool = True,
     executor: Optional[Callable[[List[str]], int]] = None,
     base_dir: Optional[Path] = None,
 ) -> Tuple[bool, str]:
@@ -202,19 +250,29 @@ def run_antigravity_continuous_task(
         return True, f"Workspace prepared at {project_dir}. Please continue task directly in Antigravity IDE."
 
     # Step 3: Closed-Loop Multi-Turn Steering
-    turn_limit = max(1, min(max_turns, int(os.environ.get("PAI_AGY_MAX_TURNS", "12"))))
+    turn_limit = max(2, min(max_turns, int(os.environ.get("PAI_AGY_MAX_TURNS", "12"))))
     turn = 1
     current_prompt = (
         f"You are working in the workspace '{project_dir}'.\n"
         f"Goal: {raw}\n\n"
-        "Requirements:\n"
-        "- Build a complete, functional, high-quality, self-contained project.\n"
-        "- Create all necessary code files (HTML, JS, CSS, Python, etc.) with full implementation.\n"
-        "- Verify that all code has zero syntax errors and is ready to run.\n"
+        "Milestone 1: Project Architecture & Entrypoint\n"
+        "- Create 'index.html' with full semantic structure, viewport meta, canvas or UI container.\n"
+        "- Include proper <link rel=\"stylesheet\" href=\"style.css\"> in <head>.\n"
+        "- Include <script src=\"script.js\"></script> before </body>.\n"
+        "- Ensure HTML contains necessary HUD elements (score, controls help, reset button).\n"
+        "Do not leave empty stubs. Write clean, complete code."
     )
 
     success = False
-    last_audit: Dict[str, Any] = {"total_files": 0, "total_bytes": 0, "files": [], "syntax_errors": []}
+    last_audit: Dict[str, Any] = {
+        "total_files": 0,
+        "total_bytes": 0,
+        "files": [],
+        "syntax_errors": [],
+        "missing_references": [],
+        "has_script_logic": False,
+        "has_style_sheet": False,
+    }
 
     while turn <= turn_limit:
         _emit(stream, f"\n[Turn {turn}/{turn_limit}] Steering Antigravity agent...")
@@ -248,12 +306,15 @@ def run_antigravity_continuous_task(
         num_files = last_audit["total_files"]
         total_kb = last_audit["total_bytes"] // 1024
         syntax_errs = last_audit["syntax_errors"]
+        missing_refs = last_audit["missing_references"]
+        has_logic = last_audit["has_script_logic"]
 
         file_list_str = ", ".join(f"{f['path']} ({f['size']}B)" for f in last_audit["files"][:4])
         if num_files > 4:
             file_list_str += f", and {num_files - 4} more"
         _emit(stream, f"  Files on disk ({num_files} files, ~{total_kb} KB): {file_list_str or 'none yet'}")
 
+        # 1. If syntax errors exist, prioritize self-healing
         if syntax_errs:
             _emit(stream, f"  ⚠️ Syntax errors detected in {len(syntax_errs)} file(s). Steering automatic fix turn...")
             current_prompt = (
@@ -264,21 +325,69 @@ def run_antigravity_continuous_task(
             turn += 1
             continue
 
-        if num_files >= 1 and last_audit["total_bytes"] > 500:
-            # Check for standard entry points
-            has_entry = any(
-                f["path"] in ("index.html", "main.py", "app.py", "server.js", "package.json")
-                for f in last_audit["files"]
+        # 2. If referenced files are missing from disk, prompt to create them
+        if missing_refs:
+            _emit(stream, f"  ⚠️ Missing referenced file(s): {', '.join(missing_refs)}. Prompting agent to create them...")
+            current_prompt = (
+                f"The following files are referenced in your project but are missing from disk:\n"
+                + "\n".join(f"- {ref}" for ref in missing_refs)
+                + f"\nPlease create and fully implement these files now for '{raw}'."
             )
-            if has_entry or turn >= 2:
-                success = True
-                _emit(stream, f"  ✅ Verified: {num_files} file(s) created with clean syntax and valid entry point.")
-                break
+            turn += 1
+            continue
 
-        current_prompt = (
-            "Continue building the project. Please ensure all required logic, UI, and functionality are fully written out."
+        # 3. Check for completeness
+        has_entry = any(
+            f["path"] in ("index.html", "main.py", "app.py", "server.js")
+            for f in last_audit["files"]
         )
+        is_substantive = last_audit["total_bytes"] >= 1500 or (
+            num_files >= 2 and last_audit["total_bytes"] >= 800
+        )
+
+        if has_entry and is_substantive and has_logic and turn >= 2:
+            success = True
+            _emit(stream, f"  ✅ Verified: {num_files} file(s) created with complete logic, zero syntax errors, and resolved references.")
+            break
+
+        # 4. Steering next milestone if not yet complete
+        if not has_logic:
+            current_prompt = (
+                f"Milestone 2: Complete Application & Game Logic\n"
+                f"Now create and implement 'script.js' with the full implementation of '{raw}'.\n"
+                "Include:\n"
+                "- Full game/application loop and canvas or DOM rendering.\n"
+                "- Complete event listeners for keyboard, mouse/touch controls.\n"
+                "- Built-in Web Audio API sound effects (laser sound, explosion, game over, chime) so no external files are needed.\n"
+                "- State management (start screen, playing state, game over, score counter).\n"
+                "Write the complete functional implementation without stubs."
+            )
+        elif not last_audit["has_style_sheet"]:
+            current_prompt = (
+                "Milestone 3: Visual Styling & HUD Design\n"
+                "Now create and implement 'style.css' with sleek modern styling:\n"
+                "- Dark theme (#0d1117 / #161b22), glowing neon accents, clean typography.\n"
+                "- Centered responsive canvas layout.\n"
+                "- Sleek HUD overlay for score, health, controls badges."
+            )
+        else:
+            current_prompt = (
+                "Final Polish & Verification Turn:\n"
+                "Review all files in the workspace. Ensure all controls are responsive, game loop restarts cleanly on game over, and code compiles without errors."
+            )
+
         turn += 1
+
+    # Optional: Automatically open index.html in browser so user immediately sees the running project
+    if success and open_browser:
+        entry_html = project_dir / "index.html"
+        if entry_html.is_file():
+            try:
+                import webbrowser
+                webbrowser.open(entry_html.resolve().as_uri(), new=2)
+                _emit(stream, f"🌐 Opened live preview in default browser: {entry_html.name}")
+            except Exception:
+                pass
 
     summary_lines = [
         "🎉 Antigravity Autonomous Task Complete!",
@@ -288,7 +397,7 @@ def run_antigravity_continuous_task(
     ]
     if last_audit["files"]:
         summary_lines.append("  Deliverables:")
-        for f in last_audit["files"][:6]:
+        for f in last_audit["files"][:8]:
             summary_lines.append(f"    - {f['path']} ({f['size']} bytes)")
     summary_lines.append("Review or run your project in Antigravity IDE or default browser.")
     msg = "\n".join(summary_lines)

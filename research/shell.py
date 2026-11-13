@@ -102,6 +102,10 @@ SHELL_HELP = (
     "  /open [path|url]    Open web page, HTML file, or active project in default browser\n"
     "  /antigravity <task> Open Antigravity IDE and steer autonomous agy agent until task completion\n"
     "  /agy <task>         Alias for /antigravity continuous task supervisor\n"
+    "  /weather [city]     Get real-time live weather forecast (Open-Meteo API)\n"
+    "  /web <query>        Search live web knowledge and online resources\n"
+    "  /internet [on|off]  Check or toggle real-time internet access state\n"
+    "  /api [status|set]   Configure 3rd-party Cloud AI providers (Gemini, OpenAI, Groq, DeepSeek)\n"
     "  /mail [to/topic]    Draft an email and open browser compose with To, Subject & Body\n"
     "  /whatsapp [who/msg] Open WhatsApp desktop app or pre-fill message to contact/phone\n"
     "  /auto <instruction> Automate web search, web apps, folders, Notepad typing, or safe apps\n"
@@ -322,9 +326,28 @@ def resolve_model_name(query: str) -> Optional[str]:
 def switch_active_model(target_model_str: str, stream=sys.stdout) -> Tuple[bool, str]:
     """
     Switches active resident model override in the shell.
+    Supports both local models and 3rd-party Cloud AI models (Gemini, OpenAI, etc.).
     Updates terminal title bar and status prompt.
     """
     global _active_model_override
+
+    # Check for 3rd-Party Cloud AI models
+    try:
+        try:
+            from research.cloud_ai import is_cloud_model, set_active_cloud_model
+        except ModuleNotFoundError:
+            from cloud_ai import is_cloud_model, set_active_cloud_model
+
+        if is_cloud_model(target_model_str):
+            set_active_cloud_model(target_model_str)
+            _active_model_override = target_model_str
+            os.environ["PAI_ACTIVE_MODEL"] = target_model_str
+            ver = get_install_root_version()
+            set_terminal_title(f"PAI {ver} | Model: {target_model_str} [Cloud] | Developed by Hirusha Suhan", stream)
+            return True, f"Active model switched to cloud model '{target_model_str}'"
+    except Exception:
+        pass
+
     resolved = resolve_model_name(target_model_str)
     avail = get_available_models()
     if not resolved:
@@ -350,8 +373,31 @@ def format_models_list(color_enabled: bool = False) -> str:
         else:
             prefix = "   [      ] "
         lines.append(f"{prefix}{colorize(m, CYAN, color_enabled)}")
+
+    try:
+        try:
+            from research.cloud_ai import list_available_cloud_models
+        except ModuleNotFoundError:
+            from cloud_ai import list_available_cloud_models
+
+        cloud_models = list_available_cloud_models()
+        if cloud_models:
+            lines.append("")
+            lines.append(colorize("=== 3rd-Party Cloud AI Models ===", BOLD, color_enabled))
+            for cm in cloud_models:
+                m_name = cm["model"]
+                prov = cm["display_provider"]
+                badge = " [Key Ready]" if cm["has_key"] else " [No Key - /api set]"
+                if m_name == current:
+                    prefix = colorize(" ● [ACTIVE] ", GREEN, color_enabled)
+                else:
+                    prefix = "   [      ] "
+                lines.append(f"{prefix}{colorize(m_name, CYAN, color_enabled)} ({prov}{badge})")
+    except Exception:
+        pass
+
     lines.append(colorize("─" * 40, DIM, color_enabled))
-    lines.append(colorize(f"To switch model, type: /model <name> (e.g. /model {avail[0]})", DIM, color_enabled))
+    lines.append(colorize(f"To switch model, type: /model <name> (e.g. /model {avail[0] if avail else 'gemini'})", DIM, color_enabled))
     return "\n".join(lines)
 
 
@@ -3341,17 +3387,37 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 fix_inst = rest[idx2:].strip() if len(args) > 1 else ""
             return "fix", [target_file_or_dir, fix_inst]
 
-        if raw_cmd in ("auto", "automate", "mail", "email", "whatsapp", "wa", "antigravity", "agy"):
+        if raw_cmd in ("auto", "automate", "mail", "email", "whatsapp", "wa", "antigravity", "agy", "weather", "web", "search"):
             if raw_cmd in ("mail", "email"):
                 sub_kind = "mail"
             elif raw_cmd in ("whatsapp", "wa"):
                 sub_kind = "whatsapp"
             elif raw_cmd in ("antigravity", "agy"):
                 sub_kind = "antigravity"
+            elif raw_cmd in ("weather",):
+                sub_kind = "weather"
+            elif raw_cmd in ("web", "search"):
+                sub_kind = "web"
             else:
                 sub_kind = "auto"
             auto_prompt = stripped[len(tokens[0]):].strip()
             return "automate", [sub_kind, auto_prompt]
+
+        if raw_cmd in ("internet", "online", "offline"):
+            args = tokens[1:]
+            action_arg = args[0].lower() if args else ("off" if raw_cmd == "offline" else "status")
+            return "internet_toggle", [action_arg]
+
+        if raw_cmd in ("api", "cloud", "key", "keys"):
+            args = tokens[1:]
+            sub_cmd = args[0].lower() if args else "status"
+            rest = stripped[len(tokens[0]):].strip()
+            if len(args) > 1:
+                idx = rest.find(args[0]) + len(args[0])
+                rest_args = rest[idx:].strip()
+            else:
+                rest_args = ""
+            return "cloud_api", [sub_cmd, rest_args]
 
         if raw_cmd in ("open", "preview", "browse"):
             args = tokens[1:]
@@ -3953,6 +4019,93 @@ def run_interactive_shell(
                 if not msg:
                     msg = "Automation finished."
                 output_fn(colorize("Automation complete." if ok else msg, GREEN if ok else RED, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "internet_toggle":
+                arg = argv[0] if argv else "status"
+                try:
+                    try:
+                        from research.internet_service import is_internet_enabled, set_internet_enabled
+                    except ModuleNotFoundError:
+                        from internet_service import is_internet_enabled, set_internet_enabled
+                    if arg in ("on", "1", "enable", "enabled", "yes"):
+                        set_internet_enabled(True)
+                        msg = "🌐 Internet access ENABLED. Live weather, web searches, and cloud APIs are active."
+                        output_fn(colorize(msg, GREEN, color_enabled))
+                    elif arg in ("off", "0", "disable", "disabled", "no"):
+                        set_internet_enabled(False)
+                        msg = "🔒 Internet access DISABLED. Running in strictly offline local mode."
+                        output_fn(colorize(msg, YELLOW, color_enabled))
+                    else:
+                        state_str = "ENABLED" if is_internet_enabled() else "DISABLED"
+                        msg = f"Internet Access State: {state_str}\n  Use /internet on to enable or /internet off to disable."
+                        output_fn(colorize(msg, GREEN if is_internet_enabled() else YELLOW, color_enabled))
+                except Exception as exc:
+                    msg = f"Internet toggle error: {exc}"
+                    output_fn(colorize(msg, RED, color_enabled))
+                add_to_session_history(line, msg)
+                cols, _ = get_terminal_dimensions()
+                sep_char = "─" if can_encode_blocks(stream) else "-"
+                output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
+                continue
+            elif action == "cloud_api":
+                sub_cmd = argv[0] if argv else "status"
+                rest = argv[1] if len(argv) > 1 else ""
+                try:
+                    try:
+                        from research.cloud_ai import (
+                            format_cloud_status,
+                            set_provider_key,
+                            set_active_cloud_model,
+                            set_custom_endpoint,
+                        )
+                    except ModuleNotFoundError:
+                        from cloud_ai import (
+                            format_cloud_status,
+                            set_provider_key,
+                            set_active_cloud_model,
+                            set_custom_endpoint,
+                        )
+
+                    if sub_cmd == "status" or not sub_cmd:
+                        msg = format_cloud_status()
+                        output_fn(colorize(msg, CYAN if color_enabled else "", color_enabled))
+                    elif sub_cmd in ("set", "key", "add"):
+                        parts = rest.split(None, 1)
+                        if len(parts) < 2:
+                            msg = "Error: /api set requires <provider> and <key> (e.g. /api set gemini AIza...)"
+                            output_fn(colorize(msg, RED, color_enabled))
+                        else:
+                            prov, key_val = parts[0].lower(), parts[1].strip()
+                            set_provider_key(prov, key_val)
+                            msg = f"✅ Saved API key for {prov.title()}. Cloud AI ready for requests."
+                            output_fn(colorize(msg, GREEN, color_enabled))
+                    elif sub_cmd in ("model", "switch", "use"):
+                        if not rest:
+                            msg = "Error: /api model requires a model name (e.g. /api model gemini-2.0-flash)"
+                            output_fn(colorize(msg, RED, color_enabled))
+                        else:
+                            set_active_cloud_model(rest.strip())
+                            _active_model_override = rest.strip()
+                            msg = f"✅ Switched active cloud model to '{rest.strip()}'."
+                            output_fn(colorize(msg, GREEN, color_enabled))
+                    elif sub_cmd in ("endpoint", "url"):
+                        if not rest:
+                            msg = "Error: /api endpoint requires a base URL (e.g. /api endpoint https://api.together.xyz/v1)"
+                            output_fn(colorize(msg, RED, color_enabled))
+                        else:
+                            set_custom_endpoint(rest.strip())
+                            msg = f"✅ Saved custom endpoint URL: {rest.strip()}"
+                            output_fn(colorize(msg, GREEN, color_enabled))
+                    else:
+                        msg = format_cloud_status()
+                        output_fn(colorize(msg, CYAN if color_enabled else "", color_enabled))
+                except Exception as exc:
+                    msg = f"Cloud API error: {exc}"
+                    output_fn(colorize(msg, RED, color_enabled))
                 add_to_session_history(line, msg)
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
