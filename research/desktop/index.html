@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PAI Studio - Personal Agentic AI Desktop</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">
+          <span class="logo-p">P</span><span class="logo-a">A</span><span class="logo-i">I</span>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">PAI Studio</span>
+          <span class="brand-sub">Desktop v1.1.0</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="chat">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          <span>Chat & Reasoning</span>
+        </button>
+        <button class="nav-item" data-tab="models">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+          <span>Model Manager</span>
+        </button>
+        <button class="nav-item" data-tab="cloud">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>
+          <span>Cloud AI Keys</span>
+        </button>
+        <button class="nav-item" data-tab="antigravity">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <span>Antigravity Agent</span>
+        </button>
+        <button class="nav-item" data-tab="tools">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <span>Tools & Health</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-indicator">
+          <span class="status-dot online" id="server-status-dot"></span>
+          <span class="status-label" id="server-status-text">Engine Ready</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- Top Navbar -->
+      <header class="top-nav">
+        <div class="active-model-box">
+          <span class="nav-label">Model:</span>
+          <select id="header-model-select" class="model-select">
+            <option value="llama3.2:3b">llama3.2:3b (Local)</option>
+          </select>
+        </div>
+
+        <div class="toggles-box">
+          <label class="toggle-pill" title="Toggle live web search & real-time weather">
+            <input type="checkbox" id="toggle-internet" checked />
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">🌐 Internet</span>
+          </label>
+          <label class="toggle-pill" title="Toggle automatic fact-checking against web sources">
+            <input type="checkbox" id="toggle-factcheck" checked />
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">🛡️ Fact-Check</span>
+          </label>
+        </div>
+      </header>
+
+      <!-- View Containers -->
+      <div class="views-wrapper">
+        
+        <!-- 1. CHAT VIEW -->
+        <section id="view-chat" class="tab-view active">
+          <div class="chat-container">
+            <div class="messages-scroll" id="messages-list">
+              <div class="message assistant welcome">
+                <div class="msg-header">
+                  <span class="avatar-badge">PAI</span>
+                  <span class="msg-author">Personal Agentic AI Assistant</span>
+                  <span class="msg-time">Just now</span>
+                </div>
+                <div class="msg-body">
+                  <p>Welcome to <strong>PAI Studio</strong>! I am your privacy-first, agentic AI assistant running locally on your PC.</p>
+                  <p>Ask me anything, draft documents, generate code, inspect live weather, or ask me to fact-check statements in real-time.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="chat-input-area">
+              <form id="chat-form" class="chat-form">
+                <textarea
+                  id="chat-input"
+                  class="chat-textarea"
+                  placeholder="Ask PAI or type an instruction (e.g. 'What is the capital of Sri Lanka?', 'Give me today weather in Colombo')..."
+                  rows="1"
+                ></textarea>
+                <button type="submit" id="btn-send" class="btn-send" title="Send message">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                </button>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. MODEL MANAGER VIEW -->
+        <section id="view-models" class="tab-view">
+          <div class="panel-header">
+            <h2>Local AI Model Manager</h2>
+            <p>Download, browse, and manage open-weight models powered by your local Ollama engine.</p>
+          </div>
+
+          <!-- Pull New Model Card -->
+          <div class="glass-card mb-4">
+            <h3 class="card-title">📥 Pull / Download Local Model</h3>
+            <div class="pull-form">
+              <input type="text" id="pull-model-name" class="input-text" placeholder="e.g. llama3.2:3b, qwen2.5-coder:7b, deepseek-r1:7b" />
+              <button id="btn-pull-model" class="btn btn-primary">Start Download</button>
+            </div>
+            
+            <div id="pull-progress-container" class="pull-progress hidden">
+              <div class="progress-bar-bg">
+                <div id="pull-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+              </div>
+              <div class="progress-info">
+                <span id="pull-status-text">Downloading layers...</span>
+                <span id="pull-percent-text">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Installed Models List -->
+          <div class="glass-card">
+            <div class="flex-between mb-3">
+              <h3 class="card-title">📦 Installed Local Models</h3>
+              <button id="btn-refresh-models" class="btn btn-secondary btn-sm">Refresh</button>
+            </div>
+            <div id="installed-models-list" class="model-cards-grid">
+              <div class="loading-spinner">Loading models...</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. CLOUD AI KEYS VIEW -->
+        <section id="view-cloud" class="tab-view">
+          <div class="panel-header">
+            <h2>3rd-Party Cloud AI Providers</h2>
+            <p>Configure API keys for external models (Gemini, OpenAI, Groq, DeepSeek). Keys are stored safely in <code>~/.pai/cloud_ai.json</code> and never committed to git.</p>
+          </div>
+
+          <div class="grid-2-cols">
+            <!-- Google Gemini -->
+            <div class="glass-card provider-card">
+              <div class="card-badge" id="gemini-badge">Status: Checking...</div>
+              <h3>Google Gemini</h3>
+              <p class="text-muted">High-speed multimodal models (gemini-2.0-flash, gemini-1.5-pro).</p>
+              <div class="input-group">
+                <input type="password" id="key-gemini" class="input-text" placeholder="AIzaSy..." />
+                <button class="btn btn-primary btn-save-key" data-provider="gemini">Save Key</button>
+              </div>
+            </div>
+
+            <!-- OpenAI -->
+            <div class="glass-card provider-card">
+              <div class="card-badge" id="openai-badge">Status: Checking...</div>
+              <h3>OpenAI</h3>
+              <p class="text-muted">Industry-leading reasoning models (gpt-4o, gpt-4o-mini, o3-mini).</p>
+              <div class="input-group">
+                <input type="password" id="key-openai" class="input-text" placeholder="sk-..." />
+                <button class="btn btn-primary btn-save-key" data-provider="openai">Save Key</button>
+              </div>
+            </div>
+
+            <!-- Groq -->
+            <div class="glass-card provider-card">
+              <div class="card-badge" id="groq-badge">Status: Checking...</div>
+              <h3>Groq</h3>
+              <p class="text-muted">Ultra-fast LPU inference (llama-3.3-70b-versatile, mixtral-8x7b).</p>
+              <div class="input-group">
+                <input type="password" id="key-groq" class="input-text" placeholder="gsk_..." />
+                <button class="btn btn-primary btn-save-key" data-provider="groq">Save Key</button>
+              </div>
+            </div>
+
+            <!-- DeepSeek -->
+            <div class="glass-card provider-card">
+              <div class="card-badge" id="deepseek-badge">Status: Checking...</div>
+              <h3>DeepSeek</h3>
+              <p class="text-muted">Deep reasoning and coding models (deepseek-chat, deepseek-reasoner).</p>
+              <div class="input-group">
+                <input type="password" id="key-deepseek" class="input-text" placeholder="sk-..." />
+                <button class="btn btn-primary btn-save-key" data-provider="deepseek">Save Key</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. ANTIGRAVITY AGENT VIEW -->
+        <section id="view-antigravity" class="tab-view">
+          <div class="panel-header">
+            <h2>Antigravity Autonomous Supervisor</h2>
+            <p>Steer the headless continuous agent to scaffold, code, test, style, and preview projects automatically.</p>
+          </div>
+
+          <div class="glass-card mb-4">
+            <h3 class="card-title">🚀 Launch Autonomous Task</h3>
+            <div class="task-form">
+              <input type="text" id="antigravity-task-input" class="input-text" placeholder="e.g. Build a 3D Solar System simulation in Three.js with sound effects" />
+              <button id="btn-run-antigravity" class="btn btn-accent">Run Autonomous Agent</button>
+            </div>
+          </div>
+
+          <div class="glass-card">
+            <h3 class="card-title">📋 Supervisor Execution Log</h3>
+            <div id="antigravity-log" class="console-box">
+              <div class="log-line info">[IDLE] Enter a task description and click 'Run Autonomous Agent'.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. TOOLS & HEALTH VIEW -->
+        <section id="view-tools" class="tab-view">
+          <div class="panel-header">
+            <h2>Tools, Web Grounding & System Doctor</h2>
+            <p>Direct access to live weather telemetry, Wikipedia & DuckDuckGo search, and hardware diagnostics.</p>
+          </div>
+
+          <div class="grid-2-cols mb-4">
+            <!-- Weather Card -->
+            <div class="glass-card">
+              <h3>⛅ Live Real-Time Weather (Open-Meteo)</h3>
+              <div class="input-group mb-2">
+                <input type="text" id="tool-weather-city" class="input-text" placeholder="Colombo, Sri Lanka" value="Colombo" />
+                <button id="btn-get-weather" class="btn btn-primary">Check Weather</button>
+              </div>
+              <div id="weather-result-box" class="result-box">Click 'Check Weather' to fetch live data.</div>
+            </div>
+
+            <!-- Web Search Card -->
+            <div class="glass-card">
+              <h3>🌐 Web Knowledge Search</h3>
+              <div class="input-group mb-2">
+                <input type="text" id="tool-search-query" class="input-text" placeholder="Search Wikipedia & DuckDuckGo..." />
+                <button id="btn-run-search" class="btn btn-primary">Search</button>
+              </div>
+              <div id="search-result-box" class="result-box">Enter a query to search live internet sources.</div>
+            </div>
+          </div>
+
+          <!-- System Health Card -->
+          <div class="glass-card">
+            <h3>🩺 System Health & Hardware Diagnostics</h3>
+            <div id="doctor-telemetry-box" class="telemetry-grid">
+              <div class="telemetry-item">
+                <span class="telemetry-label">OS Platform:</span>
+                <span class="telemetry-val" id="doc-platform">Windows 11 x64</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">RAM Available:</span>
+                <span class="telemetry-val" id="doc-ram">Checking...</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Active Model:</span>
+                <span class="telemetry-val" id="doc-model">Checking...</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Python Version:</span>
+                <span class="telemetry-val" id="doc-python">Checking...</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

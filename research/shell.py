@@ -4115,19 +4115,17 @@ def run_interactive_shell(
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
                 continue
             elif action == "launch_desktop":
-                import subprocess
-                launcher = Path(__file__).resolve().parent.parent / "desktop" / "launch_desktop.bat"
-                if launcher.is_file():
-                    subprocess.Popen(
-                        ["cmd.exe", "/c", str(launcher)],
-                        creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-                    )
-                    msg = "🚀 Launching PAI Studio Desktop Application..."
-                    output_fn(colorize(msg, GREEN, color_enabled))
-                else:
-                    msg = "Error: PAI Desktop launcher not found at desktop/launch_desktop.bat."
-                    output_fn(colorize(msg, RED, color_enabled))
-                add_to_session_history(line, msg)
+                try:
+                    try:
+                        from research.desktop_launcher import launch_desktop_app
+                    except ImportError:
+                        from desktop_launcher import launch_desktop_app
+                    ok_launch, msg_launch = launch_desktop_app()
+                    output_fn(colorize(f"🚀 {msg_launch}", GREEN if ok_launch else RED, color_enabled))
+                except Exception as exc:
+                    msg_launch = f"Error launching desktop: {exc}"
+                    output_fn(colorize(msg_launch, RED, color_enabled))
+                add_to_session_history(line, msg_launch)
                 cols, _ = get_terminal_dimensions()
                 sep_char = "─" if can_encode_blocks(stream) else "-"
                 output_fn(colorize(sep_char * min(cols, 80), DIM, color_enabled))
