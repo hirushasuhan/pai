@@ -13,6 +13,7 @@ let activeProjectName = "";
 let currentOpenFile = "";
 let chatHistory = [];
 let availableModels = [];
+let lastSentPrompt = "";
 let projectsData = { active_project: "", projects: [] };
 let teamRosterData = [];
 let currentDeliverables = { plan: "", specialist: "", code: {}, qa: "" };
@@ -544,6 +545,7 @@ function setupChat() {
       if (!activeProjectPath) return;
     }
 
+    lastSentPrompt = prompt;
     chatInput.value = "";
     appendUserMessage(prompt);
     btnSend.disabled = true;
@@ -569,20 +571,20 @@ function setupChat() {
         if (data.is_image) {
           updateAssistantMessageImage(botMsgId, data.image_url, data.prompt, data.model, data.filename);
         } else if (data.is_team) {
-          updateAssistantTeamMessage(botMsgId, data);
+          updateAssistantTeamMessage(botMsgId, data, prompt);
           if (activeProjectPath) {
             loadProjectFiles(activeProjectPath);
           }
         } else {
-          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding);
+          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, prompt);
         }
         chatHistory.push({ role: "user", content: prompt });
         chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
       } else {
-        updateAssistantError(botMsgId, data.error || "Execution error");
+        updateAssistantError(botMsgId, data.error || "Execution error", prompt);
       }
     } catch (err) {
-      updateAssistantError(botMsgId, `Server connection error: ${err.message}`);
+      updateAssistantError(botMsgId, `Server connection error: ${err.message}`, prompt);
     } finally {
       btnSend.disabled = false;
       chatInput.focus();
@@ -609,11 +611,21 @@ function appendUserMessage(text) {
       <span class="avatar-badge">YOU</span>
       <span class="msg-author">User</span>
       <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+      <div class="msg-actions">
+        <button type="button" class="btn-msg-action btn-copy-msg" title="Copy instruction to clipboard">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>Copy</span>
+        </button>
+      </div>
     </div>
     <div class="msg-body">
       <p>${escapeHtml(text)}</p>
     </div>
   `;
+  const btnCopy = msg.querySelector(".btn-copy-msg");
+  if (btnCopy) {
+    btnCopy.addEventListener("click", () => copyToClipboard(text, btnCopy));
+  }
   messagesList.appendChild(msg);
   messagesList.scrollTop = messagesList.scrollHeight;
 }
@@ -641,7 +653,7 @@ function appendAssistantPlaceholder(id, isTeam = false) {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
-function updateAssistantMessage(id, text, factcheck, grounding) {
+function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "") {
   const msg = document.getElementById(id);
   if (!msg) return;
   const body = msg.querySelector(".msg-body");
@@ -674,11 +686,38 @@ function updateAssistantMessage(id, text, factcheck, grounding) {
     `;
   }
 
+  const promptForRetry = userPrompt || lastSentPrompt;
+  html += `
+    <div class="msg-footer-actions">
+      <button type="button" class="btn-msg-action btn-copy-msg" title="Copy response to clipboard">
+        <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        <span>Copy</span>
+      </button>
+      ${promptForRetry ? `
+        <button type="button" class="btn-msg-action btn-regenerate-msg" title="Regenerate answer with active model">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          <span>Regenerate</span>
+        </button>
+      ` : ""}
+    </div>
+  `;
+
   body.innerHTML = html;
+
+  const btnCopy = body.querySelector(".btn-copy-msg");
+  if (btnCopy) {
+    btnCopy.addEventListener("click", () => copyToClipboard(text, btnCopy));
+  }
+
+  const btnRegen = body.querySelector(".btn-regenerate-msg");
+  if (btnRegen) {
+    btnRegen.addEventListener("click", () => regeneratePrompt(promptForRetry));
+  }
+
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
-function updateAssistantTeamMessage(id, data) {
+function updateAssistantTeamMessage(id, data, userPrompt = "") {
   const msg = document.getElementById(id);
   if (!msg) return;
   const body = msg.querySelector(".msg-body");
@@ -693,6 +732,7 @@ function updateAssistantTeamMessage(id, data) {
     `;
   }
 
+  const promptForRetry = userPrompt || lastSentPrompt;
   body.innerHTML = `
     <div class="chat-team-summary">
       <div class="chat-team-header">
@@ -701,8 +741,30 @@ function updateAssistantTeamMessage(id, data) {
       </div>
       <div>${formatMarkdown(data.response)}</div>
       ${filesHtml ? `<div class="mt-2"><strong>Saved Code Files (Click to inspect):</strong>${filesHtml}</div>` : ""}
+      <div class="msg-footer-actions">
+        <button type="button" class="btn-msg-action btn-copy-msg" title="Copy team summary">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>Copy</span>
+        </button>
+        ${promptForRetry ? `
+          <button type="button" class="btn-msg-action btn-regenerate-msg" title="Re-run collaborative team workflow">
+            <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            <span>Regenerate</span>
+          </button>
+        ` : ""}
+      </div>
     </div>
   `;
+
+  const btnCopy = body.querySelector(".btn-copy-msg");
+  if (btnCopy) {
+    btnCopy.addEventListener("click", () => copyToClipboard(data.response, btnCopy));
+  }
+  const btnRegen = body.querySelector(".btn-regenerate-msg");
+  if (btnRegen) {
+    btnRegen.addEventListener("click", () => regeneratePrompt(promptForRetry));
+  }
+
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
@@ -727,17 +789,44 @@ function updateAssistantMessageImage(id, dataUrl, prompt, model, filename) {
           Download PNG
         </a>
       </div>
+      <div class="msg-footer-actions">
+        <button type="button" class="btn-msg-action btn-regenerate-msg" title="Re-generate image">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          <span>Regenerate</span>
+        </button>
+      </div>
     </div>
   `;
+
+  const btnRegen = body.querySelector(".btn-regenerate-msg");
+  if (btnRegen) {
+    btnRegen.addEventListener("click", () => regeneratePrompt(`/image ${prompt}`));
+  }
+
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
-function updateAssistantError(id, errText) {
+function updateAssistantError(id, errText, promptForRetry = "") {
   const msg = document.getElementById(id);
   if (!msg) return;
   const body = msg.querySelector(".msg-body");
   body.classList.remove("loading-indicator");
-  body.innerHTML = `<p class="error-text">Error: ${escapeHtml(errText)}</p>`;
+  const p = promptForRetry || lastSentPrompt;
+  body.innerHTML = `
+    <p class="error-text">Error: ${escapeHtml(errText)}</p>
+    ${p ? `
+      <div class="msg-footer-actions">
+        <button type="button" class="btn-msg-action btn-regenerate-msg" title="Retry this request">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          <span>Retry / Regenerate</span>
+        </button>
+      </div>
+    ` : ""}
+  `;
+  const btnRegen = body.querySelector(".btn-regenerate-msg");
+  if (btnRegen) {
+    btnRegen.addEventListener("click", () => regeneratePrompt(p));
+  }
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
@@ -2194,9 +2283,21 @@ function escapeHtml(text) {
 function formatMarkdown(text) {
   if (!text) return "";
   let html = escapeHtml(text);
-  // Code blocks
+  // Code blocks with syntax header and copy button
   html = html.replace(/```([a-z0-9_\-]+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="language-${lang || 'plaintext'} font-mono-target">${code.trim()}</code></pre>`;
+    const language = (lang || 'code').trim();
+    return `
+      <div class="code-block-wrapper">
+        <div class="code-block-header">
+          <span class="code-lang font-mono-target">${language}</span>
+          <button type="button" class="btn-copy-code" onclick="copyCodeBlock(this)" title="Copy code block">
+            <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span>Copy</span>
+          </button>
+        </div>
+        <pre><code class="language-${language} font-mono-target">${code.trim()}</code></pre>
+      </div>
+    `;
   });
   // Inline code
   html = html.replace(/`([^`]+)`/g, '<code class="font-mono-target">$1</code>');
@@ -2213,4 +2314,66 @@ function formatMarkdown(text) {
   html = html.replace(/\n\n+/g, '</p><p>');
   html = `<p>${html}</p>`;
   return html;
+}
+
+// Clipboard & Regenerate Utilities
+function copyToClipboard(content, btnEl) {
+  if (!content) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(content).then(() => {
+      onCopySuccess(btnEl);
+    }).catch(() => {
+      fallbackCopy(content, btnEl);
+    });
+  } else {
+    fallbackCopy(content, btnEl);
+  }
+}
+
+function fallbackCopy(content, btnEl) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = content;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    onCopySuccess(btnEl);
+  } catch (e) {
+    showToast("Could not copy to clipboard", "error");
+  }
+}
+
+function onCopySuccess(btnEl) {
+  showToast("Copied to clipboard!", "success");
+  if (btnEl) {
+    const originalText = btnEl.innerHTML;
+    btnEl.innerHTML = `<svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Copied!</span>`;
+    btnEl.classList.add("copied");
+    setTimeout(() => {
+      btnEl.innerHTML = originalText;
+      btnEl.classList.remove("copied");
+    }, 2000);
+  }
+}
+
+function copyCodeBlock(btn) {
+  const wrapper = btn.closest(".code-block-wrapper");
+  const codeEl = wrapper ? wrapper.querySelector("code") : null;
+  const text = codeEl ? codeEl.innerText : "";
+  if (!text) return;
+  copyToClipboard(text, btn);
+}
+
+function regeneratePrompt(promptToRetry) {
+  const p = promptToRetry || lastSentPrompt;
+  if (!p) {
+    showToast("No previous instruction to regenerate", "info");
+    return;
+  }
+  chatInput.value = p;
+  chatForm.dispatchEvent(new Event("submit"));
 }

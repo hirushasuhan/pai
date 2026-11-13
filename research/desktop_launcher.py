@@ -141,21 +141,12 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
             return False, f"Failed to open browser: {exc}"
 
     if wait_for_exit and server_instance is not None:
-        if proc is not None:
-            try:
-                proc.wait()
-            except KeyboardInterrupt:
-                pass
-            finally:
-                server_instance.shutdown()
-                server_instance.server_close()
-        else:
-            try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                server_instance.shutdown()
-                server_instance.server_close()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            server_instance.shutdown()
+            server_instance.server_close()
 
     return True, msg
 

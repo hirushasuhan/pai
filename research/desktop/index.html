@@ -154,6 +154,12 @@
                   <span class="avatar-badge">PAI</span>
                   <span class="msg-author">Personal Agentic AI Assistant</span>
                   <span class="msg-time">Just now</span>
+                  <div class="msg-actions">
+                    <button type="button" class="btn-msg-action btn-copy-msg" onclick="copyToClipboard(this.closest('.message').querySelector('.msg-body').innerText, this)" title="Copy message">
+                      <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                      <span>Copy</span>
+                    </button>
+                  </div>
                 </div>
                 <div class="msg-body">
                   <p>Welcome to <strong>PAI Studio</strong>! I am your privacy-first, agentic AI assistant running locally on your PC.</p>
