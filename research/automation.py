@@ -66,6 +66,8 @@ _APP_ALLOWLIST: Dict[str, Tuple[str, List[str]]] = {
     "powershell": ("PowerShell", ["powershell.exe"]),
     "whatsapp": ("WhatsApp", ["explorer.exe", "whatsapp:"]),
     "whatsapp desktop": ("WhatsApp", ["explorer.exe", "whatsapp:"]),
+    "antigravity": ("Antigravity IDE", ["C:\\Users\\hp\\AppData\\Local\\Programs\\Antigravity IDE\\Antigravity IDE.exe"]),
+    "antigravity ide": ("Antigravity IDE", ["C:\\Users\\hp\\AppData\\Local\\Programs\\Antigravity IDE\\Antigravity IDE.exe"]),
 }
 
 _FOLDER_MAP: Dict[str, str] = {
@@ -107,13 +109,17 @@ def _emit(stream: Any, msg: str) -> None:
 
 
 def format_automation_help() -> str:
-    """Return concise help text for /auto, /mail, and /whatsapp commands."""
+    """Return concise help text for /auto, /mail, /whatsapp, and /antigravity commands."""
     return (
-        "Computer & Browser Automation (/auto, /mail, /whatsapp):\n"
+        "Computer, Browser & Antigravity Automation (/auto, /mail, /whatsapp, /antigravity):\n"
+        "  /antigravity <prompt>     - Open Antigravity IDE and steer autonomous agy agent until task completion\n"
+        "  /agy <prompt>             - Alias for /antigravity\n"
         "  /mail [to/topic]          - Draft email and open Gmail/Outlook compose with To, Subject & Body\n"
         "  /whatsapp [who/msg]       - Open WhatsApp desktop app or pre-fill message to contact/phone\n"
         "  /auto <instruction>       - Automate browser search, weather, web apps, folders, or safe apps\n"
         "Examples:\n"
+        "  antigravity open karala Three.js 3D game ekak hadanna\n"
+        "  /agy create a snake game with sound effects in HTML5 canvas\n"
         "  mail ekak danna john@example.com ta meeting eka postpone karanna kiyala\n"
         "  whatsapp eke Kasun ta Hello kiyala yawanna\n"
         "  mata ada wether eka hoyala denna\n"
@@ -701,6 +707,9 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
     raw = (prompt or "").strip()
     lower = raw.lower()
 
+    if sub_action in ("antigravity", "agy"):
+        return {"kind": "antigravity", "prompt": raw}
+
     if sub_action == "mail":
         return {"kind": "email", "prompt": raw}
 
@@ -712,6 +721,18 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
     if any(k in lower for k in weather_keywords):
         query = _extract_weather_query(raw)
         return {"kind": "web_search", "engine": "google", "query": query}
+
+    # Antigravity autonomous development trigger
+    # Handles: "antigravity open karala Three.js game ekak hadanna", "/antigravity build snake game", etc.
+    is_agy_mention = (
+        "antigravity" in lower
+        or bool(re.search(r"\b(?:agy)\b", lower))
+        or lower.startswith(("/antigravity", "/agy"))
+    )
+    if is_agy_mention:
+        is_info_query = any(lower.startswith(q) for q in ("what is ", "how does ", "explain ", "define "))
+        if not is_info_query:
+            return {"kind": "antigravity", "prompt": raw}
 
     explicit_auto = sub_action == "auto"
 
@@ -839,6 +860,19 @@ def execute_automation_task(
         return False, help_txt
 
     kind = intent["kind"]
+    if kind == "antigravity":
+        try:
+            from research.antigravity_driver import run_antigravity_continuous_task
+        except ModuleNotFoundError:
+            from antigravity_driver import run_antigravity_continuous_task
+        clean_prompt = intent["prompt"]
+        clean_prompt = re.sub(r"^/(?:antigravity|agy)\b\s*", "", clean_prompt, flags=re.IGNORECASE).strip()
+        return run_antigravity_continuous_task(
+            clean_prompt,
+            stream=stream,
+            executor=executor,
+        )
+
     if kind == "whatsapp":
         info = parse_whatsapp_intent(intent["prompt"])
         return open_whatsapp(

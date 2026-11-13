@@ -3075,6 +3075,112 @@ console.log('Playable Verified');
         self.assertLess(len(truncated), 200)
         self.assertIn("repetitive output loop detected and truncated", truncated)
 
+    def test_antigravity_continuous_agent(self) -> None:
+        """Asserts Antigravity IDE and headless agy supervisor loop execution & routing."""
+        import antigravity_driver as agy_drv
+        import automation as auto_mod
+        from shell import parse_shell_line
+
+        # 1. Slash command and natural language routing
+        act_a1, argv_a1 = parse_shell_line("/antigravity Three.js 3D game ekak hadanna")
+        self.assertEqual(act_a1, "automate")
+        self.assertEqual(argv_a1[0], "antigravity")
+        self.assertEqual(argv_a1[1], "Three.js 3D game ekak hadanna")
+
+        act_a2, argv_a2 = parse_shell_line("/agy build snake game with HTML5 canvas")
+        self.assertEqual(act_a2, "automate")
+        self.assertEqual(argv_a2[0], "antigravity")
+        self.assertEqual(argv_a2[1], "build snake game with HTML5 canvas")
+
+        act_nat, argv_nat = parse_shell_line("antigravity open karala Three.js game ekak hadanna")
+        self.assertEqual(act_nat, "automate")
+        self.assertEqual(argv_nat[0], "auto")
+
+        intent = auto_mod.parse_automation_intent("antigravity open karala Three.js game ekak hadanna")
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.get("kind"), "antigravity")
+
+        # Non-regression for informational queries
+        act_info, _ = parse_shell_line("what is antigravity")
+        self.assertEqual(act_info, "chat")
+        self.assertIsNone(auto_mod.parse_automation_intent("what is antigravity"))
+
+        # 2. Workspace Provisioning & Task Blueprint
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            ws = agy_drv.create_project_workspace("Three.js space shooter", base_dir=base)
+            self.assertTrue(ws.is_dir())
+            task_file = ws / "AGY_TASK.md"
+            self.assertTrue(task_file.is_file())
+            content = task_file.read_text(encoding="utf-8")
+            self.assertIn("Three.js space shooter", content)
+            self.assertIn("Technical Requirements", content)
+
+            # 3. File and Syntax Auditing
+            audit1 = agy_drv.audit_workspace_files(ws)
+            self.assertEqual(audit1["total_files"], 0)
+
+            # Create clean index.html and main.py
+            (ws / "index.html").write_text("<!DOCTYPE html><html><body><h1>Game</h1></body></html>", encoding="utf-8")
+            (ws / "main.py").write_text("print('Game running')", encoding="utf-8")
+            audit2 = agy_drv.audit_workspace_files(ws)
+            self.assertEqual(audit2["total_files"], 2)
+            self.assertEqual(len(audit2["syntax_errors"]), 0)
+
+            # Write invalid python file to trigger syntax audit error
+            broken_file = ws / "broken.py"
+            broken_file.write_text("def broken syntax in python:\n", encoding="utf-8")
+            audit3 = agy_drv.audit_workspace_files(ws)
+            self.assertEqual(audit3["total_files"], 3)
+            self.assertGreaterEqual(len(audit3["syntax_errors"]), 1)
+            self.assertIn("broken.py", audit3["syntax_errors"][0])
+            broken_file.unlink()
+
+            # 4. Multi-Turn Autonomous Supervisor Loop
+            turn_count = 0
+
+            def fake_subprocess_run(cmd, *args, **kwargs):
+                nonlocal turn_count
+                turn_count += 1
+                target_p = Path(cmd[2])
+                mock_res = MagicMock()
+                mock_res.returncode = 0
+                if turn_count == 1:
+                    # Turn 1: agent creates broken.py
+                    (target_p / "broken.py").write_text("def error in python:\n", encoding="utf-8")
+                    mock_res.stdout = "Created initial skeleton in broken.py"
+                else:
+                    # Turn 2: agent fixes broken.py and writes full index.html
+                    (target_p / "broken.py").write_text("def fixed():\n    return 42\n", encoding="utf-8")
+                    (target_p / "index.html").write_text(
+                        "<!DOCTYPE html><html><head><title>3D Game</title></head><body><canvas id='c'></canvas>"
+                        + "<!-- " + "padding" * 150 + " --></body></html>",
+                        encoding="utf-8",
+                    )
+                    mock_res.stdout = "Fixed broken.py and generated complete index.html"
+                return mock_res
+
+            fake_bin = base / "fake_agy.exe"
+            fake_bin.write_text("dummy", encoding="utf-8")
+            fake_ide = base / "fake_ide.exe"
+            fake_ide.write_text("dummy", encoding="utf-8")
+
+            with patch.object(agy_drv, "find_antigravity_binaries", return_value=(str(fake_bin), str(fake_ide))), \
+                 patch.object(agy_drv, "launch_antigravity_ide", return_value=(True, "Launched Antigravity IDE")), \
+                 patch("subprocess.run", side_effect=fake_subprocess_run):
+
+                out_stream = io.StringIO()
+                ok, msg = agy_drv.run_antigravity_continuous_task(
+                    "Three.js 3D space flight simulator",
+                    stream=out_stream,
+                    max_turns=5,
+                    base_dir=base,
+                )
+                self.assertTrue(ok, msg)
+                self.assertIn("Antigravity Autonomous Task Complete", msg)
+                self.assertIn("index.html", msg)
+                self.assertGreaterEqual(turn_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

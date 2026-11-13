@@ -100,6 +100,8 @@ SHELL_HELP = (
     "  /fix [file|dir] [note] Analyze active project or target for bugs, auto-fix with backup\n"
     "  /project [dir]      Scaffold project or show active project status\n"
     "  /open [path|url]    Open web page, HTML file, or active project in default browser\n"
+    "  /antigravity <task> Open Antigravity IDE and steer autonomous agy agent until task completion\n"
+    "  /agy <task>         Alias for /antigravity continuous task supervisor\n"
     "  /mail [to/topic]    Draft an email and open browser compose with To, Subject & Body\n"
     "  /whatsapp [who/msg] Open WhatsApp desktop app or pre-fill message to contact/phone\n"
     "  /auto <instruction> Automate web search, web apps, folders, Notepad typing, or safe apps\n"
@@ -3339,11 +3341,13 @@ def parse_shell_line(line: str) -> Tuple[str, List[str]]:
                 fix_inst = rest[idx2:].strip() if len(args) > 1 else ""
             return "fix", [target_file_or_dir, fix_inst]
 
-        if raw_cmd in ("auto", "automate", "mail", "email", "whatsapp", "wa"):
+        if raw_cmd in ("auto", "automate", "mail", "email", "whatsapp", "wa", "antigravity", "agy"):
             if raw_cmd in ("mail", "email"):
                 sub_kind = "mail"
             elif raw_cmd in ("whatsapp", "wa"):
                 sub_kind = "whatsapp"
+            elif raw_cmd in ("antigravity", "agy"):
+                sub_kind = "antigravity"
             else:
                 sub_kind = "auto"
             auto_prompt = stripped[len(tokens[0]):].strip()
