@@ -115,6 +115,8 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
     proc = None
     if browser_exe:
         try:
+            profile_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PAI" / "app_profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
             flags = 0
             if sys.platform == "win32":
                 flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
@@ -122,12 +124,27 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
                 [
                     browser_exe,
                     f"--app={BRIDGE_URL}",
+                    f"--user-data-dir={profile_dir}",
                     "--window-size=1280,840",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],
                 creationflags=flags,
             )
+            time.sleep(0.6)
+            # Detect if Chromium rejected --app or exited immediately (ExitCode 21)
+            if proc.poll() is not None:
+                proc = subprocess.Popen(
+                    [
+                        browser_exe,
+                        "--new-window",
+                        BRIDGE_URL,
+                    ],
+                    creationflags=flags,
+                )
+                time.sleep(0.4)
+                if proc.poll() is not None:
+                    proc = None
             msg = f"PAI Studio Desktop opened in native app mode ({os.path.basename(browser_exe)})."
         except Exception:
             proc = None
@@ -139,13 +156,25 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
         except Exception as exc:
             return False, f"Failed to open browser: {exc}"
 
-    if wait_for_exit and server_instance is not None:
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            server_instance.shutdown()
-            server_instance.server_close()
+    if wait_for_exit:
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.wait()
+            except Exception:
+                pass
+            if server_instance is not None:
+                try:
+                    server_instance.shutdown()
+                    server_instance.server_close()
+                except Exception:
+                    pass
+        elif server_instance is not None:
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                server_instance.shutdown()
+                server_instance.server_close()
 
     return True, msg
 
