@@ -30,7 +30,7 @@ All preconditions must be verified and formally accepted before tagging the free
     3. Commit `research/catalog.json` to git. [Completed in commit `e618920`]
     4. Regenerate evidence logs on the new clean tree via `python tools/save_unit_test_evidence.py`.
     5. Record new research tree ID and update pins:
-       - **New Pinned Research Tree ID:** `06ba5cfa3e48eccdf5cb692a2b66503f6a08d33f` (updated in Antigravity continuous agent, internet, fact-checking & secret protection)
+       - **New Pinned Research Tree ID:** `7852c2c6da3a234361bad5074b8a321792ad9996` (updated in Antigravity continuous agent, internet, fact-checking & secret protection)
        - Baseline `v1.0.0-rc1` research tree ID: `506e520b33a0af8c3f0276114483ce26b9bd3787`
     *(The private key path is never written to any file, log, or commit message).*
 - [x] **Precondition 6 (Branding Touch-up & Icons Rebuilt - Accepted in Commit `d13db15`):**
@@ -71,7 +71,7 @@ Verify that the tag holds the exact pinned tree IDs:
 # 1. Verify Core Tree invariant (must match 14c60746ca9a41d91aafd88cc0c7d98719cfe3a9)
 git rev-parse v1.1.0-rc4:core
 
-# 2. Verify Research Tree invariant (must match 06ba5cfa3e48eccdf5cb692a2b66503f6a08d33f)
+# 2. Verify Research Tree invariant (must match 7852c2c6da3a234361bad5074b8a321792ad9996)
 git rev-parse v1.1.0-rc4:research
 
 # 3. Verify evaluated binary SHA-256 with mandatory flag (must match 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe)
@@ -120,7 +120,7 @@ User runs the installer check in a clean Windows Sandbox/VM per Precondition 8. 
    - Installer SHA-256 hash (`dist/PAI-Setup-1.1.0-rc2-x64.exe`)
    - Three Evaluated Pins:
      - `core/` tree ID: `14c60746ca9a41d91aafd88cc0c7d98719cfe3a9`
-     - `research/` tree ID: `06ba5cfa3e48eccdf5cb692a2b66503f6a08d33f`
+     - `research/` tree ID: `7852c2c6da3a234361bad5074b8a321792ad9996`
      - `pai-core.exe` SHA-256: `6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe`
 
 ---

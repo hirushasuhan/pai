@@ -18,7 +18,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from research.internet_service import is_internet_enabled, search_web
+try:
+    from research.internet_service import is_internet_enabled, search_web
+except ModuleNotFoundError:
+    from internet_service import is_internet_enabled, search_web
 
 # Global toggle for automated fact checking in interactive sessions
 _AUTO_FACTCHECK_ENABLED: bool = True
