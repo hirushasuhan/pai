@@ -1,18 +1,18 @@
 ================================================================================
 PAI SETUP UNIT TESTS (32 TESTS, MILESTONE P6 & FINDINGS DP, DQ, DR, DY, EF, EH, EM, EP) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-13T12:13:29.354858+00:00
+Timestamp (UTC): 2026-11-13T13:12:03.282546+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        a09cfab29f5469c77c31045a9adf3652654d9fbb
+Git HEAD:        06c682c65967a602bee29575c7e8762cb77ddaf1
 Working Tree:    clean
-Research Tree:   9b71e2e4c597a22b86e53e08d3396a5321659939
+Research Tree:   f6bd587185c8b0c8103a064daa25bf1ddf0d3618
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
-pai.iss SHA256:   36464b44ee8d63ea57256fbd364be731d49a9c7dde1b2fea2665427941d4b73f
+pai.iss SHA256:   29e8de5d296253c3e6a4c2482a28d9b5e60c98f1a689961d97fcbd7d101e2b86
 agreement SHA256: e0e477178d61dedc41f182cc1839ed75418b360f77d6a0617fb031da5f31c0e9
 ================================================================================
 
@@ -50,6 +50,6 @@ WARNING: Ollama daemon did not return a manifest digest for catalog model 'no-di
 ERROR: Catalog verification failed: Catalog Ed25519 signature verification failed against trust root
 .
 ----------------------------------------------------------------------
-Ran 32 tests in 26.598s
+Ran 32 tests in 26.612s
 
 OK

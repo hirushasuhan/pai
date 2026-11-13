@@ -68,6 +68,26 @@ class TestInstallerP5(unittest.TestCase):
         # Check for cached embed python zip
         cls.cached_python_zip = Path(tempfile.gettempdir()) / f"python-{PINNED_PYTHON_VERSION}-embed-amd64.zip"
 
+    @classmethod
+    def tearDownClass(cls) -> None:
+        real_install = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "PAI"
+        if (real_install / "manifest.json").is_file():
+            try:
+                ps_script = (
+                    f"Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{8B8A618C-8A6A-4A02-A6F2-D5E79B6A1A2E}}_is1' -Name 'InstallLocation' -Value '{real_install}\\' -ErrorAction SilentlyContinue; "
+                    f"$sh = New-Object -ComObject WScript.Shell; "
+                    f"$desktopLnk = [System.IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'PAI Studio.lnk'); "
+                    f"$sc = $sh.CreateShortcut($desktopLnk); "
+                    f"$sc.TargetPath = '{real_install}\\python\\pythonw.exe'; "
+                    f"$sc.Arguments = '\"{real_install}\\research\\desktop_launcher.py\"'; "
+                    f"$sc.WorkingDirectory = '{real_install}'; "
+                    f"$sc.IconLocation = '{real_install}\\assets\\pai.ico,0'; "
+                    f"$sc.Save(); "
+                )
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], timeout=5)
+            except Exception:
+                pass
+
     def setUp(self) -> None:
         self.tmp_dir = tempfile.mkdtemp(prefix="pai_p5_test_")
         self.test_subkeys: List[str] = []
@@ -304,7 +324,7 @@ class TestInstallerP5(unittest.TestCase):
         # Run installer silently with custom DIR and isolated REG_SUBKEY
         env = os.environ.copy()
         env["PAI_REG_SUBKEY"] = sub
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{sub}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(proc.returncode, 0, f"Installer failed (code {proc.returncode}):\n{proc.stdout}\n{proc.stderr}")
 
@@ -363,7 +383,7 @@ class TestInstallerP5(unittest.TestCase):
         # Install
         env = os.environ.copy()
         env["PAI_REG_SUBKEY"] = sub
-        inst_cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        inst_cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{sub}"'
         proc = subprocess.run(inst_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(proc.returncode, 0)
         self.assertTrue((install_target / "unins000.exe").is_file())
@@ -403,7 +423,7 @@ class TestInstallerP5(unittest.TestCase):
 
         env = os.environ.copy()
         env["PAI_REG_SUBKEY"] = sub
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{sub}"'
 
         # First installation
         res1 = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
@@ -545,7 +565,7 @@ class TestInstallerP5(unittest.TestCase):
 
         # Pass an illegal subkey that update_path.ps1 explicitly rejects fail-closed
         illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         self.assertNotEqual(proc.returncode, 0, "Silent installer must exit non-zero when post-install PATH update fails")
         self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
@@ -619,7 +639,7 @@ class TestInstallerP5(unittest.TestCase):
         sub = self._create_isolated_reg_subkey("Test_PAI_Rollback_DK14", "%USERPROFILE%\\bin")
         illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
 
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
 
@@ -659,7 +679,7 @@ class TestInstallerP5(unittest.TestCase):
         sub = self._create_isolated_reg_subkey("Test_PAI_Uninstall_DK15", "%USERPROFILE%\\bin")
 
         # 1. Install successfully
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{sub}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         self.assertEqual(proc.returncode, 0, f"Installer failed: {proc.stdout}\n{proc.stderr}")
         self.assertTrue((install_target / "bin" / "pai.exe").exists(), "Installed pai.exe missing")
@@ -715,7 +735,7 @@ class TestInstallerP5(unittest.TestCase):
         sub = self._create_isolated_reg_subkey("Test_PAI_DirReject_DK16", "%USERPROFILE%\\bin")
 
         # Attempt silent install into the non-empty non-PAI folder
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{non_empty_dir}" /REG_SUBKEY="{sub}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{non_empty_dir}" /REG_SUBKEY="{sub}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
         # Must exit non-zero (PrepareToInstall failure)
@@ -756,7 +776,7 @@ class TestInstallerP5(unittest.TestCase):
 
         sub = self._create_isolated_reg_subkey("Test_PAI_ForeignReject_DL17", "%USERPROFILE%\\bin")
 
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{foreign_dir}" /REG_SUBKEY="{sub}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{foreign_dir}" /REG_SUBKEY="{sub}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
         # Must fail closed with non-zero exit code
@@ -830,7 +850,7 @@ class TestInstallerP5(unittest.TestCase):
         sub = self._create_isolated_reg_subkey("Test_PAI_Hostile_DM18", "%USERPROFILE%\\bin")
         illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
 
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
 
@@ -874,7 +894,7 @@ class TestInstallerP5(unittest.TestCase):
         sub = self._create_isolated_reg_subkey("Test_PAI_Upgrade_DN19", "%USERPROFILE%\\bin")
         illegal_subkey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
 
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{illegal_subkey}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         self.assertEqual(proc.returncode, 3, "Expected exit code 3 from Inno Setup post-install error handler")
 
@@ -930,7 +950,7 @@ class TestInstallerP5(unittest.TestCase):
         sub = self._create_isolated_reg_subkey("Test_PAI_Icon_20", "%USERPROFILE%\\bin")
         env = os.environ.copy()
         env["PAI_REG_SUBKEY"] = sub
-        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /DIR="{install_target}" /REG_SUBKEY="{sub}"'
+        cmd = f'"{installer_exe}" /VERYSILENT /SUPPRESSMSGBOXES /NOICONS /TASKS="" /DIR="{install_target}" /REG_SUBKEY="{sub}"'
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(proc.returncode, 0, f"Installer failed: {proc.stderr}")
 
