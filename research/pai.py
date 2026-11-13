@@ -1371,10 +1371,6 @@ def build_parser() -> argparse.ArgumentParser:
         p_def = subparsers.add_parser(deferred, help=f"Direct {deferred} execution (deferred to M6+)")
         p_def.add_argument("args", nargs="*", help="Arguments")
 
-    # desktop / studio
-    subparsers.add_parser("desktop", help="Launch PAI Studio native desktop application")
-    subparsers.add_parser("studio", help="Launch PAI Studio native desktop application")
-
     return parser
 
 
@@ -3397,6 +3393,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args and raw_args[0].lower() in ("desktop", "studio", "gui", "ui"):
+        try:
+            from desktop_launcher import launch_desktop_app
+        except ImportError:
+            from research.desktop_launcher import launch_desktop_app
+        ok, msg = launch_desktop_app()
+        print(msg)
+        return 0 if ok else 1
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -3477,14 +3483,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_route(args)
         elif args.subcommand == "setup":
             return cmd_setup(args)
-        elif args.subcommand in ("desktop", "studio"):
-            try:
-                from desktop_launcher import launch_desktop_app
-            except ImportError:
-                from research.desktop_launcher import launch_desktop_app
-            ok, msg = launch_desktop_app()
-            print(msg)
-            return 0 if ok else 1
         else:
             parser.print_help()
             return 1
