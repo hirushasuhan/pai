@@ -1,14 +1,14 @@
 ================================================================================
 PAI INTERACTIVE TERMINAL SHELL REPL TESTS (35 TESTS, ADR-014, FINDINGS ES, ET, EX, FK, FL, FM, FN, FO, FP) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-13T08:34:16.833583+00:00
+Timestamp (UTC): 2026-11-13T08:39:57.340524+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        461b816fdb17652c1594957b92db601d1062e730
+Git HEAD:        95505a5bf70d5a7ac75850cdcb76ebdb39edd729
 Working Tree:    clean
-Research Tree:   06ba5cfa3e48eccdf5cb692a2b66503f6a08d33f
+Research Tree:   7852c2c6da3a234361bad5074b8a321792ad9996
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -17,7 +17,7 @@ agreement SHA256: e0e477178d61dedc41f182cc1839ed75418b360f77d6a0617fb031da5f31c0
 ================================================================================
 
 Command: python research/tests/test_shell.py
-Exit Code: 1
+Exit Code: 0
 
 STDOUT:
 
@@ -103,31 +103,13 @@ console.log(a);
    Payload: Sprint release approved and deployed. Active project files ready for browser execution.
 
 STDERR:
-....C:\Python314\Lib\subprocess.py:1138: ResourceWarning: subprocess 23980 is still running
+....C:\Python314\Lib\subprocess.py:1138: ResourceWarning: subprocess 23800 is still running
   _warn("subprocess %s is still running" % self.pid,
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-.E.................................................Error: Chat prompt cannot be empty.
+...................................................Error: Chat prompt cannot be empty.
 Error: Chat prompt cannot be empty.
 ....
-======================================================================
-ERROR: test_fact_checker_engine_and_shell_routing (__main__.TestInteractiveShellADR014.test_fact_checker_engine_and_shell_routing)
-Asserts that fact-checking claims, entailment scoring, and shell routing function correctly.
 ----------------------------------------------------------------------
-Traceback (most recent call last):
-  File "C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\tests\test_shell.py", line 3333, in test_fact_checker_engine_and_shell_routing
-    import research.fact_checker as fact_checker
-ModuleNotFoundError: No module named 'research'
+Ran 59 tests in 235.706s
 
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\tests\test_shell.py", line 3335, in test_fact_checker_engine_and_shell_routing
-    import fact_checker
-  File "C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\fact_checker.py", line 21, in <module>
-    from research.internet_service import is_internet_enabled, search_web
-ModuleNotFoundError: No module named 'research'
-
-----------------------------------------------------------------------
-Ran 59 tests in 235.358s
-
-FAILED (errors=1)
+OK
