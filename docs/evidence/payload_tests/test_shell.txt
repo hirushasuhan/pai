@@ -1,14 +1,14 @@
 ================================================================================
 PAI INTERACTIVE TERMINAL SHELL REPL TESTS (35 TESTS, ADR-014, FINDINGS ES, ET, EX, FK, FL, FM, FN, FO, FP) - VERIFIED MACHINE & REPOSITORY HEADER (Findings DA, EN)
 ================================================================================
-Timestamp (UTC): 2026-11-13T10:48:12.676504+00:00
+Timestamp (UTC): 2026-11-13T11:06:04.804889+00:00
 Platform:        Windows-11-10.0.26300-SP0
 Python Runtime:  C:\Python314\python.exe
 Python Version:  3.14.0 (tags/v3.14.0:ebf955d, Oct  7 2025, 10:15:03) [MSC v.1944 64 bit (AMD64)]
 Processor:       AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
-Git HEAD:        f6389f009f48aff5e75708c8467438c16100b937
+Git HEAD:        ab9eb944f7e9cce29adb667af8acfba393d85c38
 Working Tree:    clean
-Research Tree:   1ce41accfe6e5c671d7c4c7507e756f3fcc76efb
+Research Tree:   457995dd575540e0c01366fae98b04f86f9fdf63
 Core Tree:       14c60746ca9a41d91aafd88cc0c7d98719cfe3a9
 pai-core SHA256: 6f13d49463c757f2f3e43506f9743c37f602196544ce8fa85d5c5ce9332e3efe
 pai_setup SHA256: aef063ee527c53695c06838383b2dc234531116b45ac19f0f90a0d34ef366cf2
@@ -17,7 +17,7 @@ agreement SHA256: e0e477178d61dedc41f182cc1839ed75418b360f77d6a0617fb031da5f31c0
 ================================================================================
 
 Command: python research/tests/test_shell.py
-Exit Code: 0
+Exit Code: 1
 
 STDOUT:
 
@@ -103,13 +103,30 @@ console.log(a);
    Payload: Sprint release approved and deployed. Active project files ready for browser execution.
 
 STDERR:
-....C:\Python314\Lib\subprocess.py:1138: ResourceWarning: subprocess 13768 is still running
+....C:\Python314\Lib\subprocess.py:1138: ResourceWarning: subprocess 18660 is still running
   _warn("subprocess %s is still running" % self.pid,
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-...................................................Error: Chat prompt cannot be empty.
+...........................F.......................Error: Chat prompt cannot be empty.
 Error: Chat prompt cannot be empty.
 ....
+======================================================================
+FAIL: test_shell_finding_fp_no_v110_literal_in_research_grep (__main__.TestInteractiveShellADR014.test_shell_finding_fp_no_v110_literal_in_research_grep)
+Finding FP:
 ----------------------------------------------------------------------
-Ran 59 tests in 236.778s
+Traceback (most recent call last):
+  File "C:\Users\hp\Documents\GitHub\personal_agentic_ai\research\tests\test_shell.py", line 1730, in test_shell_finding_fp_no_v110_literal_in_research_grep
+    self.assertEqual(matches, [], f"Forbidden literal '{forbidden}' found in research/ files: {matches}")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['desktop\\index.html'] != []
 
-OK
+First list contains 1 additional elements.
+First extra element 0:
+'desktop\\index.html'
+
+- ['desktop\\index.html']
++ [] : Forbidden literal 'v1.1.0' found in research/ files: ['desktop\\index.html']
+
+----------------------------------------------------------------------
+Ran 59 tests in 236.415s
+
+FAILED (failures=1)
