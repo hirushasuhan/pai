@@ -38,6 +38,14 @@ const pullPercentText = document.getElementById("pull-percent-text");
 
 // Cloud DOM
 const btnSaveKeys = document.querySelectorAll(".btn-save-key");
+const cloudForm = document.getElementById("cloud-model-form");
+const cfgModelName = document.getElementById("cfg-model-name");
+const cfgProviderUrl = document.getElementById("cfg-provider-url");
+const cfgApiKey = document.getElementById("cfg-api-key");
+const btnToggleKeyVis = document.getElementById("btn-toggle-key-visibility");
+const saveStatusNotice = document.getElementById("save-model-status");
+const configuredModelsList = document.getElementById("configured-models-list");
+const configuredCountSpan = document.getElementById("configured-count");
 
 // Antigravity DOM
 const antigravityTaskInput = document.getElementById("antigravity-task-input");
@@ -171,8 +179,9 @@ async function sendMessage() {
   chatInput.value = "";
   appendMessage("user", text);
 
-  // Assistant typing placeholder
-  const placeholder = appendMessage("assistant", "Thinking...");
+  // Check if image prompt or image model
+  const isImgPrompt = text.startsWith("/image ") || text.startsWith("/img ");
+  const placeholder = appendMessage("assistant", isImgPrompt ? "🎨 Generating image..." : "Thinking...");
   const bodyDiv = placeholder.querySelector(".msg-body");
 
   try {
@@ -188,9 +197,9 @@ async function sendMessage() {
 
     const data = await res.json();
     if (data.success) {
-      renderAssistantResponse(placeholder, data.response, data.thinking, data.factcheck);
+      renderAssistantResponse(placeholder, data.response, data.thinking, data.factcheck, data);
       chatHistory.push({ role: "user", content: text });
-      chatHistory.push({ role: "assistant", content: data.response });
+      chatHistory.push({ role: "assistant", content: data.response || "Generated image" });
     } else {
       bodyDiv.innerHTML = `<span style="color:var(--accent-red)">Error: ${data.error || "Generation failed"}</span>`;
     }
@@ -223,9 +232,37 @@ function appendMessage(role, text) {
   return msg;
 }
 
-function renderAssistantResponse(msgElement, responseText, thinkingText, factcheckData) {
+function renderAssistantResponse(msgElement, responseText, thinkingText, factcheckData, extraData = {}) {
   const bodyDiv = msgElement.querySelector(".msg-body");
   bodyDiv.innerHTML = "";
+
+  // 1. Generated Image Card
+  if (extraData && extraData.is_image && extraData.image_url) {
+    const imgCard = document.createElement("div");
+    imgCard.className = "chat-image-card";
+    const promptLabel = extraData.prompt || responseText || "Generated Image";
+    const fname = extraData.filename || `pai_image_${Date.now()}.png`;
+    imgCard.innerHTML = `
+      <div class="image-preview-wrap">
+        <img src="${extraData.image_url}" alt="${escapeHtml(promptLabel)}" class="generated-chat-image" />
+      </div>
+      <div class="image-actions">
+        <div class="image-info">
+          <span class="image-prompt-badge">🎨 ${escapeHtml(promptLabel)}</span>
+          <span class="image-model-badge">${escapeHtml(extraData.model || activeModel)}</span>
+        </div>
+        <div class="image-btns">
+          <a href="${extraData.image_url}" download="${fname}" class="btn btn-primary btn-sm btn-download-image">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span>Download Image</span>
+          </a>
+        </div>
+      </div>
+    `;
+    bodyDiv.appendChild(imgCard);
+    messagesList.scrollTop = messagesList.scrollHeight;
+    return;
+  }
 
   // 1. Thinking trace
   if (thinkingText) {
@@ -320,23 +357,27 @@ async function loadModelsList() {
     data.local_models.forEach((m) => {
       const opt = document.createElement("option");
       opt.value = m.name;
-      opt.textContent = `${m.name} (${m.size_gb} GB)`;
+      opt.textContent = `💻 ${m.name} (${m.size_gb} GB)`;
       if (m.name === data.active_model) opt.selected = true;
       localGroup.appendChild(opt);
     });
     headerModelSelect.appendChild(localGroup);
 
-    // Cloud models
-    const cloudGroup = document.createElement("optgroup");
-    cloudGroup.label = "3rd-Party Cloud AI";
-    data.cloud_models.forEach((cm) => {
-      const opt = document.createElement("option");
-      opt.value = cm.model;
-      opt.textContent = `${cm.model} (${cm.display_provider})`;
-      if (cm.model === data.active_model) opt.selected = true;
-      cloudGroup.appendChild(opt);
-    });
-    headerModelSelect.appendChild(cloudGroup);
+    // Cloud models - ONLY if has_key === true
+    const readyCloud = (data.cloud_models || []).filter((cm) => cm.has_key);
+    if (readyCloud.length > 0) {
+      const cloudGroup = document.createElement("optgroup");
+      cloudGroup.label = "Configured External AI Models";
+      readyCloud.forEach((cm) => {
+        const opt = document.createElement("option");
+        opt.value = cm.model;
+        const icon = cm.model_type === "image" ? "🎨" : "⚡";
+        opt.textContent = `${icon} ${cm.model} (${cm.display_provider || 'Cloud'})`;
+        if (cm.model === data.active_model) opt.selected = true;
+        cloudGroup.appendChild(opt);
+      });
+      headerModelSelect.appendChild(cloudGroup);
+    }
 
     // Render installed cards
     if (data.local_models.length === 0) {
@@ -425,13 +466,86 @@ function pullModel(name) {
     });
 }
 
-// 5. Cloud AI Keys
+// 5. Cloud AI & Images Configuration
 function setupCloudKeys() {
+  const presetPills = document.querySelectorAll(".preset-pill");
+  presetPills.forEach((pill) => {
+    pill.addEventListener("click", () => {
+      const name = pill.getAttribute("data-name");
+      const url = pill.getAttribute("data-url");
+      const type = pill.getAttribute("data-type") || "chat";
+      if (cfgModelName) cfgModelName.value = name;
+      if (cfgProviderUrl) cfgProviderUrl.value = url;
+      const radio = document.querySelector(`input[name="model-type"][value="${type}"]`);
+      if (radio) radio.checked = true;
+      if (cfgApiKey) cfgApiKey.focus();
+    });
+  });
+
+  if (btnToggleKeyVis && cfgApiKey) {
+    btnToggleKeyVis.addEventListener("click", () => {
+      const isPw = cfgApiKey.type === "password";
+      cfgApiKey.type = isPw ? "text" : "password";
+      btnToggleKeyVis.textContent = isPw ? "🙈" : "👁️";
+    });
+  }
+
+  if (cloudForm) {
+    cloudForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const mName = (cfgModelName?.value || "").trim();
+      const pUrl = (cfgProviderUrl?.value || "").trim();
+      const apiKey = (cfgApiKey?.value || "").trim();
+      const mType = document.querySelector('input[name="model-type"]:checked')?.value || "chat";
+      if (!mName || !pUrl || !apiKey) return;
+
+      if (saveStatusNotice) {
+        saveStatusNotice.textContent = "Saving...";
+        saveStatusNotice.style.color = "var(--accent-cyan)";
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/cloud/save_model`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_name: mName,
+            provider_url: pUrl,
+            api_key: apiKey,
+            model_type: mType,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (saveStatusNotice) {
+            saveStatusNotice.textContent = `✅ Saved & Activated ${mName}!`;
+            saveStatusNotice.style.color = "var(--accent-green)";
+            setTimeout(() => { saveStatusNotice.textContent = ""; }, 4000);
+          }
+          if (cfgApiKey) cfgApiKey.value = "";
+          loadCloudConfig();
+          loadModelsList();
+        } else {
+          if (saveStatusNotice) {
+            saveStatusNotice.textContent = `❌ ${data.error || "Save failed"}`;
+            saveStatusNotice.style.color = "var(--accent-red)";
+          }
+        }
+      } catch (err) {
+        if (saveStatusNotice) {
+          saveStatusNotice.textContent = `❌ Error: ${err.message}`;
+          saveStatusNotice.style.color = "var(--accent-red)";
+        }
+      }
+    });
+  }
+
+  // Legacy key save buttons if present
   btnSaveKeys.forEach((btn) => {
     btn.addEventListener("click", async () => {
       const prov = btn.getAttribute("data-provider");
       const input = document.getElementById(`key-${prov}`);
-      const val = input.value.trim();
+      const val = input ? input.value.trim() : "";
       if (!val) return;
 
       try {
@@ -442,9 +556,10 @@ function setupCloudKeys() {
         });
         const data = await res.json();
         if (data.success) {
-          input.value = "";
+          if (input) input.value = "";
           alert(`Successfully saved API key for ${prov.toUpperCase()}!`);
           loadCloudConfig();
+          loadModelsList();
         }
       } catch (err) {
         alert(`Failed to save key: ${err.message}`);
@@ -457,17 +572,71 @@ async function loadCloudConfig() {
   try {
     const res = await fetch(`${API_BASE}/api/cloud/config`);
     const data = await res.json();
-    data.providers.forEach((p) => {
-      const badge = document.getElementById(`${p.id}-badge`);
-      if (badge) {
-        if (p.has_key) {
-          badge.textContent = "Status: Key Ready";
-          badge.className = "card-badge ready";
-        } else {
-          badge.textContent = "Status: No Key";
-          badge.className = "card-badge";
+    const configured = data.configured_models || [];
+
+    if (configuredCountSpan) {
+      configuredCountSpan.textContent = `${configured.length} model${configured.length === 1 ? '' : 's'}`;
+    }
+
+    if (!configuredModelsList) return;
+    if (configured.length === 0) {
+      configuredModelsList.innerHTML = '<div class="text-muted">No external models configured yet. Use the form above to add one!</div>';
+      return;
+    }
+
+    configuredModelsList.innerHTML = "";
+    configured.forEach((cm) => {
+      const card = document.createElement("div");
+      const isActive = cm.model_name === data.active_model;
+      card.className = `configured-model-card ${isActive ? 'active' : ''}`;
+      const isImg = cm.model_type === "image";
+      card.innerHTML = `
+        <div class="flex-between">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="model-item-title">${escapeHtml(cm.model_name)}</span>
+            <span class="type-badge ${isImg ? 'image' : 'chat'}">${isImg ? '🎨 Image' : '💬 Chat'}</span>
+          </div>
+          ${isActive ? '<span class="avatar-badge">Active</span>' : ''}
+        </div>
+        <div class="model-item-meta" style="word-break:break-all;">
+          <strong>URL:</strong> ${escapeHtml(cm.provider_url)}
+        </div>
+        <div class="model-item-meta">
+          <strong>Key:</strong> ••••••••${escapeHtml((cm.api_key || '').slice(-4))}
+        </div>
+        <div class="flex-between" style="margin-top:6px;">
+          <button class="btn btn-secondary btn-sm btn-switch-cloud" data-model="${escapeHtml(cm.model_name)}">
+            ${isActive ? 'Active' : 'Set as Active'}
+          </button>
+          <button class="btn btn-secondary btn-sm btn-delete-cloud" data-model="${escapeHtml(cm.model_name)}" style="color:var(--accent-red);">
+            🗑️ Delete
+          </button>
+        </div>
+      `;
+
+      card.querySelector(".btn-switch-cloud").addEventListener("click", () => {
+        headerModelSelect.value = cm.model_name;
+        headerModelSelect.dispatchEvent(new Event("change"));
+        loadCloudConfig();
+        loadModelsList();
+      });
+
+      card.querySelector(".btn-delete-cloud").addEventListener("click", async () => {
+        if (!confirm(`Remove configured model "${cm.model_name}"?`)) return;
+        try {
+          await fetch(`${API_BASE}/api/cloud/delete_model`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_name: cm.model_name }),
+          });
+          loadCloudConfig();
+          loadModelsList();
+        } catch (err) {
+          alert(`Failed to delete: ${err.message}`);
         }
-      }
+      });
+
+      configuredModelsList.appendChild(card);
     });
   } catch (err) {
     console.error("Cloud config load error:", err);

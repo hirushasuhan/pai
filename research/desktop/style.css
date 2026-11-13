@@ -673,3 +673,214 @@ body {
 }
 .telemetry-label { font-size: 11px; color: var(--text-dim); }
 .telemetry-val { font-size: 14px; font-weight: 600; color: var(--accent-cyan); }
+
+/* Official PAI Logo */
+.brand-logo-img {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 8px rgba(0, 242, 254, 0.4));
+  transition: transform 0.2s ease;
+}
+.brand-logo-img:hover {
+  transform: scale(1.08);
+}
+
+/* Preset Pills */
+.preset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.preset-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+}
+.preset-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.preset-pill {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.preset-pill:hover {
+  background: rgba(0, 242, 254, 0.12);
+  border-color: var(--accent-cyan);
+  color: var(--text-main);
+  transform: translateY(-1px);
+}
+
+/* Cloud Form Controls */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.form-label .req {
+  color: var(--accent-magenta);
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.input-pw-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.btn-pw-toggle {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+/* Radio Pill Group */
+.radio-pill-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.radio-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-subtle);
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+.radio-pill:has(input:checked) {
+  border-color: var(--accent-cyan);
+  background: rgba(0, 242, 254, 0.08);
+  color: var(--text-main);
+}
+.radio-pill input {
+  accent-color: var(--accent-cyan);
+}
+
+/* Status Notice */
+.status-notice {
+  font-size: 13px;
+  color: var(--accent-green);
+  font-weight: 500;
+}
+
+/* Configured Model Cards */
+.configured-model-card {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s ease;
+}
+.configured-model-card.active {
+  border-color: var(--accent-cyan);
+  background: rgba(0, 242, 254, 0.04);
+}
+.type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+.type-badge.chat {
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--accent-blue);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.type-badge.image {
+  background: rgba(244, 63, 94, 0.2);
+  color: var(--accent-magenta);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+/* Generated Image Card in Chat */
+.chat-image-card {
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-top: 10px;
+  max-width: 520px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.image-preview-wrap {
+  width: 100%;
+  max-height: 480px;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.generated-chat-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  transition: transform 0.3s ease;
+  cursor: pointer;
+}
+.generated-chat-image:hover {
+  transform: scale(1.02);
+}
+.image-actions {
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.8);
+  border-top: 1px solid var(--border-subtle);
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.image-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.image-prompt-badge {
+  font-size: 12px;
+  color: var(--text-main);
+  font-weight: 500;
+}
+.image-model-badge {
+  font-size: 11px;
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+}
+.btn-download-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+  color: #000 !important;
+  font-weight: 600;
+}

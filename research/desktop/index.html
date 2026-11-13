@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PAI Studio - Personal Agentic AI Desktop</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/pai-logo-512.png" />
   <link rel="stylesheet" href="style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,7 +18,7 @@
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-logo">
-          <span class="logo-p">P</span><span class="logo-a">A</span><span class="logo-i">I</span>
+          <img src="/assets/pai-logo-512.png" alt="PAI Logo" class="brand-logo-img" />
         </div>
         <div class="brand-text">
           <span class="brand-title">PAI Studio</span>
@@ -35,7 +37,7 @@
         </button>
         <button class="nav-item" data-tab="cloud">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>
-          <span>Cloud AI Keys</span>
+          <span>Cloud & Images</span>
         </button>
         <button class="nav-item" data-tab="antigravity">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
@@ -155,56 +157,89 @@
           </div>
         </section>
 
-        <!-- 3. CLOUD AI KEYS VIEW -->
+        <!-- 3. CLOUD AI & IMAGE GENERATION VIEW -->
         <section id="view-cloud" class="tab-view">
           <div class="panel-header">
-            <h2>3rd-Party Cloud AI Providers</h2>
-            <p>Configure API keys for external models (Gemini, OpenAI, Groq, DeepSeek). Keys are stored safely in <code>~/.pai/cloud_ai.json</code> and never committed to git.</p>
+            <h2>3rd-Party Cloud AI & Image Generation</h2>
+            <p>Configure external cloud models and image generators. Credentials are saved locally in <code>~/.pai/cloud_ai.json</code> and never committed to git.</p>
           </div>
 
-          <div class="grid-2-cols">
-            <!-- Google Gemini -->
-            <div class="glass-card provider-card">
-              <div class="card-badge" id="gemini-badge">Status: Checking...</div>
-              <h3>Google Gemini</h3>
-              <p class="text-muted">High-speed multimodal models (gemini-2.0-flash, gemini-1.5-pro).</p>
-              <div class="input-group">
-                <input type="password" id="key-gemini" class="input-text" placeholder="AIzaSy..." />
-                <button class="btn btn-primary btn-save-key" data-provider="gemini">Save Key</button>
+          <!-- Configuration Form Card -->
+          <div class="glass-card config-form-card mb-4">
+            <div class="card-badge" id="form-badge">Add / Update Model</div>
+            <h3 class="card-title">Connect Cloud AI Model</h3>
+            <p class="text-muted mb-3">Add any OpenAI-compatible provider, Google Gemini model, or image generation engine.</p>
+
+            <!-- Quick Presets -->
+            <div class="preset-section mb-3">
+              <span class="preset-label">⚡ Quick Presets:</span>
+              <div class="preset-pill-row">
+                <button type="button" class="preset-pill" data-name="gemini-2.0-flash" data-url="https://generativelanguage.googleapis.com/v1beta/openai/" data-type="chat" data-prov="gemini">⚡ Gemini 2.0 Flash</button>
+                <button type="button" class="preset-pill" data-name="imagen-3.0-generate-002" data-url="https://generativelanguage.googleapis.com/v1beta" data-type="image" data-prov="gemini">🎨 Google Imagen 3</button>
+                <button type="button" class="preset-pill" data-name="gpt-4o" data-url="https://api.openai.com/v1" data-type="chat" data-prov="openai">🧠 OpenAI GPT-4o</button>
+                <button type="button" class="preset-pill" data-name="dall-e-3" data-url="https://api.openai.com/v1" data-type="image" data-prov="openai">🖼️ DALL-E 3</button>
+                <button type="button" class="preset-pill" data-name="llama-3.3-70b-versatile" data-url="https://api.groq.com/openai/v1" data-type="chat" data-prov="groq">🚀 Groq Fast LPU</button>
+                <button type="button" class="preset-pill" data-name="deepseek-chat" data-url="https://api.deepseek.com" data-type="chat" data-prov="deepseek">🔍 DeepSeek V3</button>
               </div>
             </div>
 
-            <!-- OpenAI -->
-            <div class="glass-card provider-card">
-              <div class="card-badge" id="openai-badge">Status: Checking...</div>
-              <h3>OpenAI</h3>
-              <p class="text-muted">Industry-leading reasoning models (gpt-4o, gpt-4o-mini, o3-mini).</p>
-              <div class="input-group">
-                <input type="password" id="key-openai" class="input-text" placeholder="sk-..." />
-                <button class="btn btn-primary btn-save-key" data-provider="openai">Save Key</button>
+            <form id="cloud-model-form" class="cloud-form">
+              <!-- 1. Model Name -->
+              <div class="form-group mb-3">
+                <label for="cfg-model-name" class="form-label">Model Name <span class="req">*</span></label>
+                <input type="text" id="cfg-model-name" class="input-text" placeholder="e.g. gemini-2.0-flash, imagen-3.0-generate-002, gpt-4o, deepseek-chat" required />
+                <span class="field-hint">The exact model name or ID as recognized by the provider API.</span>
               </div>
-            </div>
 
-            <!-- Groq -->
-            <div class="glass-card provider-card">
-              <div class="card-badge" id="groq-badge">Status: Checking...</div>
-              <h3>Groq</h3>
-              <p class="text-muted">Ultra-fast LPU inference (llama-3.3-70b-versatile, mixtral-8x7b).</p>
-              <div class="input-group">
-                <input type="password" id="key-groq" class="input-text" placeholder="gsk_..." />
-                <button class="btn btn-primary btn-save-key" data-provider="groq">Save Key</button>
+              <!-- 2. Provider / Base URL -->
+              <div class="form-group mb-3">
+                <label for="cfg-provider-url" class="form-label">Provider / Base URL <span class="req">*</span></label>
+                <input type="text" id="cfg-provider-url" class="input-text" placeholder="e.g. https://generativelanguage.googleapis.com/v1beta/openai/ or https://api.openai.com/v1" required />
+                <span class="field-hint">Base endpoint URL of the API service or proxy.</span>
               </div>
-            </div>
 
-            <!-- DeepSeek -->
-            <div class="glass-card provider-card">
-              <div class="card-badge" id="deepseek-badge">Status: Checking...</div>
-              <h3>DeepSeek</h3>
-              <p class="text-muted">Deep reasoning and coding models (deepseek-chat, deepseek-reasoner).</p>
-              <div class="input-group">
-                <input type="password" id="key-deepseek" class="input-text" placeholder="sk-..." />
-                <button class="btn btn-primary btn-save-key" data-provider="deepseek">Save Key</button>
+              <!-- 3. API Key -->
+              <div class="form-group mb-3">
+                <label for="cfg-api-key" class="form-label">API Key <span class="req">*</span></label>
+                <div class="input-pw-wrap">
+                  <input type="password" id="cfg-api-key" class="input-text" placeholder="Enter API Key (e.g. AIzaSy... or sk-...)" required />
+                  <button type="button" class="btn btn-secondary btn-pw-toggle" id="btn-toggle-key-visibility" title="Toggle visibility">👁️</button>
+                </div>
+                <span class="field-hint">Your secret key. Saved strictly in ~/.pai/cloud_ai.json (Threat T22 compliant).</span>
               </div>
+
+              <!-- 4. Capability / Type -->
+              <div class="form-group mb-3">
+                <label class="form-label">Model Capability</label>
+                <div class="radio-pill-group">
+                  <label class="radio-pill">
+                    <input type="radio" name="model-type" value="chat" checked />
+                    <span>💬 Text & Reasoning / Chat</span>
+                  </label>
+                  <label class="radio-pill">
+                    <input type="radio" name="model-type" value="image" />
+                    <span>🎨 Image Generation (Downloads directly in chat)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-actions flex-between">
+                <button type="submit" class="btn btn-primary" id="btn-save-cloud-model">
+                  <span>💾 Save & Activate Model</span>
+                </button>
+                <span id="save-model-status" class="status-notice"></span>
+              </div>
+            </form>
+          </div>
+
+          <!-- Configured External Models List -->
+          <div class="glass-card">
+            <div class="flex-between mb-3">
+              <h3 class="card-title">Active Configured External Models</h3>
+              <span class="text-muted" id="configured-count">0 models</span>
+            </div>
+            <div id="configured-models-list" class="model-cards-grid">
+              <div class="text-muted">No external models configured yet. Use the form above to add one!</div>
             </div>
           </div>
         </section>

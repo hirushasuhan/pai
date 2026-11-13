@@ -55,6 +55,14 @@ WizardStyle=modern
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#AgreementPath}"; DestDir: "{app}"; DestName: "AGREEMENT.txt"; Flags: ignoreversion
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[Icons]
+Name: "{autoprograms}\Personal Agentic AI\PAI Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m research.desktop_launcher"; WorkingDir: "{app}"; IconFilename: "{app}\assets\pai.ico"; Comment: "Personal Agentic AI Studio"
+Name: "{autoprograms}\Personal Agentic AI\PAI Terminal"; Filename: "{app}\bin\pai.exe"; WorkingDir: "{app}"; IconFilename: "{app}\assets\pai.ico"; Comment: "PAI Interactive Shell"
+Name: "{autodesktop}\PAI Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m research.desktop_launcher"; WorkingDir: "{app}"; IconFilename: "{app}\assets\pai.ico"; Comment: "Personal Agentic AI Studio"; Tasks: desktopicon
+
 [Run]
 Filename: "{app}\bin\pai.exe"; Parameters: "setup"; Description: "Run First-Run Setup (Hardware Survey & Model Setup)"; Flags: postinstall skipifsilent nowait unchecked
 Filename: "{app}\bin\pai.exe"; Parameters: "doctor --skip-smoke"; Description: "Run Diagnostic Doctor Check"; Flags: postinstall skipifsilent nowait unchecked

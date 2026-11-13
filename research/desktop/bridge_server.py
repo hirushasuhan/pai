@@ -36,13 +36,17 @@ if str(REPO_ROOT) not in sys.path:
 try:
     from research.cloud_ai import (
         CLOUD_PROVIDERS,
+        add_configured_model,
+        generate_image_cloud,
         get_active_cloud_model,
         get_active_cloud_provider,
+        get_configured_models,
         get_provider_key,
         is_cloud_model,
         list_available_cloud_models,
         load_cloud_config,
         query_cloud_ai,
+        remove_configured_model,
         set_active_cloud_model,
         set_custom_endpoint,
         set_provider_key,
@@ -62,13 +66,17 @@ try:
 except ImportError:
     from cloud_ai import (
         CLOUD_PROVIDERS,
+        add_configured_model,
+        generate_image_cloud,
         get_active_cloud_model,
         get_active_cloud_provider,
+        get_configured_models,
         get_provider_key,
         is_cloud_model,
         list_available_cloud_models,
         load_cloud_config,
         query_cloud_ai,
+        remove_configured_model,
         set_active_cloud_model,
         set_custom_endpoint,
         set_provider_key,
@@ -104,6 +112,66 @@ def set_current_model(m: str) -> None:
     os.environ["PAI_ACTIVE_MODEL"] = m
     if is_cloud_model(m):
         set_active_cloud_model(m)
+
+
+def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
+    """Scan local models from Ollama /api/tags AND from disk manifests (~/.ollama/models/manifests)."""
+    models_dict: Dict[str, Dict[str, Any]] = {}
+    ollama_online = False
+
+    # 1. Probe Ollama live endpoint
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if not name:
+                    continue
+                size_gb = round(m.get("size", 0) / (1024 ** 3), 2)
+                models_dict[name.lower()] = {
+                    "name": name,
+                    "size_gb": size_gb,
+                    "modified_at": m.get("modified_at", ""),
+                    "is_active": name == get_current_model(),
+                }
+            ollama_online = True
+    except Exception:
+        pass
+
+    # 2. Disk manifest scanning (~/.ollama/models/manifests)
+    manifest_dir = Path.home() / ".ollama" / "models" / "manifests"
+    if manifest_dir.is_dir():
+        for f in manifest_dir.rglob("*"):
+            if f.is_file():
+                try:
+                    rel = f.relative_to(manifest_dir)
+                    parts = rel.parts
+                    if len(parts) >= 3:
+                        model_name = parts[-2]
+                        tag = parts[-1]
+                        full_name = f"{model_name}:{tag}"
+                        if full_name.lower() in models_dict:
+                            continue
+                        size_gb = 0.0
+                        try:
+                            m_data = json.loads(f.read_text(encoding="utf-8"))
+                            size_bytes = sum(l.get("size", 0) for l in m_data.get("layers", []))
+                            size_gb = round(size_bytes / (1024 ** 3), 2)
+                        except Exception:
+                            pass
+                        m_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime))
+                        models_dict[full_name.lower()] = {
+                            "name": full_name,
+                            "size_gb": size_gb,
+                            "modified_at": m_time,
+                            "is_active": full_name == get_current_model(),
+                        }
+                except Exception:
+                    pass
+
+    model_list = sorted(list(models_dict.values()), key=lambda x: x["name"])
+    return model_list, ollama_online
 
 
 class PAIBridgeHandler(BaseHTTPRequestHandler):
@@ -178,6 +246,42 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content)
                 return
+        elif path == "/favicon.ico":
+            ico_file = desktop_dir / "assets" / "pai.ico"
+            if ico_file.is_file():
+                content = ico_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/x-icon")
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
+        elif path.startswith("/assets/"):
+            fname = Path(path[len("/assets/"):]).name
+            asset_file = desktop_dir / "assets" / fname
+            if asset_file.is_file():
+                content = asset_file.read_bytes()
+                ctype = "image/png" if fname.endswith(".png") else "image/x-icon"
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
+        elif path.startswith("/generated_images/"):
+            fname = Path(path[len("/generated_images/"):]).name
+            img_file = Path.home() / ".pai" / "generated_images" / fname
+            if img_file.is_file():
+                content = img_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(content)))
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(content)
+                return
 
         # 1. Status endpoint
         if path == "/api/status":
@@ -223,7 +327,41 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "active_model": m})
             else:
                 self._send_json({"success": False, "error": "Model name required"}, status=400)
-        # 4. Save Cloud API Key
+        # 4. Save Cloud Model (Dynamic Form)
+        elif path == "/api/cloud/save_model":
+            m_name = body.get("model_name", "").strip()
+            p_url = body.get("provider_url", "").strip()
+            key = body.get("api_key", "").strip()
+            m_type = body.get("model_type", "chat").strip()
+            prov = body.get("provider", "custom").strip()
+            if m_name and p_url and key:
+                saved = add_configured_model(m_name, p_url, key, m_type, prov)
+                self._send_json({"success": True, "model": saved})
+            else:
+                self._send_json({"success": False, "error": "Model name, provider URL, and API key are required."}, status=400)
+        # 5. Delete Cloud Model
+        elif path == "/api/cloud/delete_model":
+            m_name = body.get("model_name", "").strip()
+            ok_del = remove_configured_model(m_name)
+            self._send_json({"success": ok_del, "model_name": m_name})
+        # 6. Generate Image Endpoint
+        elif path == "/api/image/generate":
+            prompt = body.get("prompt", "").strip()
+            model = body.get("model", "")
+            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(prompt, model=model)
+            if ok_img:
+                self._send_json({
+                    "success": True,
+                    "is_image": True,
+                    "image_url": data_url_or_err,
+                    "image_path": fpath,
+                    "filename": fname,
+                    "prompt": prompt,
+                    "model": model,
+                })
+            else:
+                self._send_json({"success": False, "error": data_url_or_err}, status=500)
+        # 7. Save Cloud API Key (Legacy)
         elif path == "/api/cloud/set_key":
             prov = body.get("provider", "").strip().lower()
             key = body.get("key", "").strip()
@@ -232,12 +370,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "provider": prov, "message": f"Saved API key for {prov.title()}"})
             else:
                 self._send_json({"success": False, "error": "Provider and key required"}, status=400)
-        # 5. Set Custom Endpoint
+        # 8. Set Custom Endpoint
         elif path == "/api/cloud/set_endpoint":
             url = body.get("url", "").strip()
             set_custom_endpoint(url)
             self._send_json({"success": True, "url": url})
-        # 6. Toggle Internet / Factcheck
+        # 9. Toggle Internet / Factcheck
         elif path == "/api/settings/toggle":
             feature = body.get("feature", "")
             val = bool(body.get("value", False))
@@ -281,26 +419,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_get_models(self) -> None:
-        local_models = []
-        ollama_online = False
-        try:
-            req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for m in data.get("models", []):
-                    name = m.get("name", "")
-                    size_gb = round(m.get("size", 0) / (1024 ** 3), 2)
-                    local_models.append({
-                        "name": name,
-                        "size_gb": size_gb,
-                        "modified_at": m.get("modified_at", ""),
-                        "is_active": name == get_current_model(),
-                    })
-                ollama_online = True
-        except Exception:
-            pass
-
-        cloud_models = list_available_cloud_models()
+        local_models, ollama_online = get_all_installed_local_models()
+        # Return only cloud models that have active API keys configured
+        cloud_models = [cm for cm in list_available_cloud_models() if cm.get("has_key")]
         self._send_json({
             "ollama_online": ollama_online,
             "local_models": local_models,
@@ -310,6 +431,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
     def _handle_get_cloud_config(self) -> None:
         cfg = load_cloud_config()
+        configured_models = cfg.get("configured_models", [])
         providers = []
         for prov_id, meta in CLOUD_PROVIDERS.items():
             if prov_id == "custom" and not cfg.get("custom_endpoint"):
@@ -321,12 +443,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 "has_key": has_k,
                 "default_model": meta.get("default_model", ""),
                 "models": meta.get("models", []),
+                "type": meta.get("type", "chat"),
             })
         self._send_json({
             "active_provider": cfg.get("active_provider", ""),
             "active_model": cfg.get("active_model", ""),
             "custom_endpoint": cfg.get("custom_endpoint", ""),
             "providers": providers,
+            "configured_models": configured_models,
         })
 
     def _handle_doctor(self) -> None:
@@ -393,6 +517,36 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Prompt cannot be empty"}, status=400)
             return
 
+        # Check if requested model or prompt is for image generation
+        is_img_model = False
+        cfg = load_cloud_config()
+        for cm in cfg.get("configured_models", []):
+            if cm.get("model_name") == model and cm.get("model_type") == "image":
+                is_img_model = True
+                break
+        if any(tok in model.lower() for tok in ("imagen", "dall-e", "image")):
+            is_img_model = True
+
+        prompt_is_image = prompt.strip().startswith(("/image ", "/img "))
+        if is_img_model or prompt_is_image:
+            clean_prompt = re.sub(r"^/(image|img)\s+", "", prompt.strip())
+            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(clean_prompt, model=model)
+            if ok_img:
+                self._send_json({
+                    "success": True,
+                    "is_image": True,
+                    "image_url": data_url_or_err,
+                    "image_path": fpath,
+                    "filename": fname,
+                    "prompt": clean_prompt,
+                    "model": model,
+                    "response": f"Generated image for: \"{clean_prompt}\"",
+                })
+                return
+            else:
+                self._send_json({"success": False, "error": data_url_or_err}, status=500)
+                return
+
         reply_text = ""
         think_text = ""
         error_msg = ""
@@ -410,6 +564,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 error_msg = res_cloud
         else:
             # 2. Local Ollama Generation
+            try:
+                from core_service import OllamaServiceManager
+                OllamaServiceManager.get_instance().ensure_service_running()
+            except Exception:
+                pass
+
             ollama_url = "http://127.0.0.1:11434/api/generate"
             ollama_payload = {
                 "model": model,
