@@ -384,6 +384,31 @@ function switchTab(tab) {
 }
 
 // 2. Chat System with Native AI Team & Slash Commands Integration
+function hasVisionModelInstalled() {
+  if (!availableModels || !Array.isArray(availableModels) || availableModels.length === 0) return false;
+  return availableModels.some((m) => {
+    const name = (typeof m === "string" ? m : (m.name || "")).toLowerCase();
+    return name.includes("llava") || name.includes("moondream") || name.includes("vision") || name.includes("bakllava");
+  });
+}
+
+function updateAttachmentCapabilities() {
+  const hasVision = hasVisionModelInstalled();
+  if (chatFileInput) {
+    if (hasVision) {
+      chatFileInput.accept = ".txt,.md,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.log,.png,.jpg,.jpeg,.webp,.gif,.bmp";
+      if (btnAttachFile) {
+        btnAttachFile.title = "Attach documents, code, or images for visual inspection (.png, .jpg, .pdf, .docx, .py, etc.)";
+      }
+    } else {
+      chatFileInput.accept = ".txt,.md,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.log";
+      if (btnAttachFile) {
+        btnAttachFile.title = "Attach documents & code (Install LLaVA 7B or Moondream 2 to enable image inspection)";
+      }
+    }
+  }
+}
+
 function updateChatPlaceholderForActiveModel() {
   if (!chatInput) return;
   const m = (activeModel || "").toLowerCase();
@@ -402,7 +427,7 @@ const SLASH_COMMANDS = [
   { cmd: "/team", desc: "Toggle autonomous 4-role AI engineering team", cat: "Agents" },
   { cmd: "/supervisor", desc: "Open Antigravity Autonomous Supervisor in AI Team", cat: "Agents" },
   { cmd: "/antigravity", desc: "Launch continuous autonomous agent in AI Team tab", cat: "Agents" },
-  { cmd: "/image", desc: "Generate image with Google Imagen 3 or DALL-E (Configure in Cloud AI)", cat: "Creative" },
+  { cmd: "/image", desc: "Generate image with Local SD-Turbo or Cloud AI (Imagen / DALL-E)", cat: "Creative" },
   { cmd: "/weather", desc: "Fetch live real-time weather telemetry", cat: "Tools" },
   { cmd: "/web", desc: "Search live web knowledge and display citations", cat: "Tools" },
   { cmd: "/mcp", desc: "Manage Model Context Protocol (MCP) servers & tools", cat: "System" },
@@ -552,6 +577,16 @@ window.removeChatAttachment = function(idx) {
 
 async function parseAndAddAttachment(file) {
   if (!file) return;
+  const ext = (file.name || "").split('.').pop().toLowerCase();
+  const isImageFile = ["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext);
+  if (isImageFile && !hasVisionModelInstalled()) {
+    showToast(
+      "Image attachment disabled: Please install LLaVA 7B or Moondream 2 from Local Models to attach images.",
+      "warning",
+      "Vision Model Required"
+    );
+    return;
+  }
   if (file.size > 50 * 1024 * 1024) {
     showToast(`File ${file.name} is too large (> 50MB)`, "warning");
     return;
@@ -861,10 +896,12 @@ function setupChat() {
   initChatHistory();
   setupSlashCommands();
   updateChatPlaceholderForActiveModel();
+  updateAttachmentCapabilities();
 
   // Attach File Button & File Input
   if (btnAttachFile && chatFileInput) {
     btnAttachFile.addEventListener("click", () => {
+      updateAttachmentCapabilities();
       chatFileInput.click();
     });
     chatFileInput.addEventListener("change", async (e) => {
@@ -1010,7 +1047,9 @@ function setupChat() {
         `   \`\`\`text\n` +
         `   /image a majestic tree in a misty forest at dawn, cinematic lighting\n` +
         `   \`\`\`\n` +
-        `2. Ensure you have an Image Generation API Key configured in **Settings & 3rd-Party Cloud AI** (such as **Google Imagen 3** with a Gemini API key or **OpenAI DALL-E 3**).\n\n` +
+        `2. Enable an Image Generator:\n` +
+        `   - **Local Models:** Install **\`sd-turbo\`** or **\`stable-diffusion-v1-5\`** from the Local AI Models tab.\n` +
+        `   - **Cloud AI:** Connect **Google Imagen 3** (via Gemini key) or **OpenAI DALL-E 3** in Settings & 3rd-Party Cloud AI.\n\n` +
         `*Tip:* To inspect or ask questions about an existing image using **${activeModel}**, attach the image file using the paperclip button (📎) and type your question!`;
       updateAssistantMessage(botId, imgHelpText, null, []);
       return;
@@ -1025,7 +1064,7 @@ function setupChat() {
         `- \`/factcheck [on|off]\` : Toggle automated claim verification and audit engine\n` +
         `- \`/team\` : Toggle autonomous 4-role AI engineering team\n` +
         `- \`/supervisor\` or \`/antigravity\` : Open Antigravity Autonomous Supervisor in AI Team\n` +
-        `- \`/image <prompt>\` : Synthesize image with Google Imagen 3 or DALL-E (Configure in Cloud AI)\n` +
+        `- \`/image <prompt>\` : Synthesize image with Local SD-Turbo or Cloud AI (Imagen / DALL-E)\n` +
         `- \`/weather [city]\` : Fetch live real-time Open-Meteo weather forecast\n` +
         `- \`/web <query>\` : Search Wikipedia & DuckDuckGo with live web citations\n` +
         `- \`/mcp\` : Open Model Context Protocol (MCP) servers & plugins hub\n` +
@@ -2563,6 +2602,7 @@ async function loadInstalledModels() {
       renderInstalledModels(availableModels);
       populateModelSelectors(availableModels);
       renderRecommendedModels(data.models.recommended || []);
+      updateAttachmentCapabilities();
     }
   } catch (err) {
     console.error("Models fetch error:", err);
@@ -3464,6 +3504,7 @@ async function checkStartupPreflight() {
       renderInstalledModels(availableModels);
       populateModelSelectors(availableModels);
       renderRecommendedModels(data.models.recommended || []);
+      updateAttachmentCapabilities();
     }
   } catch (err) {
     console.warn("Preflight check warning:", err);

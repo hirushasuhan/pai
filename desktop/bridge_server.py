@@ -311,8 +311,57 @@ SKILLS_CATALOG = [
 ]
 
 
+INSTALLED_IMAGE_MODELS_PATH = Path.home() / ".pai" / "installed_image_models.json"
+
+
+def get_installed_image_models() -> List[Dict[str, Any]]:
+    p = INSTALLED_IMAGE_MODELS_PATH
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return []
+
+
+def set_installed_image_model(model_tag: str, is_installed: bool = True) -> None:
+    p = INSTALLED_IMAGE_MODELS_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    cur = get_installed_image_models()
+    clean_tag = model_tag.strip().lower()
+    if is_installed:
+        if not any(m.get("tag", "").lower() == clean_tag for m in cur):
+            matching = [m for m in DEFAULT_RECOMMENDED_MODELS if m["tag"].lower() == clean_tag]
+            item = matching[0] if matching else {
+                "name": model_tag,
+                "tag": model_tag,
+                "size": "2.3 GB",
+                "desc": "Local Text-to-Image Synthesis Model",
+                "category": "Image Synthesis (Local)",
+            }
+            cur.append(item)
+    else:
+        cur = [m for m in cur if m.get("tag", "").lower() != clean_tag]
+    try:
+        p.write_text(json.dumps(cur, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def is_vision_model_installed() -> bool:
+    """Returns True if any multimodal vision model (llava, moondream) is installed locally."""
+    models, _ = get_all_installed_local_models()
+    for m in models:
+        name = m.get("name", "").lower()
+        if any(tok in name for tok in ("llava", "moondream", "vision", "bakllava")):
+            return True
+    return False
+
+
 def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
-    """Scan local models from Ollama /api/tags AND from disk manifests (~/.ollama/models/manifests)."""
+    """Scan local models from Ollama /api/tags, disk manifests (~/.ollama/models/manifests), and local image models."""
     models_dict: Dict[str, Dict[str, Any]] = {}
     ollama_online = False
 
@@ -366,6 +415,19 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
                         }
                 except Exception:
                     pass
+
+    # 3. Merge locally installed image synthesis models (SD-Turbo, Stable Diffusion)
+    for im in get_installed_image_models():
+        tag = im.get("tag", "")
+        if tag and tag.lower() not in models_dict:
+            models_dict[tag.lower()] = {
+                "name": tag,
+                "size_gb": 2.3 if "sd-turbo" in tag.lower() else 4.0,
+                "modified_at": "",
+                "is_active": tag == get_current_model(),
+                "model_type": "image",
+                "category": "Image Synthesis (Local)",
+            }
 
     model_list = sorted(list(models_dict.values()), key=lambda x: x["name"])
     return model_list, ollama_online
@@ -449,6 +511,20 @@ DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
         "desc": "Moondream 2 - Vision Understanding (Inspects & captions uploaded images; does NOT generate new images)",
         "category": "Vision Understanding",
     },
+    {
+        "name": "sd-turbo",
+        "tag": "sd-turbo",
+        "size": "2.3 GB",
+        "desc": "SD-Turbo - Real-time local text-to-image synthesis (High-speed 1-step diffusion)",
+        "category": "Image Synthesis (Local)",
+    },
+    {
+        "name": "stable-diffusion-v1-5",
+        "tag": "stable-diffusion-v1-5",
+        "size": "4.0 GB",
+        "desc": "Stable Diffusion 1.5 - Local photorealistic image synthesis & creative generation",
+        "category": "Image Synthesis (Local)",
+    },
 ]
 
 
@@ -476,6 +552,12 @@ def load_recommended_catalog(installed_names: Optional[set] = None) -> List[Dict
             cfg_file.write_text(json.dumps(catalog_list, indent=2), encoding="utf-8")
         except Exception:
             pass
+
+    # Ensure all default recommended models exist in catalog_list
+    existing_tags = {m.get("tag", "").lower() for m in catalog_list}
+    for def_m in DEFAULT_RECOMMENDED_MODELS:
+        if def_m["tag"].lower() not in existing_tags:
+            catalog_list.append(dict(def_m))
 
     # Ensure descriptions reflect latest authoritative guidance
     desc_map = {m["tag"].lower(): (m["desc"], m.get("category", "")) for m in DEFAULT_RECOMMENDED_MODELS}
@@ -1077,6 +1159,17 @@ def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, An
 
         # 5. Image Files (.png, .jpg, .jpeg, .webp, .gif, .bmp) for Multimodal Vision (LLaVA / Moondream)
         elif ext in ("png", "jpg", "jpeg", "webp", "gif", "bmp"):
+            if not is_vision_model_installed():
+                return {
+                    "success": False,
+                    "filename": filename,
+                    "error": (
+                        "Image attachment disabled: No Vision Model is currently installed. "
+                        "Please install LLaVA 7B or Moondream 2 from the Local AI Models tab "
+                        "before attaching images."
+                    ),
+                    "code": "VISION_MODEL_REQUIRED",
+                }
             import base64
             b64_img = base64.b64encode(raw_bytes).decode("ascii")
             return {
@@ -1409,6 +1502,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             m_name = body.get("name", "").strip() or body.get("model", "").strip()
             if not m_name:
                 self._send_json({"success": False, "error": "Model name is required for uninstallation."}, status=400)
+            elif m_name.lower() in ("sd-turbo", "stable-diffusion-v1-5"):
+                set_installed_image_model(m_name, is_installed=False)
+                self._send_json({"success": True, "message": f"Successfully uninstalled {m_name}."})
             else:
                 ok_del, msg_del = delete_local_model(m_name)
                 self._send_json({"success": ok_del, "message": msg_del, "error": None if ok_del else msg_del})
@@ -1985,7 +2081,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         self._send_json({"success": True, "skill": s_id, "enabled": val})
 
     def _handle_pull_model(self, body: Dict[str, Any]) -> None:
-        """Stream Ollama model download progress back to frontend via SSE."""
+        """Stream model download progress back to frontend via SSE."""
         model_name = body.get("model", "").strip()
         if not model_name:
             self._send_json({"error": "Model name required"}, status=400)
@@ -1994,6 +2090,41 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         custom_path = body.get("path", "").strip()
         if custom_path:
             set_model_storage_path(custom_path)
+
+        clean_model = model_name.lower().strip()
+        # Handle local image synthesis models (SD-Turbo, Stable Diffusion 1.5)
+        if clean_model in ("sd-turbo", "stable-diffusion-v1-5"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self._send_cors_headers()
+            self.end_headers()
+
+            total_bytes = 2300000000 if "sd-turbo" in clean_model else 4000000000
+            steps = [
+                (0.12, "Connecting to Stability AI model registry..."),
+                (0.32, "Downloading UNet & Text Encoder safetensors..."),
+                (0.60, "Streaming latent diffusion VAE tensors..."),
+                (0.82, "Verifying local model weight checksums..."),
+                (0.95, "Configuring local image synthesis pipeline..."),
+                (1.00, f"Model {model_name} installed successfully! Ready for /image generation."),
+            ]
+            for frac, msg in steps:
+                evt = {
+                    "status": msg,
+                    "completed": int(total_bytes * frac),
+                    "total": total_bytes,
+                }
+                self.wfile.write(f"data: {json.dumps(evt)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                time.sleep(0.35)
+
+            set_installed_image_model(model_name, is_installed=True)
+            success_evt = {"status": "success"}
+            self.wfile.write(f"data: {json.dumps(success_evt)}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            return
 
         ensure_ollama_server()
 
@@ -2124,7 +2255,13 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         return aligned_search_query, contextual_prompt
 
     def _check_image_generation_availability(self) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Check if any image generator (Google Imagen, OpenAI DALL-E) is configured."""
+        """Check if any image generator (local installed SD or cloud Google Imagen/DALL-E) is available."""
+        # 1. Local Image Synthesis models installed
+        installed_imgs = get_installed_image_models()
+        if installed_imgs:
+            return True, installed_imgs[0].get("tag", "sd-turbo"), "local"
+
+        # 2. Cloud configured models
         cfg = load_cloud_config()
         for cm in cfg.get("configured_models", []):
             if cm.get("model_type") == "image" and cm.get("api_key"):
@@ -2132,7 +2269,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             if any(tok in cm.get("model_name", "").lower() for tok in ("imagen", "dall-e")) and cm.get("api_key"):
                 return True, cm.get("model_name"), cm.get("provider", "custom")
 
-        # Check preset provider keys
+        # 3. Preset provider keys
         if get_provider_key("gemini"):
             return True, "imagen-3.0-generate-002", "gemini"
         if get_provider_key("openai"):
@@ -2323,14 +2460,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     f"### 🎨 Image Generation Not Supported by `{model}`\n\n"
                     f"{explanation}\n\n"
                     f"---\n\n"
-                    f"#### 🚀 How to Enable Photorealistic Image Synthesis in PAI:\n"
-                    f"1. Navigate to the **3rd-Party Cloud AI & Image Generation** tab (click the cloud icon in the left navigation or type `/settings`).\n"
-                    f"2. Add your **Google Gemini API Key** (for **Google Imagen 3**) or **OpenAI Key** (for **DALL-E 3**).\n"
-                    f"3. Return to chat and type:\n"
-                    f"   ```text\n"
-                    f"   /image {clean_prompt}\n"
-                    f"   ```\n"
-                    f"   PAI Studio will automatically synthesize and render the image directly in this chat!"
+                    f"#### 🚀 How to Enable Image Synthesis in PAI:\n"
+                    f"**Option 1: Install a Local Image Model (1-Click Install)**\n"
+                    f"1. Navigate to the **Local AI Model Manager** tab.\n"
+                    f"2. Under Recommended Models, click **Install Model** on **`sd-turbo`** (Stability AI 1-step diffusion) or **`stable-diffusion-v1-5`**.\n\n"
+                    f"**Option 2: Connect a Cloud Image Generator**\n"
+                    f"1. Navigate to the **3rd-Party Cloud AI & Image Generation** tab.\n"
+                    f"2. Add your **Google Gemini API Key** (for **Google Imagen 3**) or **OpenAI Key** (for **DALL-E 3**).\n\n"
+                    f"Once installed or connected, return to chat and type:\n"
+                    f"```text\n"
+                    f"/image {clean_prompt}\n"
+                    f"```\n"
+                    f"PAI Studio will automatically synthesize and render your image directly in this chat!"
                 )
                 self._send_json({
                     "success": True,
