@@ -316,6 +316,21 @@ function setupNavigation() {
 function switchTab(tab) {
   if (tab === "antigravity") tab = "team";
   currentTab = tab;
+
+  const tabNames = {
+    chat: "Chat & Reasoning",
+    projects: "Project Workspaces",
+    models: "Models & Hardware",
+    cloud: "Cloud Models",
+    search: "Web Knowledge Search",
+    team: "Multi-Agent Team",
+    settings: "Settings & System"
+  };
+  const viewBreadcrumb = document.getElementById("current-view-name");
+  if (viewBreadcrumb) {
+    viewBreadcrumb.textContent = tabNames[tab] || tab;
+  }
+
   navItems.forEach((btn) => {
     if (btn.getAttribute("data-tab") === tab) {
       btn.classList.add("active");
@@ -2703,15 +2718,78 @@ function showPreflightModal(data) {
 btnClosePreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
 btnDismissPreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
 
+let currentColorMode = "dark"; // "dark" | "light" | "auto"
+
+function setColorMode(mode, save = true) {
+  currentColorMode = mode;
+  let effectiveMode = mode;
+  if (mode === "auto") {
+    effectiveMode = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+
+  if (effectiveMode === "light") {
+    document.documentElement.setAttribute("data-theme", "light");
+    document.body.classList.remove("dark-theme");
+    document.body.classList.add("light-theme");
+    const iconMoon = document.querySelector(".theme-icon.icon-moon");
+    const iconSun = document.querySelector(".theme-icon.icon-sun");
+    const text = document.getElementById("theme-mode-text");
+    if (iconMoon) iconMoon.classList.add("hidden");
+    if (iconSun) iconSun.classList.remove("hidden");
+    if (text) text.textContent = "Light";
+  } else {
+    document.documentElement.setAttribute("data-theme", "dark");
+    document.body.classList.remove("light-theme");
+    document.body.classList.add("dark-theme");
+    const iconMoon = document.querySelector(".theme-icon.icon-moon");
+    const iconSun = document.querySelector(".theme-icon.icon-sun");
+    const text = document.getElementById("theme-mode-text");
+    if (iconMoon) iconMoon.classList.remove("hidden");
+    if (iconSun) iconSun.classList.add("hidden");
+    if (text) text.textContent = "Dark";
+  }
+
+  const radio = document.querySelector(`input[name="setting-color-mode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+
+  if (save) {
+    localStorage.setItem("pai_color_mode", mode);
+  }
+}
+
 // 11. Settings & Appearance View
 function setupSettings() {
+  const btnThemeModeToggle = document.getElementById("btn-theme-mode-toggle");
+  btnThemeModeToggle?.addEventListener("click", () => {
+    const nextMode = (currentColorMode === "light") ? "dark" : "light";
+    setColorMode(nextMode);
+    showToast(`Switched to ${nextMode.toUpperCase()} mode workstation!`, "info", "Theme Changed");
+  });
+
+  document.querySelectorAll('input[name="setting-color-mode"]').forEach((r) => {
+    r.addEventListener("change", (e) => {
+      setColorMode(e.target.value);
+      showToast(`Theme mode set to ${e.target.value.toUpperCase()}`, "info");
+    });
+  });
+
+  try {
+    window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
+      if (currentColorMode === "auto") {
+        setColorMode("auto", false);
+      }
+    });
+  } catch (_) {}
+
   btnResetSettings?.addEventListener("click", () => {
     if (settingFontFamily) settingFontFamily.value = "jetbrains";
     if (settingFontSize) settingFontSize.value = "13.5px";
     const radio = document.querySelector('input[name="setting-theme"][value="theme-pai-cyber"]');
     if (radio) radio.checked = true;
+    setColorMode("dark");
     applySettings({ font: "jetbrains", size: "13.5px", theme: "theme-pai-cyber" });
     localStorage.removeItem("pai_settings");
+    localStorage.removeItem("pai_color_mode");
     showToast("Settings reset to defaults", "info");
   });
 
@@ -2719,7 +2797,9 @@ function setupSettings() {
     const font = settingFontFamily ? settingFontFamily.value : "jetbrains";
     const size = settingFontSize ? settingFontSize.value : "13.5px";
     const theme = document.querySelector('input[name="setting-theme"]:checked')?.value || "theme-pai-cyber";
+    const colorMode = document.querySelector('input[name="setting-color-mode"]:checked')?.value || currentColorMode;
 
+    setColorMode(colorMode);
     applySettings({ font, size, theme });
     localStorage.setItem("pai_settings", JSON.stringify({ font, size, theme }));
     showToast("Appearance & Developer font updated!", "success", "Settings Saved");
@@ -2748,6 +2828,9 @@ function applySettings(cfg) {
 
 function applyStoredSettings() {
   try {
+    const savedColorMode = localStorage.getItem("pai_color_mode") || "dark";
+    setColorMode(savedColorMode, false);
+
     const stored = localStorage.getItem("pai_settings");
     if (stored) {
       const cfg = JSON.parse(stored);
@@ -3028,13 +3111,51 @@ function setupDesktopContextMenu() {
     }
   });
 
-  // Block Developer Tools and Save-As Browser Key Shortcuts
+  // Desktop Global Shortcuts & Browser Interceptions
   window.addEventListener("keydown", (e) => {
+    // 1. Toggle Light / Dark Mode: Ctrl + Shift + L
+    if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) {
+      e.preventDefault();
+      const next = (currentColorMode === "light") ? "dark" : "light";
+      setColorMode(next);
+      showToast(`Switched to ${next.toUpperCase()} mode theme!`, "info", "Theme Changed");
+      return;
+    }
+
+    // 2. Focus Chat: Ctrl + K
+    if (e.ctrlKey && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      switchTab("chat");
+      chatInput?.focus();
+      return;
+    }
+
+    // 3. Tab switching shortcuts: Ctrl + 1..7 (when not typing in an input)
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= "1" && e.key <= "7") {
+      const isInput = e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+      if (!isInput) {
+        e.preventDefault();
+        const tabs = ["chat", "projects", "models", "cloud", "search", "team", "settings"];
+        const idx = parseInt(e.key, 10) - 1;
+        if (tabs[idx]) {
+          switchTab(tabs[idx]);
+        }
+        return;
+      }
+    }
+
+    // 4. Block Developer Tools and Save-As Browser Key Shortcuts
     if (
       e.key === "F12" ||
       (e.ctrlKey && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) ||
       (e.ctrlKey && ["u", "U", "s", "S", "p", "P"].includes(e.key))
     ) {
+      // Allow Ctrl+S specifically inside code editor to save file
+      if ((e.key === "s" || e.key === "S") && currentTab === "projects" && !btnSaveFile?.disabled) {
+        e.preventDefault();
+        btnSaveFile?.click();
+        return;
+      }
       e.preventDefault();
     }
   });

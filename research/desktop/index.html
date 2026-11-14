@@ -92,8 +92,15 @@
     <!-- Main Content Area -->
     <main class="main-content">
       
-      <!-- Top Navbar -->
-      <header class="top-nav">
+      <!-- Top Navbar & Native Desktop Header -->
+      <header class="top-nav" data-tauri-drag-region>
+        <!-- Desktop Workspace Breadcrumb -->
+        <div class="desktop-breadcrumb font-jetbrains" data-tauri-drag-region>
+          <span class="brand-crumb">PAI</span>
+          <span class="crumb-separator">›</span>
+          <span id="current-view-name" class="view-crumb">Chat & Reasoning</span>
+        </div>
+
         <!-- Model Selector -->
         <div class="active-model-box">
           <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
@@ -146,6 +153,15 @@
               Fact-Check
             </span>
           </label>
+        </div>
+
+        <!-- Header Utilities & Theme Mode Toggle -->
+        <div class="header-utils-box">
+          <button type="button" id="btn-theme-mode-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Workstation Mode (Ctrl+Shift+L)">
+            <span class="theme-icon icon-moon">🌙</span>
+            <span class="theme-icon icon-sun hidden">☀️</span>
+            <span id="theme-mode-text" class="theme-mode-text">Dark</span>
+          </button>
         </div>
       </header>
 
@@ -812,6 +828,24 @@
                   <option value="17px">17px (Extra Large)</option>
                 </select>
                 <span class="field-hint">Dynamically adjusts code editor line height and font size.</span>
+              </div>
+            </div>
+
+            <div class="form-group mb-3">
+              <label class="form-label">Color Mode Theme</label>
+              <div class="radio-pill-group">
+                <label class="radio-pill">
+                  <input type="radio" name="setting-color-mode" value="dark" checked />
+                  <span>🌙 Deep Space Dark (Default)</span>
+                </label>
+                <label class="radio-pill">
+                  <input type="radio" name="setting-color-mode" value="light" />
+                  <span>☀️ Clean Workstation Light</span>
+                </label>
+                <label class="radio-pill">
+                  <input type="radio" name="setting-color-mode" value="auto" />
+                  <span>💻 Follow System OS</span>
+                </label>
               </div>
             </div>
 
