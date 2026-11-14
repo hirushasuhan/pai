@@ -4538,11 +4538,72 @@ body.light-theme .project-card-path {
 
 body.light-theme .mcp-server-card,
 body.light-theme .skill-card,
+body.light-theme .team-role-card,
 body.light-theme .team-roster-card {
   background: #ffffff !important;
   border: 1px solid #e2e8f0 !important;
   color: #0f172a !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+body.light-theme .team-role-card:hover,
+body.light-theme .skill-card:hover,
+body.light-theme .mcp-server-card:hover {
+  background: #f8fafc !important;
+  border-color: #0284c7 !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+}
+
+body.light-theme .team-role-card .role-title {
+  color: #0f172a !important;
+}
+
+body.light-theme .team-role-card .role-tag,
+body.light-theme .team-role-card .role-assignment label {
+  color: #64748b !important;
+}
+
+body.light-theme .team-role-card .role-desc {
+  color: #334155 !important;
+}
+
+body.light-theme .role-model-select {
+  background-color: #ffffff !important;
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .role-model-select option {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .mcp-add-form,
+body.light-theme .plugin-add-form {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .skill-name {
+  color: #0f172a !important;
+}
+
+body.light-theme .skill-cat {
+  color: #64748b !important;
+}
+
+body.light-theme .skill-desc {
+  color: #475569 !important;
+}
+
+body.light-theme .skill-icon-wrap {
+  background: #e0f2fe !important;
+  border: 1px solid #bae6fd !important;
+}
+
+body.light-theme .skill-icon-wrap svg {
+  stroke: #0284c7 !important;
 }
 
 body.light-theme .mcp-card-cmd {
@@ -4550,5 +4611,30 @@ body.light-theme .mcp-card-cmd {
   border: 1px solid #e2e8f0 !important;
   color: #0284c7 !important;
 }
+
+body.light-theme .model-storage-banner {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+body.light-theme .model-storage-label {
+  color: #64748b !important;
+}
+
+body.light-theme .model-storage-path {
+  color: #0284c7 !important;
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  padding: 3px 8px !important;
+  border-radius: 4px !important;
+}
+
+body.light-theme .storage-free-badge {
+  background: #f1f5f9 !important;
+  color: #334155 !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
 
 

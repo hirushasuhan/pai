@@ -1387,23 +1387,13 @@ function setupProjects() {
   btnBrowseProjFolder.addEventListener("click", async () => {
     btnBrowseProjFolder.disabled = true;
     try {
-      const picked = await openNativeFolderDialog();
+      const picked = await openNativeFolderDialog("Select Project Workspace Folder");
       if (picked && picked.path) {
         projPathInput.value = picked.path;
         if (!projNameInput.value.trim()) {
-          projNameInput.value = picked.name;
+          projNameInput.value = picked.name || picked.path.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
         }
-        showToast(`Selected project folder: ${picked.name}`, "success");
-      } else {
-        const manual = prompt("Enter or paste folder path (e.g. C:\\Users\\hp\\Documents\\my_project):", projPathInput.value || "");
-        if (manual && manual.trim()) {
-          projPathInput.value = manual.trim();
-          if (!projNameInput.value.trim()) {
-            const seg = manual.trim().split(/[\/\\]/).filter(Boolean).pop();
-            projNameInput.value = seg || "My Project";
-          }
-          showToast(`Selected folder: ${projPathInput.value}`, "success");
-        }
+        showToast(`Selected project folder: ${picked.name || picked.path}`, "success");
       }
     } catch (err) {
       console.error("Browse error:", err);
@@ -1467,7 +1457,11 @@ function setupProjects() {
 
 async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Folder") {
   try {
-    const res = await fetch(`${API_BASE}/api/utils/select_folder`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/utils/select_folder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: dialogTitle }),
+    });
     const data = await res.json();
     if (data.success && data.path) {
       return data;
@@ -1480,27 +1474,18 @@ async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Fo
 
 async function browseAndActivateProjectFolder() {
   try {
-    const picked = await openNativeFolderDialog();
-    let folderPath = picked && picked.path ? picked.path : "";
-    let folderName = picked && picked.name ? picked.name : "";
-
-    if (!folderPath) {
-      const manual = prompt("Enter or paste project folder path (e.g. C:\\Users\\hp\\Documents\\my_project):", activeProjectPath || "");
-      if (manual && manual.trim()) {
-        folderPath = manual.trim();
-        folderName = folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
-      }
-    }
-
-    if (folderPath) {
+    const picked = await openNativeFolderDialog("Select Project Workspace Folder");
+    if (picked && picked.path) {
+      const folderPath = picked.path;
+      const folderName = picked.name || folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
       await fetch(`${API_BASE}/api/projects/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: folderName || "Workspace", path: folderPath }),
+        body: JSON.stringify({ name: folderName, path: folderPath }),
       });
       await loadProjects();
       await activateProject(folderPath);
-      showToast(`Activated workspace: ${folderName || "Workspace"}`, "success");
+      showToast(`Activated workspace: ${folderName}`, "success");
       return true;
     }
   } catch (e) {
@@ -2325,11 +2310,7 @@ function setupModels() {
   const btnChangePath = document.getElementById("btn-change-model-path");
   if (btnChangePath) {
     btnChangePath.addEventListener("click", async () => {
-      let picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
-      if (!picked) {
-        const manual = prompt("Enter or paste custom model storage directory (e.g. D:\\AI_Models):");
-        if (manual && manual.trim()) picked = { path: manual.trim() };
-      }
+      const picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
       if (picked && picked.path) {
         try {
           const res = await fetch(`${API_BASE}/api/models/storage`, {
@@ -2355,11 +2336,7 @@ function setupModels() {
   const btnBrowsePull = document.getElementById("btn-browse-pull-path");
   if (btnBrowsePull) {
     btnBrowsePull.addEventListener("click", async () => {
-      let picked = await openNativeFolderDialog("Select Custom Model Destination Folder");
-      if (!picked) {
-        const manual = prompt("Enter or paste custom download directory:");
-        if (manual && manual.trim()) picked = { path: manual.trim() };
-      }
+      const picked = await openNativeFolderDialog("Select Custom Model Destination Folder");
       if (picked && picked.path) {
         const targetInput = document.getElementById("pull-model-target-path");
         if (targetInput) targetInput.value = picked.path;

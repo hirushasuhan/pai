@@ -754,35 +754,12 @@ def detect_system_hardware() -> Dict[str, Any]:
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
     """Open native Windows folder picker dialog and return selected path."""
     if sys.platform == "win32":
-        # 1. Primary: PowerShell Shell.Application BrowseForFolder
+        # 1. Primary: Python GUI subsystem (pythonw.exe) with native Tkinter / Windows Common Dialog
         try:
-            import base64
-            # 0x40 = BIF_NEWDIALOGSTYLE, 0x10 = BIF_EDITBOX, 0x01 = BIF_RETURNONLYFSDIRS
-            ps_script = f"""
-            $app = New-Object -ComObject Shell.Application
-            $folder = $app.BrowseForFolder(0, '{title}', 0x51, 0)
-            if ($folder) {{
-                [Console]::WriteLine($folder.Self.Path)
-            }}
-            """
-            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
-            flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", enc],
-                capture_output=True,
-                text=True,
-                creationflags=flags,
-                timeout=120.0,
-            )
-            for line in res.stdout.strip().splitlines():
-                line = line.strip()
-                if line and os.path.isdir(line):
-                    return os.path.normpath(line)
-        except Exception:
-            pass
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
+                tmp_path = tmp.name
 
-        # 2. Secondary: Python Tkinter native folder dialog with topmost window
-        try:
             py_code = (
                 "import sys, os, tkinter as tk, tkinter.filedialog as fd\n"
                 "try:\n"
@@ -792,25 +769,64 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
                 "    r.deiconify()\n"
                 "    r.focus_force()\n"
                 "    t = sys.argv[1] if len(sys.argv) > 1 else 'Select Folder'\n"
+                "    out_path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
                 "    p = fd.askdirectory(parent=r, title=t)\n"
                 "    r.destroy()\n"
-                "    if p and os.path.isdir(p):\n"
-                "        print(os.path.normpath(p))\n"
+                "    if p and os.path.isdir(p) and out_path:\n"
+                "        with open(out_path, 'w', encoding='utf-8') as f:\n"
+                "            f.write(os.path.normpath(p))\n"
                 "except Exception:\n"
                 "    pass\n"
             )
-            py_bin = sys.executable or "python.exe"
+            python_dir = os.path.dirname(sys.executable)
+            pythonw_bin = os.path.join(python_dir, "pythonw.exe")
+            bin_to_run = pythonw_bin if os.path.exists(pythonw_bin) else sys.executable
             flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+            subprocess.run(
+                [bin_to_run, "-c", py_code, title, tmp_path],
+                capture_output=True,
+                creationflags=flags,
+                timeout=180.0,
+            )
+
+            selected_path = ""
+            if os.path.exists(tmp_path):
+                with open(tmp_path, "r", encoding="utf-8") as f:
+                    selected_path = f.read().strip()
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+            if selected_path and os.path.isdir(selected_path):
+                return os.path.normpath(selected_path)
+        except Exception:
+            pass
+
+        # 2. Secondary: Windows Forms FolderBrowserDialog
+        try:
+            import base64
+            ps_script = f"""
+            [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
+            $d = New-Object System.Windows.Forms.FolderBrowserDialog
+            $d.Description = '{title}'
+            $d.ShowNewFolderButton = $true
+            if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+                [Console]::WriteLine($d.SelectedPath)
+            }}
+            """
+            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
             res = subprocess.run(
-                [py_bin, "-c", py_code, title],
+                ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
                 capture_output=True,
                 text=True,
-                creationflags=flags,
-                timeout=120.0,
+                timeout=180.0,
             )
-            out = res.stdout.strip()
-            if out and os.path.isdir(out):
-                return os.path.normpath(out)
+            for line in res.stdout.strip().splitlines():
+                line = line.strip()
+                if line and os.path.isdir(line):
+                    return os.path.normpath(line)
         except Exception:
             pass
 
@@ -1189,7 +1205,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._handle_system_preflight()
         # 13. Native folder selection
         elif path == "/api/utils/select_folder":
-            self._handle_select_folder()
+            self._handle_select_folder("Select Project Workspace Folder")
         else:
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
@@ -1348,7 +1364,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._handle_antigravity_run(body)
         # 13. Native Folder Picker
         elif path == "/api/utils/select_folder":
-            self._handle_select_folder()
+            dlg_title = body.get("title") if isinstance(body, dict) and body.get("title") else "Select Project Workspace Folder"
+            self._handle_select_folder(dlg_title)
         # 14. MCP Save Server
         elif path == "/api/mcp/save":
             name = body.get("name", "").strip()
@@ -1842,9 +1859,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
             self.wfile.flush()
 
-    def _handle_select_folder(self) -> None:
+    def _handle_select_folder(self, title: str = "Select Project Workspace Folder") -> None:
         """Open native Windows folder picker dialog and return selected path."""
-        folder = open_native_folder_dialog()
+        folder = open_native_folder_dialog(title=title)
         if folder:
             self._send_json({"success": True, "path": folder, "name": Path(folder).name})
         else:
