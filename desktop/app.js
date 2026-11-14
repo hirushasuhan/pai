@@ -173,8 +173,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setupModels();
   setupCloudKeys();
   setupAntigravity();
-  setupTools();
-  setupSettingsModal();
+  setupWebSearch();
+  setupSettings();
   checkStartupPreflight();
 
   // Immediately populate models, projects, skills and MCP servers on startup
@@ -338,7 +338,10 @@ function switchTab(tab) {
     loadSkills();
     loadMcpServers();
   }
-  if (tab === "tools") loadDoctorTelemetry();
+  if (tab === "search") {
+    setTimeout(() => toolSearchQuery?.focus(), 50);
+  }
+  if (tab === "settings" || tab === "tools") loadDoctorTelemetry();
 }
 
 // 2. Chat System with Native AI Team & Slash Commands Integration
@@ -354,6 +357,8 @@ const SLASH_COMMANDS = [
   { cmd: "/mcp", desc: "Manage Model Context Protocol (MCP) servers & tools", cat: "System" },
   { cmd: "/models", desc: "Open Model Manager to pull or switch local models", cat: "System" },
   { cmd: "/projects", desc: "Open Project Workspace context & in-app file editor", cat: "System" },
+  { cmd: "/search", desc: "Open Web Knowledge Search & ground truth citations", cat: "Search" },
+  { cmd: "/settings", desc: "Open developer font typography, themes & hardware diagnostics", cat: "System" },
   { cmd: "/clear", desc: "Clear current conversation history", cat: "Chat" },
   { cmd: "/help", desc: "Display all available commands and keyboard shortcuts", cat: "Help" },
 ];
@@ -520,6 +525,16 @@ function setupChat() {
     }
     if (lowerPrompt === "/models") {
       switchTab("models");
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/settings") {
+      switchTab("settings");
+      chatInput.value = "";
+      return;
+    }
+    if (lowerPrompt === "/search" || lowerPrompt === "/web") {
+      switchTab("search");
       chatInput.value = "";
       return;
     }
@@ -2287,31 +2302,55 @@ function appendLog(line) {
   antigravityLog.scrollTop = antigravityLog.scrollHeight;
 }
 
-// 9. Tools & Health
-function setupTools() {
-  btnGetWeather.addEventListener("click", async () => {
-    const city = toolWeatherCity.value.trim() || "Colombo";
-    weatherResultBox.textContent = `Fetching live weather for ${city}...`;
-    try {
-      const res = await fetch(`${API_BASE}/api/weather?city=${encodeURIComponent(city)}`);
-      const data = await res.json();
-      weatherResultBox.textContent = data.message || JSON.stringify(data);
-    } catch (err) {
-      weatherResultBox.textContent = `Weather error: ${err.message}`;
-    }
-  });
+// 9. Web Knowledge Search
+function setupWebSearch() {
+  if (!btnRunSearch || !toolSearchQuery) return;
 
-  btnRunSearch.addEventListener("click", async () => {
-    const q = toolSearchQuery.value.trim();
+  async function executeWebSearch(query) {
+    const q = (query !== undefined ? query : toolSearchQuery.value).trim();
     if (!q) return;
-    searchResultBox.textContent = `Searching live web knowledge for "${q}"...`;
+    toolSearchQuery.value = q;
+    const statusTag = document.getElementById("search-status-tag");
+    if (statusTag) statusTag.textContent = "Searching...";
+    searchResultBox.innerHTML = `<div class="text-muted">Searching live internet & Wikipedia for "${escapeHtml(q)}"...</div>`;
+
     try {
       const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`);
       const data = await res.json();
-      searchResultBox.textContent = data.message || "No results found.";
+      if (statusTag) statusTag.textContent = "Complete";
+
+      if (data.results && Array.isArray(data.results) && data.results.length > 0) {
+        searchResultBox.innerHTML = data.results.map((r, i) => `
+          <div class="search-finding-card">
+            <div class="search-finding-title">${i + 1}. ${escapeHtml(r.title || "Web Result")}</div>
+            <div class="search-finding-snippet">${escapeHtml(r.snippet || r.body || "")}</div>
+            ${r.url ? `<div class="search-finding-source"><span>Source:</span> <a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a></div>` : ""}
+          </div>
+        `).join("");
+      } else if (data.message) {
+        searchResultBox.textContent = data.message;
+      } else {
+        searchResultBox.textContent = "No verified web results found for this query.";
+      }
     } catch (err) {
+      if (statusTag) statusTag.textContent = "Error";
       searchResultBox.textContent = `Search error: ${err.message}`;
     }
+  }
+
+  btnRunSearch.addEventListener("click", () => executeWebSearch());
+  toolSearchQuery.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      executeWebSearch();
+    }
+  });
+
+  document.querySelectorAll(".btn-quick-search").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const q = btn.getAttribute("data-query");
+      if (q) executeWebSearch(q);
+    });
   });
 }
 
@@ -2507,34 +2546,31 @@ function showPreflightModal(data) {
 btnClosePreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
 btnDismissPreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
 
-// 11. Settings & Appearance Modal
-function setupSettingsModal() {
-  btnOpenSettings.addEventListener("click", () => {
-    settingsModal.classList.remove("hidden");
-  });
-
-  btnCloseSettings.addEventListener("click", () => {
-    settingsModal.classList.add("hidden");
-  });
-
-  btnResetSettings.addEventListener("click", () => {
-    settingFontFamily.value = "jetbrains";
-    settingFontSize.value = "13.5px";
+// 11. Settings & Appearance View
+function setupSettings() {
+  btnResetSettings?.addEventListener("click", () => {
+    if (settingFontFamily) settingFontFamily.value = "jetbrains";
+    if (settingFontSize) settingFontSize.value = "13.5px";
     const radio = document.querySelector('input[name="setting-theme"][value="theme-pai-cyber"]');
     if (radio) radio.checked = true;
     applySettings({ font: "jetbrains", size: "13.5px", theme: "theme-pai-cyber" });
+    localStorage.removeItem("pai_settings");
     showToast("Settings reset to defaults", "info");
   });
 
-  btnSaveSettings.addEventListener("click", () => {
-    const font = settingFontFamily.value;
-    const size = settingFontSize.value;
+  btnSaveSettings?.addEventListener("click", () => {
+    const font = settingFontFamily ? settingFontFamily.value : "jetbrains";
+    const size = settingFontSize ? settingFontSize.value : "13.5px";
     const theme = document.querySelector('input[name="setting-theme"]:checked')?.value || "theme-pai-cyber";
 
     applySettings({ font, size, theme });
     localStorage.setItem("pai_settings", JSON.stringify({ font, size, theme }));
-    settingsModal.classList.add("hidden");
     showToast("Appearance & Developer font updated!", "success", "Settings Saved");
+  });
+
+  document.getElementById("btn-refresh-diagnostics")?.addEventListener("click", () => {
+    loadDoctorTelemetry();
+    showToast("System diagnostics refreshed!", "info");
   });
 }
 
