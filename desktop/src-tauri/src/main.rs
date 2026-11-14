@@ -1,9 +1,15 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::Manager;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 struct AppState {
     bridge_child: Mutex<Option<Child>>,
@@ -19,13 +25,88 @@ fn get_engine_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+fn is_bridge_running() -> bool {
+    TcpStream::connect_timeout(
+        &"127.0.0.1:8765".parse().unwrap(),
+        Duration::from_millis(400),
+    )
+    .is_ok()
+}
+
+fn resolve_python_path() -> PathBuf {
+    let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let pai_pyw = Path::new(&local_app).join("Programs/PAI/python/pythonw.exe");
+    if pai_pyw.is_file() {
+        return pai_pyw;
+    }
+    let pai_py = Path::new(&local_app).join("Programs/PAI/python/python.exe");
+    if pai_py.is_file() {
+        return pai_py;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p1 = parent.join("python/pythonw.exe");
+            if p1.is_file() {
+                return p1;
+            }
+            let p2 = parent.join("../python/pythonw.exe");
+            if p2.is_file() {
+                return p2;
+            }
+        }
+    }
+    PathBuf::from(if cfg!(windows) { "pythonw.exe" } else { "python3" })
+}
+
+fn resolve_bridge_script() -> Option<PathBuf> {
+    let candidates = [
+        "desktop/bridge_server.py",
+        "research/desktop/bridge_server.py",
+        "../desktop/bridge_server.py",
+    ];
+    for c in &candidates {
+        let p = Path::new(c);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let installed_p = Path::new(&local_app).join("Programs/PAI/desktop/bridge_server.py");
+    if installed_p.is_file() {
+        return Some(installed_p);
+    }
+    let installed_r = Path::new(&local_app).join("Programs/PAI/research/desktop/bridge_server.py");
+    if installed_r.is_file() {
+        return Some(installed_r);
+    }
+    None
+}
+
 fn spawn_bridge_daemon() -> Option<Child> {
-    // Attempt to spawn Python bridge server daemon in background
-    let py = if cfg!(windows) { "python.exe" } else { "python3" };
-    Command::new(py)
-        .arg("desktop/bridge_server.py")
-        .spawn()
-        .ok()
+    if is_bridge_running() {
+        return None;
+    }
+
+    let py_bin = resolve_python_path();
+    let script = resolve_bridge_script()?;
+
+    let mut cmd = Command::new(&py_bin);
+    cmd.arg(&script);
+
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let child = cmd.spawn().ok();
+
+    // Wait up to 3 seconds for bridge to respond
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(200));
+        if is_bridge_running() {
+            break;
+        }
+    }
+
+    child
 }
 
 fn main() {
@@ -38,9 +119,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![get_engine_status])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Terminate background bridge server when main window is closed
                 let state = window.state::<AppState>();
-                if let Ok(mut lock) = state.bridge_child.lock() {
+                let lock_res = state.bridge_child.lock();
+                if let Ok(mut lock) = lock_res {
                     if let Some(mut child) = lock.take() {
                         let _ = child.kill();
                     }

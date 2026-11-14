@@ -204,7 +204,7 @@
                 <button type="button" id="btn-attach-file" class="btn-attach-file" title="Attach documents, spreadsheets, PDFs, or code files (.doc, .docx, .txt, .pdf, .xls, .xlsx, .csv, .md)">
                   <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
                 </button>
-                <input type="file" id="chat-file-input" class="hidden" style="display: none;" multiple accept=".txt,.md,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.log" />
+                <input type="file" id="chat-file-input" class="hidden" style="display: none !important; opacity: 0; position: absolute; pointer-events: none; width: 0; height: 0;" multiple accept=".txt,.md,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.log" />
                 <textarea
                   id="chat-input"
                   class="chat-textarea"
