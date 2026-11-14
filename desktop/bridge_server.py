@@ -611,29 +611,179 @@ def save_custom_plugin(plugin: Dict[str, Any]) -> bool:
         return False
 
 
-def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
-    """Open native Windows folder picker dialog and return selected path."""
-    # Fast native PowerShell FolderBrowserDialog with STA threading
+def get_pai_config_path() -> Path:
+    p = Path.home() / ".pai" / "config.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def get_model_storage_path() -> str:
+    """Get active models storage path from environment or ~/.pai/config.json."""
+    if "OLLAMA_MODELS" in os.environ and os.environ["OLLAMA_MODELS"]:
+        return os.environ["OLLAMA_MODELS"]
+    p = get_pai_config_path()
+    if p.is_file():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if d.get("models_path") and os.path.isdir(d["models_path"]):
+                return d["models_path"]
+        except Exception:
+            pass
+    # Default Ollama models directory
+    default_dir = Path.home() / ".ollama" / "models"
+    return str(default_dir)
+
+
+def set_model_storage_path(new_path: str) -> bool:
+    """Update active models storage path and apply to process environment."""
+    try:
+        p_dir = Path(new_path).resolve()
+        p_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["OLLAMA_MODELS"] = str(p_dir)
+        cfg_path = get_pai_config_path()
+        data = {}
+        if cfg_path.is_file():
+            try:
+                data = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        data["models_path"] = str(p_dir)
+        cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+_HARDWARE_CACHE: Optional[Dict[str, Any]] = None
+
+
+def detect_system_hardware() -> Dict[str, Any]:
+    """Inspect local hardware: exact OS, CPU, GPU, RAM and Storage."""
+    global _HARDWARE_CACHE
+    if _HARDWARE_CACHE is not None:
+        try:
+            total, used, free = shutil.disk_usage("C:")
+            _HARDWARE_CACHE["storage"]["total_gb"] = round(total / (1024**3), 1)
+            _HARDWARE_CACHE["storage"]["free_gb"] = round(free / (1024**3), 1)
+            _HARDWARE_CACHE["storage"]["used_gb"] = round(used / (1024**3), 1)
+        except Exception:
+            pass
+        return _HARDWARE_CACHE
+
+    os_caption = platform.platform()
+    cpu_name = platform.processor() or "Multi-Core Processor"
+    cores = os.cpu_count() or 4
+    threads = cores
+    gpus = []
+    ram_bytes = 0
+
     if sys.platform == "win32":
         try:
-            cmd = [
-                "powershell", "-NoProfile", "-NonInteractive", "-STA", "-Command",
-                "[System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null; "
-                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                f"$f.Description = '{title}'; "
-                "$f.ShowNewFolderButton = $true; "
-                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
-            ]
+            import base64
+            ps_script = """
+            $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors
+            $gpus = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name)
+            $os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber
+            $mem = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+            [PSCustomObject]@{
+                os_caption = $os.Caption
+                os_build = $os.BuildNumber
+                cpu = $cpu.Name
+                cores = $cpu.NumberOfCores
+                threads = $cpu.NumberOfLogicalProcessors
+                gpus = $gpus
+                ram_bytes = $mem
+            } | ConvertTo-Json
+            """
+            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
             flags = 0x08000000  # CREATE_NO_WINDOW
-            out = subprocess.check_output(
-                cmd,
+            raw = subprocess.check_output(
+                ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
                 creationflags=flags,
                 stdin=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=30.0,
+                timeout=12.0,
+            ).decode("utf-8", errors="replace")
+            idx = raw.find("{")
+            if idx != -1:
+                d = json.loads(raw[idx:])
+                if d.get("os_caption"):
+                    os_caption = f"{d['os_caption']} (Build {d.get('os_build', '')})".strip()
+                if d.get("cpu"):
+                    cpu_name = d["cpu"]
+                if d.get("cores"):
+                    cores = int(d["cores"])
+                if d.get("threads"):
+                    threads = int(d["threads"])
+                if d.get("gpus"):
+                    gpus = d["gpus"] if isinstance(d["gpus"], list) else [str(d["gpus"])]
+                if d.get("ram_bytes"):
+                    ram_bytes = int(d["ram_bytes"])
+        except Exception:
+            pass
+
+    # Storage telemetry
+    total, used, free = 0, 0, 0
+    try:
+        total, used, free = shutil.disk_usage("C:")
+    except Exception:
+        pass
+
+    ram_total_gb = round(ram_bytes / (1024**3), 1) if ram_bytes else 16.0
+    if not gpus:
+        gpus = ["Integrated / Dedicated Graphics Adapter"]
+
+    hw = {
+        "os": os_caption,
+        "cpu": cpu_name,
+        "cores": cores,
+        "threads": threads,
+        "gpus": gpus,
+        "ram_total_gb": ram_total_gb,
+        "storage": {
+            "drive": "C:",
+            "total_gb": round(total / (1024**3), 1),
+            "free_gb": round(free / (1024**3), 1),
+            "used_gb": round(used / (1024**3), 1),
+        },
+    }
+    _HARDWARE_CACHE = hw
+    return hw
+
+
+def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
+    """Open native Windows folder picker dialog and return selected path."""
+    if sys.platform == "win32":
+        try:
+            import base64
+            ps_script = f"""
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.TopMost = $true
+            $form.ShowInTaskbar = $false
+            $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+            $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            $dialog.Description = '{title}'
+            $dialog.ShowNewFolderButton = $true
+            $res = $dialog.ShowDialog($form)
+            if ($res -eq [System.Windows.Forms.DialogResult]::OK) {{
+                Write-Output $dialog.SelectedPath
+            }}
+            """
+            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+            flags = 0x08000000  # CREATE_NO_WINDOW
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", enc],
+                creationflags=flags,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=45.0,
             ).decode("utf-8", errors="replace").strip()
-            if out and os.path.isdir(out):
-                return os.path.normpath(out)
+            for line in out.splitlines():
+                line = line.strip()
+                if line and os.path.isdir(line):
+                    return os.path.normpath(line)
         except Exception:
             pass
 
@@ -668,14 +818,8 @@ def get_system_preflight() -> Dict[str, Any]:
     installed_names = {m["name"].lower() for m in models_list}
     recommended_models = load_recommended_catalog(installed_names)
 
-    # 4. RAM telemetry
-    ram_gb = 16.0
-    try:
-        import psutil
-        ram_gb = round(psutil.virtual_memory().total / (1024 ** 3), 1)
-    except Exception:
-        pass
-
+    # 4. Hardware telemetry
+    hw = detect_system_hardware()
     ready = bool(ollama_online and model_count > 0)
 
     return {
@@ -692,17 +836,16 @@ def get_system_preflight() -> Dict[str, Any]:
             "path": str(ollama_path) if ollama_path else "",
             "download_url": "https://ollama.com/download/windows",
             "status": "healthy" if ollama_online else ("not_running" if ollama_installed else "missing"),
+            "models_path": get_model_storage_path(),
         },
         "models": {
             "count": model_count,
             "installed": models_list,
             "recommended": recommended_models,
             "active_model": get_current_model(),
+            "storage_path": get_model_storage_path(),
         },
-        "hardware": {
-            "ram_total_gb": ram_gb,
-            "os": platform.platform(),
-        },
+        "hardware": hw,
     }
 
 
@@ -880,8 +1023,16 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             plugins = load_plugins_list()
             self._send_json({"success": True, "plugins": plugins})
         # 11. Doctor / Hardware telemetry
-        elif path == "/api/doctor":
+        elif path in ("/api/doctor", "/api/system/hardware"):
             self._handle_doctor()
+        # 11b. Model Storage Path & Telemetry
+        elif path == "/api/models/storage":
+            hw = detect_system_hardware()
+            self._send_json({
+                "success": True,
+                "path": get_model_storage_path(),
+                "storage": hw["storage"],
+            })
         # 12. Preflight system health check
         elif path == "/api/system/preflight":
             self._handle_system_preflight()
@@ -914,6 +1065,27 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         elif path == "/api/models/recommended/refresh":
             recs = refresh_recommended_catalog()
             self._send_json({"success": True, "recommended": recs})
+        # 2d. Model Storage Path Update
+        elif path == "/api/models/storage":
+            custom_p = body.get("path", "").strip()
+            if not custom_p:
+                self._send_json({"success": False, "error": "Storage path is required."}, status=400)
+            else:
+                ok_set = set_model_storage_path(custom_p)
+                hw = detect_system_hardware()
+                self._send_json({"success": ok_set, "path": get_model_storage_path(), "storage": hw["storage"]})
+        # 2e. Validate or Create Project Directory Path
+        elif path == "/api/projects/validate_path":
+            target_p = body.get("path", "").strip()
+            if not target_p:
+                self._send_json({"success": False, "error": "Folder path cannot be empty."}, status=400)
+            else:
+                try:
+                    norm = os.path.normpath(target_p)
+                    os.makedirs(norm, exist_ok=True)
+                    self._send_json({"success": True, "path": norm, "name": Path(norm).name or "Workspace"})
+                except Exception as exc:
+                    self._send_json({"success": False, "error": f"Invalid path: {exc}"}, status=400)
         # 3. Model Switch
         elif path == "/api/models/switch":
             m = body.get("model", "").strip()
@@ -1129,20 +1301,16 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_doctor(self) -> None:
-        # Hardware inspection
-        ram_info = {"total_gb": 16.0, "available_gb": 8.0}
-        try:
-            import psutil
-            vm = psutil.virtual_memory()
-            ram_info["total_gb"] = round(vm.total / (1024 ** 3), 1)
-            ram_info["available_gb"] = round(vm.available / (1024 ** 3), 1)
-        except Exception:
-            pass
-
+        # Accurate Hardware inspection
+        hw = detect_system_hardware()
         self._send_json({
-            "platform": sys.platform,
+            "platform": hw["os"],
             "python_version": sys.version.split()[0],
-            "ram": ram_info,
+            "ram": {
+                "total_gb": hw["ram_total_gb"],
+                "available_gb": hw["ram_total_gb"],
+            },
+            "hardware": hw,
             "internet_enabled": is_internet_enabled(),
             "factcheck_enabled": is_factcheck_enabled(),
             "active_model": get_current_model(),
@@ -1459,6 +1627,10 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         if not model_name:
             self._send_json({"error": "Model name required"}, status=400)
             return
+
+        custom_path = body.get("path", "").strip()
+        if custom_path:
+            set_model_storage_path(custom_path)
 
         ensure_ollama_server()
 

@@ -183,6 +183,8 @@ document.addEventListener("DOMContentLoaded", () => {
   loadProjects();
   loadSkills();
   loadMcpServers();
+  loadModelStoragePath();
+  initLiveEnvironmentTelemetry();
 
   setInterval(checkServerHealth, 5000);
 });
@@ -869,7 +871,25 @@ function setupProjects() {
   });
 
   btnBrowseProjFolder.addEventListener("click", async () => {
-    const picked = await openNativeFolderDialog();
+    let picked = await openNativeFolderDialog();
+    if (!picked) {
+      const manual = prompt("Enter or paste folder directory path (e.g. C:\\Users\\hp\\my-project):");
+      if (manual && manual.trim()) {
+        try {
+          const valRes = await fetch(`${API_BASE}/api/projects/validate_path`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: manual.trim() }),
+          });
+          const valData = await valRes.json();
+          if (valData.success && valData.path) {
+            picked = valData;
+          }
+        } catch (e) {
+          picked = { path: manual.trim(), name: manual.trim().split(/[\\/]/).pop() || "Workspace" };
+        }
+      }
+    }
     if (picked) {
       projPathInput.value = picked.path;
       if (!projNameInput.value.trim()) {
@@ -931,7 +951,7 @@ function setupProjects() {
   });
 }
 
-async function openNativeFolderDialog() {
+async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Folder") {
   try {
     const res = await fetch(`${API_BASE}/api/utils/select_folder`, { method: "POST" });
     const data = await res.json();
@@ -945,7 +965,29 @@ async function openNativeFolderDialog() {
 }
 
 async function browseAndActivateProjectFolder() {
-  const picked = await openNativeFolderDialog();
+  let picked = await openNativeFolderDialog();
+  if (!picked) {
+    const manual = prompt("Enter or paste your project folder directory (e.g. C:\\Users\\hp\\my-project):");
+    if (manual && manual.trim()) {
+      try {
+        const valRes = await fetch(`${API_BASE}/api/projects/validate_path`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: manual.trim() }),
+        });
+        const valData = await valRes.json();
+        if (valData.success && valData.path) {
+          picked = valData;
+        } else {
+          showToast(valData.error || "Invalid path", "error");
+          return false;
+        }
+      } catch (err) {
+        picked = { path: manual.trim(), name: manual.trim().split(/[\\/]/).pop() || "Workspace" };
+      }
+    }
+  }
+
   if (picked) {
     const name = picked.name || "Workspace";
     try {
@@ -1773,11 +1815,81 @@ function setupModels() {
     });
   }
 
+  const btnChangePath = document.getElementById("btn-change-model-path");
+  if (btnChangePath) {
+    btnChangePath.addEventListener("click", async () => {
+      let picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
+      if (!picked) {
+        const manual = prompt("Enter or paste custom model storage directory (e.g. D:\\AI_Models):");
+        if (manual && manual.trim()) picked = { path: manual.trim() };
+      }
+      if (picked && picked.path) {
+        try {
+          const res = await fetch(`${API_BASE}/api/models/storage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: picked.path }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Model storage path updated to: ${data.path}`, "success", "Storage Configured");
+            loadModelStoragePath();
+            loadInstalledModels();
+          } else {
+            showToast(data.error || "Failed to update storage path", "error");
+          }
+        } catch (err) {
+          showToast(`Error updating path: ${err.message}`, "error");
+        }
+      }
+    });
+  }
+
+  const btnBrowsePull = document.getElementById("btn-browse-pull-path");
+  if (btnBrowsePull) {
+    btnBrowsePull.addEventListener("click", async () => {
+      let picked = await openNativeFolderDialog("Select Custom Model Destination Folder");
+      if (!picked) {
+        const manual = prompt("Enter or paste custom download directory:");
+        if (manual && manual.trim()) picked = { path: manual.trim() };
+      }
+      if (picked && picked.path) {
+        const targetInput = document.getElementById("pull-model-target-path");
+        if (targetInput) targetInput.value = picked.path;
+      }
+    });
+  }
+
   btnPullModel.addEventListener("click", () => {
     const name = pullModelNameInput.value.trim();
-    if (!name) return;
-    pullModel(name);
+    if (!name) {
+      showToast("Please enter a model name or tag (e.g. deepseek-r1:1.5b)", "warning");
+      return;
+    }
+    const targetPath = document.getElementById("pull-model-target-path")?.value.trim() || "";
+    pullModel(name, targetPath);
   });
+}
+
+async function loadModelStoragePath() {
+  try {
+    const res = await fetch(`${API_BASE}/api/models/storage`);
+    const data = await res.json();
+    if (data.success) {
+      const display = document.getElementById("model-storage-path-display");
+      if (display) display.textContent = data.path;
+      const freeDisplay = document.getElementById("storage-free-display");
+      if (freeDisplay && data.storage) {
+        freeDisplay.textContent = `${data.storage.free_gb} GB Free (${data.storage.drive})`;
+      }
+      const targetInput = document.getElementById("pull-model-target-path");
+      if (targetInput && !targetInput.value) {
+        targetInput.placeholder = data.path;
+      }
+    }
+  } catch (e) {
+    console.error("Error loading model storage path:", e);
+  }
 }
 
 async function loadInstalledModels() {
@@ -1948,17 +2060,20 @@ async function switchModel(modelName) {
   }
 }
 
-function pullModel(modelName) {
+function pullModel(modelName, targetPath = "") {
   pullProgressContainer.classList.remove("hidden");
   pullProgressBar.style.width = "0%";
   pullStatusText.textContent = `Starting download for ${modelName}...`;
   pullPercentText.textContent = "0%";
-  btnPullModel.disabled = true;
+  if (btnPullModel) btnPullModel.disabled = true;
+
+  const payload = { model: modelName };
+  if (targetPath) payload.path = targetPath;
 
   fetch(`${API_BASE}/api/models/pull`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: modelName }),
+    body: JSON.stringify(payload),
   }).then(response => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -2204,13 +2319,86 @@ async function loadDoctorTelemetry() {
   try {
     const res = await fetch(`${API_BASE}/api/doctor`);
     const data = await res.json();
-    document.getElementById("doc-platform").textContent = data.platform;
-    document.getElementById("doc-ram").textContent = `${data.ram.available_gb} GB / ${data.ram.total_gb} GB`;
-    document.getElementById("doc-model").textContent = data.active_model;
-    document.getElementById("doc-python").textContent = data.python_version;
+    const hw = data.hardware || {};
+
+    const elPlatform = document.getElementById("doc-platform");
+    if (elPlatform) elPlatform.textContent = hw.os || data.platform || "Windows 11";
+
+    const elCpu = document.getElementById("doc-cpu");
+    if (elCpu) {
+      elCpu.textContent = hw.cpu ? `${hw.cpu} (${hw.cores} Cores, ${hw.threads} Threads)` : "Multi-Core CPU";
+    }
+
+    const elGpu = document.getElementById("doc-gpu");
+    if (elGpu) {
+      elGpu.textContent = Array.isArray(hw.gpus) && hw.gpus.length > 0 ? hw.gpus.join(", ") : "Graphics Controller";
+    }
+
+    const elRam = document.getElementById("doc-ram");
+    if (elRam) {
+      elRam.textContent = hw.ram_total_gb ? `${hw.ram_total_gb} GB Physical RAM` : (data.ram ? `${data.ram.total_gb} GB` : "16 GB");
+    }
+
+    const elStorage = document.getElementById("doc-storage");
+    if (elStorage) {
+      if (hw.storage) {
+        elStorage.textContent = `${hw.storage.free_gb} GB Free / ${hw.storage.total_gb} GB Total (${hw.storage.drive})`;
+      } else {
+        elStorage.textContent = "Disk Storage Ready";
+      }
+    }
+
+    const elModel = document.getElementById("doc-model");
+    if (elModel) elModel.textContent = data.active_model || activeModel;
+
+    const elPython = document.getElementById("doc-python");
+    if (elPython) elPython.textContent = data.python_version || "3.14";
   } catch (err) {
     console.error("Telemetry error:", err);
   }
+}
+
+function initLiveEnvironmentTelemetry() {
+  const clockEl = document.getElementById("env-live-clock");
+  const tempEl = document.getElementById("env-weather-temp");
+  const condEl = document.getElementById("env-weather-cond");
+  const iconEl = document.getElementById("env-weather-icon");
+
+  function updateClock() {
+    if (!clockEl) return;
+    const now = new Date();
+    clockEl.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  async function fetchLiveWeatherTelemetry() {
+    try {
+      const res = await fetch(`${API_BASE}/api/weather?city=Colombo`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        const w = data.data;
+        if (tempEl) tempEl.textContent = `${Math.round(w.temperature_c)}°C`;
+        if (condEl) condEl.textContent = w.condition_en || "Clear";
+        if (iconEl) {
+          const code = w.weathercode || 0;
+          if (code === 0) iconEl.textContent = "☀️";
+          else if (code <= 3) iconEl.textContent = "⛅";
+          else if (code <= 48) iconEl.textContent = "🌫️";
+          else if (code <= 67) iconEl.textContent = "🌧️";
+          else if (code <= 82) iconEl.textContent = "🌦️";
+          else if (code <= 99) iconEl.textContent = "⛈️";
+          else iconEl.textContent = "⛅";
+        }
+      }
+    } catch (e) {
+      if (condEl) condEl.textContent = "Offline";
+    }
+  }
+
+  fetchLiveWeatherTelemetry();
+  setInterval(fetchLiveWeatherTelemetry, 10 * 60 * 1000);
 }
 
 // 10. Startup Preflight Check
@@ -2259,6 +2447,20 @@ function showPreflightModal(data) {
     </span>
   `;
   preflightStatusItems.appendChild(olItem);
+
+  if (data.hardware) {
+    const hwItem = document.createElement("div");
+    hwItem.className = "preflight-item";
+    const gpuName = data.hardware.gpus && data.hardware.gpus.length ? data.hardware.gpus[0] : "Graphics Adapter";
+    hwItem.innerHTML = `
+      <div class="preflight-item-info">
+        <span class="preflight-item-title">System & Hardware</span>
+        <span class="preflight-item-detail">${escapeHtml(data.hardware.cpu || 'CPU')} &bull; ${escapeHtml(gpuName)} &bull; ${data.hardware.ram_total_gb || 16} GB RAM</span>
+      </div>
+      <span class="preflight-badge healthy">Detected</span>
+    `;
+    preflightStatusItems.appendChild(hwItem);
+  }
 
   const mdItem = document.createElement("div");
   mdItem.className = "preflight-item";

@@ -67,6 +67,21 @@
       </nav>
 
       <div class="sidebar-footer">
+        <!-- Live Environment Telemetry Widget -->
+        <div class="sidebar-env-widget" id="sidebar-env-widget">
+          <div class="sidebar-env-top">
+            <span class="env-clock-display" id="env-live-clock">--:--:--</span>
+            <span class="env-location-tag" id="env-location-tag">Live Time</span>
+          </div>
+          <div class="sidebar-env-weather" id="env-weather-container">
+            <span class="env-weather-badge">
+              <span class="env-weather-icon" id="env-weather-icon">⛅</span>
+              <span class="env-weather-temp" id="env-weather-temp">--°C</span>
+            </span>
+            <span class="env-weather-cond" id="env-weather-cond">Syncing telemetry...</span>
+          </div>
+        </div>
+
         <div class="status-indicator">
           <span class="status-dot online" id="server-status-dot"></span>
           <span class="status-label" id="server-status-text">Engine Ready</span>
@@ -499,6 +514,21 @@
             <p>Download, browse, and manage open-weight models powered by your local Ollama engine.</p>
           </div>
 
+          <!-- Model Storage Location & Custom Destination -->
+          <div class="model-storage-banner mb-4">
+            <div class="model-storage-info">
+              <span class="model-storage-label">Model Storage Directory (Weights Installation Destination)</span>
+              <span class="model-storage-path font-mono-target" id="model-storage-path-display">Loading path...</span>
+            </div>
+            <div class="model-storage-actions">
+              <span class="storage-free-badge" id="storage-free-display">-- GB Free</span>
+              <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-change-model-path" title="Select custom folder or drive to save models">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                <span>Change Storage Folder</span>
+              </button>
+            </div>
+          </div>
+
           <!-- Recommended Models (1-Click Install) -->
           <div class="glass-card mb-4">
             <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
@@ -521,14 +551,28 @@
           <div class="glass-card mb-4">
             <h3 class="card-title flex-center-gap">
               <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-              <span>Pull Any Custom Ollama Model</span>
+              <span>Install Any Custom Model</span>
             </h3>
-            <div class="pull-form">
-              <input type="text" id="pull-model-name" class="input-text" placeholder="e.g. llama3.2:3b, qwen2.5-coder:7b, deepseek-r1:7b, codellama:7b" />
-              <button id="btn-pull-model" class="btn btn-primary">Start Download</button>
+            <p class="text-muted mb-3">Pull any open-weight model from the Ollama library or HuggingFace (e.g. <code>deepseek-r1:1.5b</code>, <code>mistral:7b</code>, <code>phi3:mini</code>, <code>starcoder2</code>, <code>dolphin-llama3</code>) into your selected storage path.</p>
+            <div class="custom-pull-form-grid mb-3">
+              <div class="form-group mb-2">
+                <label class="form-label">Model Tag or Identifier</label>
+                <input type="text" id="pull-model-name" class="form-input font-mono-target" placeholder="e.g. deepseek-r1:1.5b, mistral:7b, qwen2.5:3b" required />
+              </div>
+              <div class="form-group mb-2">
+                <label class="form-label">Target Download Directory</label>
+                <div class="input-with-button">
+                  <input type="text" id="pull-model-target-path" class="form-input font-mono-target" placeholder="Uses active model storage folder" />
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-browse-pull-path">Browse</button>
+                </div>
+              </div>
             </div>
+            <button id="btn-pull-model" class="btn btn-primary btn-sm flex-center-gap">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>Start Download & Install</span>
+            </button>
             
-            <div id="pull-progress-container" class="pull-progress hidden">
+            <div id="pull-progress-container" class="pull-progress hidden mt-3">
               <div class="progress-bar-bg">
                 <div id="pull-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
               </div>
@@ -733,19 +777,31 @@
             <div id="doctor-telemetry-box" class="telemetry-grid">
               <div class="telemetry-item">
                 <span class="telemetry-label">OS Platform:</span>
-                <span class="telemetry-val" id="doc-platform">Windows 11 x64</span>
+                <span class="telemetry-val" id="doc-platform">Detecting...</span>
               </div>
               <div class="telemetry-item">
-                <span class="telemetry-label">RAM Available:</span>
-                <span class="telemetry-val" id="doc-ram">Checking...</span>
+                <span class="telemetry-label">CPU Processor:</span>
+                <span class="telemetry-val" id="doc-cpu">Detecting...</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Graphics (GPU):</span>
+                <span class="telemetry-val" id="doc-gpu">Detecting...</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">System RAM:</span>
+                <span class="telemetry-val" id="doc-ram">Detecting...</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Storage Capacity:</span>
+                <span class="telemetry-val" id="doc-storage">Detecting...</span>
               </div>
               <div class="telemetry-item">
                 <span class="telemetry-label">Active Model:</span>
-                <span class="telemetry-val" id="doc-model">Checking...</span>
+                <span class="telemetry-val" id="doc-model">Detecting...</span>
               </div>
               <div class="telemetry-item">
-                <span class="telemetry-label">Python Version:</span>
-                <span class="telemetry-val" id="doc-python">Checking...</span>
+                <span class="telemetry-label">Python Runtime:</span>
+                <span class="telemetry-val" id="doc-python">Detecting...</span>
               </div>
             </div>
           </div>
