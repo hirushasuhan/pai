@@ -1008,6 +1008,86 @@
     </div>
   </div>
 
+  <!-- Model Install & Path Confirmation Modal -->
+  <div id="model-install-modal" class="modal-backdrop hidden">
+    <div class="modal-card model-install-modal-card">
+      <div class="modal-header flex-between">
+        <h3 class="flex-center-gap modal-title">
+          <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span id="install-modal-title">Install AI Model</span>
+        </h3>
+        <button type="button" class="btn-close-modal" id="btn-close-install-modal" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Model Specification Preview Box -->
+        <div class="install-model-spec-card mb-3">
+          <div class="spec-row flex-between">
+            <span class="spec-label">Model Identifier:</span>
+            <span class="spec-val font-mono" id="install-modal-model-tag">llama3.2:3b</span>
+          </div>
+          <div class="spec-row flex-between">
+            <span class="spec-label">Download Size:</span>
+            <span class="spec-val font-semibold text-accent" id="install-modal-model-size">~2.0 GB</span>
+          </div>
+          <div class="spec-desc" id="install-modal-model-desc">
+            Meta Llama 3.2 3B - Ultra fast, low RAM reasoning & chat
+          </div>
+        </div>
+
+        <!-- Path Selection Input & Free Space Status -->
+        <div class="form-group mb-3">
+          <label class="form-label" for="install-modal-path-input">Save Destination Directory (Model Storage):</label>
+          <div class="input-with-action">
+            <input type="text" id="install-modal-path-input" class="input-text font-mono-target" placeholder="C:\Users\hp\.ollama\models" required />
+            <button type="button" class="btn btn-secondary flex-center-gap" id="btn-browse-install-path" title="Browse target folder with native Windows dialog">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span>Browse...</span>
+            </button>
+          </div>
+          <div class="path-storage-hint mt-2 flex-between">
+            <span id="install-modal-storage-info" class="storage-hint-ok">Checking storage...</span>
+            <button type="button" class="btn-link text-xs" id="btn-reset-install-path">Reset to Default</button>
+          </div>
+        </div>
+
+        <!-- Live Download Progress State (Revealed after confirming download) -->
+        <div id="install-modal-progress-section" class="install-progress-section hidden mt-3">
+          <div class="install-progress-header flex-between mb-1">
+            <span class="text-sm font-semibold" id="install-modal-status-text">Starting download...</span>
+            <span class="font-mono font-semibold" id="install-modal-pct-text">0%</span>
+          </div>
+          <div class="progress-bar-bg mb-2">
+            <div id="install-modal-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+          </div>
+          <div class="install-progress-details flex-between text-xs text-muted mb-2 font-mono">
+            <span id="install-modal-bytes-text">0 MB / 0 MB</span>
+            <span id="install-modal-save-target">Saving to chosen folder</span>
+          </div>
+          <p class="text-xs text-muted" id="install-modal-bg-note">
+            💡 Download runs in background. You may keep this open or close it to continue your work.
+          </p>
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-install-modal">Cancel</button>
+        <button type="button" class="btn btn-primary flex-center-gap" id="btn-confirm-install-model">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span id="btn-confirm-install-label">Confirm & Download Model</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Custom Desktop App Context Menu -->
   <div id="desktop-context-menu" class="desktop-context-menu hidden">
     <button type="button" class="ctx-item" id="ctx-copy">

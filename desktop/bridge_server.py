@@ -634,6 +634,24 @@ def get_model_storage_path() -> str:
     return str(default_dir)
 
 
+def get_disk_free_for_path(path_str: str) -> Dict[str, Any]:
+    """Calculate free, total and used storage for any target directory path."""
+    try:
+        p = Path(path_str).resolve()
+        while not p.exists() and p != p.parent:
+            p = p.parent
+        drive = p.drive or os.path.splitdrive(str(p))[0] or "C:"
+        total, used, free = shutil.disk_usage(str(p))
+        return {
+            "drive": drive,
+            "free_gb": round(free / (1024**3), 1),
+            "total_gb": round(total / (1024**3), 1),
+            "used_gb": round(used / (1024**3), 1),
+        }
+    except Exception:
+        return {"drive": "C:", "free_gb": 0.0, "total_gb": 0.0, "used_gb": 0.0}
+
+
 def set_model_storage_path(new_path: str) -> bool:
     """Update active models storage path and apply to process environment."""
     try:
@@ -649,6 +667,17 @@ def set_model_storage_path(new_path: str) -> bool:
                 data = {}
         data["models_path"] = str(p_dir)
         cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        if sys.platform == "win32":
+            try:
+                flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", f"[System.Environment]::SetEnvironmentVariable('OLLAMA_MODELS', '{str(p_dir)}', 'User')"],
+                    capture_output=True,
+                    creationflags=flags,
+                    timeout=5.0,
+                )
+            except Exception:
+                pass
         return True
     except Exception:
         return False
@@ -1194,11 +1223,13 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._handle_doctor()
         # 11b. Model Storage Path & Telemetry
         elif path == "/api/models/storage":
-            hw = detect_system_hardware()
+            target_p = query_params.get("path", [get_model_storage_path()])[0] or get_model_storage_path()
+            st = get_disk_free_for_path(target_p)
             self._send_json({
                 "success": True,
                 "path": get_model_storage_path(),
-                "storage": hw["storage"],
+                "target_path": target_p,
+                "storage": st,
             })
         # 12. Preflight system health check
         elif path == "/api/system/preflight":
@@ -1258,8 +1289,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Storage path is required."}, status=400)
             else:
                 ok_set = set_model_storage_path(custom_p)
-                hw = detect_system_hardware()
-                self._send_json({"success": ok_set, "path": get_model_storage_path(), "storage": hw["storage"]})
+                st = get_disk_free_for_path(custom_p)
+                self._send_json({"success": ok_set, "path": get_model_storage_path(), "storage": st})
         # 2e. Validate or Create Project Directory Path
         elif path == "/api/projects/validate_path":
             target_p = body.get("path", "").strip()

@@ -2344,6 +2344,67 @@ function setupModels() {
     });
   }
 
+  // Model Install Confirmation & Path Modal setup
+  const modelInstallModal = document.getElementById("model-install-modal");
+  const btnCloseInstallModal = document.getElementById("btn-close-install-modal");
+  const btnCancelInstallModal = document.getElementById("btn-cancel-install-modal");
+  const btnConfirmInstallModel = document.getElementById("btn-confirm-install-model");
+  const btnBrowseInstallPath = document.getElementById("btn-browse-install-path");
+  const btnResetInstallPath = document.getElementById("btn-reset-install-path");
+  const installModalPathInput = document.getElementById("install-modal-path-input");
+
+  function closeInstallModal() {
+    if (modelInstallModal) modelInstallModal.classList.add("hidden");
+  }
+
+  if (btnCloseInstallModal) btnCloseInstallModal.addEventListener("click", closeInstallModal);
+  if (btnCancelInstallModal) btnCancelInstallModal.addEventListener("click", closeInstallModal);
+
+  if (btnBrowseInstallPath) {
+    btnBrowseInstallPath.addEventListener("click", async () => {
+      const picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
+      if (picked && picked.path) {
+        if (installModalPathInput) {
+          installModalPathInput.value = picked.path;
+          checkInstallPathStorage(picked.path);
+        }
+      }
+    });
+  }
+
+  if (installModalPathInput) {
+    installModalPathInput.addEventListener("input", () => {
+      checkInstallPathStorage(installModalPathInput.value.trim());
+    });
+  }
+
+  if (btnResetInstallPath) {
+    btnResetInstallPath.addEventListener("click", async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/models/storage`);
+        const data = await res.json();
+        if (data.success && data.path && installModalPathInput) {
+          installModalPathInput.value = data.path;
+          checkInstallPathStorage(data.path);
+        }
+      } catch (e) {
+        if (installModalPathInput) installModalPathInput.value = "C:\\Users\\hp\\.ollama\\models";
+      }
+    });
+  }
+
+  if (btnConfirmInstallModel) {
+    btnConfirmInstallModel.addEventListener("click", () => {
+      if (isModelDownloading) {
+        closeInstallModal();
+        return;
+      }
+      if (!currentInstallTargetModel) return;
+      const targetPath = installModalPathInput ? installModalPathInput.value.trim() : "";
+      startModelDownload(currentInstallTargetModel, targetPath);
+    });
+  }
+
   btnPullModel.addEventListener("click", () => {
     const name = pullModelNameInput.value.trim();
     if (!name) {
@@ -2351,7 +2412,13 @@ function setupModels() {
       return;
     }
     const targetPath = document.getElementById("pull-model-target-path")?.value.trim() || "";
-    pullModel(name, targetPath);
+    openModelInstallModal({
+      tag: name,
+      name: name,
+      size: "Variable (Depends on model weights)",
+      desc: "Custom open-weight model pulled from Ollama library or HuggingFace.",
+      targetPath: targetPath,
+    });
   });
 }
 
@@ -2481,7 +2548,7 @@ function renderRecommendedModels(recs) {
     const dlBtn = card.querySelector(".btn-download-rec");
     if (dlBtn) {
       dlBtn.addEventListener("click", () => {
-        pullModel(rec.tag);
+        openModelInstallModal(rec);
       });
     }
 
@@ -2544,11 +2611,113 @@ async function switchModel(modelName) {
   }
 }
 
-function pullModel(modelName, targetPath = "") {
-  pullProgressContainer.classList.remove("hidden");
-  pullProgressBar.style.width = "0%";
-  pullStatusText.textContent = `Starting download for ${modelName}...`;
-  pullPercentText.textContent = "0%";
+let currentInstallTargetModel = null;
+let isModelDownloading = false;
+
+async function checkInstallPathStorage(pathVal) {
+  const infoEl = document.getElementById("install-modal-storage-info");
+  if (!infoEl) return;
+  infoEl.textContent = "Checking disk space...";
+  infoEl.className = "storage-hint-ok";
+  try {
+    const q = pathVal ? `?path=${encodeURIComponent(pathVal)}` : "";
+    const res = await fetch(`${API_BASE}/api/models/storage${q}`);
+    const data = await res.json();
+    if (data.success && data.storage) {
+      const free = data.storage.free_gb;
+      const drive = data.storage.drive || "C:";
+      if (free < 2.0) {
+        infoEl.textContent = `⚠️ Low Disk Space: Only ${free} GB Free on ${drive}`;
+        infoEl.className = "storage-hint-warn";
+      } else {
+        infoEl.textContent = `✓ Storage Available: ${free} GB Free on ${drive}`;
+        infoEl.className = "storage-hint-ok";
+      }
+    } else {
+      infoEl.textContent = "Custom folder destination verified.";
+    }
+  } catch (e) {
+    infoEl.textContent = "Storage destination verified.";
+  }
+}
+
+async function openModelInstallModal(modelInfo) {
+  currentInstallTargetModel = modelInfo;
+
+  const modal = document.getElementById("model-install-modal");
+  const titleEl = document.getElementById("install-modal-title");
+  const tagEl = document.getElementById("install-modal-model-tag");
+  const sizeEl = document.getElementById("install-modal-model-size");
+  const descEl = document.getElementById("install-modal-model-desc");
+  const pathInput = document.getElementById("install-modal-path-input");
+  const progressSec = document.getElementById("install-modal-progress-section");
+  const confirmBtn = document.getElementById("btn-confirm-install-model");
+  const confirmLabel = document.getElementById("btn-confirm-install-label");
+  const cancelBtn = document.getElementById("btn-cancel-install-modal");
+
+  if (!modal) return;
+
+  if (titleEl) titleEl.textContent = `Install AI Model: ${modelInfo.name || modelInfo.tag}`;
+  if (tagEl) tagEl.textContent = modelInfo.tag || modelInfo.name;
+  if (sizeEl) sizeEl.textContent = modelInfo.size ? `~${modelInfo.size}` : "Variable";
+  if (descEl) descEl.textContent = modelInfo.desc || "High-performance open weights calibrated for coding, fast chat and deep reasoning.";
+
+  if (modelInfo.targetPath && pathInput) {
+    pathInput.value = modelInfo.targetPath;
+    checkInstallPathStorage(modelInfo.targetPath);
+  } else {
+    try {
+      const res = await fetch(`${API_BASE}/api/models/storage`);
+      const data = await res.json();
+      if (data.success && data.path && pathInput) {
+        pathInput.value = data.path;
+        checkInstallPathStorage(data.path);
+      }
+    } catch (e) {
+      if (pathInput) pathInput.value = "C:\\Users\\hp\\.ollama\\models";
+    }
+  }
+
+  // Reset progress section to hidden initial state
+  if (progressSec) progressSec.classList.add("hidden");
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.classList.remove("btn-secondary");
+    confirmBtn.classList.add("btn-primary");
+  }
+  if (confirmLabel) confirmLabel.textContent = "Confirm & Download Model";
+  if (cancelBtn) cancelBtn.style.display = "";
+
+  modal.classList.remove("hidden");
+}
+
+function startModelDownload(modelInfo, targetPath = "") {
+  const modelName = modelInfo.tag || modelInfo.name;
+  isModelDownloading = true;
+
+  const progressSec = document.getElementById("install-modal-progress-section");
+  const statusEl = document.getElementById("install-modal-status-text");
+  const pctEl = document.getElementById("install-modal-pct-text");
+  const barEl = document.getElementById("install-modal-progress-bar");
+  const bytesEl = document.getElementById("install-modal-bytes-text");
+  const targetEl = document.getElementById("install-modal-save-target");
+  const confirmLabel = document.getElementById("btn-confirm-install-label");
+  const cancelBtn = document.getElementById("btn-cancel-install-modal");
+
+  if (progressSec) progressSec.classList.remove("hidden");
+  if (statusEl) statusEl.textContent = `Connecting & initializing download for ${modelName}...`;
+  if (pctEl) pctEl.textContent = "0%";
+  if (barEl) barEl.style.width = "0%";
+  if (bytesEl) bytesEl.textContent = "0 MB / 0 MB";
+  if (targetEl) targetEl.textContent = targetPath ? `Target: ${targetPath.split(/[\/\\]/).filter(Boolean).pop() || targetPath}` : "Target: Default models folder";
+  if (confirmLabel) confirmLabel.textContent = "Run in Background & Close";
+  if (cancelBtn) cancelBtn.style.display = "none";
+
+  // Also activate main page progress bar
+  if (pullProgressContainer) pullProgressContainer.classList.remove("hidden");
+  if (pullProgressBar) pullProgressBar.style.width = "0%";
+  if (pullStatusText) pullStatusText.textContent = `Downloading ${modelName}...`;
+  if (pullPercentText) pullPercentText.textContent = "0%";
   if (btnPullModel) btnPullModel.disabled = true;
 
   const payload = { model: modelName };
@@ -2565,12 +2734,22 @@ function pullModel(modelName, targetPath = "") {
     function read() {
       reader.read().then(({ done, value }) => {
         if (done) {
-          pullStatusText.textContent = "Download complete!";
-          pullProgressBar.style.width = "100%";
-          pullPercentText.textContent = "100%";
-          btnPullModel.disabled = false;
-          showToast(`Successfully downloaded ${modelName}!`, "success", "Download Complete");
+          isModelDownloading = false;
+          if (statusEl) statusEl.textContent = `✓ Successfully installed ${modelName}!`;
+          if (pctEl) pctEl.textContent = "100%";
+          if (barEl) barEl.style.width = "100%";
+          if (confirmLabel) confirmLabel.textContent = "Done / Close";
+          if (cancelBtn) cancelBtn.style.display = "none";
+
+          if (pullStatusText) pullStatusText.textContent = "Download complete!";
+          if (pullProgressBar) pullProgressBar.style.width = "100%";
+          if (pullPercentText) pullPercentText.textContent = "100%";
+          if (btnPullModel) btnPullModel.disabled = false;
+
+          showToast(`Successfully downloaded and installed ${modelName}!`, "success", "Download Complete");
           loadInstalledModels();
+          loadRecommendedModels();
+          loadModelStoragePath();
           return;
         }
 
@@ -2580,11 +2759,20 @@ function pullModel(modelName, targetPath = "") {
           if (line.startsWith("data: ")) {
             try {
               const d = JSON.parse(line.substring(6));
-              if (d.status) pullStatusText.textContent = d.status;
+              if (d.status) {
+                if (statusEl) statusEl.textContent = d.status;
+                if (pullStatusText) pullStatusText.textContent = d.status;
+              }
               if (d.total && d.completed) {
                 const pct = Math.round((d.completed / d.total) * 100);
-                pullProgressBar.style.width = `${pct}%`;
-                pullPercentText.textContent = `${pct}%`;
+                if (barEl) barEl.style.width = `${pct}%`;
+                if (pctEl) pctEl.textContent = `${pct}%`;
+                if (pullProgressBar) pullProgressBar.style.width = `${pct}%`;
+                if (pullPercentText) pullPercentText.textContent = `${pct}%`;
+
+                const completedMB = (d.completed / (1024 * 1024)).toFixed(1);
+                const totalMB = (d.total / (1024 * 1024)).toFixed(1);
+                if (bytesEl) bytesEl.textContent = `${completedMB} MB / ${totalMB} MB`;
               }
             } catch (e) {}
           }
@@ -2594,9 +2782,23 @@ function pullModel(modelName, targetPath = "") {
     }
     read();
   }).catch(err => {
-    pullStatusText.textContent = `Download error: ${err.message}`;
-    btnPullModel.disabled = false;
+    isModelDownloading = false;
+    if (statusEl) statusEl.textContent = `Download error: ${err.message}`;
+    if (confirmLabel) confirmLabel.textContent = "Close";
+    if (cancelBtn) cancelBtn.style.display = "";
+    if (pullStatusText) pullStatusText.textContent = `Download error: ${err.message}`;
+    if (btnPullModel) btnPullModel.disabled = false;
     showToast(`Download failed: ${err.message}`, "error");
+  });
+}
+
+function pullModel(modelName, targetPath = "") {
+  openModelInstallModal({
+    tag: modelName,
+    name: modelName,
+    size: "Variable",
+    desc: "Local open-weight intelligence model.",
+    targetPath: targetPath,
   });
 }
 

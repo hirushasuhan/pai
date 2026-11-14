@@ -59,6 +59,18 @@ fn resolve_python_path() -> PathBuf {
 }
 
 fn resolve_bridge_script() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p0 = parent.join("bridge_server.py");
+            if p0.is_file() {
+                return Some(p0);
+            }
+            let p1 = parent.join("desktop/bridge_server.py");
+            if p1.is_file() {
+                return Some(p1);
+            }
+        }
+    }
     let candidates = [
         "desktop/bridge_server.py",
         "research/desktop/bridge_server.py",
@@ -71,6 +83,10 @@ fn resolve_bridge_script() -> Option<PathBuf> {
         }
     }
     let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let installed_root = Path::new(&local_app).join("Programs/PAI/bridge_server.py");
+    if installed_root.is_file() {
+        return Some(installed_root);
+    }
     let installed_p = Path::new(&local_app).join("Programs/PAI/desktop/bridge_server.py");
     if installed_p.is_file() {
         return Some(installed_p);
