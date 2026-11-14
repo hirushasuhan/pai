@@ -1124,10 +1124,16 @@
             💡 Download runs in background. You may keep this open or close it to continue your work.
           </p>
           <div class="progress-actions flex-between mt-2">
-            <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-pause-install-download" title="Pause or cancel active model download">
-              <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
-              <span id="btn-pause-download-label">Pause / Cancel</span>
-            </button>
+            <div class="flex-center-gap">
+              <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-pause-install-download" title="Pause or resume active model download">
+                <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                <span id="btn-pause-download-label">Pause</span>
+              </button>
+              <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-cancel-download-active" title="Cancel and abort active download">
+                <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <span>Cancel</span>
+              </button>
+            </div>
             <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-run-bg-modal" title="Run download in background and close popup">
               <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
               <span>Run in Background</span>

@@ -1258,6 +1258,7 @@ def get_system_preflight() -> Dict[str, Any]:
             "recommended": recommended_models,
             "active_model": get_current_model(),
             "storage_path": get_model_storage_path(),
+            "storage": get_disk_free_for_path(get_model_storage_path()),
         },
         "hardware": hw,
     }
@@ -2097,9 +2098,10 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self._send_cors_headers()
             self.end_headers()
+            self.close_connection = True
 
             total_bytes = 2300000000 if "sd-turbo" in clean_model else 4000000000
             steps = [
@@ -2110,30 +2112,48 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 (0.95, "Configuring local image synthesis pipeline..."),
                 (1.00, f"Model {model_name} installed successfully! Ready for /image generation."),
             ]
-            for frac, msg in steps:
-                evt = {
-                    "status": msg,
-                    "completed": int(total_bytes * frac),
-                    "total": total_bytes,
-                }
-                self.wfile.write(f"data: {json.dumps(evt)}\n\n".encode("utf-8"))
-                self.wfile.flush()
-                time.sleep(0.35)
+            try:
+                for frac, msg in steps:
+                    evt = {
+                        "status": msg,
+                        "completed": int(total_bytes * frac),
+                        "total": total_bytes,
+                    }
+                    self.wfile.write(f"data: {json.dumps(evt)}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    time.sleep(0.35)
 
-            set_installed_image_model(model_name, is_installed=True)
-            success_evt = {"status": "success"}
-            self.wfile.write(f"data: {json.dumps(success_evt)}\n\n".encode("utf-8"))
-            self.wfile.flush()
+                set_installed_image_model(model_name, is_installed=True)
+                success_evt = {"status": "success"}
+                self.wfile.write(f"data: {json.dumps(success_evt)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
             return
 
-        ensure_ollama_server()
+        if not ensure_ollama_server():
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self._send_cors_headers()
+            self.end_headers()
+            self.close_connection = True
+            err_data = json.dumps({"status": "error", "error": "Ollama service is offline and could not be started. Please start Ollama."})
+            try:
+                self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self._send_cors_headers()
         self.end_headers()
+        self.close_connection = True
 
         payload = json.dumps({"name": model_name, "stream": True}).encode("utf-8")
         req = urllib.request.Request(
@@ -2148,12 +2168,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 for line in resp:
                     if line:
                         chunk = line.decode("utf-8").strip()
-                        self.wfile.write(f"data: {chunk}\n\n".encode("utf-8"))
-                        self.wfile.flush()
+                        if chunk:
+                            self.wfile.write(f"data: {chunk}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
         except Exception as exc:
-            err_data = json.dumps({"status": "error", "error": str(exc)})
-            self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
-            self.wfile.flush()
+            try:
+                err_data = json.dumps({"status": "error", "error": str(exc)})
+                self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def _handle_select_folder(self, title: str = "Select Project Workspace Folder") -> None:
         """Open native Windows folder picker dialog and return selected path."""
