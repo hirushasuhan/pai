@@ -1054,30 +1054,20 @@ function setupProjects() {
   });
 
   btnBrowseProjFolder.addEventListener("click", async () => {
-    let picked = await openNativeFolderDialog();
-    if (!picked) {
-      const manual = prompt("Enter or paste folder directory path (e.g. C:\\Users\\hp\\my-project):");
-      if (manual && manual.trim()) {
-        try {
-          const valRes = await fetch(`${API_BASE}/api/projects/validate_path`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: manual.trim() }),
-          });
-          const valData = await valRes.json();
-          if (valData.success && valData.path) {
-            picked = valData;
-          }
-        } catch (e) {
-          picked = { path: manual.trim(), name: manual.trim().split(/[\\/]/).pop() || "Workspace" };
+    btnBrowseProjFolder.disabled = true;
+    try {
+      const picked = await openNativeFolderDialog();
+      if (picked && picked.path) {
+        projPathInput.value = picked.path;
+        if (!projNameInput.value.trim()) {
+          projNameInput.value = picked.name;
         }
+        showToast(`Selected project folder: ${picked.name}`, "success");
       }
-    }
-    if (picked) {
-      projPathInput.value = picked.path;
-      if (!projNameInput.value.trim()) {
-        projNameInput.value = picked.name;
-      }
+    } catch (err) {
+      console.error("Browse error:", err);
+    } finally {
+      btnBrowseProjFolder.disabled = false;
     }
   });
 
@@ -1148,32 +1138,10 @@ async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Fo
 }
 
 async function browseAndActivateProjectFolder() {
-  let picked = await openNativeFolderDialog();
-  if (!picked) {
-    const manual = prompt("Enter or paste your project folder directory (e.g. C:\\Users\\hp\\my-project):");
-    if (manual && manual.trim()) {
-      try {
-        const valRes = await fetch(`${API_BASE}/api/projects/validate_path`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: manual.trim() }),
-        });
-        const valData = await valRes.json();
-        if (valData.success && valData.path) {
-          picked = valData;
-        } else {
-          showToast(valData.error || "Invalid path", "error");
-          return false;
-        }
-      } catch (err) {
-        picked = { path: manual.trim(), name: manual.trim().split(/[\\/]/).pop() || "Workspace" };
-      }
-    }
-  }
-
-  if (picked) {
-    const name = picked.name || "Workspace";
-    try {
+  try {
+    const picked = await openNativeFolderDialog();
+    if (picked && picked.path) {
+      const name = picked.name || "Workspace";
       await fetch(`${API_BASE}/api/projects/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1181,10 +1149,11 @@ async function browseAndActivateProjectFolder() {
       });
       await loadProjects();
       await activateProject(picked.path);
+      showToast(`Activated workspace: ${name}`, "success");
       return true;
-    } catch (e) {
-      console.error("Save on browse error:", e);
     }
+  } catch (e) {
+    console.error("Browse & activate error:", e);
   }
   return false;
 }

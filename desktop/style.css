@@ -585,12 +585,27 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #000;
-  transition: transform 0.15s ease;
+  color: #0b0f17;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   align-self: flex-end;
+  box-shadow: 0 2px 8px rgba(0, 240, 255, 0.25);
+  flex-shrink: 0;
+}
+.btn-send .send-icon {
+  width: 17px;
+  height: 17px;
+  stroke: #0b0f17;
+  transition: transform 0.15s ease;
 }
 .btn-send:hover {
   transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 240, 255, 0.4);
+}
+.btn-send:hover .send-icon {
+  transform: translateY(-2px);
+}
+.btn-send:active {
+  transform: scale(0.95);
 }
 
 .btn-attach-file {

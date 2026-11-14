@@ -758,17 +758,24 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
             import base64
             ps_script = f"""
             Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Drawing
+            [System.Windows.Forms.Application]::EnableVisualStyles()
             $form = New-Object System.Windows.Forms.Form
             $form.TopMost = $true
             $form.ShowInTaskbar = $false
-            $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+            $form.Opacity = 0
+            $form.Size = New-Object System.Drawing.Size(1, 1)
             $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+            $form.Show()
+            $form.BringToFront()
+            $form.Activate()
             $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
             $dialog.Description = '{title}'
             $dialog.ShowNewFolderButton = $true
             $res = $dialog.ShowDialog($form)
-            if ($res -eq [System.Windows.Forms.DialogResult]::OK) {{
-                Write-Output $dialog.SelectedPath
+            $form.Close()
+            if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {{
+                [Console]::WriteLine($dialog.SelectedPath)
             }}
             """
             enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
@@ -778,7 +785,7 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
                 creationflags=flags,
                 stdin=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=45.0,
+                timeout=60.0,
             ).decode("utf-8", errors="replace").strip()
             for line in out.splitlines():
                 line = line.strip()
