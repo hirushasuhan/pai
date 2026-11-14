@@ -2730,3 +2730,72 @@ body.font-inter {
   color: #fff;
   transform: scale(1.03);
 }
+
+/* Custom Desktop Context Menu */
+.desktop-context-menu {
+  position: fixed;
+  z-index: 999999;
+  background: rgba(15, 23, 42, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 12px rgba(0, 242, 254, 0.15);
+  padding: 6px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: none;
+}
+
+.desktop-context-menu.hidden {
+  display: none !important;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-main);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.ctx-item:hover {
+  background: rgba(0, 242, 254, 0.15);
+  color: var(--accent-cyan);
+}
+
+.ctx-item:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.ctx-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  stroke: currentColor;
+}
+
+.ctx-shortcut {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.ctx-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 6px;
+}

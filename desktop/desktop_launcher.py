@@ -134,6 +134,9 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
         "--disable-default-apps",
         "--disable-background-mode",
         "--enable-features=OverlayScrollbar",
+        "--disable-features=Translate,OptimizationHints",
+        "--disable-save-password-bubble",
+        "--disable-blink-features=AutomationControlled",
     ]
 
     flags = 0

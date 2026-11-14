@@ -175,6 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupAntigravity();
   setupWebSearch();
   setupSettings();
+  setupDesktopContextMenu();
   checkStartupPreflight();
 
   // Immediately populate models, projects, skills and MCP servers on startup
@@ -2306,7 +2307,7 @@ function appendLog(line) {
 function setupWebSearch() {
   if (!btnRunSearch || !toolSearchQuery) return;
 
-  async function executeWebSearch(query) {
+  executeWebSearch = async function(query) {
     const q = (query !== undefined ? query : toolSearchQuery.value).trim();
     if (!q) return;
     toolSearchQuery.value = q;
@@ -2730,4 +2731,155 @@ function regeneratePrompt(promptToRetry) {
   }
   chatInput.value = p;
   chatForm.dispatchEvent(new Event("submit"));
+}
+
+
+// 12. Native Desktop Context Menu & Browser Action Interception
+let executeWebSearch = null; // Bound by setupWebSearch
+
+function setupDesktopContextMenu() {
+  const ctxMenu = document.getElementById("desktop-context-menu");
+  const ctxCopy = document.getElementById("ctx-copy");
+  const ctxCut = document.getElementById("ctx-cut");
+  const ctxPaste = document.getElementById("ctx-paste");
+  const ctxWebSearch = document.getElementById("ctx-web-search");
+  const ctxSearchDivider = document.getElementById("ctx-search-divider");
+  const ctxSelectAll = document.getElementById("ctx-select-all");
+
+  let activeTarget = null;
+  let activeSelectedText = "";
+
+  function hideContextMenu() {
+    if (ctxMenu) ctxMenu.classList.add("hidden");
+  }
+
+  // Intercept Right-Click Globally to Eliminate Browser Devtools/Save-As Menu
+  window.addEventListener("contextmenu", (e) => {
+    e.preventDefault(); // Eliminates default browser context menu (Inspect, Save as, etc.)
+
+    activeTarget = e.target;
+    activeSelectedText = window.getSelection() ? window.getSelection().toString().trim() : "";
+
+    const isEditable = activeTarget && (
+      activeTarget.tagName === "INPUT" ||
+      activeTarget.tagName === "TEXTAREA" ||
+      activeTarget.isContentEditable
+    );
+
+    // If neither editable nor has selected text, keep clean desktop window feel (no popup)
+    if (!isEditable && !activeSelectedText) {
+      hideContextMenu();
+      return;
+    }
+
+    if (!ctxMenu) return;
+
+    // Toggle menu actions
+    if (ctxCut) ctxCut.style.display = isEditable ? "flex" : "none";
+    if (ctxPaste) ctxPaste.style.display = isEditable ? "flex" : "none";
+    if (ctxCopy) ctxCopy.disabled = !activeSelectedText && !isEditable;
+
+    if (activeSelectedText) {
+      if (ctxWebSearch) {
+        ctxWebSearch.style.display = "flex";
+        const shortQ = activeSelectedText.length > 20 ? activeSelectedText.slice(0, 18) + "..." : activeSelectedText;
+        const textSpan = document.getElementById("ctx-web-search-text");
+        if (textSpan) textSpan.textContent = `Search Web for "${shortQ}"`;
+      }
+      if (ctxSearchDivider) ctxSearchDivider.style.display = "block";
+    } else {
+      if (ctxWebSearch) ctxWebSearch.style.display = "none";
+      if (ctxSearchDivider) ctxSearchDivider.style.display = "none";
+    }
+
+    // Position context menu
+    ctxMenu.classList.remove("hidden");
+    const menuWidth = ctxMenu.offsetWidth || 200;
+    const menuHeight = ctxMenu.offsetHeight || 160;
+    let posX = e.clientX;
+    let posY = e.clientY;
+
+    if (posX + menuWidth > window.innerWidth) posX = window.innerWidth - menuWidth - 8;
+    if (posY + menuHeight > window.innerHeight) posY = window.innerHeight - menuHeight - 8;
+
+    ctxMenu.style.left = `${Math.max(8, posX)}px`;
+    ctxMenu.style.top = `${Math.max(8, posY)}px`;
+  });
+
+  // Hide context menu on click or blur
+  window.addEventListener("click", hideContextMenu);
+  window.addEventListener("blur", hideContextMenu);
+  window.addEventListener("resize", hideContextMenu);
+
+  // Context Actions
+  ctxCopy?.addEventListener("click", () => {
+    hideContextMenu();
+    if (activeSelectedText) {
+      copyToClipboard(activeSelectedText);
+    } else if (activeTarget && typeof activeTarget.value === "string") {
+      copyToClipboard(activeTarget.value);
+    }
+  });
+
+  ctxCut?.addEventListener("click", () => {
+    hideContextMenu();
+    if (activeTarget && typeof activeTarget.value === "string") {
+      const start = activeTarget.selectionStart || 0;
+      const end = activeTarget.selectionEnd || activeTarget.value.length;
+      const sel = activeTarget.value.substring(start, end);
+      if (sel) {
+        copyToClipboard(sel);
+        activeTarget.setRangeText("", start, end, "end");
+        activeTarget.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+  });
+
+  ctxPaste?.addEventListener("click", async () => {
+    hideContextMenu();
+    if (activeTarget && typeof activeTarget.value === "string") {
+      try {
+        const text = await navigator.clipboard?.readText();
+        if (text) {
+          const start = activeTarget.selectionStart || activeTarget.value.length;
+          const end = activeTarget.selectionEnd || start;
+          activeTarget.setRangeText(text, start, end, "end");
+          activeTarget.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      } catch (err) {
+        showToast("Please press Ctrl+V to paste into field", "info");
+      }
+    }
+  });
+
+  ctxWebSearch?.addEventListener("click", () => {
+    hideContextMenu();
+    if (activeSelectedText) {
+      switchTab("search");
+      if (typeof executeWebSearch === "function") {
+        executeWebSearch(activeSelectedText);
+      }
+    }
+  });
+
+  ctxSelectAll?.addEventListener("click", () => {
+    hideContextMenu();
+    if (activeTarget && typeof activeTarget.select === "function") {
+      activeTarget.focus();
+      activeTarget.select();
+    } else {
+      window.getSelection()?.selectAllChildren(document.body);
+    }
+  });
+
+  // Block Developer Tools and Save-As Browser Key Shortcuts
+  window.addEventListener("keydown", (e) => {
+    if (
+      e.key === "F12" ||
+      (e.ctrlKey && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) ||
+      (e.ctrlKey && ["u", "U", "s", "S", "p", "P"].includes(e.key))
+    ) {
+      e.preventDefault();
+    }
+  });
 }

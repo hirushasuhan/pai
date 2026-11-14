@@ -155,8 +155,17 @@ def fetch_live_weather(query: str = "", timeout: float = 6.0) -> Tuple[bool, str
     return True, msg, result_data
 
 
+def _clean_html_text(text: str) -> str:
+    """Clean HTML tags and unescape common entities."""
+    if not text:
+        return ""
+    s = re.sub(r"<[^<]+?>", "", text)
+    s = s.replace("&quot;", '"').replace("&#039;", "'").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[bool, str, List[Dict[str, str]]]:
-    """Perform real-time web search using Wikipedia and DuckDuckGo."""
+    """Perform multi-source verified web search using Wikipedia, Tech News, arXiv, and DuckDuckGo."""
     if not is_internet_enabled():
         return False, "Internet access is disabled in PAI settings (/internet on to enable).", []
 
@@ -166,6 +175,19 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
 
     results: List[Dict[str, str]] = []
     seen_titles = set()
+
+    def add_result(title: str, url: str, snippet: str, source: str) -> None:
+        clean_t = _clean_html_text(title)
+        clean_s = _clean_html_text(snippet)
+        if not clean_t or not clean_s or clean_t.lower() in seen_titles:
+            return
+        seen_titles.add(clean_t.lower())
+        results.append({
+            "title": clean_t,
+            "url": url or f"https://duckduckgo.com/?q={urllib.parse.quote_plus(clean_t)}",
+            "snippet": clean_s[:800],
+            "source": source,
+        })
 
     # Expand query abbreviations and clean
     clean_q = re.sub(r"(?i)\b(who is|who was|what is|tell me about|can you tell me|do you know|the|of|a|an)\b", " ", q)
@@ -185,87 +207,116 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
         elif "prime minister" in q.lower() and any(u in q.lower() for u in ("uk", "united kingdom", "u.k.", "britain")):
             search_queries.insert(0, "Prime Minister of the United Kingdom")
             search_queries.insert(1, "List of prime ministers of the United Kingdom")
-        else:
-            search_queries.insert(0, f"List of {clean_q}")
 
-    # 1. Wikipedia Full-Text Search with Lead Section Extract (exintro + explaintext)
+    # 1. Wikipedia Summary & Search API
     for sq in search_queries[:3]:
         try:
-            srch_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(sq)}&utf8=&format=json"
-            req_srch = urllib.request.Request(srch_url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req_srch, timeout=timeout) as resp:
-                srch_data = json.loads(resp.read().decode("utf-8"))
-                items = srch_data.get("query", {}).get("search", [])
-                hit_titles = [it.get("title") for it in items[:3] if it.get("title") and it.get("title") not in seen_titles]
-                for ht in hit_titles:
-                    seen_titles.add(ht)
-
-                if hit_titles:
-                    titles_param = "|".join(urllib.parse.quote(t) for t in hit_titles)
-                    ext_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&titles={titles_param}&format=json"
-                    req_ext = urllib.request.Request(ext_url, headers={"User-Agent": USER_AGENT})
-                    with urllib.request.urlopen(req_ext, timeout=timeout) as resp_ext:
-                        ext_data = json.loads(resp_ext.read().decode("utf-8"))
-                        # Map pages by lowercase title to preserve hit_titles relevance order
-                        page_map = {
-                            (p.get("title") or "").strip().lower(): p
-                            for p in ext_data.get("query", {}).get("pages", {}).values()
-                        }
-                        for ht in hit_titles:
-                            page = page_map.get(ht.strip().lower())
-                            if not page:
-                                continue
-                            p_title = page.get("title", "")
-                            p_extract = (page.get("extract") or "").strip()
-                            if p_title and p_extract:
-                                # Split by linebreaks to get paragraphs and preserve officeholder details
-                                paras = [p.strip() for p in re.split(r"\r?\n+", p_extract) if p.strip()]
-                                snippet = " ".join(paras[:3])[:750]
-                                results.append({
-                                    "title": p_title,
-                                    "url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(p_title.replace(' ', '_'))}",
-                                    "snippet": snippet,
-                                    "source": "Wikipedia",
-                                })
+            summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(sq.replace(' ', '_'))}"
+            req_sum = urllib.request.Request(summary_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req_sum, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if "title" in data and "extract" in data:
+                    add_result(
+                        data["title"],
+                        data.get("content_urls", {}).get("desktop", {}).get("page") or f"https://en.wikipedia.org/wiki/{urllib.parse.quote(data['title'].replace(' ', '_'))}",
+                        data["extract"],
+                        "Wikipedia",
+                    )
+                    break
+                elif "query" in data and "search" in data.get("query", {}):
+                    for item in data["query"]["search"][:3]:
+                        add_result(
+                            item.get("title", ""),
+                            f"https://en.wikipedia.org/wiki/{urllib.parse.quote(item.get('title', '').replace(' ', '_'))}",
+                            item.get("snippet", ""),
+                            "Wikipedia",
+                        )
         except Exception:
             pass
 
-    # 2. DuckDuckGo Instant Answer API
-    ddg_encoded = urllib.parse.quote_plus(q)
-    ddg_url = f"https://api.duckduckgo.com/?q={ddg_encoded}&format=json&no_html=1&skip_disambig=1"
-    req_ddg = urllib.request.Request(ddg_url, headers={"User-Agent": USER_AGENT})
+    # If Wikipedia summary didn't produce enough results, run Wikipedia query search
+    if len(results) < 3:
+        for sq in search_queries[:2]:
+            try:
+                srch_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(sq)}&utf8=&format=json"
+                req_srch = urllib.request.Request(srch_url, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(req_srch, timeout=timeout) as resp:
+                    srch_data = json.loads(resp.read().decode("utf-8"))
+                    items = srch_data.get("query", {}).get("search", [])
+                    for item in items[:3]:
+                        t = item.get("title", "")
+                        snip = item.get("snippet", "")
+                        if t and snip:
+                            add_result(
+                                t,
+                                f"https://en.wikipedia.org/wiki/{urllib.parse.quote(t.replace(' ', '_'))}",
+                                snip,
+                                "Wikipedia",
+                            )
+            except Exception:
+                pass
+
+    # 2. Tech News & Community Intelligence (Hacker News Algolia API)
     try:
+        hn_url = f"https://hn.algolia.com/api/v1/search?query={urllib.parse.quote_plus(clean_q or q)}&tags=story&hitsPerPage=4"
+        req_hn = urllib.request.Request(hn_url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req_hn, timeout=timeout) as resp:
+            hn_data = json.loads(resp.read().decode("utf-8"))
+            for h in hn_data.get("hits", []):
+                t = h.get("title")
+                url_link = h.get("url") or f"https://news.ycombinator.com/item?id={h.get('objectID')}"
+                pts = h.get("points") or 0
+                author = h.get("author") or "Community"
+                created = (h.get("created_at") or "")[:10]
+                if t and (pts > 2 or "ai" in q.lower() or "llm" in q.lower() or "news" in q.lower()):
+                    snip = f"{t} (Published: {created} | Author: {author} | Points: {pts})"
+                    add_result(t, url_link, snip, "Tech News & Releases")
+    except Exception:
+        pass
+
+    # 3. Scientific Preprints & Breakthroughs (arXiv API)
+    if any(k in q.lower() for k in ("ai", "llm", "language model", "deep learning", "machine learning", "breakthrough", "neural", "vision", "quantum", "algorithm", "paper", "research", "gpt")):
+        try:
+            arxiv_q = clean_q or q
+            arxiv_url = f"http://export.arxiv.org/api/query?search_query=all:{urllib.parse.quote_plus(arxiv_q)}&start=0&max_results=3"
+            req_ar = urllib.request.Request(arxiv_url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req_ar, timeout=timeout) as resp:
+                xml_text = resp.read().decode("utf-8", errors="ignore")
+                entries = re.findall(r'<entry>([\s\S]*?)</entry>', xml_text)
+                for entry in entries:
+                    t_m = re.search(r'<title>([\s\S]*?)</title>', entry)
+                    s_m = re.search(r'<summary>([\s\S]*?)</summary>', entry)
+                    id_m = re.search(r'<id>([\s\S]*?)</id>', entry)
+                    if t_m:
+                        title_str = t_m.group(1).strip()
+                        sum_str = s_m.group(1).strip() if s_m else ""
+                        link_str = id_m.group(1).strip() if id_m else "https://arxiv.org"
+                        add_result(title_str, link_str, sum_str, "arXiv AI Preprints")
+        except Exception:
+            pass
+
+    # 4. DuckDuckGo Instant Answer API
+    try:
+        ddg_encoded = urllib.parse.quote_plus(q)
+        ddg_url = f"https://api.duckduckgo.com/?q={ddg_encoded}&format=json&no_html=1&skip_disambig=1"
+        req_ddg = urllib.request.Request(ddg_url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req_ddg, timeout=timeout) as resp:
             d_data = json.loads(resp.read().decode("utf-8"))
             abstract = (d_data.get("AbstractText") or "").strip()
             heading = (d_data.get("Heading") or q).strip()
             abs_url = d_data.get("AbstractURL") or f"https://duckduckgo.com/?q={ddg_encoded}"
-            if abstract and heading not in seen_titles:
-                seen_titles.add(heading)
-                results.append({
-                    "title": heading,
-                    "url": abs_url,
-                    "snippet": abstract,
-                    "source": "DuckDuckGo",
-                })
-
-            # Check related topics
+            if abstract:
+                add_result(heading, abs_url, abstract, "DuckDuckGo")
             for rel in d_data.get("RelatedTopics", [])[:2]:
                 if isinstance(rel, dict) and "Text" in rel and "FirstURL" in rel:
                     rel_title = rel.get("FirstURL", "").split("/")[-1].replace("_", " ")
-                    if rel_title and rel_title not in seen_titles:
-                        seen_titles.add(rel_title)
-                        results.append({
-                            "title": rel_title,
-                            "url": rel.get("FirstURL", ""),
-                            "snippet": rel.get("Text", ""),
-                            "source": "DuckDuckGo",
-                        })
+                    if rel_title:
+                        add_result(rel_title, rel.get("FirstURL", ""), rel.get("Text", ""), "DuckDuckGo")
     except Exception:
         pass
 
     if not results:
-        return False, f"No instant search results found online for '{q}'.", []
+        return False, f"No verified web results found online for '{q}'. Please check your search terms.", []
 
     lines = [f"🌐 Web Search Results for '{q}':"]
     for i, r in enumerate(results[:max_results], 1):
