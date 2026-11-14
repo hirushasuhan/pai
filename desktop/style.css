@@ -619,6 +619,10 @@ body {
   height: 20px;
 }
 
+#chat-file-input {
+  display: none !important;
+}
+
 /* Chat Attachments Tray */
 .chat-attachments-tray {
   display: flex;
