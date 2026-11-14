@@ -612,7 +612,7 @@ def save_custom_plugin(plugin: Dict[str, Any]) -> bool:
 
 
 def get_pai_config_path() -> Path:
-    p = Path.home() / ".pai" / "config.json"
+    p = Path.home() / ".pai" / "desktop_config.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
