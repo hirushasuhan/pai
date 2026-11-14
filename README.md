@@ -2,10 +2,11 @@
 
 > **A Stateless, Hardware-Aware, Recursive Self-Improving Personal Intelligence Engine**
 
-**Status (2026-10-27):**
+**Status (2026-11-14):**
+- **Release v1.2.0 (Tauri 2.0 Native Desktop Application):** Ultra-lightweight native desktop workstation for Windows (`desktop/`, `pai-desktop.exe`) featuring dual Clean Workstation Light and Deep Space Dark modes, headless native Windows folder picker dialogs, interactive Model Install modal with custom destination selection and real-time disk storage telemetry, pause/resume download engine with live progress bar and background download tracking.
 - **Release N (`v1.0.0-rc1`, commit `8ce81cb`):** Memory-safe Rust policy core (`core/`, `pai-core`) is **default-on** for runtime operations, with authoritative Python fallback and strict kill switch (`PAI_RUST_FALLBACK_PYTHON=1`).
 - **N+1 Evaluation Window:** Active 14-day operational shadow telemetry evaluation window is running with zero discrepancies across comparisons.
-- **Packaging & Distribution (Planned, not released):** A single `.exe` Inno Setup installer (`PAI-Setup-<version>-x64.exe`), PowerShell one-liner bootstrap (`install.ps1`), hardware-aware model setup, and Linux preview (`install.sh`) are specified in [PACKAGING_SPEC.md](docs/PACKAGING_SPEC.md) and [ADR-013](docs/adr/ADR-013-installer-and-distribution.md). Payload builder milestones P1 and P1b code are accepted; Milestone P2 is in progress.
+- **Packaging & Distribution:** Standalone native desktop binary (`pai-desktop.exe`), local Inno Setup payload integration, and PowerShell bootstrap are fully aligned.
 
 See [Roadmap](docs/ROADMAP.md) · [Packaging Spec](docs/PACKAGING_SPEC.md) · [Release Notes N](docs/RELEASE_NOTES_N.md) · [Project Review](docs/PROJECT_REVIEW.md) · [Threat Model](docs/THREAT_MODEL.md) · [Decisions (ADRs)](docs/adr/README.md).
 

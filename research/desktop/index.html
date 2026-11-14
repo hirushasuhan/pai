@@ -169,6 +169,11 @@
 
           <!-- Header Utilities & Theme Mode Toggle -->
           <div class="header-utils-box">
+            <!-- Background Downloading Pill -->
+            <button type="button" id="header-downloading-pill" class="header-downloading-pill hidden" title="Click to view live model download progress">
+              <span class="pulse-indicator"></span>
+              <span id="header-download-text">Downloading llama3.2:3b (0%)</span>
+            </button>
             <button type="button" id="btn-theme-mode-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Workstation Mode (Ctrl+Shift+L)">
               <svg class="theme-icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
               <svg class="theme-icon icon-sun hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
@@ -678,9 +683,19 @@
               <div class="progress-bar-bg">
                 <div id="pull-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
               </div>
-              <div class="progress-info">
+              <div class="progress-info flex-between mb-2">
                 <span id="pull-status-text">Downloading layers...</span>
                 <span id="pull-percent-text">0%</span>
+              </div>
+              <div class="progress-page-actions flex-between">
+                <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-expand-download-modal" title="View detailed progress popup">
+                  <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                  <span>View Details Popup</span>
+                </button>
+                <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-page-pause-download" title="Pause or cancel active download">
+                  <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                  <span>Pause / Cancel</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1052,7 +1067,10 @@
           </div>
           <div class="path-storage-hint mt-2 flex-between">
             <span id="install-modal-storage-info" class="storage-hint-ok">Checking storage...</span>
-            <button type="button" class="btn-link text-xs" id="btn-reset-install-path">Reset to Default</button>
+            <button type="button" class="btn btn-secondary btn-xs flex-center-gap btn-reset-pill" id="btn-reset-install-path" title="Reset to standard Ollama models directory">
+              <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+              <span>Reset to Default</span>
+            </button>
           </div>
         </div>
 
@@ -1069,9 +1087,19 @@
             <span id="install-modal-bytes-text">0 MB / 0 MB</span>
             <span id="install-modal-save-target">Saving to chosen folder</span>
           </div>
-          <p class="text-xs text-muted" id="install-modal-bg-note">
+          <p class="text-xs text-muted mb-2" id="install-modal-bg-note">
             💡 Download runs in background. You may keep this open or close it to continue your work.
           </p>
+          <div class="progress-actions flex-between mt-2">
+            <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-pause-install-download" title="Pause or cancel active model download">
+              <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+              <span id="btn-pause-download-label">Pause / Cancel</span>
+            </button>
+            <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-run-bg-modal" title="Run download in background and close popup">
+              <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+              <span>Run in Background</span>
+            </button>
+          </div>
         </div>
       </div>
       <div class="modal-footer flex-between">

@@ -19,7 +19,7 @@ struct AppState {
 fn get_engine_status() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "status": "ready",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "framework": "Tauri 2.0 (Rust)",
         "loopback": "127.0.0.1:8765"
     }))

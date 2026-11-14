@@ -2352,13 +2352,45 @@ function setupModels() {
   const btnBrowseInstallPath = document.getElementById("btn-browse-install-path");
   const btnResetInstallPath = document.getElementById("btn-reset-install-path");
   const installModalPathInput = document.getElementById("install-modal-path-input");
+  const btnPauseInstallDownload = document.getElementById("btn-pause-install-download");
+  const btnRunBgModal = document.getElementById("btn-run-bg-modal");
+  const btnPagePauseDownload = document.getElementById("btn-page-pause-download");
+  const btnExpandDownloadModal = document.getElementById("btn-expand-download-modal");
+  const headerDownloadingPill = document.getElementById("header-downloading-pill");
 
   function closeInstallModal() {
     if (modelInstallModal) modelInstallModal.classList.add("hidden");
   }
 
+  function reopenDownloadingModal() {
+    if (currentInstallTargetModel) {
+      openModelInstallModal(currentInstallTargetModel);
+    }
+  }
+
   if (btnCloseInstallModal) btnCloseInstallModal.addEventListener("click", closeInstallModal);
   if (btnCancelInstallModal) btnCancelInstallModal.addEventListener("click", closeInstallModal);
+  if (btnRunBgModal) btnRunBgModal.addEventListener("click", closeInstallModal);
+
+  if (btnPauseInstallDownload) {
+    btnPauseInstallDownload.addEventListener("click", () => {
+      pauseActiveDownload();
+    });
+  }
+
+  if (btnPagePauseDownload) {
+    btnPagePauseDownload.addEventListener("click", () => {
+      pauseActiveDownload();
+    });
+  }
+
+  if (headerDownloadingPill) {
+    headerDownloadingPill.addEventListener("click", reopenDownloadingModal);
+  }
+
+  if (btnExpandDownloadModal) {
+    btnExpandDownloadModal.addEventListener("click", reopenDownloadingModal);
+  }
 
   if (btnBrowseInstallPath) {
     btnBrowseInstallPath.addEventListener("click", async () => {
@@ -2527,13 +2559,33 @@ function renderInstalledModels(models) {
   });
 }
 
+let latestRecommendedModels = [];
+let currentInstallTargetModel = null;
+let isModelDownloading = false;
+let activeDownloadingModelTag = null;
+let activeDownloadPct = 0;
+let activeDownloadAbortController = null;
+
 function renderRecommendedModels(recs) {
   if (!recommendedModelsGrid) return;
+  latestRecommendedModels = recs || [];
   recommendedModelsGrid.innerHTML = "";
 
-  recs.forEach((rec) => {
+  latestRecommendedModels.forEach((rec) => {
     const card = document.createElement("div");
     card.className = "recommended-model-card";
+
+    const isDownloadingThis = isModelDownloading && activeDownloadingModelTag && (activeDownloadingModelTag === rec.tag || activeDownloadingModelTag === rec.name);
+
+    let footerBtnHtml = "";
+    if (rec.is_installed) {
+      footerBtnHtml = `<span class="active-badge">${SVG_ICONS.check} Installed</span>`;
+    } else if (isDownloadingThis) {
+      footerBtnHtml = `<button type="button" class="btn btn-primary btn-sm btn-download-rec downloading-active" data-tag="${escapeHtml(rec.tag)}" title="Click to view live download progress in popup"><span class="spinner-inline"></span> Downloading (${activeDownloadPct || 0}%)...</button>`;
+    } else {
+      footerBtnHtml = `<button type="button" class="btn btn-primary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}">Install Model</button>`;
+    }
+
     card.innerHTML = `
       <div class="rec-model-header">
         <span class="rec-model-name">${escapeHtml(rec.name)}</span>
@@ -2541,7 +2593,7 @@ function renderRecommendedModels(recs) {
       </div>
       <div class="rec-model-desc">${escapeHtml(rec.desc)}</div>
       <div class="rec-model-footer">
-        ${rec.is_installed ? `<span class="active-badge">${SVG_ICONS.check} Installed</span>` : `<button type="button" class="btn btn-primary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}">Install Model</button>`}
+        ${footerBtnHtml}
       </div>
     `;
 
@@ -2611,8 +2663,37 @@ async function switchModel(modelName) {
   }
 }
 
-let currentInstallTargetModel = null;
-let isModelDownloading = false;
+function pauseActiveDownload() {
+  if (activeDownloadAbortController) {
+    activeDownloadAbortController.abort();
+    activeDownloadAbortController = null;
+  }
+  isModelDownloading = false;
+  const tag = activeDownloadingModelTag;
+  activeDownloadingModelTag = null;
+  activeDownloadPct = 0;
+
+  const statusEl = document.getElementById("install-modal-status-text");
+  if (statusEl) statusEl.textContent = "Download paused / canceled.";
+  const confirmLabel = document.getElementById("btn-confirm-install-label");
+  if (confirmLabel) confirmLabel.textContent = "Confirm & Resume Download";
+  const cancelBtn = document.getElementById("btn-cancel-install-modal");
+  if (cancelBtn) cancelBtn.style.display = "";
+
+  if (pullStatusText) pullStatusText.textContent = `Download paused for ${tag || "model"}.`;
+  if (btnPullModel) {
+    btnPullModel.disabled = false;
+    btnPullModel.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>Start Download & Install</span>`;
+  }
+
+  const headerPill = document.getElementById("header-downloading-pill");
+  if (headerPill) headerPill.classList.add("hidden");
+
+  showToast(`Model download paused for ${tag || "model"}.`, "warning");
+  if (latestRecommendedModels.length > 0) {
+    renderRecommendedModels(latestRecommendedModels);
+  }
+}
 
 async function checkInstallPathStorage(pathVal) {
   const infoEl = document.getElementById("install-modal-storage-info");
@@ -2657,8 +2738,9 @@ async function openModelInstallModal(modelInfo) {
 
   if (!modal) return;
 
+  const mTag = modelInfo.tag || modelInfo.name;
   if (titleEl) titleEl.textContent = `Install AI Model: ${modelInfo.name || modelInfo.tag}`;
-  if (tagEl) tagEl.textContent = modelInfo.tag || modelInfo.name;
+  if (tagEl) tagEl.textContent = mTag;
   if (sizeEl) sizeEl.textContent = modelInfo.size ? `~${modelInfo.size}` : "Variable";
   if (descEl) descEl.textContent = modelInfo.desc || "High-performance open weights calibrated for coding, fast chat and deep reasoning.";
 
@@ -2678,15 +2760,23 @@ async function openModelInstallModal(modelInfo) {
     }
   }
 
-  // Reset progress section to hidden initial state
-  if (progressSec) progressSec.classList.add("hidden");
-  if (confirmBtn) {
-    confirmBtn.disabled = false;
-    confirmBtn.classList.remove("btn-secondary");
-    confirmBtn.classList.add("btn-primary");
+  // Check if this model is actively downloading
+  const isThisDownloading = isModelDownloading && activeDownloadingModelTag && (activeDownloadingModelTag === mTag);
+
+  if (isThisDownloading && progressSec) {
+    progressSec.classList.remove("hidden");
+    if (confirmLabel) confirmLabel.textContent = "Run in Background & Close";
+    if (cancelBtn) cancelBtn.style.display = "none";
+  } else {
+    if (progressSec) progressSec.classList.add("hidden");
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.classList.remove("btn-secondary");
+      confirmBtn.classList.add("btn-primary");
+    }
+    if (confirmLabel) confirmLabel.textContent = "Confirm & Download Model";
+    if (cancelBtn) cancelBtn.style.display = "";
   }
-  if (confirmLabel) confirmLabel.textContent = "Confirm & Download Model";
-  if (cancelBtn) cancelBtn.style.display = "";
 
   modal.classList.remove("hidden");
 }
@@ -2694,6 +2784,9 @@ async function openModelInstallModal(modelInfo) {
 function startModelDownload(modelInfo, targetPath = "") {
   const modelName = modelInfo.tag || modelInfo.name;
   isModelDownloading = true;
+  activeDownloadingModelTag = modelName;
+  activeDownloadPct = 0;
+  activeDownloadAbortController = new AbortController();
 
   const progressSec = document.getElementById("install-modal-progress-section");
   const statusEl = document.getElementById("install-modal-status-text");
@@ -2703,6 +2796,8 @@ function startModelDownload(modelInfo, targetPath = "") {
   const targetEl = document.getElementById("install-modal-save-target");
   const confirmLabel = document.getElementById("btn-confirm-install-label");
   const cancelBtn = document.getElementById("btn-cancel-install-modal");
+  const headerPill = document.getElementById("header-downloading-pill");
+  const headerText = document.getElementById("header-download-text");
 
   if (progressSec) progressSec.classList.remove("hidden");
   if (statusEl) statusEl.textContent = `Connecting & initializing download for ${modelName}...`;
@@ -2713,12 +2808,26 @@ function startModelDownload(modelInfo, targetPath = "") {
   if (confirmLabel) confirmLabel.textContent = "Run in Background & Close";
   if (cancelBtn) cancelBtn.style.display = "none";
 
-  // Also activate main page progress bar
+  // Activate header pill
+  if (headerPill && headerText) {
+    headerPill.classList.remove("hidden");
+    headerText.textContent = `Downloading ${modelName} (0%)`;
+  }
+
+  // Update card buttons
+  if (latestRecommendedModels.length > 0) {
+    renderRecommendedModels(latestRecommendedModels);
+  }
+
+  // Activate main page progress bar
   if (pullProgressContainer) pullProgressContainer.classList.remove("hidden");
   if (pullProgressBar) pullProgressBar.style.width = "0%";
   if (pullStatusText) pullStatusText.textContent = `Downloading ${modelName}...`;
   if (pullPercentText) pullPercentText.textContent = "0%";
-  if (btnPullModel) btnPullModel.disabled = true;
+  if (btnPullModel) {
+    btnPullModel.disabled = true;
+    btnPullModel.innerHTML = `<span class="spinner-inline"></span> <span>Downloading ${modelName}...</span>`;
+  }
 
   const payload = { model: modelName };
   if (targetPath) payload.path = targetPath;
@@ -2727,6 +2836,7 @@ function startModelDownload(modelInfo, targetPath = "") {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal: activeDownloadAbortController.signal,
   }).then(response => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -2735,6 +2845,9 @@ function startModelDownload(modelInfo, targetPath = "") {
       reader.read().then(({ done, value }) => {
         if (done) {
           isModelDownloading = false;
+          activeDownloadingModelTag = null;
+          activeDownloadAbortController = null;
+
           if (statusEl) statusEl.textContent = `✓ Successfully installed ${modelName}!`;
           if (pctEl) pctEl.textContent = "100%";
           if (barEl) barEl.style.width = "100%";
@@ -2744,7 +2857,12 @@ function startModelDownload(modelInfo, targetPath = "") {
           if (pullStatusText) pullStatusText.textContent = "Download complete!";
           if (pullProgressBar) pullProgressBar.style.width = "100%";
           if (pullPercentText) pullPercentText.textContent = "100%";
-          if (btnPullModel) btnPullModel.disabled = false;
+          if (btnPullModel) {
+            btnPullModel.disabled = false;
+            btnPullModel.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>Start Download & Install</span>`;
+          }
+
+          if (headerPill) headerPill.classList.add("hidden");
 
           showToast(`Successfully downloaded and installed ${modelName}!`, "success", "Download Complete");
           loadInstalledModels();
@@ -2765,6 +2883,8 @@ function startModelDownload(modelInfo, targetPath = "") {
               }
               if (d.total && d.completed) {
                 const pct = Math.round((d.completed / d.total) * 100);
+                activeDownloadPct = pct;
+
                 if (barEl) barEl.style.width = `${pct}%`;
                 if (pctEl) pctEl.textContent = `${pct}%`;
                 if (pullProgressBar) pullProgressBar.style.width = `${pct}%`;
@@ -2773,6 +2893,20 @@ function startModelDownload(modelInfo, targetPath = "") {
                 const completedMB = (d.completed / (1024 * 1024)).toFixed(1);
                 const totalMB = (d.total / (1024 * 1024)).toFixed(1);
                 if (bytesEl) bytesEl.textContent = `${completedMB} MB / ${totalMB} MB`;
+
+                // Update card button live
+                const activeCardBtn = document.querySelector(`.btn-download-rec[data-tag="${modelName}"]`);
+                if (activeCardBtn && !activeCardBtn.classList.contains("downloading-active")) {
+                  activeCardBtn.classList.add("downloading-active");
+                }
+                if (activeCardBtn) {
+                  activeCardBtn.innerHTML = `<span class="spinner-inline"></span> Downloading (${pct}%)...`;
+                }
+
+                // Update header pill text
+                if (headerText) {
+                  headerText.textContent = `Downloading ${modelName} (${pct}%)`;
+                }
               }
             } catch (e) {}
           }
@@ -2782,13 +2916,27 @@ function startModelDownload(modelInfo, targetPath = "") {
     }
     read();
   }).catch(err => {
+    if (err.name === "AbortError") {
+      // User triggered pause / cancel
+      return;
+    }
     isModelDownloading = false;
+    activeDownloadingModelTag = null;
+    activeDownloadAbortController = null;
+
     if (statusEl) statusEl.textContent = `Download error: ${err.message}`;
     if (confirmLabel) confirmLabel.textContent = "Close";
     if (cancelBtn) cancelBtn.style.display = "";
     if (pullStatusText) pullStatusText.textContent = `Download error: ${err.message}`;
-    if (btnPullModel) btnPullModel.disabled = false;
+    if (btnPullModel) {
+      btnPullModel.disabled = false;
+      btnPullModel.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>Start Download & Install</span>`;
+    }
+    if (headerPill) headerPill.classList.add("hidden");
     showToast(`Download failed: ${err.message}`, "error");
+    if (latestRecommendedModels.length > 0) {
+      renderRecommendedModels(latestRecommendedModels);
+    }
   });
 }
 
