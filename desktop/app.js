@@ -260,6 +260,7 @@ function setupNavigation() {
       const data = await res.json();
       if (data.success) {
         activeModel = selected;
+        updateChatPlaceholderForActiveModel();
         showToast(`Switched active model to ${selected}`, "success", "Model Changed");
       }
     } catch (err) {
@@ -383,6 +384,16 @@ function switchTab(tab) {
 }
 
 // 2. Chat System with Native AI Team & Slash Commands Integration
+function updateChatPlaceholderForActiveModel() {
+  if (!chatInput) return;
+  const m = (activeModel || "").toLowerCase();
+  if (m.includes("llava") || m.includes("moondream") || m.includes("vision")) {
+    chatInput.placeholder = "Ask a question, or attach an image (📎) for visual inspection...";
+  } else {
+    chatInput.placeholder = "Ask anything, run /image, /team, /help... (Enter to send, Shift+Enter for newline)";
+  }
+}
+
 const SLASH_COMMANDS = [
   { cmd: "/internet on", desc: "Enable live real-time internet web access & RAG", cat: "Grounding" },
   { cmd: "/internet off", desc: "Disable internet access (strictly offline mode)", cat: "Grounding" },
@@ -391,7 +402,7 @@ const SLASH_COMMANDS = [
   { cmd: "/team", desc: "Toggle autonomous 4-role AI engineering team", cat: "Agents" },
   { cmd: "/supervisor", desc: "Open Antigravity Autonomous Supervisor in AI Team", cat: "Agents" },
   { cmd: "/antigravity", desc: "Launch continuous autonomous agent in AI Team tab", cat: "Agents" },
-  { cmd: "/image", desc: "Generate image with Google Imagen 3 or DALL-E 3", cat: "Creative" },
+  { cmd: "/image", desc: "Generate image with Google Imagen 3 or DALL-E (Configure in Cloud AI)", cat: "Creative" },
   { cmd: "/weather", desc: "Fetch live real-time weather telemetry", cat: "Tools" },
   { cmd: "/web", desc: "Search live web knowledge and display citations", cat: "Tools" },
   { cmd: "/mcp", desc: "Manage Model Context Protocol (MCP) servers & tools", cat: "System" },
@@ -849,6 +860,7 @@ function renderChatHistorySidebar() {
 function setupChat() {
   initChatHistory();
   setupSlashCommands();
+  updateChatPlaceholderForActiveModel();
 
   // Attach File Button & File Input
   if (btnAttachFile && chatFileInput) {
@@ -982,6 +994,27 @@ function setupChat() {
       chatInput.value = "";
       return;
     }
+    if (lowerPrompt === "/image" || lowerPrompt === "/img") {
+      chatInput.value = "";
+      appendUserMessage(prompt);
+      const botId = "msg-" + Date.now();
+      appendAssistantPlaceholder(botId, false);
+      const isVision = (activeModel || "").toLowerCase().includes("llava") || (activeModel || "").toLowerCase().includes("moondream");
+      const modelNote = isVision
+        ? `Currently active model **\`${activeModel}\`** is a **Vision Understanding model** (it inspects and analyzes uploaded images via 📎, but cannot synthesize new images).\n\n`
+        : `Currently active model **\`${activeModel}\`** is a **Local Language model**.\n\n`;
+      const imgHelpText = `### 🎨 How to Generate AI Images with \`/image\`\n\n` +
+        modelNote +
+        `To generate photorealistic images:\n` +
+        `1. Provide a descriptive prompt with the command:\n` +
+        `   \`\`\`text\n` +
+        `   /image a majestic tree in a misty forest at dawn, cinematic lighting\n` +
+        `   \`\`\`\n` +
+        `2. Ensure you have an Image Generation API Key configured in **Settings & 3rd-Party Cloud AI** (such as **Google Imagen 3** with a Gemini API key or **OpenAI DALL-E 3**).\n\n` +
+        `*Tip:* To inspect or ask questions about an existing image using **${activeModel}**, attach the image file using the paperclip button (📎) and type your question!`;
+      updateAssistantMessage(botId, imgHelpText, null, []);
+      return;
+    }
     if (lowerPrompt === "/help") {
       chatInput.value = "";
       appendUserMessage("/help");
@@ -992,7 +1025,7 @@ function setupChat() {
         `- \`/factcheck [on|off]\` : Toggle automated claim verification and audit engine\n` +
         `- \`/team\` : Toggle autonomous 4-role AI engineering team\n` +
         `- \`/supervisor\` or \`/antigravity\` : Open Antigravity Autonomous Supervisor in AI Team\n` +
-        `- \`/image <prompt>\` : Synthesize image with Google Imagen 3 or DALL-E 3\n` +
+        `- \`/image <prompt>\` : Synthesize image with Google Imagen 3 or DALL-E (Configure in Cloud AI)\n` +
         `- \`/weather [city]\` : Fetch live real-time Open-Meteo weather forecast\n` +
         `- \`/web <query>\` : Search Wikipedia & DuckDuckGo with live web citations\n` +
         `- \`/mcp\` : Open Model Context Protocol (MCP) servers & plugins hub\n` +
@@ -2863,6 +2896,7 @@ function populateModelSelectors(models) {
     headerModelSelect.options[0].selected = true;
     activeModel = headerModelSelect.options[0].value;
   }
+  updateChatPlaceholderForActiveModel();
 }
 
 async function switchModel(modelName) {
@@ -2876,6 +2910,7 @@ async function switchModel(modelName) {
     if (data.success) {
       activeModel = modelName;
       headerModelSelect.value = modelName;
+      updateChatPlaceholderForActiveModel();
       showToast(`Model switched to ${modelName}`, "success");
       loadInstalledModels();
     }

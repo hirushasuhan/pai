@@ -439,15 +439,15 @@ DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
         "name": "llava:7b",
         "tag": "llava:7b",
         "size": "4.7 GB",
-        "desc": "LLaVA 7B - Multimodal vision, image inspection & visual QA",
-        "category": "Vision & Multimodal",
+        "desc": "LLaVA 7B - Vision Understanding (Inspects & explains uploaded images; does NOT generate new images)",
+        "category": "Vision Understanding",
     },
     {
         "name": "moondream:latest",
         "tag": "moondream:latest",
         "size": "1.7 GB",
-        "desc": "Moondream 2 - Ultra-compact, fast vision & captioning model",
-        "category": "Vision & Multimodal",
+        "desc": "Moondream 2 - Vision Understanding (Inspects & captions uploaded images; does NOT generate new images)",
+        "category": "Vision Understanding",
     },
 ]
 
@@ -471,11 +471,20 @@ def load_recommended_catalog(installed_names: Optional[set] = None) -> List[Dict
             pass
 
     if not catalog_list:
-        catalog_list = DEFAULT_RECOMMENDED_MODELS.copy()
+        catalog_list = [dict(m) for m in DEFAULT_RECOMMENDED_MODELS]
         try:
             cfg_file.write_text(json.dumps(catalog_list, indent=2), encoding="utf-8")
         except Exception:
             pass
+
+    # Ensure descriptions reflect latest authoritative guidance
+    desc_map = {m["tag"].lower(): (m["desc"], m.get("category", "")) for m in DEFAULT_RECOMMENDED_MODELS}
+    for entry in catalog_list:
+        tag_k = entry.get("tag", "").lower()
+        if tag_k in desc_map:
+            entry["desc"] = desc_map[tag_k][0]
+            if desc_map[tag_k][1]:
+                entry["category"] = desc_map[tag_k][1]
 
     if installed_names is None:
         local_models, _ = get_all_installed_local_models()
@@ -1065,6 +1074,21 @@ def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, An
             else:
                 runs = re.findall(rb'[\x20-\x7E\r\n]{5,}', raw_bytes)
                 text = "\n".join(r.decode("latin-1", errors="ignore") for r in runs if not r.startswith(rb"%PDF") and not r.startswith(rb"/"))
+
+        # 5. Image Files (.png, .jpg, .jpeg, .webp, .gif, .bmp) for Multimodal Vision (LLaVA / Moondream)
+        elif ext in ("png", "jpg", "jpeg", "webp", "gif", "bmp"):
+            import base64
+            b64_img = base64.b64encode(raw_bytes).decode("ascii")
+            return {
+                "success": True,
+                "filename": filename,
+                "type": "image",
+                "size": len(raw_bytes),
+                "char_count": len(b64_img),
+                "content": f"[ATTACHED IMAGE: {filename} (Multimodal visual data)]",
+                "image_base64": b64_img,
+                "preview": f"[Attached Image: {filename} - {round(len(raw_bytes)/1024, 1)} KB]",
+            }
 
         else:
             try:
@@ -2099,6 +2123,23 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
         return aligned_search_query, contextual_prompt
 
+    def _check_image_generation_availability(self) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Check if any image generator (Google Imagen, OpenAI DALL-E) is configured."""
+        cfg = load_cloud_config()
+        for cm in cfg.get("configured_models", []):
+            if cm.get("model_type") == "image" and cm.get("api_key"):
+                return True, cm.get("model_name"), cm.get("provider", "custom")
+            if any(tok in cm.get("model_name", "").lower() for tok in ("imagen", "dall-e")) and cm.get("api_key"):
+                return True, cm.get("model_name"), cm.get("provider", "custom")
+
+        # Check preset provider keys
+        if get_provider_key("gemini"):
+            return True, "imagen-3.0-generate-002", "gemini"
+        if get_provider_key("openai"):
+            return True, "dall-e-3", "openai"
+
+        return False, None, None
+
     def _handle_chat(self, body: Dict[str, Any]) -> None:
         """Execute chat completion, optionally ground in project files & fact-check."""
         raw_prompt = body.get("prompt", "").strip()
@@ -2112,24 +2153,31 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             return
         if not raw_prompt:
             raw_prompt = "Please analyze and summarize the attached document(s)."
-        # Inject attached documents (docs, txt, pdf, excel, md) into prompt context
+
+        # Inject attached documents & images into prompt context
+        images_for_ollama = []
         attachments = body.get("attachments", [])
         if attachments and isinstance(attachments, list):
             att_blocks = []
             for att in attachments:
                 a_name = att.get("name") or att.get("filename") or "document"
                 a_type = att.get("type", "file")
-                a_content = (att.get("content") or "").strip()
-                if a_content:
-                    att_blocks.append(
-                        f"[ATTACHED DOCUMENT: {a_name} (Format: {a_type})]\n"
-                        f"--- Content Begin ---\n"
-                        f"{a_content}\n"
-                        f"--- Content End ---"
-                    )
+                b64_img = att.get("image_base64")
+                if b64_img:
+                    images_for_ollama.append(b64_img)
+                    att_blocks.append(f"[ATTACHED IMAGE: {a_name}] (Visual inspection data)")
+                else:
+                    a_content = (att.get("content") or "").strip()
+                    if a_content:
+                        att_blocks.append(
+                            f"[ATTACHED DOCUMENT: {a_name} (Format: {a_type})]\n"
+                            f"--- Content Begin ---\n"
+                            f"{a_content}\n"
+                            f"--- Content End ---"
+                        )
             if att_blocks:
                 raw_prompt = (
-                    f"The user has attached the following document(s) for your review:\n\n"
+                    f"The user has attached the following file(s) for your review:\n\n"
                     f"{chr(10).join(att_blocks)}\n\n"
                     f"User Instruction / Query:\n{raw_prompt}"
                 )
@@ -2219,20 +2267,81 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # Check if requested model or prompt is for image generation
+        # Check if requested model or prompt is an explicit image synthesis request
+        stripped_prompt = raw_prompt.strip()
+        prompt_is_image = (
+            stripped_prompt.startswith(("/image ", "/img ", "/image\n", "/img\n"))
+            or stripped_prompt in ("/image", "/img")
+        )
+
         is_img_model = False
         cfg = load_cloud_config()
         for cm in cfg.get("configured_models", []):
             if cm.get("model_name") == model and cm.get("model_type") == "image":
                 is_img_model = True
                 break
-        if any(tok in model.lower() for tok in ("imagen", "dall-e", "image")):
+        if any(tok in model.lower() for tok in ("imagen", "dall-e")):
             is_img_model = True
 
-        prompt_is_image = raw_prompt.strip().startswith(("/image ", "/img "))
         if is_img_model or prompt_is_image:
-            clean_prompt = re.sub(r"^/(image|img)\s+", "", raw_prompt.strip())
-            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(clean_prompt, model=model)
+            clean_prompt = re.sub(r"^/(image|img)\s*", "", stripped_prompt).strip()
+
+            if not clean_prompt:
+                self._send_json({
+                    "success": True,
+                    "is_image": False,
+                    "response": (
+                        "### 🎨 AI Image Synthesis (`/image`)\n\n"
+                        "**Usage:** `/image <description of the image you want to create>`\n\n"
+                        "**Examples:**\n"
+                        "- `/image a majestic ancient oak tree in a misty forest at sunrise, 8k resolution`\n"
+                        "- `/image a futuristic cybernetic workstation with glowing holographic displays`\n"
+                        "- `/image serene tropical beach in Sri Lanka with turquoise waves and coconut palms`\n\n"
+                        "*(Note: Requires Google Imagen 3 or OpenAI DALL-E configured in the Cloud AI tab)*"
+                    ),
+                    "model": model,
+                })
+                return
+
+            has_img_gen, img_model, img_provider = self._check_image_generation_availability()
+
+            if not has_img_gen:
+                is_vision_model = any(v in model.lower() for v in ("llava", "moondream", "vision", "bakllava"))
+                if is_vision_model:
+                    explanation = (
+                        f"The currently selected model **`{model}`** is a **Multimodal Vision Understanding model** (Image Input → Text Analysis).\n\n"
+                        f"- 👁️ **What `{model}` CAN do:** It can **inspect, analyze, and describe** images you upload. You can attach any image using the 📎 paperclip button or drag-and-drop into chat, and ask questions about it!\n"
+                        f"- ❌ **What `{model}` CANNOT do:** It **cannot generate, synthesize, or draw new images** from text (Text → Image). Local Ollama models are autoregressive language transformers, not image synthesis/diffusion engines."
+                    )
+                else:
+                    explanation = (
+                        f"The currently selected model **`{model}`** is a **Local Text & Code language model**.\n\n"
+                        f"- ❌ Local Ollama language models **cannot generate or draw images**. Image synthesis requires an AI image generator (such as Google Imagen 3, Stable Diffusion, or DALL-E)."
+                    )
+
+                response_markdown = (
+                    f"### 🎨 Image Generation Not Supported by `{model}`\n\n"
+                    f"{explanation}\n\n"
+                    f"---\n\n"
+                    f"#### 🚀 How to Enable Photorealistic Image Synthesis in PAI:\n"
+                    f"1. Navigate to the **3rd-Party Cloud AI & Image Generation** tab (click the cloud icon in the left navigation or type `/settings`).\n"
+                    f"2. Add your **Google Gemini API Key** (for **Google Imagen 3**) or **OpenAI Key** (for **DALL-E 3**).\n"
+                    f"3. Return to chat and type:\n"
+                    f"   ```text\n"
+                    f"   /image {clean_prompt}\n"
+                    f"   ```\n"
+                    f"   PAI Studio will automatically synthesize and render the image directly in this chat!"
+                )
+                self._send_json({
+                    "success": True,
+                    "is_image": False,
+                    "response": response_markdown,
+                    "model": model,
+                })
+                return
+
+            target_image_model = img_model if not is_img_model else model
+            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(clean_prompt, model=target_image_model)
             if ok_img:
                 self._send_json({
                     "success": True,
@@ -2241,12 +2350,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     "image_path": fpath,
                     "filename": fname,
                     "prompt": clean_prompt,
-                    "model": model,
+                    "model": target_image_model,
                     "response": f"Generated image for: \"{clean_prompt}\"",
                 })
                 return
             else:
-                self._send_json({"success": False, "error": data_url_or_err}, status=500)
+                self._send_json({"success": False, "error": f"Image generation failed: {data_url_or_err}"}, status=500)
                 return
 
         # Apply Conversational Context Alignment & History Compaction
@@ -2324,6 +2433,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     "num_ctx": ctx_size,
                 },
             }
+            if images_for_ollama:
+                ollama_payload["images"] = images_for_ollama
             req_data = json.dumps(ollama_payload).encode("utf-8")
 
             # Execute with automatic retry on transient startup warm-up

@@ -461,31 +461,12 @@ def generate_image_cloud(
         except Exception:
             pass
 
-    # 3. High-Resolution Offline Artistic Canvas (Fail-Safe Local Generator)
-    try:
-        from PIL import Image, ImageDraw
-        width, height = 1024, 1024
-        img = Image.new("RGB", (width, height), (15, 23, 42))
-        draw = ImageDraw.Draw(img)
-        # Background grid
-        for y in range(0, height, 64):
-            draw.line([(0, y), (width, y)], fill=(30, 41, 59), width=1)
-        for x in range(0, width, 64):
-            draw.line([(x, 0), (x, height)], fill=(30, 41, 59), width=1)
-        # Concentric glowing circles
-        center_x, center_y = width // 2, height // 2
-        for r in range(360, 40, -40):
-            draw.ellipse([center_x - r, center_y - r, center_x + r, center_y + r], outline=(0, 240, 255), width=2)
-        draw.ellipse([center_x - 120, center_y - 120, center_x + 120, center_y + 120], fill=(99, 102, 241), outline=(168, 85, 247), width=4)
-        draw.text((center_x, 80), "PAI STUDIO GENERATIVE ART", fill=(255, 255, 255), anchor="mm")
-        draw.text((center_x, height - 100), f'Prompt: "{prompt_clean[:60]}"', fill=(226, 232, 240), anchor="mm")
-        img.save(out_file, format="PNG")
-        raw_bytes = out_file.read_bytes()
-        b64_str = base64.b64encode(raw_bytes).decode("ascii")
-        data_uri = f"data:image/png;base64,{b64_str}"
-        return True, data_uri, str(out_file), filename
-    except Exception as exc:
-        return False, f"Image generation failed: {exc}", None, None
+    # 3. No image generation provider configured
+    return False, (
+        "No AI Image Generation API Key is configured. "
+        "Local models (like LLaVA or Llama) are vision/language understanding models and cannot synthesize new images. "
+        "Please connect Google Imagen 3 (via Gemini API key) or OpenAI DALL-E in the Cloud AI tab."
+    ), None, None
 
 
 def query_cloud_ai(
