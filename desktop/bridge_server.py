@@ -1840,6 +1840,92 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         data = get_system_preflight()
         self._send_json(data)
 
+    def _compact_and_align_conversation_history(self, history: List[Dict[str, Any]], current_prompt: str) -> Tuple[str, str]:
+        """
+        Conversational Context Alignment & History Compaction Engine.
+        1. Synthesizes an aligned search query if current_prompt is anaphoric (e.g. 'rate eka' -> 'usd to lkr rate').
+        2. Distills and compacts older conversation turns into high-salience semantic context.
+        3. Preserves immediate recent turns verbatim so the model maintains 100% coherence across multi-turn chats.
+        """
+        if not history or not isinstance(history, list):
+            return current_prompt, current_prompt
+
+        # Normalize messages into standard role/content pairs
+        valid_msgs = []
+        for item in history:
+            if isinstance(item, dict):
+                role = item.get("role") or ("user" if item.get("is_user") else "assistant")
+                content = (item.get("content") or item.get("text") or "").strip()
+                if content and role in ("user", "assistant"):
+                    valid_msgs.append({"role": role, "content": content})
+
+        if not valid_msgs:
+            return current_prompt, current_prompt
+
+        # Extract previous user questions and assistant answers
+        user_queries = [m["content"] for m in valid_msgs if m["role"] == "user"]
+        last_user_query = user_queries[-1] if user_queries else ""
+
+        # Detect if current prompt is anaphoric, ellipsis or follow-up
+        q_low = current_prompt.lower()
+        follow_up_triggers = (
+            "rate eka", "eka", "it", "that", "again", "why", "how much", "tell me more",
+            "poddak kiyanna", "mokakda", "what about", "and this", "continue", "give me",
+            "denna", "ko", "rate", "price", "val", "cost", "difference", "explain", "thawa"
+        )
+        is_follow_up = len(current_prompt.split()) <= 7 and any(trig in q_low for trig in follow_up_triggers)
+
+        # 1. Synthesize Aligned Search Query for Grounding
+        aligned_search_query = current_prompt
+        if is_follow_up and last_user_query:
+            aligned_search_query = f"{last_user_query} {current_prompt}".strip()
+
+        # 2. History Compaction:
+        # If history is short (<= 3 messages), format directly
+        if len(valid_msgs) <= 3:
+            formatted = []
+            for m in valid_msgs:
+                prefix = "User" if m["role"] == "user" else "Assistant"
+                formatted.append(f"{prefix}: {m['content']}")
+            history_text = "\n\n".join(formatted)
+            contextual_prompt = (
+                f"[CONVERSATION DIALOGUE CONTEXT]\n"
+                f"You are conversing with the user. Maintain strict relevance and continuity with this ongoing dialogue:\n\n"
+                f"{history_text}\n\n"
+                f"Current User Request:\n{current_prompt}"
+            )
+        else:
+            # Compact older turns into salient points and keep last 2 turns verbatim
+            older_turns = valid_msgs[:-2]
+            recent_turns = valid_msgs[-2:]
+
+            bullets = []
+            for m in older_turns:
+                label = "User asked" if m["role"] == "user" else "Assistant replied"
+                snippet = m["content"][:160].replace("\n", " ").strip()
+                bullets.append(f"- {label}: \"{snippet}\"")
+            compact_summary = "\n".join(bullets[-6:])
+
+            recent_formatted = []
+            for m in recent_turns:
+                prefix = "User" if m["role"] == "user" else "Assistant"
+                recent_formatted.append(f"{prefix}: {m['content']}")
+            recent_text = "\n\n".join(recent_formatted)
+
+            contextual_prompt = (
+                f"[CONVERSATION CONTEXT & RELEVANCE MEMORY]\n"
+                f"You are engaged in an ongoing multi-turn dialogue with the user. Continue directly and accurately without losing context.\n\n"
+                f"--- Prior Conversation Context ---\n"
+                f"{compact_summary}\n\n"
+                f"--- Immediate Recent Turn ---\n"
+                f"{recent_text}\n\n"
+                f"--- Current User Request ---\n"
+                f"User: {current_prompt}\n"
+                f"Assistant:"
+            )
+
+        return aligned_search_query, contextual_prompt
+
     def _handle_chat(self, body: Dict[str, Any]) -> None:
         """Execute chat completion, optionally ground in project files & fact-check."""
         raw_prompt = body.get("prompt", "").strip()
@@ -1990,21 +2076,24 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": data_url_or_err}, status=500)
                 return
 
+        # Apply Conversational Context Alignment & History Compaction
+        aligned_search_query, contextual_prompt = self._compact_and_align_conversation_history(history, raw_prompt)
+
         # Prepare prompt with project context if an active project is selected
-        prompt = raw_prompt
+        prompt = contextual_prompt
         if project_path and Path(project_path).is_dir():
             proj_context = get_project_codebase_context(Path(project_path))
             if proj_context:
                 prompt = (
                     f"You are working in the active project directory: {project_path}\n"
                     f"Relevant Project Files:\n{proj_context}\n\n"
-                    f"User Request:\n{raw_prompt}"
+                    f"{contextual_prompt}"
                 )
 
-        # Real-time Web Grounding: Pre-inject authoritative live internet references
+        # Real-time Web Grounding: Pre-inject authoritative live internet references using aligned query
         grounding_citations = []
         if is_internet_enabled():
-            has_ground, ground_ctx, cites = get_live_grounding_context(raw_prompt)
+            has_ground, ground_ctx, cites = get_live_grounding_context(aligned_search_query)
             if has_ground and ground_ctx:
                 prompt = f"{ground_ctx}\n\nUser Question:\n{prompt}"
                 grounding_citations = cites

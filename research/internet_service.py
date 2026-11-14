@@ -327,6 +327,50 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
     return True, msg, results[:max_results]
 
 
+def fetch_live_currency_rate(query: str, timeout: float = 5.0) -> Tuple[bool, str, Dict[str, Any]]:
+    """Fetch live authoritative foreign exchange rates for currencies mentioned in query."""
+    q_low = (query or "").lower()
+    currency_keywords = (
+        "usd", "lkr", "eur", "gbp", "jpy", "inr", "aud", "cad", "cny", "sgd", "aed", "qar", "sar",
+        "currency", "exchange rate", "dollar rate", "dollar to rupee", "rate eka", "mudal", "forex", "fx"
+    )
+    if not any(k in q_low for k in currency_keywords):
+        return False, "", {}
+
+    # Target currency resolution (default to LKR if Sri Lanka / rupee / lkr or generic query)
+    target = "LKR" if any(k in q_low for k in ("lkr", "rupee", "sri lanka", "rate eka")) else "EUR"
+    base = "USD"
+    for c in ("eur", "gbp", "jpy", "inr", "aud", "cad", "cny", "sgd", "aed"):
+        if f"{c} to" in q_low or f"from {c}" in q_low:
+            base = c.upper()
+            break
+
+    try:
+        url = f"https://open.er-api.com/v6/latest/{base}"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            rates = data.get("rates", {})
+            rate_val = rates.get(target)
+            last_update = data.get("time_last_update_utc", "Live 2026")
+            if rate_val is not None:
+                summary = (
+                    f"1 {base} = {rate_val:.2f} {target} (Foreign Exchange Market Rate as of {last_update}). "
+                    f"Key related rates: 1 USD = {rates.get('LKR', 0):.2f} LKR, 1 EUR = {rates.get('EUR', 1):.2f} USD, 1 GBP = {rates.get('GBP', 1):.2f} USD."
+                )
+                return True, summary, {
+                    "base": base,
+                    "target": target,
+                    "rate": rate_val,
+                    "updated": last_update,
+                    "url": "https://open.er-api.com/"
+                }
+    except Exception:
+        pass
+
+    return False, "", {}
+
+
 def get_live_grounding_context(query: str, timeout: float = 6.0) -> Tuple[bool, str, List[Dict[str, str]]]:
     """Retrieve real-time web context to ground model prompt before generation."""
     if not is_internet_enabled():
@@ -336,13 +380,30 @@ def get_live_grounding_context(query: str, timeout: float = 6.0) -> Tuple[bool, 
     if not q or len(q) < 3:
         return False, "", []
 
-    # Check if query is weather related
+    # 1. Check if query is currency / foreign exchange related
+    ok_c, msg_c, data_c = fetch_live_currency_rate(q, timeout=timeout)
+    if ok_c:
+        ctx = (
+            f"[REAL-TIME LIVE FOREIGN EXCHANGE & CURRENCY GROUNDING]:\n"
+            f"Base: {data_c.get('base')} | Target: {data_c.get('target')}\n"
+            f"Live Rate: {msg_c}\n\n"
+            f"Instructions: Use this authoritative live foreign exchange rate data to directly answer the user's currency query accurately and politely."
+        )
+        cites = [{
+            "title": f"Live Forex Rate ({data_c.get('base')}/{data_c.get('target')})",
+            "url": data_c.get("url", "https://open.er-api.com/"),
+            "snippet": msg_c,
+            "source": "Open Exchange Rates API",
+        }]
+        return True, ctx, cites
+
+    # 2. Check if query is weather related
     if any(k in q.lower() for k in ("weather", "kaalaguna", "forecast", "temperature", "rain in", "climate in")):
         ok_w, msg_w, data_w = fetch_live_weather(q, timeout=timeout)
         if ok_w:
             ctx = (
                 f"[REAL-TIME LIVE WEATHER GROUNDING]:\n"
-                f"Current Date: 2026-11-13\n"
+                f"Current Date: 2026-11-14\n"
                 f"{msg_w}\n\n"
                 f"Instructions: Use this authoritative live weather data to directly answer the user."
             )

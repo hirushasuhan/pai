@@ -65,7 +65,18 @@ const btnAttachFile = document.getElementById("btn-attach-file");
 const chatFileInput = document.getElementById("chat-file-input");
 const chatAttachmentsTray = document.getElementById("chat-attachments-tray");
 const chatDropOverlay = document.getElementById("chat-drop-overlay");
+
+// Chat History & Saved Sessions DOM
+const chatHistorySidebar = document.getElementById("chat-history-sidebar");
+const btnNewChat = document.getElementById("btn-new-chat");
+const chatHistoryList = document.getElementById("chat-history-list");
+const btnClearAllHistory = document.getElementById("btn-clear-all-history");
+const btnToggleChatHistory = document.getElementById("btn-toggle-chat-history");
+const currentChatTitle = document.getElementById("current-chat-title");
+
 let currentChatAttachments = [];
+let chatSessions = [];
+let activeSessionId = null;
 
 // Projects DOM
 const createProjectForm = document.getElementById("create-project-form");
@@ -574,7 +585,264 @@ async function parseAndAddAttachment(file) {
   });
 }
 
+// ==========================================================================
+// Chat History & Saved Conversation Sessions Engine
+// ==========================================================================
+
+function initChatHistory() {
+  try {
+    const raw = localStorage.getItem("pai_chat_sessions");
+    if (raw) {
+      chatSessions = JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn("Could not read stored chat sessions:", e);
+    chatSessions = [];
+  }
+
+  const savedActiveId = localStorage.getItem("pai_active_chat_session_id");
+  if (!chatSessions || chatSessions.length === 0) {
+    createNewChatSession(false);
+  } else {
+    const found = chatSessions.find(s => s.id === savedActiveId);
+    if (found) {
+      activeSessionId = found.id;
+      loadSessionMessages(found);
+    } else {
+      activeSessionId = chatSessions[0].id;
+      loadSessionMessages(chatSessions[0]);
+    }
+  }
+
+  if (localStorage.getItem("pai_history_collapsed") === "true" && chatHistorySidebar) {
+    chatHistorySidebar.classList.add("collapsed");
+  }
+
+  renderChatHistorySidebar();
+
+  btnNewChat?.addEventListener("click", () => {
+    createNewChatSession();
+  });
+
+  btnClearAllHistory?.addEventListener("click", () => {
+    if (confirm("Are you sure you want to clear all conversation history?")) {
+      clearAllChatSessions();
+    }
+  });
+
+  btnToggleChatHistory?.addEventListener("click", () => {
+    if (chatHistorySidebar) {
+      chatHistorySidebar.classList.toggle("collapsed");
+      localStorage.setItem("pai_history_collapsed", chatHistorySidebar.classList.contains("collapsed"));
+    }
+  });
+}
+
+function createNewChatSession(render = true) {
+  const newId = "session_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
+  const newSession = {
+    id: newId,
+    title: "New Conversation",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: []
+  };
+  chatSessions.unshift(newSession);
+  activeSessionId = newId;
+  saveChatSessions();
+
+  chatHistory = [];
+  messagesList.innerHTML = `
+    <div class="message assistant welcome">
+      <div class="msg-header">
+        <span class="avatar-badge">PAI</span>
+        <span class="msg-author">Personal Agentic AI Assistant</span>
+        <span class="msg-time">Just now</span>
+      </div>
+      <div class="msg-body">
+        <p>👋 Hello! I am your native <strong>Personal Agentic AI</strong> companion.</p>
+        <p>I can solve complex coding problems, manage project files, orchestrate an autonomous 4-role AI engineering team, verify claims against real-time web knowledge, and synthesize images.</p>
+      </div>
+    </div>
+  `;
+
+  if (currentChatTitle) {
+    currentChatTitle.textContent = "New Conversation";
+  }
+
+  if (render) {
+    renderChatHistorySidebar();
+  }
+  chatInput?.focus();
+}
+
+function loadSessionMessages(session) {
+  if (!session) return;
+  if (currentChatTitle) {
+    currentChatTitle.textContent = session.title || "New Conversation";
+  }
+
+  messagesList.innerHTML = "";
+  chatHistory = [];
+
+  if (!session.messages || session.messages.length === 0) {
+    messagesList.innerHTML = `
+      <div class="message assistant welcome">
+        <div class="msg-header">
+          <span class="avatar-badge">PAI</span>
+          <span class="msg-author">Personal Agentic AI Assistant</span>
+          <span class="msg-time">Just now</span>
+        </div>
+        <div class="msg-body">
+          <p>👋 Hello! I am your native <strong>Personal Agentic AI</strong> companion.</p>
+          <p>I can solve complex coding problems, manage project files, orchestrate an autonomous 4-role AI engineering team, verify claims against real-time web knowledge, and synthesize images.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  session.messages.forEach(item => {
+    if (item.role === "user") {
+      appendUserMessage(item.text, item.attachments || []);
+      chatHistory.push({ role: "user", content: item.text });
+    } else if (item.role === "assistant") {
+      const botId = "hist-msg-" + Math.random().toString(36).substring(2, 8);
+      appendAssistantPlaceholder(botId, item.is_team);
+      if (item.is_image) {
+        updateAssistantMessageImage(botId, item.image_url, item.text, item.model, item.filename);
+      } else if (item.is_team && item.teamData) {
+        updateAssistantTeamMessage(botId, item.teamData, item.userPrompt || "");
+      } else {
+        updateAssistantMessage(botId, item.text, item.factcheck, item.grounding, item.userPrompt || "");
+      }
+      chatHistory.push({ role: "assistant", content: item.text });
+    }
+  });
+
+  const scrollContainer = document.getElementById("messages-scroll");
+  if (scrollContainer) {
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+  }
+}
+
+function switchChatSession(id) {
+  if (id === activeSessionId) return;
+  const session = chatSessions.find(s => s.id === id);
+  if (!session) return;
+  activeSessionId = id;
+  localStorage.setItem("pai_active_chat_session_id", id);
+  loadSessionMessages(session);
+  renderChatHistorySidebar();
+}
+
+function deleteChatSession(id, e) {
+  e?.stopPropagation();
+  chatSessions = chatSessions.filter(s => s.id !== id);
+  saveChatSessions();
+  if (activeSessionId === id) {
+    if (chatSessions.length > 0) {
+      activeSessionId = chatSessions[0].id;
+      localStorage.setItem("pai_active_chat_session_id", activeSessionId);
+      loadSessionMessages(chatSessions[0]);
+    } else {
+      createNewChatSession(false);
+    }
+  }
+  renderChatHistorySidebar();
+  showToast("Conversation deleted", "info");
+}
+
+function clearAllChatSessions() {
+  chatSessions = [];
+  saveChatSessions();
+  createNewChatSession();
+  showToast("All chat history cleared", "info");
+}
+
+function saveChatSessions() {
+  try {
+    localStorage.setItem("pai_chat_sessions", JSON.stringify(chatSessions));
+    if (activeSessionId) {
+      localStorage.setItem("pai_active_chat_session_id", activeSessionId);
+    }
+  } catch (e) {
+    console.warn("Could not save chat sessions:", e);
+  }
+}
+
+function saveTurnToActiveSession(userRecord, assistantRecord) {
+  let activeSession = chatSessions.find(s => s.id === activeSessionId);
+  if (!activeSession) {
+    activeSession = {
+      id: activeSessionId || ("session_" + Date.now()),
+      title: "New Conversation",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: []
+    };
+    chatSessions.unshift(activeSession);
+    activeSessionId = activeSession.id;
+  }
+
+  activeSession.messages.push(userRecord);
+  activeSession.messages.push(assistantRecord);
+  activeSession.updatedAt = new Date().toISOString();
+
+  if (activeSession.title === "New Conversation" || activeSession.messages.filter(m => m.role === 'user').length === 1) {
+    let clean = (userRecord.text || "").replace(/^[\/\#\*\-\s]+/, "").trim();
+    if (clean.length > 28) {
+      clean = clean.substring(0, 28) + "...";
+    }
+    activeSession.title = clean || "Conversation";
+    if (currentChatTitle) {
+      currentChatTitle.textContent = activeSession.title;
+    }
+  }
+
+  saveChatSessions();
+  renderChatHistorySidebar();
+}
+
+function renderChatHistorySidebar() {
+  if (!chatHistoryList) return;
+  chatHistoryList.innerHTML = "";
+
+  if (!chatSessions || chatSessions.length === 0) {
+    chatHistoryList.innerHTML = `<div class="chat-history-empty" style="padding: 16px 10px; font-size: 11.5px; color: var(--text-dim); text-align: center;">No saved conversations</div>`;
+    return;
+  }
+
+  chatSessions.forEach(session => {
+    const item = document.createElement("div");
+    item.className = `chat-history-item ${session.id === activeSessionId ? "active" : ""}`;
+    item.title = session.title || "Conversation";
+
+    item.innerHTML = `
+      <div class="chat-history-item-content">
+        <svg class="chat-history-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span class="chat-history-item-title">${escapeHtml(session.title || "New Conversation")}</span>
+      </div>
+      <button type="button" class="btn-delete-session" title="Delete conversation">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+      </button>
+    `;
+
+    item.addEventListener("click", () => switchChatSession(session.id));
+    const btnDel = item.querySelector(".btn-delete-session");
+    btnDel?.addEventListener("click", (e) => deleteChatSession(session.id, e));
+
+    chatHistoryList.appendChild(item);
+  });
+}
+
 function setupChat() {
+  initChatHistory();
   setupSlashCommands();
 
   // Attach File Button & File Input
@@ -636,6 +904,12 @@ function setupChat() {
     const lowerPrompt = prompt.toLowerCase();
     if (lowerPrompt === "/clear") {
       chatHistory = [];
+      const actSession = chatSessions.find(s => s.id === activeSessionId);
+      if (actSession) {
+        actSession.messages = [];
+        actSession.updatedAt = new Date().toISOString();
+        saveChatSessions();
+      }
       messagesList.innerHTML = `
         <div class="message assistant welcome">
           <div class="msg-header">
@@ -742,6 +1016,13 @@ function setupChat() {
     appendUserMessage(promptToSend, sentAttachments);
     btnSend.disabled = true;
 
+    const userMsgRecord = {
+      role: "user",
+      text: promptToSend,
+      attachments: sentAttachments,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
     const botMsgId = "msg-" + Date.now();
     appendAssistantPlaceholder(botMsgId, isTeam);
 
@@ -773,11 +1054,41 @@ function setupChat() {
         }
         chatHistory.push({ role: "user", content: promptToSend });
         chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
+
+        const assistantMsgRecord = {
+          role: "assistant",
+          text: data.response || (data.is_image ? `[Generated Image: ${data.prompt}]` : `[Action Completed]`),
+          factcheck: data.factcheck,
+          grounding: data.grounding,
+          is_image: !!data.is_image,
+          image_url: data.image_url,
+          model: data.model,
+          filename: data.filename,
+          is_team: !!data.is_team,
+          teamData: data.is_team ? data : null,
+          userPrompt: promptToSend,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        saveTurnToActiveSession(userMsgRecord, assistantMsgRecord);
       } else {
         updateAssistantError(botMsgId, data.error || "Execution error", promptToSend);
+        const errorRecord = {
+          role: "assistant",
+          text: `⚠️ Error: ${data.error || "Execution error"}`,
+          userPrompt: promptToSend,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        saveTurnToActiveSession(userMsgRecord, errorRecord);
       }
     } catch (err) {
       updateAssistantError(botMsgId, `Server connection error: ${err.message}`, promptToSend);
+      const connErrRecord = {
+        role: "assistant",
+        text: `⚠️ Server connection error: ${err.message}`,
+        userPrompt: promptToSend,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      saveTurnToActiveSession(userMsgRecord, connErrRecord);
     } finally {
       btnSend.disabled = false;
       chatInput.focus();
