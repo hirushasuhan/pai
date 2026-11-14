@@ -754,40 +754,56 @@ def detect_system_hardware() -> Dict[str, Any]:
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
     """Open native Windows folder picker dialog and return selected path."""
     if sys.platform == "win32":
+        # 1. Primary: Python Tkinter native folder dialog with topmost window
+        try:
+            py_code = (
+                "import sys, os, tkinter as tk, tkinter.filedialog as fd\n"
+                "try:\n"
+                "    r = tk.Tk()\n"
+                "    r.withdraw()\n"
+                "    r.attributes('-topmost', True)\n"
+                "    r.focus_force()\n"
+                "    t = sys.argv[1] if len(sys.argv) > 1 else 'Select Folder'\n"
+                "    p = fd.askdirectory(parent=r, title=t)\n"
+                "    r.destroy()\n"
+                "    if p and os.path.isdir(p):\n"
+                "        print(os.path.normpath(p))\n"
+                "except Exception:\n"
+                "    pass\n"
+            )
+            py_bin = sys.executable or "python.exe"
+            flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            res = subprocess.run(
+                [py_bin, "-c", py_code, title],
+                capture_output=True,
+                text=True,
+                creationflags=flags,
+                timeout=120.0,
+            )
+            out = res.stdout.strip()
+            if out and os.path.isdir(out):
+                return os.path.normpath(out)
+        except Exception:
+            pass
+
+        # 2. Fallback: Shell.Application BrowseForFolder
         try:
             import base64
             ps_script = f"""
-            Add-Type -AssemblyName System.Windows.Forms
-            Add-Type -AssemblyName System.Drawing
-            [System.Windows.Forms.Application]::EnableVisualStyles()
-            $form = New-Object System.Windows.Forms.Form
-            $form.TopMost = $true
-            $form.ShowInTaskbar = $false
-            $form.Opacity = 0
-            $form.Size = New-Object System.Drawing.Size(1, 1)
-            $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-            $form.Show()
-            $form.BringToFront()
-            $form.Activate()
-            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-            $dialog.Description = '{title}'
-            $dialog.ShowNewFolderButton = $true
-            $res = $dialog.ShowDialog($form)
-            $form.Close()
-            if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {{
-                [Console]::WriteLine($dialog.SelectedPath)
+            $app = New-Object -ComObject Shell.Application
+            $folder = $app.BrowseForFolder(0, '{title}', 0x00000010 + 0x00000040 + 0x00000200, 0)
+            if ($folder -ne $null) {{
+                [Console]::WriteLine($folder.Self.Path)
             }}
             """
             enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
-            flags = 0x08000000  # CREATE_NO_WINDOW
-            out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", enc],
-                creationflags=flags,
-                stdin=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=60.0,
-            ).decode("utf-8", errors="replace").strip()
-            for line in out.splitlines():
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
+                capture_output=True,
+                text=True,
+                timeout=120.0,
+            )
+            for line in res.stdout.strip().splitlines():
                 line = line.strip()
                 if line and os.path.isdir(line):
                     return os.path.normpath(line)

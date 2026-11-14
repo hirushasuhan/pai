@@ -1063,6 +1063,16 @@ function setupProjects() {
           projNameInput.value = picked.name;
         }
         showToast(`Selected project folder: ${picked.name}`, "success");
+      } else if (!picked || !picked.cancelled) {
+        const manual = prompt("Could not open native folder dialog. Enter or paste folder path (e.g. C:\\Users\\hp\\Documents\\my_project):");
+        if (manual && manual.trim()) {
+          projPathInput.value = manual.trim();
+          if (!projNameInput.value.trim()) {
+            const seg = manual.trim().split(/[\/\\]/).filter(Boolean).pop();
+            projNameInput.value = seg || "My Project";
+          }
+          showToast(`Selected folder: ${projPathInput.value}`, "success");
+        }
       }
     } catch (err) {
       console.error("Browse error:", err);
@@ -1140,16 +1150,26 @@ async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Fo
 async function browseAndActivateProjectFolder() {
   try {
     const picked = await openNativeFolderDialog();
-    if (picked && picked.path) {
-      const name = picked.name || "Workspace";
+    let folderPath = picked && picked.path ? picked.path : "";
+    let folderName = picked && picked.name ? picked.name : "";
+
+    if (!folderPath && (!picked || !picked.cancelled)) {
+      const manual = prompt("Enter or paste project folder path (e.g. C:\\Users\\hp\\Documents\\my_project):");
+      if (manual && manual.trim()) {
+        folderPath = manual.trim();
+        folderName = folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
+      }
+    }
+
+    if (folderPath) {
       await fetch(`${API_BASE}/api/projects/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, path: picked.path }),
+        body: JSON.stringify({ name: folderName || "Workspace", path: folderPath }),
       });
       await loadProjects();
-      await activateProject(picked.path);
-      showToast(`Activated workspace: ${name}`, "success");
+      await activateProject(folderPath);
+      showToast(`Activated workspace: ${folderName || "Workspace"}`, "success");
       return true;
     }
   } catch (e) {
