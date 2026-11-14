@@ -754,14 +754,40 @@ def detect_system_hardware() -> Dict[str, Any]:
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
     """Open native Windows folder picker dialog and return selected path."""
     if sys.platform == "win32":
-        # 1. Primary: Python Tkinter native folder dialog with topmost window
+        # 1. Primary: PowerShell Shell.Application BrowseForFolder
+        try:
+            import base64
+            # 0x40 = BIF_NEWDIALOGSTYLE, 0x10 = BIF_EDITBOX, 0x01 = BIF_RETURNONLYFSDIRS
+            ps_script = f"""
+            $app = New-Object -ComObject Shell.Application
+            $folder = $app.BrowseForFolder(0, '{title}', 0x51, 0)
+            if ($folder) {{
+                [Console]::WriteLine($folder.Self.Path)
+            }}
+            """
+            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
+                capture_output=True,
+                text=True,
+                timeout=120.0,
+            )
+            for line in res.stdout.strip().splitlines():
+                line = line.strip()
+                if line and os.path.isdir(line):
+                    return os.path.normpath(line)
+        except Exception:
+            pass
+
+        # 2. Secondary: Python Tkinter native folder dialog with topmost window
         try:
             py_code = (
                 "import sys, os, tkinter as tk, tkinter.filedialog as fd\n"
                 "try:\n"
                 "    r = tk.Tk()\n"
-                "    r.withdraw()\n"
                 "    r.attributes('-topmost', True)\n"
+                "    r.geometry('0x0+0+0')\n"
+                "    r.deiconify()\n"
                 "    r.focus_force()\n"
                 "    t = sys.argv[1] if len(sys.argv) > 1 else 'Select Folder'\n"
                 "    p = fd.askdirectory(parent=r, title=t)\n"
@@ -783,30 +809,6 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
             out = res.stdout.strip()
             if out and os.path.isdir(out):
                 return os.path.normpath(out)
-        except Exception:
-            pass
-
-        # 2. Fallback: Shell.Application BrowseForFolder
-        try:
-            import base64
-            ps_script = f"""
-            $app = New-Object -ComObject Shell.Application
-            $folder = $app.BrowseForFolder(0, '{title}', 0x00000010 + 0x00000040 + 0x00000200, 0)
-            if ($folder -ne $null) {{
-                [Console]::WriteLine($folder.Self.Path)
-            }}
-            """
-            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
-                capture_output=True,
-                text=True,
-                timeout=120.0,
-            )
-            for line in res.stdout.strip().splitlines():
-                line = line.strip()
-                if line and os.path.isdir(line):
-                    return os.path.normpath(line)
         except Exception:
             pass
 
@@ -1523,25 +1525,36 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             projects.append(item)
 
         data["projects"] = projects
-        data["active_project"] = name
+        data["active_project"] = str(folder)
         save_projects_data(data)
-        self._send_json({"success": True, "project": item, "active_project": name})
+        self._send_json({"success": True, "project": item, "active_project": str(folder)})
 
     def _handle_project_set_active(self, body: Dict[str, Any]) -> None:
-        name = body.get("name", "").strip()
+        target = (body.get("path") or body.get("name") or "").strip()
         data = load_projects_data()
-        data["active_project"] = name
+        matched_path = ""
+        if target:
+            for p in data.get("projects", []):
+                if p.get("path", "").lower() == target.lower() or p.get("name", "").lower() == target.lower():
+                    matched_path = p.get("path", "")
+                    break
+            if not matched_path and Path(target).is_dir():
+                matched_path = str(Path(target).resolve())
+        data["active_project"] = matched_path
         save_projects_data(data)
-        self._send_json({"success": True, "active_project": name})
+        self._send_json({"success": True, "active_project": matched_path})
 
     def _handle_project_delete(self, body: Dict[str, Any]) -> None:
-        name = body.get("name", "").strip()
+        target = (body.get("path") or body.get("name") or "").strip().lower()
         data = load_projects_data()
-        data["projects"] = [p for p in data.get("projects", []) if p.get("name", "").lower() != name.lower()]
-        if data.get("active_project", "").lower() == name.lower():
+        data["projects"] = [
+            p for p in data.get("projects", [])
+            if p.get("name", "").lower() != target and p.get("path", "").lower() != target
+        ]
+        if data.get("active_project", "").lower() == target:
             data["active_project"] = ""
         save_projects_data(data)
-        self._send_json({"success": True, "deleted": name})
+        self._send_json({"success": True, "deleted": target})
 
     def _handle_project_files(self, query_params: Dict[str, List[str]]) -> None:
         p_str = query_params.get("path", [""])[0].strip()

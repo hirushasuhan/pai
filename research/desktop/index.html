@@ -94,74 +94,87 @@
       
       <!-- Top Navbar & Native Desktop Header -->
       <header class="top-nav" data-tauri-drag-region>
-        <!-- Desktop Workspace Breadcrumb -->
-        <div class="desktop-breadcrumb font-jetbrains" data-tauri-drag-region>
-          <span class="brand-crumb">PAI</span>
-          <span class="crumb-separator">›</span>
-          <span id="current-view-name" class="view-crumb">Chat & Reasoning</span>
+        <!-- Left: Desktop Workspace Breadcrumb -->
+        <div class="top-nav-left" data-tauri-drag-region>
+          <div class="desktop-breadcrumb font-jetbrains" data-tauri-drag-region>
+            <span class="brand-crumb">PAI</span>
+            <span class="crumb-separator">›</span>
+            <span id="current-view-name" class="view-crumb">Chat & Reasoning</span>
+          </div>
         </div>
 
-        <!-- Model Selector -->
-        <div class="active-model-box">
-          <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
-          <span class="nav-label">Model:</span>
-          <select id="header-model-select" class="model-select">
-            <option value="">Loading installed models...</option>
-          </select>
+        <!-- Center: Unified Workspace Controls -->
+        <div class="top-nav-center">
+          <div class="nav-controls-group">
+            <!-- Model Selector -->
+            <div class="nav-control-item">
+              <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              <span class="nav-control-label">Model:</span>
+              <select id="header-model-select" class="nav-control-select">
+                <option value="">Loading installed models...</option>
+              </select>
+            </div>
+
+            <div class="nav-control-divider"></div>
+
+            <!-- Project Selector Dropdown & Browse Action -->
+            <div class="nav-control-item">
+              <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+              <span class="nav-control-label">Project:</span>
+              <select id="header-project-select" class="nav-control-select">
+                <option value="">No Active Project (Global)</option>
+              </select>
+              <button type="button" class="btn-nav-browse" id="btn-header-browse-folder" title="Browse / Add project workspace folder">
+                <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+              </button>
+            </div>
+          </div>
         </div>
 
-        <!-- Project Selector Dropdown & Browse Action -->
-        <div class="active-project-box">
-          <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-          <span class="nav-label">Project:</span>
-          <select id="header-project-select" class="project-select">
-            <option value="">No Active Project (Global)</option>
-          </select>
-          <button type="button" class="btn btn-secondary btn-icon-only" id="btn-header-browse-folder" title="Browse and open a project folder via native Windows dialog">
-            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
-          </button>
-        </div>
+        <!-- Right: Real-Time Grounding & AI Team Toggles + Theme Mode -->
+        <div class="top-nav-right">
+          <div class="toggles-box">
+            <!-- AI Team Toggle -->
+            <label class="toggle-pill team-toggle-pill" title="Toggle Collaborative Multi-Agent Team (PM, Architect, Specialist, QA). Requires active project directory.">
+              <input type="checkbox" id="toggle-team-mode" />
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">
+                <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                <span>AI Team</span>
+              </span>
+            </label>
 
-        <!-- Real-Time Grounding & AI Team Toggles -->
-        <div class="toggles-box">
-          <!-- AI Team Toggle -->
-          <label class="toggle-pill team-toggle-pill" title="Toggle Collaborative Multi-Agent Team (PM, Architect, Specialist, QA). Requires active project directory.">
-            <input type="checkbox" id="toggle-team-mode" />
-            <span class="toggle-slider"></span>
-            <span class="toggle-text">
-              <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-              AI Team
-            </span>
-          </label>
+            <!-- Internet Toggle -->
+            <label class="toggle-pill" title="Toggle live web search & real-time weather">
+              <input type="checkbox" id="toggle-internet" checked />
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">
+                <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                <span>Internet</span>
+              </span>
+            </label>
 
-          <!-- Internet Toggle -->
-          <label class="toggle-pill" title="Toggle live web search & real-time weather">
-            <input type="checkbox" id="toggle-internet" checked />
-            <span class="toggle-slider"></span>
-            <span class="toggle-text">
-              <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-              Internet
-            </span>
-          </label>
+            <!-- Fact-Check Toggle -->
+            <label class="toggle-pill" title="Toggle automatic fact-checking against web sources">
+              <input type="checkbox" id="toggle-factcheck" checked />
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">
+                <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                <span>Fact-Check</span>
+              </span>
+            </label>
+          </div>
 
-          <!-- Fact-Check Toggle -->
-          <label class="toggle-pill" title="Toggle automatic fact-checking against web sources">
-            <input type="checkbox" id="toggle-factcheck" checked />
-            <span class="toggle-slider"></span>
-            <span class="toggle-text">
-              <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-              Fact-Check
-            </span>
-          </label>
-        </div>
+          <div class="nav-control-divider"></div>
 
-        <!-- Header Utilities & Theme Mode Toggle -->
-        <div class="header-utils-box">
-          <button type="button" id="btn-theme-mode-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Workstation Mode (Ctrl+Shift+L)">
-            <svg class="theme-icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-            <svg class="theme-icon icon-sun hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
-            <span id="theme-mode-text" class="theme-mode-text">Dark</span>
-          </button>
+          <!-- Header Utilities & Theme Mode Toggle -->
+          <div class="header-utils-box">
+            <button type="button" id="btn-theme-mode-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Workstation Mode (Ctrl+Shift+L)">
+              <svg class="theme-icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+              <svg class="theme-icon icon-sun hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+              <span id="theme-mode-text" class="theme-mode-text">Dark</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -181,15 +194,13 @@
               </div>
               <div class="chat-history-title-row">
                 <span class="chat-history-heading">Saved Chats</span>
+                <button type="button" class="btn-clear-history-compact" id="btn-clear-all-history" title="Clear all conversation sessions">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                  <span>Clear</span>
+                </button>
               </div>
               <div class="chat-history-list" id="chat-history-list">
                 <!-- Dynamically populated chat sessions -->
-              </div>
-              <div class="chat-history-footer">
-                <button type="button" class="btn-clear-all-history" id="btn-clear-all-history" title="Clear all conversation sessions">
-                  <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                  <span>Clear History</span>
-                </button>
               </div>
             </aside>
 

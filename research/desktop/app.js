@@ -270,6 +270,11 @@ function setupNavigation() {
 
   headerProjectSelect.addEventListener("change", async (e) => {
     const selectedPath = e.target.value;
+    if (selectedPath === "__NEW_PROJECT__") {
+      headerProjectSelect.value = activeProjectPath || "";
+      await browseAndActivateProjectFolder();
+      return;
+    }
     await activateProject(selectedPath);
   });
 
@@ -1389,8 +1394,8 @@ function setupProjects() {
           projNameInput.value = picked.name;
         }
         showToast(`Selected project folder: ${picked.name}`, "success");
-      } else if (!picked || !picked.cancelled) {
-        const manual = prompt("Could not open native folder dialog. Enter or paste folder path (e.g. C:\\Users\\hp\\Documents\\my_project):");
+      } else {
+        const manual = prompt("Enter or paste folder path (e.g. C:\\Users\\hp\\Documents\\my_project):", projPathInput.value || "");
         if (manual && manual.trim()) {
           projPathInput.value = manual.trim();
           if (!projNameInput.value.trim()) {
@@ -1479,8 +1484,8 @@ async function browseAndActivateProjectFolder() {
     let folderPath = picked && picked.path ? picked.path : "";
     let folderName = picked && picked.name ? picked.name : "";
 
-    if (!folderPath && (!picked || !picked.cancelled)) {
-      const manual = prompt("Enter or paste project folder path (e.g. C:\\Users\\hp\\Documents\\my_project):");
+    if (!folderPath) {
+      const manual = prompt("Enter or paste project folder path (e.g. C:\\Users\\hp\\Documents\\my_project):", activeProjectPath || "");
       if (manual && manual.trim()) {
         folderPath = manual.trim();
         folderName = folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
@@ -1536,6 +1541,10 @@ function populateHeaderProjectDropdown(projects, activePath) {
     if (p.path === activePath) opt.selected = true;
     headerProjectSelect.appendChild(opt);
   });
+  const addOpt = document.createElement("option");
+  addOpt.value = "__NEW_PROJECT__";
+  addOpt.textContent = "+ Add / Open Project Folder...";
+  headerProjectSelect.appendChild(addOpt);
 }
 
 function renderProjectsList(projects, activePath) {
