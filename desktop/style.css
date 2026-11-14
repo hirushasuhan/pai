@@ -3791,18 +3791,19 @@ body.light-theme .open-filename {
 }
 
 /* Universal Form Inputs, Dropdowns & Textareas in Light Mode */
+body.light-theme input:not([type="checkbox"]):not([type="radio"]),
+body.light-theme select,
+body.light-theme textarea,
 body.light-theme .form-input,
 body.light-theme .input-text,
 body.light-theme input[type="text"],
 body.light-theme input[type="password"],
 body.light-theme input[type="number"],
 body.light-theme input[type="search"],
-body.light-theme select,
 body.light-theme select.form-input,
 body.light-theme select.input-text,
 body.light-theme select.nav-control-select,
 body.light-theme select.role-model-select,
-body.light-theme textarea,
 body.light-theme textarea.form-input,
 body.light-theme textarea.chat-textarea,
 body.light-theme textarea.code-editor-textarea,
@@ -3814,17 +3815,18 @@ body.light-theme .code-editor-textarea {
   box-shadow: none !important;
 }
 
+body.light-theme input:not([type="checkbox"]):not([type="radio"]):focus,
+body.light-theme select:focus,
+body.light-theme textarea:focus,
 body.light-theme .form-input:focus,
 body.light-theme .input-text:focus,
 body.light-theme input[type="text"]:focus,
 body.light-theme input[type="password"]:focus,
 body.light-theme input[type="number"]:focus,
-body.light-theme select:focus,
 body.light-theme select.form-input:focus,
 body.light-theme select.input-text:focus,
 body.light-theme select.nav-control-select:focus,
 body.light-theme select.role-model-select:focus,
-body.light-theme textarea:focus,
 body.light-theme textarea.form-input:focus,
 body.light-theme textarea.code-editor-textarea:focus,
 body.light-theme .code-editor-textarea:focus {
@@ -3856,11 +3858,46 @@ body.light-theme .code-editor-textarea::placeholder {
 }
 
 body.light-theme .form-label {
-  color: #334155 !important;
+  color: #0f172a !important;
 }
 
 body.light-theme .field-hint {
   color: #64748b !important;
+}
+
+body.light-theme .switch .slider {
+  background-color: #cbd5e1 !important;
+}
+
+body.light-theme .switch input:checked + .slider {
+  background-color: #0284c7 !important;
+}
+
+body.light-theme .mcp-preset-pills .preset-pill-btn,
+body.light-theme .preset-pill-row .preset-pill,
+body.light-theme .preset-pill {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+body.light-theme .mcp-preset-pills .preset-pill-btn:hover,
+body.light-theme .preset-pill-row .preset-pill:hover,
+body.light-theme .preset-pill:hover {
+  background: #f0f9ff !important;
+  border-color: #0284c7 !important;
+  color: #0284c7 !important;
+}
+
+body.light-theme .preset-pill-label,
+body.light-theme .preset-label {
+  color: #0284c7 !important;
+}
+
+body.light-theme .btn-pw-toggle {
+  background: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
 }
 
 body.light-theme .radio-pill {
@@ -4634,6 +4671,94 @@ body.light-theme .storage-free-badge {
   background: #f1f5f9 !important;
   color: #334155 !important;
   border: 1px solid #cbd5e1 !important;
+}
+
+body.light-theme .skill-card.active {
+  border-color: #0284c7 !important;
+  box-shadow: 0 0 0 1px #0284c7, 0 2px 8px rgba(2, 132, 199, 0.08) !important;
+}
+
+body.light-theme .skill-status-tag.enabled {
+  background: #f0fdf4 !important;
+  color: #15803d !important;
+  border: 1px solid #bbf7d0 !important;
+}
+
+body.light-theme .skill-status-tag.disabled {
+  background: #f1f5f9 !important;
+  color: #64748b !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+body.light-theme .radio-pill {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+body.light-theme .radio-pill:has(input:checked),
+body.light-theme .radio-pill.checked {
+  background: #e0f2fe !important;
+  border-color: #0284c7 !important;
+  color: #0284c7 !important;
+}
+
+body.light-theme .modal-backdrop {
+  background: rgba(15, 23, 42, 0.5) !important;
+}
+
+body.light-theme .modal-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .modal-header {
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .modal-footer {
+  border-top: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .modal-title {
+  color: #0f172a !important;
+}
+
+body.light-theme .feed-placeholder {
+  color: #64748b !important;
+}
+
+body.light-theme .deliverable-content-box,
+body.light-theme #team-deliverable-view {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .deliverable-content-box pre,
+body.light-theme #team-deliverable-view pre {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .console-box,
+body.light-theme #antigravity-log {
+  background: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .console-box .log-line,
+body.light-theme #antigravity-log .log-line {
+  color: #334155 !important;
+}
+
+body.light-theme .console-box .log-line.info,
+body.light-theme #antigravity-log .log-line.info {
+  color: #0284c7 !important;
 }
 
 /* ==========================================================================

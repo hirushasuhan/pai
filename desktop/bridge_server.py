@@ -23,11 +23,13 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -780,12 +782,149 @@ def detect_system_hardware() -> Dict[str, Any]:
     return hw
 
 
+def _get_or_compile_windows_folder_picker() -> Optional[str]:
+    """Compile or reuse lightweight Win32 GUI folder picker binary (using IFileOpenDialog with FOS_PICKFOLDERS)."""
+    if sys.platform != "win32":
+        return None
+    temp_dir = tempfile.gettempdir()
+    exe_path = os.path.join(temp_dir, "pai_folder_picker.exe")
+    if os.path.isfile(exe_path) and os.path.getsize(exe_path) > 0:
+        return exe_path
+
+    csc_paths = [
+        r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
+        r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe",
+    ]
+    csc = next((p for p in csc_paths if os.path.isfile(p)), None)
+    if not csc:
+        return None
+
+    cs_source = """using System;
+using System.IO;
+using System.Runtime.InteropServices;
+
+namespace Pai {
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
+    public class FileOpenDialogRCW {}
+
+    [ComImport, Guid("42f85109-d1e4-4384-b65c-38838f149c49"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IFileDialog {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes();
+        void SetFileTypeIndex();
+        void GetFileTypeIndex();
+        void Advise();
+        void Unadvise();
+        void SetOptions(uint fos);
+        void GetOptions(out uint fos);
+        void SetDefaultFolder();
+        void SetFolder();
+        void GetFolder();
+        void GetCurrentSelection();
+        void SetFileName();
+        void GetFileName();
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+        void SetOkButtonLabel();
+        void SetFileNameLabel();
+        void GetResult(out IShellItem ppsi);
+    }
+
+    [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IShellItem {
+        void BindToHandler();
+        void GetParent();
+        void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
+        void GetAttributes();
+        void Compare();
+    }
+
+    public static class Program {
+        [STAThread]
+        public static int Main(string[] args) {
+            try {
+                string title = args.Length > 0 ? args[0] : "Select Folder";
+                string outPath = args.Length > 1 ? args[1] : "";
+                
+                var dialog = (IFileDialog)new FileOpenDialogRCW();
+                uint options;
+                dialog.GetOptions(out options);
+                dialog.SetOptions(options | 0x20 | 0x40); // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
+                if (!string.IsNullOrEmpty(title)) {
+                    dialog.SetTitle(title);
+                }
+                
+                int hr = dialog.Show(IntPtr.Zero);
+                if (hr == 0) {
+                    IShellItem item;
+                    dialog.GetResult(out item);
+                    string selectedPath;
+                    item.GetDisplayName(0x80058000, out selectedPath); // SIGDN_FILESYSPATH
+                    if (!string.IsNullOrEmpty(selectedPath) && !string.IsNullOrEmpty(outPath)) {
+                        File.WriteAllText(outPath, selectedPath);
+                    }
+                    return 0;
+                }
+            } catch {
+                return 1;
+            }
+            return 2;
+        }
+    }
+}
+"""
+    cs_path = os.path.join(temp_dir, "pai_folder_picker.cs")
+    try:
+        with open(cs_path, "w", encoding="utf-8") as f:
+            f.write(cs_source)
+        flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        subprocess.run(
+            [csc, "/nologo", "/target:winexe", f"/out:{exe_path}", cs_path],
+            capture_output=True,
+            creationflags=flags,
+            timeout=15.0,
+        )
+        if os.path.isfile(cs_path):
+            try:
+                os.remove(cs_path)
+            except Exception:
+                pass
+        if os.path.isfile(exe_path):
+            return exe_path
+    except Exception:
+        pass
+    return None
+
+
 def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
-    """Open native Windows folder picker dialog and return selected path."""
+    """Open modern native Windows File Explorer folder picker dialog (IFileOpenDialog with FOS_PICKFOLDERS)."""
     if sys.platform == "win32":
-        # 1. Primary: Python GUI subsystem (pythonw.exe) with native Tkinter / Windows Common Dialog
+        # 1. Primary: Native Modern Windows Explorer Dialog (same as VS Code, Chrome, etc.)
         try:
-            import tempfile
+            picker_exe = _get_or_compile_windows_folder_picker()
+            if picker_exe and os.path.isfile(picker_exe):
+                temp_dir = tempfile.gettempdir()
+                out_txt = os.path.join(temp_dir, f"pai_picked_{os.getpid()}_{int(time.time()*1000)}.txt")
+                flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                subprocess.run(
+                    [picker_exe, title, out_txt],
+                    capture_output=True,
+                    creationflags=flags,
+                    timeout=300.0,
+                )
+                if os.path.isfile(out_txt):
+                    with open(out_txt, "r", encoding="utf-8") as f:
+                        selected_path = f.read().strip()
+                    try:
+                        os.remove(out_txt)
+                    except Exception:
+                        pass
+                    if selected_path and os.path.isdir(selected_path):
+                        return os.path.normpath(selected_path)
+        except Exception:
+            pass
+
+        # 2. Fallback: Tkinter with withdrawn root (zero visible popup window)
+        try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
                 tmp_path = tmp.name
 
@@ -793,13 +932,10 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
                 "import sys, os, tkinter as tk, tkinter.filedialog as fd\n"
                 "try:\n"
                 "    r = tk.Tk()\n"
-                "    r.attributes('-topmost', True)\n"
-                "    r.geometry('0x0+0+0')\n"
-                "    r.deiconify()\n"
-                "    r.focus_force()\n"
+                "    r.withdraw()\n"
                 "    t = sys.argv[1] if len(sys.argv) > 1 else 'Select Folder'\n"
                 "    out_path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
-                "    p = fd.askdirectory(parent=r, title=t)\n"
+                "    p = fd.askdirectory(title=t)\n"
                 "    r.destroy()\n"
                 "    if p and os.path.isdir(p) and out_path:\n"
                 "        with open(out_path, 'w', encoding='utf-8') as f:\n"
@@ -830,32 +966,6 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
 
             if selected_path and os.path.isdir(selected_path):
                 return os.path.normpath(selected_path)
-        except Exception:
-            pass
-
-        # 2. Secondary: Windows Forms FolderBrowserDialog
-        try:
-            import base64
-            ps_script = f"""
-            [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
-            $d = New-Object System.Windows.Forms.FolderBrowserDialog
-            $d.Description = '{title}'
-            $d.ShowNewFolderButton = $true
-            if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
-                [Console]::WriteLine($d.SelectedPath)
-            }}
-            """
-            enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
-                capture_output=True,
-                text=True,
-                timeout=180.0,
-            )
-            for line in res.stdout.strip().splitlines():
-                line = line.strip()
-                if line and os.path.isdir(line):
-                    return os.path.normpath(line)
         except Exception:
             pass
 
