@@ -2520,6 +2520,33 @@ function setupModels() {
     });
   }
 
+  const btnChangeStorage = document.getElementById("btn-change-model-storage");
+  if (btnChangeStorage) {
+    btnChangeStorage.addEventListener("click", async () => {
+      const picked = await openNativeFolderDialog("Select Global Model Storage Directory");
+      if (picked && picked.path) {
+        currentInstallTargetPath = picked.path;
+        try {
+          const res = await fetch(`${API_BASE}/api/models/storage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: picked.path }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Model storage path updated to: ${data.path}`, "success", "Storage Updated");
+            loadModelStoragePath();
+            loadInstalledModels();
+          } else {
+            showToast(`Failed to update storage: ${data.error || "Unknown error"}`, "error");
+          }
+        } catch (e) {
+          showToast(`Error updating storage: ${e.message}`, "error");
+        }
+      }
+    });
+  }
+
   if (btnBrowseInstallPath) {
     btnBrowseInstallPath.addEventListener("click", async () => {
       const picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
@@ -2528,6 +2555,15 @@ function setupModels() {
           installModalPathInput.value = picked.path;
           checkInstallPathStorage(picked.path);
         }
+        currentInstallTargetPath = picked.path;
+        try {
+          await fetch(`${API_BASE}/api/models/storage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: picked.path }),
+          });
+          loadModelStoragePath();
+        } catch (_) {}
       }
     });
   }
@@ -2759,7 +2795,7 @@ function renderRecommendedModels(recs) {
         footerBtnHtml = `<button type="button" class="btn btn-primary btn-sm btn-download-rec downloading-active" data-tag="${escapeHtml(rec.tag)}" title="Click to view live download progress in popup"><span class="spinner-inline"></span> <span>Downloading (${activeDownloadPct || 0}%)...</span></button>`;
       }
     } else if (isModelDownloading || isDownloadPaused) {
-      footerBtnHtml = `<button type="button" class="btn btn-secondary btn-sm" disabled title="Download in progress (${activeDownloadingModelTag || 'another model'}). Please wait or pause first.">Install Model</button>`;
+      footerBtnHtml = `<button type="button" class="btn btn-secondary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}" title="Download in progress (${activeDownloadingModelTag || 'another model'}). Click to view details or switch.">Install Model</button>`;
     } else {
       footerBtnHtml = `<button type="button" class="btn btn-primary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}">Install Model</button>`;
     }
@@ -2775,7 +2811,7 @@ function renderRecommendedModels(recs) {
       </div>
     `;
 
-    const dlBtn = card.querySelector(".btn-download-rec:not([disabled])");
+    const dlBtn = card.querySelector(".btn-download-rec");
     if (dlBtn) {
       dlBtn.addEventListener("click", () => {
         openModelInstallModal(rec);
@@ -3085,27 +3121,35 @@ async function openModelInstallModal(modelInfo) {
 
   if (!modal) return;
 
+  // Unhide modal immediately for instant click response
+  modal.classList.remove("hidden");
+
   const mTag = modelInfo.tag || modelInfo.name;
   if (titleEl) titleEl.textContent = `Install AI Model: ${modelInfo.name || modelInfo.tag}`;
   if (tagEl) tagEl.textContent = mTag;
   if (sizeEl) sizeEl.textContent = modelInfo.size ? `~${modelInfo.size}` : "Variable";
   if (descEl) descEl.textContent = modelInfo.desc || "High-performance open weights calibrated for coding, fast chat and deep reasoning.";
 
+  // Populate install destination path synchronously so UI never shows empty or hangs
+  const defaultPath = currentInstallTargetPath || (pathInput && pathInput.value ? pathInput.value : "") || "C:\\Users\\hp\\.ollama\\models";
   if (modelInfo.targetPath && pathInput) {
     pathInput.value = modelInfo.targetPath;
     checkInstallPathStorage(modelInfo.targetPath);
-  } else {
-    try {
-      const res = await fetch(`${API_BASE}/api/models/storage`);
-      const data = await res.json();
-      if (data.success && data.path && pathInput) {
+  } else if (pathInput) {
+    if (!pathInput.value) pathInput.value = defaultPath;
+    checkInstallPathStorage(pathInput.value);
+  }
+
+  // Non-blocking background fetch for live storage directory info
+  fetch(`${API_BASE}/api/models/storage`)
+    .then((res) => res.json())
+    .then((data) => {
+      if (data && data.success && data.path && pathInput && !modelInfo.targetPath && !currentInstallTargetPath) {
         pathInput.value = data.path;
         checkInstallPathStorage(data.path);
       }
-    } catch (e) {
-      if (pathInput) pathInput.value = "C:\\Users\\hp\\.ollama\\models";
-    }
-  }
+    })
+    .catch(() => {});
 
   // Check if this model is actively downloading or paused
   const normActive = (activeDownloadingModelTag || "").trim().toLowerCase();
@@ -3131,8 +3175,6 @@ async function openModelInstallModal(modelInfo) {
     if (confirmLabel) confirmLabel.textContent = "Confirm & Download Model";
     if (cancelBtn) cancelBtn.style.display = "";
   }
-
-  modal.classList.remove("hidden");
 }
 
 function handleDownloadSuccess(modelName) {
