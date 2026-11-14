@@ -1417,10 +1417,10 @@ input[type="password"],
 input[type="number"],
 select.form-input,
 textarea.form-input {
-  background: rgba(15, 23, 42, 0.9) !important;
-  border: 1px solid rgba(0, 242, 254, 0.3) !important;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(0, 242, 254, 0.3);
   border-radius: var(--radius-sm);
-  color: #f1f5f9 !important;
+  color: #f1f5f9;
   font-family: inherit;
   font-size: 13px;
   padding: 8px 12px;
@@ -1433,7 +1433,7 @@ textarea.form-input {
 .input-text::placeholder,
 input::placeholder,
 textarea::placeholder {
-  color: rgba(148, 163, 184, 0.6) !important;
+  color: rgba(148, 163, 184, 0.6);
 }
 
 .form-input:focus,
@@ -1442,13 +1442,14 @@ input[type="text"]:focus,
 input[type="password"]:focus,
 select.form-input:focus,
 textarea.form-input:focus {
-  border-color: var(--accent-cyan) !important;
-  background: rgba(15, 23, 42, 0.98) !important;
-  box-shadow: 0 0 0 2px rgba(0, 242, 254, 0.25), inset 0 2px 4px rgba(0, 0, 0, 0.5) !important;
-  color: #ffffff !important;
+  border-color: var(--accent-cyan);
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 0 0 2px rgba(0, 242, 254, 0.25), inset 0 2px 4px rgba(0, 0, 0, 0.5);
+  color: #ffffff;
 }
 
-select.form-input option {
+select.form-input option,
+.input-text option {
   background: #0f172a;
   color: #f1f5f9;
 }
@@ -3789,18 +3790,77 @@ body.light-theme .open-filename {
   color: #0f172a;
 }
 
+/* Universal Form Inputs, Dropdowns & Textareas in Light Mode */
 body.light-theme .form-input,
 body.light-theme .input-text,
-body.light-theme select.input-text {
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  color: #0f172a;
+body.light-theme input[type="text"],
+body.light-theme input[type="password"],
+body.light-theme input[type="number"],
+body.light-theme input[type="search"],
+body.light-theme select,
+body.light-theme select.form-input,
+body.light-theme select.input-text,
+body.light-theme select.nav-control-select,
+body.light-theme select.role-model-select,
+body.light-theme textarea,
+body.light-theme textarea.form-input,
+body.light-theme textarea.chat-textarea,
+body.light-theme textarea.code-editor-textarea,
+body.light-theme .code-editor-textarea {
+  background-color: #ffffff !important;
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
 }
 
 body.light-theme .form-input:focus,
-body.light-theme .input-text:focus {
-  border-color: #0284c7;
-  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+body.light-theme .input-text:focus,
+body.light-theme input[type="text"]:focus,
+body.light-theme input[type="password"]:focus,
+body.light-theme input[type="number"]:focus,
+body.light-theme select:focus,
+body.light-theme select.form-input:focus,
+body.light-theme select.input-text:focus,
+body.light-theme select.nav-control-select:focus,
+body.light-theme select.role-model-select:focus,
+body.light-theme textarea:focus,
+body.light-theme textarea.form-input:focus,
+body.light-theme textarea.code-editor-textarea:focus,
+body.light-theme .code-editor-textarea:focus {
+  background-color: #ffffff !important;
+  background: #ffffff !important;
+  border-color: #0284c7 !important;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme select option,
+body.light-theme option,
+body.light-theme select.form-input option,
+body.light-theme select.input-text option,
+body.light-theme select.nav-control-select option,
+body.light-theme select.role-model-select option {
+  background-color: #ffffff !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+body.light-theme input::placeholder,
+body.light-theme textarea::placeholder,
+body.light-theme .form-input::placeholder,
+body.light-theme .input-text::placeholder,
+body.light-theme .chat-textarea::placeholder,
+body.light-theme .code-editor-textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+body.light-theme .form-label {
+  color: #334155 !important;
+}
+
+body.light-theme .field-hint {
+  color: #64748b !important;
 }
 
 body.light-theme .radio-pill {
@@ -4250,4 +4310,245 @@ body.light-theme #toggle-factcheck:checked + .toggle-slider {
 body.light-theme .toggle-pill input:checked ~ .toggle-text {
   color: #0f172a;
 }
+
+/* ==========================================================================
+   AI Models Manager Complete Light Mode Overhaul
+   ========================================================================== */
+body.light-theme .model-storage-banner {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+body.light-theme .model-storage-label {
+  color: #64748b !important;
+}
+
+body.light-theme .model-storage-path {
+  color: #0284c7 !important;
+}
+
+body.light-theme .storage-free-badge {
+  background: #f0fdf4 !important;
+  border: 1px solid #bbf7d0 !important;
+  color: #15803d !important;
+}
+
+body.light-theme .recommended-model-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+body.light-theme .recommended-model-card:hover {
+  background: #f8fafc !important;
+  border-color: #0284c7 !important;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.12) !important;
+}
+
+body.light-theme .rec-model-name {
+  color: #0f172a !important;
+}
+
+body.light-theme .rec-model-size {
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+body.light-theme .rec-model-desc {
+  color: #475569 !important;
+}
+
+body.light-theme .model-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+body.light-theme .model-card:hover {
+  background: #f8fafc !important;
+  border-color: #0284c7 !important;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.08) !important;
+}
+
+body.light-theme .model-card.active {
+  background: #f0fdf4 !important;
+  border-color: #86efac !important;
+}
+
+body.light-theme .model-name {
+  color: #0f172a !important;
+}
+
+body.light-theme .model-meta {
+  color: #64748b !important;
+}
+
+body.light-theme .active-badge {
+  background: #dcfce7 !important;
+  color: #166534 !important;
+  border: 1px solid #86efac !important;
+}
+
+body.light-theme .progress-bar-bg {
+  background: #e2e8f0 !important;
+}
+
+body.light-theme .progress-info {
+  color: #64748b !important;
+}
+
+/* ==========================================================================
+   AI Team, Projects, MCPs, Skills & Search Light Mode Containers
+   ========================================================================== */
+body.light-theme .activity-feed-box {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .fipa-msg-card {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .fipa-role {
+  color: #0f172a !important;
+}
+
+body.light-theme .fipa-content {
+  color: #334155 !important;
+}
+
+body.light-theme .deliverable-content-box {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .deliverable-content-box pre {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .deliv-tab-btn {
+  color: #64748b !important;
+}
+
+body.light-theme .deliv-tab-btn:hover {
+  color: #0f172a !important;
+}
+
+body.light-theme .deliv-tab-btn.active {
+  color: #0284c7 !important;
+  border-bottom-color: #0284c7 !important;
+}
+
+body.light-theme .deliverables-tab-bar {
+  border-bottom-color: #e2e8f0 !important;
+}
+
+body.light-theme .editor-split-body {
+  background: #ffffff !important;
+}
+
+body.light-theme .file-tree-pane {
+  background: #f8fafc !important;
+  border-right: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .file-item {
+  color: #334155 !important;
+}
+
+body.light-theme .file-item:hover {
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .file-item.active {
+  background: #e0f2fe !important;
+  color: #0284c7 !important;
+}
+
+body.light-theme .code-editor-pane {
+  background: #ffffff !important;
+}
+
+body.light-theme .hub-stat-ribbon {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+body.light-theme .hub-stat-pill {
+  color: #64748b !important;
+}
+
+body.light-theme .preset-pill,
+body.light-theme .preset-pill-btn {
+  background: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+body.light-theme .preset-pill:hover,
+body.light-theme .preset-pill-btn:hover {
+  background: #e0f2fe !important;
+  border-color: #0284c7 !important;
+  color: #0284c7 !important;
+}
+
+body.light-theme .preset-pill-label {
+  color: #64748b !important;
+}
+
+body.light-theme .search-full-result {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .search-finding-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .project-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .project-card:hover {
+  background: #f8fafc !important;
+  border-color: #0284c7 !important;
+}
+
+body.light-theme .project-card.active {
+  background: #f0fdf4 !important;
+  border-color: #86efac !important;
+}
+
+body.light-theme .project-card-name {
+  color: #0f172a !important;
+}
+
+body.light-theme .project-card-path {
+  color: #64748b !important;
+}
+
+body.light-theme .mcp-server-card,
+body.light-theme .skill-card,
+body.light-theme .team-roster-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+body.light-theme .mcp-card-cmd {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0284c7 !important;
+}
+
 

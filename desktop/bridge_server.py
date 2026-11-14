@@ -766,10 +766,12 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
             }}
             """
             enc = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+            flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
             res = subprocess.run(
-                ["powershell", "-NoProfile", "-STA", "-EncodedCommand", enc],
+                ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", enc],
                 capture_output=True,
                 text=True,
+                creationflags=flags,
                 timeout=120.0,
             )
             for line in res.stdout.strip().splitlines():
