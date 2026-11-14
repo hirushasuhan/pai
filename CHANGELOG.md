@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.0] — 2026-11-14 — Ultra-Lightweight Native Desktop Application (Tauri 2.0 + Rust), Dual Workstation Themes & Modern Model Lifecycle Management
+
+### Desktop Workstation Architecture & Native Shell
+- **Tauri 2.0 + Rust Desktop Shell**: Introduced `pai-desktop.exe`, an ultra-lightweight standalone native Windows desktop application replacing external browser execution. Embeds all frontend assets and orchestrates a local headless Python bridge daemon on `127.0.0.1:8765`.
+- **Modern Native Windows Folder Dialog**: Replaced browser prompts with Win32 `IFileOpenDialog` (`FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM`) compiled to a headless winexe (`pai_folder_picker.exe`), eliminating terminal/console flickers and legacy tree dialogs.
+- **Dual Workstation Themes (Clean Light & Deep Space Dark)**: Implemented complete Light Mode styling across all cards, containers, team role boards, deliverables, settings, and models catalog, with instant hotkey toggle (`Ctrl+Shift+L`) and system theme following.
+- **Settings UI Polish**: Upgraded "Reset Defaults" action button with rotate-ccw icon, smooth hover interactions, and seamless theme synchronization.
+
+### Model Lifecycle & Background Download Management
+- **Interactive Model Installation Modal**: Displays model specifications, parameter size, and description before download, allowing users to direct model weights to custom storage folders (e.g. `D:\AI_Models`) with real-time disk space checks.
+- **Pause & Resume Engine**: Added native download pausing and resuming via abortable streaming controllers, leveraging Ollama's layer blob cache without discarding partially downloaded layers.
+- **Global Persistent Floating Download Widget & Models Strip**: Docked floating status widget across all views and dedicated strip banner on the Models page with live percentage, throughput, Pause/Resume, and one-click popup modal reopening.
+- **Card State Synchronization**: Automatically disables competing model downloads while an active download is running, updating the active model's button to `Downloading (X%)...` or `Paused (X%)`.
+
 ## [1.1.0-rc2] — 2026-10-28 — Build Stage: Interactive Shell Polish, Managed Ollama Service & Temporal Guardrails (ADR-014, Finding ES)
 
 ### Milestone D2b-fix: Finding GF Resolution & Research Tree Pin Update (`research/tests/test_config.py`, `research/tests/test_router.py`, `packaging/build_payload.py`, `packaging/build_installer.py`, `tools/check_n_plus_1.py`, `docs/FREEZE_CHECKLIST.md`)

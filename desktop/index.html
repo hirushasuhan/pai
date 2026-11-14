@@ -636,6 +636,36 @@
             </div>
           </div>
 
+          <!-- Active Background Model Download Strip Banner -->
+          <div id="models-active-download-strip" class="models-active-download-strip hidden mb-4">
+            <div class="models-strip-left flex-center-gap">
+              <span class="pulse-indicator"></span>
+              <div class="models-strip-meta">
+                <span class="models-strip-title" id="models-strip-title">Downloading Model...</span>
+                <span class="models-strip-status text-xs text-muted" id="models-strip-status">Downloading weights layer...</span>
+              </div>
+            </div>
+            <div class="models-strip-center">
+              <div class="models-strip-bar-bg">
+                <div id="models-strip-bar" class="models-strip-bar-fill" style="width: 0%"></div>
+              </div>
+              <div class="models-strip-pct flex-between text-xs font-mono">
+                <span id="models-strip-bytes">0 MB / 0 MB</span>
+                <span id="models-strip-pct-val" class="font-semibold text-accent">0%</span>
+              </div>
+            </div>
+            <div class="models-strip-actions flex-center-gap">
+              <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-models-strip-pause" title="Pause / Resume active download">
+                <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                <span id="btn-models-strip-pause-label">Pause</span>
+              </button>
+              <button type="button" class="btn btn-primary btn-xs flex-center-gap" id="btn-models-strip-expand" title="Open full download progress popup modal">
+                <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                <span>View Popup ↗</span>
+              </button>
+            </div>
+          </div>
+
           <!-- Recommended Models (1-Click Install) -->
           <div class="glass-card mb-4">
             <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
@@ -933,7 +963,10 @@
             </div>
 
             <div class="form-actions flex-between">
-              <button type="button" class="btn btn-secondary" id="btn-reset-settings">Reset Defaults</button>
+              <button type="button" class="btn btn-secondary btn-reset-defaults" id="btn-reset-settings" title="Reset developer font and appearance to defaults">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+                <span>Reset Defaults</span>
+              </button>
               <button type="button" class="btn btn-primary" id="btn-save-settings">
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                 <span>Save & Apply Settings</span>
@@ -1144,6 +1177,33 @@
       <span>Select All</span>
       <span class="ctx-shortcut">Ctrl+A</span>
     </button>
+  </div>
+
+  <!-- Global Persistent Floating Download Widget -->
+  <div id="floating-download-widget" class="floating-download-widget hidden" title="Click to view live model download progress popup">
+    <div class="floating-download-card">
+      <div class="floating-download-top flex-between">
+        <div class="flex-center-gap">
+          <span class="pulse-indicator"></span>
+          <span class="floating-download-name" id="floating-dl-name">Downloading...</span>
+        </div>
+        <span class="floating-download-pct font-mono font-semibold" id="floating-dl-pct">0%</span>
+      </div>
+      <div class="floating-mini-bar-track">
+        <div id="floating-mini-bar-fill" class="floating-mini-bar-fill" style="width: 0%"></div>
+      </div>
+      <div class="floating-download-bottom flex-between">
+        <span class="floating-download-bytes font-mono text-xs text-muted" id="floating-dl-bytes">0 MB / 0 MB</span>
+        <div class="floating-buttons flex-center-gap">
+          <button type="button" class="btn-floating-action btn-floating-pause" id="btn-floating-pause" title="Pause / Resume download">
+            <span id="btn-floating-pause-text">Pause</span>
+          </button>
+          <button type="button" class="btn-floating-action btn-floating-open" id="btn-floating-open" title="Open download popup modal">
+            <span>View Popup ↗</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="app.js?v=20261114"></script>
