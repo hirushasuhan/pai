@@ -790,6 +790,121 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
     return None
 
 
+def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, Any]:
+    """Extract readable text from txt, md, pdf, docx, xlsx, csv, and code files."""
+    import io
+    import os
+    import re
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    text = ""
+    try:
+        # 1. Plain text, markdown, CSV, JSON, code files
+        if ext in ("txt", "md", "csv", "json", "py", "js", "ts", "html", "css", "xml", "yaml", "yml", "sh", "bat", "log"):
+            try:
+                text = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw_bytes.decode("latin-1", errors="replace")
+
+        # 2. Word documents (.docx, .doc)
+        elif ext in ("docx", "doc"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw_bytes)) as z:
+                    if "word/document.xml" in z.namelist():
+                        xml_bytes = z.read("word/document.xml")
+                        tree = ET.fromstring(xml_bytes)
+                        paras = []
+                        for p in tree.iter():
+                            if p.tag.endswith("p"):
+                                p_text = "".join(node.text for node in p.iter() if node.text and node.tag.endswith("t"))
+                                if p_text.strip():
+                                    paras.append(p_text.strip())
+                        text = "\n\n".join(paras)
+            except Exception:
+                runs = re.findall(rb'[\x20-\x7E\r\n]{4,}', raw_bytes)
+                text = "\n".join(r.decode("latin-1", errors="ignore") for r in runs if not r.startswith(rb"PK"))
+
+        # 3. Excel Spreadsheets (.xlsx, .xls)
+        elif ext in ("xlsx", "xls"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw_bytes)) as z:
+                    shared_strings = []
+                    if "xl/sharedStrings.xml" in z.namelist():
+                        stree = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                        for si in stree.iter():
+                            if si.tag.endswith("si"):
+                                item_text = "".join(t.text for t in si.iter() if t.tag.endswith("t") and t.text)
+                                shared_strings.append(item_text.strip())
+                    
+                    sheets = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+                    sheet_rows = []
+                    for sheet_name in sheets[:3]:  # read up to 3 sheets
+                        stree = ET.fromstring(z.read(sheet_name))
+                        for row in stree.iter():
+                            if row.tag.endswith("row"):
+                                cols = []
+                                for c in row.iter():
+                                    if c.tag.endswith("c"):
+                                        t_attr = c.attrib.get("t")
+                                        val = "".join(node.text for node in c.iter() if node.tag.endswith("v") and node.text).strip()
+                                        if t_attr == "s" and val.isdigit() and int(val) < len(shared_strings):
+                                            cols.append(shared_strings[int(val)])
+                                        elif val:
+                                            cols.append(val)
+                                if cols:
+                                    sheet_rows.append(" | ".join(cols))
+                    text = "\n".join(sheet_rows)
+            except Exception:
+                runs = re.findall(rb'[\x20-\x7E\r\n]{4,}', raw_bytes)
+                text = "\n".join(r.decode("latin-1", errors="ignore") for r in runs if not r.startswith(rb"PK"))
+
+        # 4. PDF Documents (.pdf)
+        elif ext == "pdf":
+            text_pieces = []
+            streams = re.findall(rb'stream[\r\n]+([\s\S]*?)[\r\n]+endstream', raw_bytes)
+            for s in streams:
+                try:
+                    import zlib
+                    decomp = zlib.decompress(s)
+                except Exception:
+                    decomp = s
+                matches = re.findall(rb'\(([^\)\\]*(?:\\.[^\)\\]*)*)\)\s*T[jJ]', decomp)
+                for m in matches:
+                    try:
+                        dec = m.decode("utf-8", errors="replace").replace("\\(", "(").replace("\\)", ")")
+                        if dec.strip():
+                            text_pieces.append(dec.strip())
+                    except Exception:
+                        pass
+            if text_pieces:
+                text = " ".join(text_pieces)
+            else:
+                runs = re.findall(rb'[\x20-\x7E\r\n]{5,}', raw_bytes)
+                text = "\n".join(r.decode("latin-1", errors="ignore") for r in runs if not r.startswith(rb"%PDF") and not r.startswith(rb"/"))
+
+        else:
+            try:
+                text = raw_bytes.decode("utf-8")
+            except Exception:
+                runs = re.findall(rb'[\x20-\x7E\r\n]{4,}', raw_bytes)
+                text = "\n".join(r.decode("latin-1", errors="ignore") for r in runs)
+    except Exception as e:
+        return {"success": False, "error": f"Failed to parse {filename}: {e}"}
+
+    clean_text = text.strip()[:40000]
+    return {
+        "success": True,
+        "filename": filename,
+        "type": ext,
+        "size": len(raw_bytes),
+        "char_count": len(clean_text),
+        "content": clean_text,
+        "preview": clean_text[:200] + ("..." if len(clean_text) > 200 else ""),
+    }
+
+
 def get_system_preflight() -> Dict[str, Any]:
     """Inspect local prerequisites, start Ollama if offline, and scan models."""
     py_ver = platform.python_version()
@@ -1050,6 +1165,25 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 1. Chat Completion & Grounding
         if path == "/api/chat":
             self._handle_chat(body)
+                # 1b. Parse Uploaded Document Attachment (docs, txt, pdf, excel, md)
+        elif path == "/api/chat/parse_file":
+            import base64
+            fname = body.get("name") or body.get("filename") or "document.txt"
+            b64_data = body.get("base64") or body.get("data") or ""
+            if b64_data:
+                if "," in b64_data:
+                    b64_data = b64_data.split(",", 1)[1]
+                try:
+                    raw_bytes = base64.b64decode(b64_data)
+                except Exception as exc:
+                    self._send_json({"success": False, "error": f"Invalid base64 payload: {exc}"}, status=400)
+                    return
+            else:
+                raw_text = body.get("content", "")
+                raw_bytes = raw_text.encode("utf-8")
+
+            res = parse_uploaded_file_content(fname, raw_bytes)
+            self._send_json(res)
         # 2. Local Model Pull (Download)
         elif path == "/api/models/pull":
             self._handle_pull_model(body)
@@ -1682,9 +1816,33 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         project_path = body.get("project_path", "").strip()
         is_team_mode = bool(body.get("is_team_mode", False))
 
-        if not raw_prompt:
-            self._send_json({"error": "Prompt cannot be empty"}, status=400)
+        if not raw_prompt and not body.get("attachments"):
+            self._send_json({"error": "Prompt or attachment required"}, status=400)
             return
+        if not raw_prompt:
+            raw_prompt = "Please analyze and summarize the attached document(s)."
+        # Inject attached documents (docs, txt, pdf, excel, md) into prompt context
+        attachments = body.get("attachments", [])
+        if attachments and isinstance(attachments, list):
+            att_blocks = []
+            for att in attachments:
+                a_name = att.get("name") or att.get("filename") or "document"
+                a_type = att.get("type", "file")
+                a_content = (att.get("content") or "").strip()
+                if a_content:
+                    att_blocks.append(
+                        f"[ATTACHED DOCUMENT: {a_name} (Format: {a_type})]\n"
+                        f"--- Content Begin ---\n"
+                        f"{a_content}\n"
+                        f"--- Content End ---"
+                    )
+            if att_blocks:
+                raw_prompt = (
+                    f"The user has attached the following document(s) for your review:\n\n"
+                    f"{chr(10).join(att_blocks)}\n\n"
+                    f"User Instruction / Query:\n{raw_prompt}"
+                )
+
 
         # Handle collaborative AI Team mode inside Chat
         if is_team_mode:

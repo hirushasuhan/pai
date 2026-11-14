@@ -61,6 +61,11 @@ const chatProjectBanner = document.getElementById("chat-project-banner");
 const chatProjectName = document.getElementById("chat-project-name");
 const chatProjectPath = document.getElementById("chat-project-path");
 const btnClearChatProj = document.getElementById("btn-clear-chat-proj");
+const btnAttachFile = document.getElementById("btn-attach-file");
+const chatFileInput = document.getElementById("chat-file-input");
+const chatAttachmentsTray = document.getElementById("chat-attachments-tray");
+const chatDropOverlay = document.getElementById("chat-drop-overlay");
+let currentChatAttachments = [];
 
 // Projects DOM
 const createProjectForm = document.getElementById("create-project-form");
@@ -309,6 +314,7 @@ function setupNavigation() {
 }
 
 function switchTab(tab) {
+  if (tab === "antigravity") tab = "team";
   currentTab = tab;
   navItems.forEach((btn) => {
     if (btn.getAttribute("data-tab") === tab) {
@@ -352,6 +358,8 @@ const SLASH_COMMANDS = [
   { cmd: "/factcheck on", desc: "Enable real-time fact-checking & audit engine", cat: "Auditing" },
   { cmd: "/factcheck off", desc: "Disable automated fact-checking", cat: "Auditing" },
   { cmd: "/team", desc: "Toggle autonomous 4-role AI engineering team", cat: "Agents" },
+  { cmd: "/supervisor", desc: "Open Antigravity Autonomous Supervisor in AI Team", cat: "Agents" },
+  { cmd: "/antigravity", desc: "Launch continuous autonomous agent in AI Team tab", cat: "Agents" },
   { cmd: "/image", desc: "Generate image with Google Imagen 3 or DALL-E 3", cat: "Creative" },
   { cmd: "/weather", desc: "Fetch live real-time weather telemetry", cat: "Tools" },
   { cmd: "/web", desc: "Search live web knowledge and display citations", cat: "Tools" },
@@ -467,8 +475,139 @@ function setupSlashCommands() {
   });
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+function renderChatAttachmentsTray() {
+  if (!chatAttachmentsTray) return;
+  if (!currentChatAttachments || currentChatAttachments.length === 0) {
+    chatAttachmentsTray.innerHTML = "";
+    chatAttachmentsTray.classList.add("hidden");
+    return;
+  }
+  chatAttachmentsTray.classList.remove("hidden");
+  chatAttachmentsTray.innerHTML = currentChatAttachments.map((att, idx) => `
+    <div class="chat-attachment-chip" title="${escapeHtml(att.name)} (${att.size_str}, ${att.char_count || 0} characters parsed)">
+      <svg class="att-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+      <span class="att-name">${escapeHtml(att.name)}</span>
+      <span class="att-size">${att.size_str}</span>
+      <button type="button" class="att-remove" onclick="removeChatAttachment(${idx})" title="Remove attachment">&times;</button>
+    </div>
+  `).join("");
+}
+
+window.removeChatAttachment = function(idx) {
+  if (idx >= 0 && idx < currentChatAttachments.length) {
+    currentChatAttachments.splice(idx, 1);
+    renderChatAttachmentsTray();
+  }
+};
+
+async function parseAndAddAttachment(file) {
+  if (!file) return;
+  if (file.size > 50 * 1024 * 1024) {
+    showToast(`File ${file.name} is too large (> 50MB)`, "warning");
+    return;
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const resultStr = reader.result;
+        const commaIdx = resultStr.indexOf(",");
+        const base64Data = commaIdx >= 0 ? resultStr.substring(commaIdx + 1) : resultStr;
+        const res = await fetch(`${API_BASE}/api/chat/parse_file`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: file.name,
+            size: file.size,
+            base64: base64Data
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          currentChatAttachments.push({
+            name: data.filename || file.name,
+            type: data.type || "file",
+            size: data.size || file.size,
+            size_str: formatBytes(data.size || file.size),
+            char_count: data.char_count || 0,
+            content: data.content || "",
+            preview: data.preview || ""
+          });
+          renderChatAttachmentsTray();
+          showToast(`Attached: ${file.name} (${formatBytes(file.size)})`, "success");
+        } else {
+          showToast(`Failed to parse ${file.name}: ${data.error || "Unknown error"}`, "error");
+        }
+      } catch (err) {
+        showToast(`Error parsing ${file.name}: ${err.message}`, "error");
+      }
+      resolve();
+    };
+    reader.onerror = () => {
+      showToast(`Could not read ${file.name}`, "error");
+      resolve();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function setupChat() {
   setupSlashCommands();
+
+  // Attach File Button & File Input
+  if (btnAttachFile && chatFileInput) {
+    btnAttachFile.addEventListener("click", () => {
+      chatFileInput.click();
+    });
+    chatFileInput.addEventListener("change", async (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        for (const file of e.target.files) {
+          await parseAndAddAttachment(file);
+        }
+        chatFileInput.value = "";
+      }
+    });
+  }
+
+  // Drag and Drop Overlay on Chat Container
+  const chatContainer = document.querySelector(".chat-container");
+  if (chatContainer && chatDropOverlay) {
+    let dragCounter = 0;
+    chatContainer.addEventListener("dragenter", (e) => {
+      e.preventDefault();
+      dragCounter++;
+      chatDropOverlay.classList.remove("hidden");
+    });
+    chatContainer.addEventListener("dragover", (e) => {
+      e.preventDefault();
+    });
+    chatContainer.addEventListener("dragleave", (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        chatDropOverlay.classList.add("hidden");
+      }
+    });
+    chatContainer.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      chatDropOverlay.classList.add("hidden");
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        for (const file of e.dataTransfer.files) {
+          await parseAndAddAttachment(file);
+        }
+      }
+    });
+  }
 
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -476,7 +615,7 @@ function setupChat() {
       slashCommandsPopup.classList.add("hidden");
     }
     const prompt = chatInput.value.trim();
-    if (!prompt) return;
+    if (!prompt && currentChatAttachments.length === 0) return;
 
     // Intercept client-side interactive slash commands
     const lowerPrompt = prompt.toLowerCase();
@@ -503,6 +642,11 @@ function setupChat() {
       toggleTeamMode.dispatchEvent(new Event("change"));
       chatInput.value = "";
       showToast(`AI Team mode ${toggleTeamMode.checked ? "activated" : "deactivated"}`, "info");
+      return;
+    }
+    if (lowerPrompt === "/antigravity" || lowerPrompt === "/supervisor") {
+      switchTab("team");
+      chatInput.value = "";
       return;
     }
     if (lowerPrompt === "/internet on" || lowerPrompt === "/internet off") {
@@ -553,6 +697,7 @@ function setupChat() {
         `- \`/internet [on|off]\` : Toggle real-time web grounding and RAG\n` +
         `- \`/factcheck [on|off]\` : Toggle automated claim verification and audit engine\n` +
         `- \`/team\` : Toggle autonomous 4-role AI engineering team\n` +
+        `- \`/supervisor\` or \`/antigravity\` : Open Antigravity Autonomous Supervisor in AI Team\n` +
         `- \`/image <prompt>\` : Synthesize image with Google Imagen 3 or DALL-E 3\n` +
         `- \`/weather [city]\` : Fetch live real-time Open-Meteo weather forecast\n` +
         `- \`/web <query>\` : Search Wikipedia & DuckDuckGo with live web citations\n` +
@@ -572,9 +717,14 @@ function setupChat() {
       if (!activeProjectPath) return;
     }
 
-    lastSentPrompt = prompt;
+    const promptToSend = prompt || "Please analyze and summarize the attached document(s).";
+    const sentAttachments = [...currentChatAttachments];
+    currentChatAttachments = [];
+    renderChatAttachmentsTray();
+
+    lastSentPrompt = promptToSend;
     chatInput.value = "";
-    appendUserMessage(prompt);
+    appendUserMessage(promptToSend, sentAttachments);
     btnSend.disabled = true;
 
     const botMsgId = "msg-" + Date.now();
@@ -585,11 +735,12 @@ function setupChat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt,
+          prompt: promptToSend,
           model: activeModel,
           history: chatHistory,
           project_path: activeProjectPath,
           is_team_mode: isTeam,
+          attachments: sentAttachments,
         }),
       });
 
@@ -598,20 +749,20 @@ function setupChat() {
         if (data.is_image) {
           updateAssistantMessageImage(botMsgId, data.image_url, data.prompt, data.model, data.filename);
         } else if (data.is_team) {
-          updateAssistantTeamMessage(botMsgId, data, prompt);
+          updateAssistantTeamMessage(botMsgId, data, promptToSend);
           if (activeProjectPath) {
             loadProjectFiles(activeProjectPath);
           }
         } else {
-          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, prompt);
+          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend);
         }
-        chatHistory.push({ role: "user", content: prompt });
+        chatHistory.push({ role: "user", content: promptToSend });
         chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
       } else {
-        updateAssistantError(botMsgId, data.error || "Execution error", prompt);
+        updateAssistantError(botMsgId, data.error || "Execution error", promptToSend);
       }
     } catch (err) {
-      updateAssistantError(botMsgId, `Server connection error: ${err.message}`, prompt);
+      updateAssistantError(botMsgId, `Server connection error: ${err.message}`, promptToSend);
     } finally {
       btnSend.disabled = false;
       chatInput.focus();
@@ -630,9 +781,24 @@ function setupChat() {
   });
 }
 
-function appendUserMessage(text) {
+function appendUserMessage(text, attachments = []) {
   const msg = document.createElement("div");
   msg.className = "message user";
+
+  let attachmentsHtml = "";
+  if (attachments && attachments.length > 0) {
+    attachmentsHtml = `
+      <div class="msg-attachments-row">
+        ${attachments.map(att => `
+          <span class="msg-att-badge" title="${escapeHtml(att.name)} (${att.size_str || formatBytes(att.size)})">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+            <span>${escapeHtml(att.name)}</span>
+          </span>
+        `).join("")}
+      </div>
+    `;
+  }
+
   msg.innerHTML = `
     <div class="msg-header">
       <span class="avatar-badge">YOU</span>
@@ -646,6 +812,7 @@ function appendUserMessage(text) {
       </div>
     </div>
     <div class="msg-body">
+      ${attachmentsHtml}
       <p>${escapeHtml(text)}</p>
     </div>
   `;
