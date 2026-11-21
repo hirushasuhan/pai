@@ -194,8 +194,8 @@ def _spawn_ollama_daemon(models_path: str, timeout: float = 8.0) -> bool:
     while time.time() - start_time < timeout:
         time.sleep(0.3)
         try:
-            req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
-            with urllib.request.urlopen(req, timeout=0.8) as r:
+            req = urllib.request.Request("http://127.0.0.1:11434/api/version", headers={"User-Agent": "PAI-Desktop/1.1"})
+            with urllib.request.urlopen(req, timeout=1.0) as r:
                 if r.status == 200:
                     _CURRENT_ACTIVE_OLLAMA_PATH = target_dir
                     return True
@@ -214,12 +214,18 @@ def ensure_ollama_server(timeout: float = 8.0, custom_models_path: Optional[str]
     # Check if Ollama is currently online
     is_online = False
     try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
-        with urllib.request.urlopen(req, timeout=0.8) as r:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/version", headers={"User-Agent": "PAI-Desktop/1.1"})
+        with urllib.request.urlopen(req, timeout=1.0) as r:
             if r.status == 200:
                 is_online = True
     except Exception:
-        pass
+        try:
+            req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Desktop/1.1"})
+            with urllib.request.urlopen(req, timeout=1.0) as r:
+                if r.status == 200:
+                    is_online = True
+        except Exception:
+            pass
 
     # If custom_models_path is provided and different from the currently running daemon path, restart it
     if is_online and custom_models_path:
@@ -1289,20 +1295,29 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder", in
                 cmd = [picker_exe, title, out_txt]
                 if initial_path and os.path.isdir(initial_path):
                     cmd.append(initial_path)
-                subprocess.run(
+                proc = subprocess.run(
                     cmd,
                     capture_output=True,
                     timeout=300.0,
                 )
-                if os.path.isfile(out_txt):
-                    with open(out_txt, "r", encoding="utf-8") as f:
-                        selected_path = f.read().strip()
+                if proc.returncode == 0:
+                    if os.path.isfile(out_txt):
+                        with open(out_txt, "r", encoding="utf-8") as f:
+                            selected_path = f.read().strip()
+                        try:
+                            os.remove(out_txt)
+                        except Exception:
+                            pass
+                        if selected_path and os.path.isdir(selected_path):
+                            return os.path.normpath(selected_path)
+                elif proc.returncode == 2:
+                    # User explicitly clicked Cancel! Return immediately - do not spawn fallback dialogs.
                     try:
-                        os.remove(out_txt)
+                        if os.path.isfile(out_txt):
+                            os.remove(out_txt)
                     except Exception:
                         pass
-                    if selected_path and os.path.isdir(selected_path):
-                        return os.path.normpath(selected_path)
+                    return None
         except Exception:
             pass
 
@@ -1328,6 +1343,9 @@ $res = $f.ShowDialog($top)
 $top.Dispose()
 if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $f.SelectedPath) {
     [System.IO.File]::WriteAllText($targetOut, $f.SelectedPath, [System.Text.Encoding]::UTF8)
+    exit 0
+} else {
+    exit 2
 }
 """
             with open(ps1_file, "w", encoding="utf-8") as f:
@@ -1337,7 +1355,7 @@ if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $f.SelectedPath) {
             if initial_path and os.path.isdir(initial_path):
                 cmd.append(initial_path)
 
-            subprocess.run(
+            ps_proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 timeout=180.0,
@@ -1347,7 +1365,7 @@ if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $f.SelectedPath) {
             except Exception:
                 pass
 
-            if os.path.isfile(out_txt):
+            if ps_proc.returncode == 0 and os.path.isfile(out_txt):
                 with open(out_txt, "r", encoding="utf-8") as f:
                     selected_path = f.read().strip()
                 try:
@@ -1356,6 +1374,14 @@ if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $f.SelectedPath) {
                     pass
                 if selected_path and os.path.isdir(selected_path):
                     return os.path.normpath(selected_path)
+            elif ps_proc.returncode == 2:
+                # Cancelled in PowerShell dialog
+                try:
+                    if os.path.isfile(out_txt):
+                        os.remove(out_txt)
+                except Exception:
+                    pass
+                return None
         except Exception:
             pass
 
@@ -2129,13 +2155,21 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         for p in data.get("projects", []):
             pth = Path(p.get("path", ""))
             p["exists"] = pth.is_dir()
+            p["file_count"] = 0
             if p["exists"]:
                 try:
-                    p["file_count"] = sum(1 for _ in pth.rglob("*") if _.is_file())
+                    count = 0
+                    for entry in os.scandir(pth):
+                        if entry.name not in {".git", "node_modules", ".venv", "venv", "__pycache__"}:
+                            count += 1
+                            if count >= 100:
+                                break
+                    p["file_count"] = count
                 except Exception:
                     p["file_count"] = 0
             else:
                 p["file_count"] = 0
+        data["success"] = True
         self._send_json(data)
 
     def _handle_project_save(self, body: Dict[str, Any]) -> None:
@@ -2151,7 +2185,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
         data = load_projects_data()
         projects = data.get("projects", [])
-        existing = next((p for p in projects if p.get("name", "").lower() == name.lower()), None)
+        target_norm = os.path.normcase(os.path.normpath(str(folder)))
+        existing = next((p for p in projects if p.get("name", "").strip().lower() == name.lower() or os.path.normcase(os.path.normpath(p.get("path", ""))) == target_norm), None)
         item = {
             "name": name,
             "path": str(folder),
@@ -2174,8 +2209,10 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         data = load_projects_data()
         matched_path = ""
         if target:
+            target_norm = os.path.normcase(os.path.normpath(target))
             for p in data.get("projects", []):
-                if p.get("path", "").lower() == target.lower() or p.get("name", "").lower() == target.lower():
+                p_norm = os.path.normcase(os.path.normpath(p.get("path", "")))
+                if p_norm == target_norm or p.get("name", "").strip().lower() == target.lower():
                     matched_path = p.get("path", "")
                     break
             if not matched_path and Path(target).is_dir():
@@ -2185,13 +2222,17 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         self._send_json({"success": True, "active_project": matched_path})
 
     def _handle_project_delete(self, body: Dict[str, Any]) -> None:
-        target = (body.get("path") or body.get("name") or "").strip().lower()
+        target = (body.get("path") or body.get("name") or "").strip()
+        target_norm = os.path.normcase(os.path.normpath(target)) if target else ""
         data = load_projects_data()
         data["projects"] = [
             p for p in data.get("projects", [])
-            if p.get("name", "").lower() != target and p.get("path", "").lower() != target
+            if p.get("name", "").strip().lower() != target.lower() and os.path.normcase(os.path.normpath(p.get("path", ""))) != target_norm
         ]
-        if data.get("active_project", "").lower() == target:
+        if data.get("active_project", "") and (
+            data.get("active_project", "").strip().lower() == target.lower()
+            or os.path.normcase(os.path.normpath(data.get("active_project", ""))) == target_norm
+        ):
             data["active_project"] = ""
         save_projects_data(data)
         self._send_json({"success": True, "deleted": target})

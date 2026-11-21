@@ -272,7 +272,12 @@ function setupNavigation() {
   headerProjectSelect.addEventListener("change", async (e) => {
     const selectedPath = e.target.value;
     if (selectedPath === "__NEW_PROJECT__") {
-      headerProjectSelect.value = activeProjectPath || "";
+      for (let i = 0; i < headerProjectSelect.options.length; i++) {
+        if (pathsMatch(headerProjectSelect.options[i].value, activeProjectPath)) {
+          headerProjectSelect.selectedIndex = i;
+          break;
+        }
+      }
       await browseAndActivateProjectFolder();
       return;
     }
@@ -280,7 +285,12 @@ function setupNavigation() {
   });
 
   btnHeaderBrowseFolder.addEventListener("click", async () => {
-    await browseAndActivateProjectFolder();
+    btnHeaderBrowseFolder.disabled = true;
+    try {
+      await browseAndActivateProjectFolder();
+    } finally {
+      btnHeaderBrowseFolder.disabled = false;
+    }
   });
 
   toggleTeamMode.addEventListener("change", async (e) => {
@@ -314,8 +324,14 @@ function setupNavigation() {
     }
   });
 
+  const savedFc = localStorage.getItem("pai_factcheck_enabled");
+  if (savedFc !== null) {
+    toggleFactcheck.checked = (savedFc === "true");
+  }
+
   toggleFactcheck.addEventListener("change", async (e) => {
     const val = e.target.checked;
+    localStorage.setItem("pai_factcheck_enabled", val ? "true" : "false");
     try {
       await fetch(`${API_BASE}/api/settings/toggle`, {
         method: "POST",
@@ -1267,19 +1283,62 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "")
     `;
   }
 
-  if (factcheck && factcheck.report) {
+  if (factcheck && (factcheck.report || (factcheck.claims && factcheck.claims.length > 0))) {
     const trustPct = (typeof factcheck.score === "number")
       ? Math.round(factcheck.score * 100)
       : (factcheck.fidelity !== undefined ? factcheck.fidelity : 0);
     const trustClass = trustPct >= 70 ? "trust-high" : (trustPct >= 35 ? "trust-med" : "trust-low");
-    html += `
-      <div class="factcheck-box ${trustClass}">
-        <div class="factcheck-header">
-          <span class="fc-title">${SVG_ICONS.shield} Real-Time Fact-Check Verdict</span>
-          <span class="fc-score ${trustClass}">Trust: ${trustPct}%</span>
+
+    let detailsContent = "";
+    if (factcheck.claims && factcheck.claims.length > 0) {
+      detailsContent = `
+        <div class="factcheck-claims-list">
+          ${factcheck.claims.map((c) => {
+            const isV = c.verdict === "VERIFIED";
+            const isC = c.verdict === "CONTRADICTED";
+            const badgeClass = isV ? "badge-verified" : (isC ? "badge-contradicted" : "badge-unverified");
+            const badgeLabel = isV ? "Verified" : (isC ? "Potential Hallucination" : "Unverified");
+            const badgeIcon = isV ? "✅" : (isC ? "❌" : "⚠️");
+            const confPct = Math.round((c.confidence || 0) * 100);
+            const citeLinks = (c.citations || []).map(cite => 
+              `<a href="${escapeHtml(cite.url)}" target="_blank" class="cite-link" title="${escapeHtml(cite.url)}">${escapeHtml(cite.title || cite.url)}</a>`
+            ).join(" ");
+            return `
+              <div class="claim-item">
+                <div class="claim-header">
+                  <span class="claim-verdict ${badgeClass}">${badgeIcon} ${badgeLabel}</span>
+                  <span class="claim-conf">Confidence: ${confPct}%</span>
+                </div>
+                <div class="claim-statement">${escapeHtml(c.statement)}</div>
+                ${c.notes ? `<div class="claim-note"><span class="text-muted">Note:</span> ${escapeHtml(c.notes)}</div>` : ""}
+                ${citeLinks ? `<div class="claim-sources"><span class="text-muted">Sources:</span> ${citeLinks}</div>` : ""}
+              </div>
+            `;
+          }).join("")}
         </div>
-        <div class="factcheck-body font-mono-target">${escapeHtml(factcheck.report)}</div>
-      </div>
+      `;
+    } else if (factcheck.report) {
+      const cleanReport = factcheck.report
+        .replace(/^─+/gm, "")
+        .replace(/🛡️ FACT-CHECK & WEB GROUNDING ENGINE \(Live Verification\):?/i, "")
+        .trim();
+      detailsContent = `<div class="factcheck-body font-mono-target">${escapeHtml(cleanReport)}</div>`;
+    }
+
+    html += `
+      <details class="factcheck-collapsible ${trustClass}">
+        <summary class="factcheck-summary">
+          <div class="fc-summary-left">
+            <span class="fc-icon">${SVG_ICONS.shield}</span>
+            <span class="fc-title">Live Verification Audit</span>
+            <span class="fc-score-badge ${trustClass}">Trust: ${trustPct}%</span>
+          </div>
+          <span class="fc-toggle-hint">View Verification ▾</span>
+        </summary>
+        <div class="factcheck-content">
+          ${detailsContent}
+        </div>
+      </details>
     `;
   }
 
@@ -1464,11 +1523,19 @@ function setupProjects() {
       const initPath = projPathInput ? projPathInput.value.trim() : "";
       const picked = await openNativeFolderDialog("Select Project Workspace Folder", initPath);
       if (picked && picked.path) {
-        projPathInput.value = picked.path;
-        if (!projNameInput.value.trim()) {
-          projNameInput.value = picked.name || picked.path.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
-        }
-        showToast(`Selected project folder: ${picked.name || picked.path}`, "success");
+        const folderPath = picked.path;
+        const folderName = picked.name || folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
+        projPathInput.value = folderPath;
+        projNameInput.value = folderName;
+        // Automatically save and activate the picked project folder immediately
+        await fetch(`${API_BASE}/api/projects/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: folderName, path: folderPath }),
+        });
+        await loadProjects();
+        await activateProject(folderPath);
+        showToast(`Workspace activated: ${folderName}`, "success", "Active Project");
       }
     } catch (err) {
       console.error("Browse error:", err);
@@ -1548,20 +1615,35 @@ async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Fo
   return null;
 }
 
+function normalizePath(p) {
+  if (!p || typeof p !== "string") return "";
+  let norm = p.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  if (/^[a-zA-Z]:/.test(norm)) {
+    norm = norm[0].toUpperCase() + norm.slice(1);
+  }
+  return norm;
+}
+
+function pathsMatch(p1, p2) {
+  if (!p1 && !p2) return true;
+  if (!p1 || !p2) return false;
+  return normalizePath(p1).toLowerCase() === normalizePath(p2).toLowerCase();
+}
+
 async function browseAndActivateProjectFolder() {
   try {
     const picked = await openNativeFolderDialog("Select Project Workspace Folder", activeProjectPath || "");
     if (picked && picked.path) {
       const folderPath = picked.path;
       const folderName = picked.name || folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
-      await fetch(`${API_BASE}/api/projects/save`, {
+      const saveRes = await fetch(`${API_BASE}/api/projects/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: folderName, path: folderPath }),
       });
-      await loadProjects();
-      await activateProject(folderPath);
-      showToast(`Activated workspace: ${folderName}`, "success");
+      const saveData = await saveRes.json();
+      const targetPath = (saveData && saveData.project && saveData.project.path) ? saveData.project.path : folderPath;
+      await activateProject(targetPath);
       return true;
     }
   } catch (e) {
@@ -1574,14 +1656,14 @@ async function loadProjects() {
   try {
     const res = await fetch(`${API_BASE}/api/projects`);
     const data = await res.json();
-    if (data.success) {
+    if (data && (data.success || Array.isArray(data.projects))) {
       projectsData = data;
-      renderProjectsList(data.projects, data.active_project);
-      populateHeaderProjectDropdown(data.projects, data.active_project);
-
       activeProjectPath = data.active_project || "";
-      const activeObj = data.projects.find(p => p.path === activeProjectPath);
-      activeProjectName = activeObj ? activeObj.name : "";
+      const activeObj = (data.projects || []).find(p => pathsMatch(p.path, activeProjectPath));
+      activeProjectName = activeObj ? activeObj.name : (activeProjectPath ? activeProjectPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace" : "");
+
+      renderProjectsList(data.projects || [], activeProjectPath);
+      populateHeaderProjectDropdown(data.projects || [], activeProjectPath);
       updateActiveProjectUI();
 
       if (activeProjectPath) {
@@ -1595,29 +1677,61 @@ async function loadProjects() {
 
 function populateHeaderProjectDropdown(projects, activePath) {
   headerProjectSelect.innerHTML = `<option value="">No Active Project (Global)</option>`;
-  projects.forEach((p) => {
+  let matchedIndex = -1;
+
+  const projList = Array.isArray(projects) ? projects : [];
+
+  projList.forEach((p, idx) => {
     const opt = document.createElement("option");
     opt.value = p.path;
-    opt.textContent = `${p.name} (${p.path})`;
-    if (p.path === activePath) opt.selected = true;
+    // Show folder name clearly with folder icon
+    opt.textContent = `📁 ${p.name}`;
+    opt.title = `${p.name} (${p.path})`;
+    if (activePath && pathsMatch(p.path, activePath)) {
+      opt.selected = true;
+      matchedIndex = idx + 1; // 1-based index (0 is No Active Project)
+    }
     headerProjectSelect.appendChild(opt);
   });
+
+  // If activePath is set, but not in projList, add it dynamically!
+  if (activePath && matchedIndex < 0) {
+    const opt = document.createElement("option");
+    opt.value = activePath;
+    const folderName = activePath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
+    opt.textContent = `📁 ${folderName}`;
+    opt.title = `${folderName} (${activePath})`;
+    opt.selected = true;
+    headerProjectSelect.appendChild(opt);
+    matchedIndex = headerProjectSelect.options.length - 1;
+  }
+
   const addOpt = document.createElement("option");
   addOpt.value = "__NEW_PROJECT__";
   addOpt.textContent = "+ Add / Open Project Folder...";
   headerProjectSelect.appendChild(addOpt);
+
+  if (activePath && matchedIndex > 0) {
+    headerProjectSelect.selectedIndex = matchedIndex;
+    const activeObj = projList.find(p => pathsMatch(p.path, activePath));
+    const displayName = activeObj ? activeObj.name : activePath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
+    headerProjectSelect.title = `Active Project: ${displayName} (${activePath})`;
+  } else {
+    headerProjectSelect.selectedIndex = 0;
+    headerProjectSelect.title = "No Active Project (Global)";
+  }
 }
 
 function renderProjectsList(projects, activePath) {
-  savedProjectsCount.textContent = projects.length;
-  if (projects.length === 0) {
+  savedProjectsCount.textContent = (projects || []).length;
+  if (!projects || projects.length === 0) {
     projectsListContainer.innerHTML = `<div class="text-muted text-sm" style="padding: 10px;">No projects saved yet. Create one above or click Browse.</div>`;
     return;
   }
 
   projectsListContainer.innerHTML = "";
   projects.forEach((p) => {
-    const isActive = p.path === activePath;
+    const isActive = pathsMatch(p.path, activePath);
     const card = document.createElement("div");
     card.className = `project-card ${isActive ? "active" : ""}`;
     card.innerHTML = `
@@ -1653,16 +1767,28 @@ async function activateProject(folderPath) {
       body: JSON.stringify({ path: folderPath }),
     });
     const data = await res.json();
-    if (data.success) {
-      activeProjectPath = folderPath;
-      const projObj = (projectsData.projects || []).find(p => p.path === folderPath);
-      activeProjectName = projObj ? projObj.name : (folderPath ? "Workspace" : "");
+    if (data && (data.success || data.active_project !== undefined)) {
+      activeProjectPath = data.active_project !== undefined ? data.active_project : folderPath;
+      
+      // Refresh projects list to keep all components completely synchronized
+      try {
+        const listRes = await fetch(`${API_BASE}/api/projects`);
+        const listData = await listRes.json();
+        if (listData && (listData.success || Array.isArray(listData.projects))) {
+          projectsData = listData;
+        }
+      } catch (_) {}
+      
+      const projObj = (projectsData.projects || []).find(p => pathsMatch(p.path, activeProjectPath));
+      activeProjectName = projObj ? projObj.name : (activeProjectPath ? activeProjectPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace" : "");
+
       updateActiveProjectUI();
       renderProjectsList(projectsData.projects || [], activeProjectPath);
-      headerProjectSelect.value = folderPath;
-      if (folderPath) {
+      populateHeaderProjectDropdown(projectsData.projects || [], activeProjectPath);
+
+      if (activeProjectPath) {
         showToast(`Workspace set to: ${activeProjectName}`, "success", "Active Project");
-        loadProjectFiles(folderPath);
+        loadProjectFiles(activeProjectPath);
       } else {
         showToast("Switched to Global mode (no active project)", "info");
         fileTreeContainer.innerHTML = `
@@ -2654,14 +2780,6 @@ function setupModels() {
             checkInstallPathStorage(picked.path);
           }
           currentInstallTargetPath = picked.path;
-          try {
-            await fetch(`${API_BASE}/api/models/storage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ path: picked.path }),
-            });
-            loadModelStoragePath();
-          } catch (_) {}
         }
       } catch (err) {
         console.error("Browse error:", err);
@@ -2932,7 +3050,7 @@ function renderRecommendedModels(recs) {
     const dlBtn = card.querySelector(".btn-download-rec");
     if (dlBtn) {
       dlBtn.addEventListener("click", () => {
-        openModelInstallModal(rec, true);
+        openModelInstallModal(rec, false);
       });
     }
 
@@ -3279,17 +3397,24 @@ async function openModelInstallModal(modelInfo, autoStart = false) {
     isSameModelTag(normActive, normName)
   );
 
+  if (isModelDownloading && !isThisActive) {
+    showToast(`Download already in progress: '${activeDownloadingModelTag}' (${Math.round(activeDownloadPct)}%).`, "warning", "Download in Progress");
+    const activeObj = latestRecommendedModels.find(r => isSameModelTag(r.tag, activeDownloadingModelTag) || isSameModelTag(r.name, activeDownloadingModelTag)) || {
+      tag: activeDownloadingModelTag,
+      name: activeDownloadingModelTag,
+      size: "Variable",
+      desc: "Currently downloading model weights...",
+    };
+    return openModelInstallModal(activeObj, false);
+  }
+
   if (isThisActive && progressSec) {
     progressSec.classList.remove("hidden");
     syncDownloadUI(activeDownloadPct, activeDownloadStatus, activeDownloadBytes, isDownloadPaused);
     if (confirmLabel) confirmLabel.textContent = isDownloadPaused ? "Resume Download" : "Run in Background & Close";
     if (cancelBtn) cancelBtn.style.display = "";
-  } else if (autoStart) {
-    // 1-Click Install Flow: Directly reveal progress and initiate download popup
-    if (progressSec) progressSec.classList.remove("hidden");
-    const targetPath = (pathInput && pathInput.value) ? pathInput.value.trim() : (modelInfo.targetPath || currentInstallTargetPath || "");
-    startModelDownload(modelInfo, targetPath);
   } else {
+    // Modal always opens in review/configure mode: user can freely check/browse path before confirming
     if (progressSec) progressSec.classList.add("hidden");
     if (confirmBtn) {
       confirmBtn.disabled = false;
@@ -3812,13 +3937,42 @@ function initLiveEnvironmentTelemetry() {
   setInterval(fetchLiveWeatherTelemetry, 10 * 60 * 1000);
 }
 
+let preflightPollTimer = null;
+
+function stopPreflightPolling() {
+  if (preflightPollTimer) {
+    clearInterval(preflightPollTimer);
+    preflightPollTimer = null;
+  }
+}
+
+function startPreflightPolling() {
+  if (preflightPollTimer) return;
+  preflightPollTimer = setInterval(async () => {
+    if (!preflightModal || preflightModal.classList.contains("hidden")) {
+      stopPreflightPolling();
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/system/preflight`);
+      const data = await res.json();
+      if (data && data.success) {
+        showPreflightModal(data);
+        if (data.ollama && data.ollama.running) {
+          stopPreflightPolling();
+        }
+      }
+    } catch (_) {}
+  }, 1200);
+}
+
 // 10. Startup Preflight Check
 async function checkStartupPreflight() {
   try {
     const res = await fetch(`${API_BASE}/api/system/preflight`);
     const data = await res.json();
     if (data.success && data.models) {
-      if (!data.ready) {
+      if (!data.ready || (data.ollama && !data.ollama.running)) {
         showPreflightModal(data);
       }
       availableModels = data.models.installed || [];
@@ -3858,7 +4012,7 @@ function showPreflightModal(data) {
   olItem.innerHTML = `
     <div class="preflight-item-info">
       <span class="preflight-item-title">Ollama Local Engine</span>
-      <span class="preflight-item-detail">${olHealthy ? "127.0.0.1:11434 Active" : (data.ollama.installed ? "Service Starting..." : "Not Installed")}</span>
+      <span class="preflight-item-detail">${olHealthy ? "127.0.0.1:11434 Active" : (data.ollama.installed ? "Service Starting... (Checking localhost:11434)" : "Not Installed")}</span>
     </div>
     <span class="preflight-badge ${olHealthy ? 'healthy' : (data.ollama.installed ? 'warning' : 'error')}">
       ${olHealthy ? 'Online' : (data.ollama.installed ? 'Standby' : 'Missing')}
@@ -3902,6 +4056,29 @@ function showPreflightModal(data) {
         ${SVG_ICONS.globe} Download Ollama for Windows
       </a>
     `;
+    stopPreflightPolling();
+  } else if (!olHealthy) {
+    // Ollama is installed but starting/standby: poll automatically and provide manual start trigger
+    preflightActionBox.classList.remove("hidden");
+    preflightActionText.textContent = "Connecting to Ollama local daemon on 127.0.0.1:11434...";
+    preflightActionButtons.innerHTML = `
+      <button type="button" class="btn btn-primary btn-sm" id="btn-preflight-boot-ollama">
+        ${SVG_ICONS.cpu} Start Ollama Engine Now
+      </button>
+    `;
+    document.getElementById("btn-preflight-boot-ollama")?.addEventListener("click", async () => {
+      const btn = document.getElementById("btn-preflight-boot-ollama");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-inline"></span> Starting Ollama...`;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/system/preflight`);
+        const updated = await res.json();
+        if (updated.success) showPreflightModal(updated);
+      } catch (_) {}
+    });
+    startPreflightPolling();
   } else if (mdCount === 0) {
     preflightActionBox.classList.remove("hidden");
     preflightActionText.textContent = "No local models are currently installed. We recommend installing Meta Llama 3.2 3B (2.0 GB) for fast, lightweight local reasoning.";
@@ -3911,19 +4088,38 @@ function showPreflightModal(data) {
       </button>
     `;
     document.getElementById("btn-preflight-pull-llama")?.addEventListener("click", () => {
+      stopPreflightPolling();
       preflightModal.classList.add("hidden");
       switchTab("models");
       pullModel("llama3.2:3b");
     });
+    stopPreflightPolling();
   } else {
     preflightActionBox.classList.add("hidden");
+    stopPreflightPolling();
+  }
+
+  if (btnDismissPreflight) {
+    if (olHealthy) {
+      btnDismissPreflight.textContent = "Launch PAI Studio";
+      btnDismissPreflight.className = "btn btn-primary";
+    } else {
+      btnDismissPreflight.textContent = "Launch Anyway";
+      btnDismissPreflight.className = "btn btn-secondary";
+    }
   }
 
   preflightModal.classList.remove("hidden");
 }
 
-btnClosePreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
-btnDismissPreflight.addEventListener("click", () => preflightModal.classList.add("hidden"));
+btnClosePreflight.addEventListener("click", () => {
+  stopPreflightPolling();
+  preflightModal.classList.add("hidden");
+});
+btnDismissPreflight.addEventListener("click", () => {
+  stopPreflightPolling();
+  preflightModal.classList.add("hidden");
+});
 
 let currentColorMode = "dark"; // "dark" | "light" | "auto"
 

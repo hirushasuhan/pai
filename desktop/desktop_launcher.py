@@ -81,15 +81,16 @@ def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer]]:
 
 
 def find_native_desktop_executable() -> Optional[str]:
-    """Find native PAI Studio Tauri release binary if present and up-to-date."""
-    app_js = _CURR_DIR / "app.js"
-    min_mtime = app_js.stat().st_mtime if app_js.is_file() else 0
+    """Find native PAI Studio Tauri release binary."""
     cand_paths = [
         _CURR_DIR / "src-tauri" / "target" / "release" / "pai-desktop.exe",
         _INSTALL_ROOT / "desktop" / "src-tauri" / "target" / "release" / "pai-desktop.exe",
+        _CURR_DIR / "pai-desktop.exe",
+        _INSTALL_ROOT / "pai-desktop.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "PAI" / "pai-desktop.exe",
     ]
     for p in cand_paths:
-        if p.is_file() and p.stat().st_mtime >= min_mtime:
+        if p.is_file() and p.stat().st_size > 0:
             return str(p.resolve())
     return None
 
