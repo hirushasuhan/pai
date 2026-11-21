@@ -1056,6 +1056,60 @@
     </div>
   </div>
 
+  <!-- Model Delete Confirmation In-App Modal -->
+  <div id="model-delete-confirm-modal" class="modal-backdrop hidden">
+    <div class="modal-card model-delete-modal-card">
+      <div class="modal-header flex-between">
+        <h3 class="flex-center-gap modal-title text-danger">
+          <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span>Uninstall Local Model</span>
+        </h3>
+        <button type="button" class="btn-close-modal" id="btn-close-delete-modal" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="delete-model-warning-box mb-3">
+          <div class="warning-icon-wrapper">
+            <svg class="warning-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </div>
+          <div class="warning-text">
+            <h4 class="warning-title">Permanent Weight Purge</h4>
+            <p class="text-sm text-muted">
+              Are you sure you want to permanently uninstall and purge this AI model? Its manifest files and neural weight blobs will be purged from disk to free storage space.
+            </p>
+          </div>
+        </div>
+
+        <div class="delete-model-meta-card mb-3">
+          <div class="meta-row flex-between mb-2">
+            <span class="meta-label">Model Identifier:</span>
+            <span class="meta-val font-mono font-semibold" id="delete-modal-model-name">llama3.2:3b</span>
+          </div>
+          <div class="meta-row flex-between">
+            <span class="meta-label">Disk Space to Reclaim:</span>
+            <span class="meta-val font-semibold text-accent" id="delete-modal-model-size">~2.0 GB</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-delete-modal">Cancel</button>
+        <button type="button" class="btn btn-danger flex-center-gap" id="btn-confirm-delete-model">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span id="btn-confirm-delete-label">Uninstall & Free Space</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Model Install & Path Confirmation Modal -->
   <div id="model-install-modal" class="modal-backdrop hidden">
     <div class="modal-card model-install-modal-card">

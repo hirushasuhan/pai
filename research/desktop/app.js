@@ -1457,9 +1457,12 @@ function setupProjects() {
   });
 
   btnBrowseProjFolder.addEventListener("click", async () => {
+    const origHtml = btnBrowseProjFolder.innerHTML;
     btnBrowseProjFolder.disabled = true;
+    btnBrowseProjFolder.textContent = "Browsing...";
     try {
-      const picked = await openNativeFolderDialog("Select Project Workspace Folder");
+      const initPath = projPathInput ? projPathInput.value.trim() : "";
+      const picked = await openNativeFolderDialog("Select Project Workspace Folder", initPath);
       if (picked && picked.path) {
         projPathInput.value = picked.path;
         if (!projNameInput.value.trim()) {
@@ -1471,6 +1474,7 @@ function setupProjects() {
       console.error("Browse error:", err);
     } finally {
       btnBrowseProjFolder.disabled = false;
+      btnBrowseProjFolder.innerHTML = origHtml;
     }
   });
 
@@ -1527,12 +1531,12 @@ function setupProjects() {
   });
 }
 
-async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Folder") {
+async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Folder", initialPath = "") {
   try {
     const res = await fetch(`${API_BASE}/api/utils/select_folder`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: dialogTitle }),
+      body: JSON.stringify({ title: dialogTitle, initial_path: initialPath }),
     });
     const data = await res.json();
     if (data.success && data.path) {
@@ -1546,7 +1550,7 @@ async function openNativeFolderDialog(dialogTitle = "Select Project Workspace Fo
 
 async function browseAndActivateProjectFolder() {
   try {
-    const picked = await openNativeFolderDialog("Select Project Workspace Folder");
+    const picked = await openNativeFolderDialog("Select Project Workspace Folder", activeProjectPath || "");
     if (picked && picked.path) {
       const folderPath = picked.path;
       const folderName = picked.name || folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
@@ -2382,25 +2386,36 @@ function setupModels() {
   const btnChangePath = document.getElementById("btn-change-model-path");
   if (btnChangePath) {
     btnChangePath.addEventListener("click", async () => {
-      const picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
-      if (picked && picked.path) {
-        try {
-          const res = await fetch(`${API_BASE}/api/models/storage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: picked.path }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            showToast(`Model storage path updated to: ${data.path}`, "success", "Storage Configured");
-            loadModelStoragePath();
-            loadInstalledModels();
-          } else {
-            showToast(data.error || "Failed to update storage path", "error");
+      const origHtml = btnChangePath.innerHTML;
+      btnChangePath.disabled = true;
+      btnChangePath.textContent = "Browsing...";
+      try {
+        const initPath = currentInstallTargetPath || (modelStoragePathValue ? modelStoragePathValue.textContent.trim() : "");
+        const picked = await openNativeFolderDialog("Select Custom Model Storage Directory", initPath);
+        if (picked && picked.path) {
+          try {
+            const res = await fetch(`${API_BASE}/api/models/storage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: picked.path }),
+            });
+            const data = await res.json();
+            if (data.success) {
+              showToast(`Model storage path updated to: ${data.path}`, "success", "Storage Configured");
+              loadModelStoragePath();
+              loadInstalledModels();
+            } else {
+              showToast(data.error || "Failed to update storage path", "error");
+            }
+          } catch (err) {
+            showToast(`Error updating path: ${err.message}`, "error");
           }
-        } catch (err) {
-          showToast(`Error updating path: ${err.message}`, "error");
         }
+      } catch (err) {
+        console.error("Browse error:", err);
+      } finally {
+        btnChangePath.disabled = false;
+        btnChangePath.innerHTML = origHtml;
       }
     });
   }
@@ -2408,10 +2423,21 @@ function setupModels() {
   const btnBrowsePull = document.getElementById("btn-browse-pull-path");
   if (btnBrowsePull) {
     btnBrowsePull.addEventListener("click", async () => {
-      const picked = await openNativeFolderDialog("Select Custom Model Destination Folder");
-      if (picked && picked.path) {
+      const origHtml = btnBrowsePull.innerHTML;
+      btnBrowsePull.disabled = true;
+      btnBrowsePull.textContent = "Browsing...";
+      try {
         const targetInput = document.getElementById("pull-model-target-path");
-        if (targetInput) targetInput.value = picked.path;
+        const initPath = targetInput ? targetInput.value.trim() : "";
+        const picked = await openNativeFolderDialog("Select Custom Model Destination Folder", initPath);
+        if (picked && picked.path) {
+          if (targetInput) targetInput.value = picked.path;
+        }
+      } catch (err) {
+        console.error("Browse error:", err);
+      } finally {
+        btnBrowsePull.disabled = false;
+        btnBrowsePull.innerHTML = origHtml;
       }
     });
   }
@@ -2435,8 +2461,64 @@ function setupModels() {
   const btnModelsStripPause = document.getElementById("btn-models-strip-pause");
   const btnModelsStripExpand = document.getElementById("btn-models-strip-expand");
 
+  // Model Delete Confirmation In-App Modal setup
+  const btnCloseDeleteModal = document.getElementById("btn-close-delete-modal");
+  const btnCancelDeleteModal = document.getElementById("btn-cancel-delete-modal");
+  const btnConfirmDeleteModel = document.getElementById("btn-confirm-delete-model");
+
+  if (btnCloseDeleteModal) btnCloseDeleteModal.addEventListener("click", closeDeleteModelModal);
+  if (btnCancelDeleteModal) btnCancelDeleteModal.addEventListener("click", closeDeleteModelModal);
+
+  if (btnConfirmDeleteModel) {
+    btnConfirmDeleteModel.addEventListener("click", async () => {
+      if (!pendingDeleteModel) return;
+      const m = pendingDeleteModel;
+      const delBtn = pendingDeleteBtn;
+      const confirmLabel = document.getElementById("btn-confirm-delete-label");
+
+      btnConfirmDeleteModel.disabled = true;
+      if (confirmLabel) confirmLabel.textContent = "Uninstalling & Freeing Space...";
+      if (delBtn) {
+        delBtn.disabled = true;
+        delBtn.textContent = "Removing...";
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/models/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: m.name }),
+        });
+        const data = await res.json();
+        closeDeleteModelModal();
+        if (data.success) {
+          showToast(data.message || `Model '${m.name}' uninstalled successfully.`, "success", "Model Removed");
+          await loadInstalledModels();
+          await loadRecommendedModels();
+          await loadModelStoragePath();
+        } else {
+          showToast(`Failed to uninstall: ${data.error || data.message || "Unknown error"}`, "error");
+          if (delBtn) {
+            delBtn.disabled = false;
+            delBtn.textContent = "Uninstall";
+          }
+        }
+      } catch (err) {
+        closeDeleteModelModal();
+        showToast(`Error uninstalling model: ${err.message}`, "error");
+        if (delBtn) {
+          delBtn.disabled = false;
+          delBtn.textContent = "Uninstall";
+        }
+      }
+    });
+  }
+
   function closeInstallModal() {
-    if (modelInstallModal) modelInstallModal.classList.add("hidden");
+    if (modelInstallModal) {
+      modelInstallModal.classList.add("hidden");
+      modelInstallModal.style.display = "none";
+    }
   }
 
   function reopenDownloadingModal() {
@@ -2523,47 +2605,69 @@ function setupModels() {
   const btnChangeStorage = document.getElementById("btn-change-model-storage");
   if (btnChangeStorage) {
     btnChangeStorage.addEventListener("click", async () => {
-      const picked = await openNativeFolderDialog("Select Global Model Storage Directory");
-      if (picked && picked.path) {
-        currentInstallTargetPath = picked.path;
-        try {
-          const res = await fetch(`${API_BASE}/api/models/storage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: picked.path }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            showToast(`Model storage path updated to: ${data.path}`, "success", "Storage Updated");
-            loadModelStoragePath();
-            loadInstalledModels();
-          } else {
-            showToast(`Failed to update storage: ${data.error || "Unknown error"}`, "error");
+      const origHtml = btnChangeStorage.innerHTML;
+      btnChangeStorage.disabled = true;
+      btnChangeStorage.textContent = "Browsing...";
+      try {
+        const initPath = currentInstallTargetPath || "";
+        const picked = await openNativeFolderDialog("Select Global Model Storage Directory", initPath);
+        if (picked && picked.path) {
+          currentInstallTargetPath = picked.path;
+          try {
+            const res = await fetch(`${API_BASE}/api/models/storage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: picked.path }),
+            });
+            const data = await res.json();
+            if (data.success) {
+              showToast(`Model storage path updated to: ${data.path}`, "success", "Storage Updated");
+              loadModelStoragePath();
+              loadInstalledModels();
+            } else {
+              showToast(`Failed to update storage: ${data.error || "Unknown error"}`, "error");
+            }
+          } catch (e) {
+            showToast(`Error updating storage: ${e.message}`, "error");
           }
-        } catch (e) {
-          showToast(`Error updating storage: ${e.message}`, "error");
         }
+      } catch (err) {
+        console.error("Browse error:", err);
+      } finally {
+        btnChangeStorage.disabled = false;
+        btnChangeStorage.innerHTML = origHtml;
       }
     });
   }
 
   if (btnBrowseInstallPath) {
     btnBrowseInstallPath.addEventListener("click", async () => {
-      const picked = await openNativeFolderDialog("Select Custom Model Storage Directory");
-      if (picked && picked.path) {
-        if (installModalPathInput) {
-          installModalPathInput.value = picked.path;
-          checkInstallPathStorage(picked.path);
+      const origHtml = btnBrowseInstallPath.innerHTML;
+      btnBrowseInstallPath.disabled = true;
+      btnBrowseInstallPath.textContent = "Browsing...";
+      try {
+        const initPath = (installModalPathInput ? installModalPathInput.value.trim() : "") || currentInstallTargetPath || "";
+        const picked = await openNativeFolderDialog("Select Custom Model Storage Directory", initPath);
+        if (picked && picked.path) {
+          if (installModalPathInput) {
+            installModalPathInput.value = picked.path;
+            checkInstallPathStorage(picked.path);
+          }
+          currentInstallTargetPath = picked.path;
+          try {
+            await fetch(`${API_BASE}/api/models/storage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: picked.path }),
+            });
+            loadModelStoragePath();
+          } catch (_) {}
         }
-        currentInstallTargetPath = picked.path;
-        try {
-          await fetch(`${API_BASE}/api/models/storage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: picked.path }),
-          });
-          loadModelStoragePath();
-        } catch (_) {}
+      } catch (err) {
+        console.error("Browse error:", err);
+      } finally {
+        btnBrowseInstallPath.disabled = false;
+        btnBrowseInstallPath.innerHTML = origHtml;
       }
     });
   }
@@ -2597,8 +2701,9 @@ function setupModels() {
         closeInstallModal();
         return;
       }
-      if (isModelDownloading) {
+      if (labelText.includes("Run in Background")) {
         closeInstallModal();
+        showToast("Download running in background. Click floating widget to reopen popup.", "info", "Background Download");
         return;
       }
       if (isDownloadPaused) {
@@ -2609,6 +2714,9 @@ function setupModels() {
         } else {
           cancelActiveDownload();
         }
+      }
+      if (isModelDownloading) {
+        return;
       }
       if (!currentInstallTargetModel) return;
       const targetPath = installModalPathInput ? installModalPathInput.value.trim() : "";
@@ -2629,7 +2737,7 @@ function setupModels() {
       size: "Variable (Depends on model weights)",
       desc: "Custom open-weight model pulled from Ollama library or HuggingFace.",
       targetPath: targetPath,
-    });
+    }, true);
   });
 }
 
@@ -2712,37 +2820,47 @@ function renderInstalledModels(models) {
 
     const delBtn = card.querySelector(".btn-delete-model");
     if (delBtn) {
-      delBtn.addEventListener("click", async () => {
-        if (!confirm(`Are you sure you want to uninstall and remove '${m.name}'? This will permanently delete the model weights and free ${m.size_gb} GB of disk space.`)) {
-          return;
-        }
-        delBtn.disabled = true;
-        delBtn.textContent = "Removing...";
-        try {
-          const res = await fetch(`${API_BASE}/api/models/delete`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: m.name }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            showToast(`Model '${m.name}' uninstalled successfully.`, "success", "Model Removed");
-            await loadInstalledModels();
-          } else {
-            showToast(`Failed to uninstall: ${data.error || "Unknown error"}`, "error");
-            delBtn.disabled = false;
-            delBtn.textContent = "Uninstall";
-          }
-        } catch (err) {
-          showToast(`Error uninstalling model: ${err.message}`, "error");
-          delBtn.disabled = false;
-          delBtn.textContent = "Uninstall";
-        }
+      delBtn.addEventListener("click", () => {
+        openDeleteModelModal(m, delBtn);
       });
     }
 
     installedModelsList.appendChild(card);
   });
+}
+
+let pendingDeleteModel = null;
+let pendingDeleteBtn = null;
+
+function openDeleteModelModal(modelObj, btnElement) {
+  pendingDeleteModel = modelObj;
+  pendingDeleteBtn = btnElement;
+
+  const modal = document.getElementById("model-delete-confirm-modal");
+  const nameEl = document.getElementById("delete-modal-model-name");
+  const sizeEl = document.getElementById("delete-modal-model-size");
+  const confirmBtn = document.getElementById("btn-confirm-delete-model");
+  const confirmLabel = document.getElementById("btn-confirm-delete-label");
+
+  if (!modal) return;
+
+  if (nameEl) nameEl.textContent = modelObj.name;
+  if (sizeEl) sizeEl.textContent = modelObj.size_gb ? `~${modelObj.size_gb} GB` : "Variable";
+  if (confirmBtn) confirmBtn.disabled = false;
+  if (confirmLabel) confirmLabel.textContent = "Uninstall & Free Space";
+
+  modal.classList.remove("hidden");
+  modal.style.display = "flex";
+}
+
+function closeDeleteModelModal() {
+  const modal = document.getElementById("model-delete-confirm-modal");
+  if (modal) {
+    modal.classList.add("hidden");
+    modal.style.display = "none";
+  }
+  pendingDeleteModel = null;
+  pendingDeleteBtn = null;
 }
 
 let latestRecommendedModels = [];
@@ -2814,7 +2932,7 @@ function renderRecommendedModels(recs) {
     const dlBtn = card.querySelector(".btn-download-rec");
     if (dlBtn) {
       dlBtn.addEventListener("click", () => {
-        openModelInstallModal(rec);
+        openModelInstallModal(rec, true);
       });
     }
 
@@ -3105,7 +3223,7 @@ async function checkInstallPathStorage(pathVal) {
   }
 }
 
-async function openModelInstallModal(modelInfo) {
+async function openModelInstallModal(modelInfo, autoStart = false) {
   currentInstallTargetModel = modelInfo;
 
   const modal = document.getElementById("model-install-modal");
@@ -3121,8 +3239,9 @@ async function openModelInstallModal(modelInfo) {
 
   if (!modal) return;
 
-  // Unhide modal immediately for instant click response
+  // Unhide modal immediately for instant click response and ensure display is flex
   modal.classList.remove("hidden");
+  modal.style.display = "flex";
 
   const mTag = modelInfo.tag || modelInfo.name;
   if (titleEl) titleEl.textContent = `Install AI Model: ${modelInfo.name || modelInfo.tag}`;
@@ -3165,6 +3284,11 @@ async function openModelInstallModal(modelInfo) {
     syncDownloadUI(activeDownloadPct, activeDownloadStatus, activeDownloadBytes, isDownloadPaused);
     if (confirmLabel) confirmLabel.textContent = isDownloadPaused ? "Resume Download" : "Run in Background & Close";
     if (cancelBtn) cancelBtn.style.display = "";
+  } else if (autoStart) {
+    // 1-Click Install Flow: Directly reveal progress and initiate download popup
+    if (progressSec) progressSec.classList.remove("hidden");
+    const targetPath = (pathInput && pathInput.value) ? pathInput.value.trim() : (modelInfo.targetPath || currentInstallTargetPath || "");
+    startModelDownload(modelInfo, targetPath);
   } else {
     if (progressSec) progressSec.classList.add("hidden");
     if (confirmBtn) {

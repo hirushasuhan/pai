@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Add research directory and repository root to sys.path
 RESEARCH_DIR = Path(__file__).resolve().parent.parent
@@ -500,31 +500,169 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
 
 
 def delete_local_model(model_name: str) -> Tuple[bool, str]:
-    """Uninstall and delete a local model via Ollama DELETE /api/delete to free disk space."""
+    """Uninstall and delete a local model via Ollama API and thoroughly purge disk manifests and layer blobs."""
     if not model_name or not model_name.strip():
         return False, "Model name cannot be empty."
-    ensure_ollama_server(timeout=3.0)
-    url = "http://127.0.0.1:11434/api/delete"
-    payload = json.dumps({"name": model_name.strip()}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json", "User-Agent": "PAI-Desktop/1.1"},
-        method="DELETE",
-    )
+
+    m_name = model_name.strip()
+    clean_target = m_name.lower()
+    freed_bytes = 0
+    deleted_manifests = 0
+    deleted_blobs = 0
+
+    # 1. Parse model base name and tag
+    if ":" in m_name:
+        parts = m_name.split(":", 1)
+        base_name = parts[0].strip()
+        tag_name = parts[1].strip()
+    else:
+        base_name = m_name
+        tag_name = "latest"
+
+    pure_model = base_name.split("/")[-1].lower()
+    pure_tag = tag_name.lower()
+
+    # 2. Invoke Ollama server DELETE /api/delete
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            if resp.status in (200, 204):
-                return True, f"Model '{model_name}' successfully uninstalled."
-            return False, f"Ollama returned HTTP status {resp.status}."
-    except urllib.error.HTTPError as exc:
+        ensure_ollama_server(timeout=2.0)
+        url = "http://127.0.0.1:11434/api/delete"
+        payload = json.dumps({
+            "name": m_name,
+            "model": m_name,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "PAI-Desktop/1.1"},
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            pass
+    except Exception:
+        pass
+
+    # 3. Purge disk manifests and unreferenced layer blobs from ALL storage directories
+    storage_roots = [
+        Path(get_model_storage_path()),
+        Path.home() / ".ollama" / "models",
+    ]
+    seen_roots: Set[Path] = set()
+
+    for root_dir in storage_roots:
         try:
-            err_data = json.loads(exc.read().decode("utf-8", errors="replace"))
-            return False, err_data.get("error", f"HTTP Error {exc.code}")
+            r_res = root_dir.resolve()
+            if r_res in seen_roots or not r_res.is_dir():
+                continue
+            seen_roots.add(r_res)
+
+            manifests_dir = r_res / "manifests"
+            blobs_dir = r_res / "blobs"
+
+            if not manifests_dir.is_dir():
+                continue
+
+            # A. Find all manifest files matching this model tag or name
+            matching_manifest_files: List[Path] = []
+            for f in manifests_dir.rglob("*"):
+                if f.is_file():
+                    try:
+                        rel = f.relative_to(manifests_dir)
+                        parts = [p.lower() for p in rel.parts]
+                        if len(parts) >= 2:
+                            f_model = parts[-2]
+                            f_tag = parts[-1]
+                            if (f_model == pure_model and f_tag == pure_tag) or \
+                               (f_model == pure_model and pure_tag == "latest" and f_tag == "latest") or \
+                               (f"{f_model}:{f_tag}" == clean_target):
+                                matching_manifest_files.append(f)
+                    except Exception:
+                        pass
+
+            # B. Gather layer digests from matching manifests before deletion
+            digests_to_check: Set[str] = set()
+            for mf in matching_manifest_files:
+                try:
+                    data = json.loads(mf.read_text(encoding="utf-8"))
+                    cfg = data.get("config", {})
+                    if cfg.get("digest"):
+                        digests_to_check.add(cfg["digest"])
+                    for lay in data.get("layers", []):
+                        if lay.get("digest"):
+                            digests_to_check.add(lay["digest"])
+                    mf.unlink(missing_ok=True)
+                    deleted_manifests += 1
+                    # Clean up empty parent directories up to manifests_dir
+                    parent = mf.parent
+                    while parent != manifests_dir:
+                        try:
+                            parent.rmdir()
+                            parent = parent.parent
+                        except OSError:
+                            break
+                except Exception:
+                    pass
+
+            # C. Check if any remaining manifest still references these digests
+            if digests_to_check and blobs_dir.is_dir():
+                active_digests: Set[str] = set()
+                for remaining_f in manifests_dir.rglob("*"):
+                    if remaining_f.is_file():
+                        try:
+                            rem_data = json.loads(remaining_f.read_text(encoding="utf-8"))
+                            rem_cfg = rem_data.get("config", {})
+                            if rem_cfg.get("digest"):
+                                active_digests.add(rem_cfg["digest"])
+                            for rem_lay in rem_data.get("layers", []):
+                                if rem_lay.get("digest"):
+                                    active_digests.add(rem_lay["digest"])
+                        except Exception:
+                            pass
+
+                for d in digests_to_check:
+                    if d not in active_digests:
+                        clean_digest = d.replace(":", "-")
+                        blob_file = blobs_dir / clean_digest
+                        if blob_file.is_file():
+                            try:
+                                b_size = blob_file.stat().st_size
+                                blob_file.unlink(missing_ok=True)
+                                freed_bytes += b_size
+                                deleted_blobs += 1
+                            except Exception:
+                                pass
         except Exception:
-            return False, f"HTTP Error {exc.code}: {exc.reason}"
-    except Exception as exc:
-        return False, str(exc)
+            pass
+
+    # 4. Clean up any physical folders created by create_physical_model_folder
+    try:
+        active_storage = Path(get_model_storage_path())
+        folder_candidates = [
+            active_storage / m_name.replace(":", "_").replace("/", "_"),
+            active_storage / m_name.replace(":", "-").replace("/", "-"),
+            active_storage / pure_model,
+        ]
+        for fc in folder_candidates:
+            if fc.is_dir() and fc != active_storage:
+                shutil.rmtree(fc, ignore_errors=True)
+    except Exception:
+        pass
+
+    # 5. Clean up image model state if applicable
+    if clean_target in ("sd-turbo", "stable-diffusion-v1-5"):
+        set_installed_image_model(clean_target, is_installed=False)
+
+    # 6. Active model fallback if the uninstalled model was active
+    cur_m = get_current_model()
+    if cur_m and (cur_m.lower() == clean_target or cur_m.lower() == pure_model):
+        remaining_models, _ = get_all_installed_local_models()
+        if remaining_models:
+            set_current_model(remaining_models[0]["name"])
+        else:
+            set_current_model("")
+
+    freed_gb = round(freed_bytes / (1024 ** 3), 2)
+    freed_str = f" Reclaimed {freed_gb} GB of disk space." if freed_gb > 0 else ""
+    return True, f"Model '{m_name}' successfully uninstalled.{freed_str}"
 
 
 DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
@@ -976,11 +1114,24 @@ def detect_system_hardware() -> Dict[str, Any]:
 
 
 def _get_or_compile_windows_folder_picker() -> Optional[str]:
-    """Compile or reuse lightweight Win32 GUI folder picker binary (using IFileOpenDialog with FOS_PICKFOLDERS)."""
+    """Return precompiled Win32 GUI folder picker binary or compile on-demand."""
     if sys.platform != "win32":
         return None
+
+    # 1. Bundled precompiled binary
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "bin", "pai_folder_picker.exe"),
+        os.path.join(base_dir, "..", "desktop", "bin", "pai_folder_picker.exe"),
+        os.path.join(base_dir, "..", "research", "desktop", "bin", "pai_folder_picker.exe"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.path.getsize(c) > 0:
+            return os.path.normpath(c)
+
+    # 2. Check temp compiled binary
     temp_dir = tempfile.gettempdir()
-    exe_path = os.path.join(temp_dir, "pai_folder_picker.exe")
+    exe_path = os.path.join(temp_dir, "pai_folder_picker_v3.exe")
     if os.path.isfile(exe_path) and os.path.getsize(exe_path) > 0:
         return exe_path
 
@@ -1000,8 +1151,8 @@ namespace Pai {
     [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
     public class FileOpenDialogRCW {}
 
-    [ComImport, Guid("42f85109-d1e4-4384-b65c-38838f149c49"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IFileDialog {
+    [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IFileOpenDialog {
         [PreserveSig] int Show(IntPtr parent);
         void SetFileTypes();
         void SetFileTypeIndex();
@@ -1010,62 +1161,100 @@ namespace Pai {
         void Unadvise();
         void SetOptions(uint fos);
         void GetOptions(out uint fos);
-        void SetDefaultFolder();
-        void SetFolder();
-        void GetFolder();
-        void GetCurrentSelection();
-        void SetFileName();
-        void GetFileName();
+        void SetDefaultFolder(IShellItem psi);
+        void SetFolder(IShellItem psi);
+        void GetFolder(out IntPtr ppsi);
+        void GetCurrentSelection(out IntPtr ppsi);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
         void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
-        void SetOkButtonLabel();
-        void SetFileNameLabel();
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
         void GetResult(out IShellItem ppsi);
+        void AddPlace(IntPtr psi, int fdap);
+        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
+        void Close(int hr);
+        void SetClientGuid(ref Guid guid);
+        void ClearClientData();
+        void SetFilter(IntPtr pFilter);
+        void GetResults(out IntPtr ppenum);
+        void GetSelectedItems(out IntPtr ppsai);
     }
 
     [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IShellItem {
-        void BindToHandler();
-        void GetParent();
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent(out IShellItem ppsi);
         void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
-        void GetAttributes();
-        void Compare();
+        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+        void Compare(IShellItem psi, uint hint, out int piOrder);
     }
 
     public static class Program {
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern int SHCreateItemFromParsingName(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
+            IntPtr pbc,
+            ref Guid riid,
+            out IShellItem ppv
+        );
+
         [STAThread]
         public static int Main(string[] args) {
+            string title = args.Length > 0 ? args[0] : "Select Folder";
+            string outPath = args.Length > 1 ? args[1] : "";
+            string initialPath = args.Length > 2 ? args[2] : "";
+
             try {
-                string title = args.Length > 0 ? args[0] : "Select Folder";
-                string outPath = args.Length > 1 ? args[1] : "";
-                
-                var dialog = (IFileDialog)new FileOpenDialogRCW();
+                var dialog = (IFileOpenDialog)new FileOpenDialogRCW();
                 uint options;
                 dialog.GetOptions(out options);
                 dialog.SetOptions(options | 0x20 | 0x40); // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
+                
                 if (!string.IsNullOrEmpty(title)) {
                     dialog.SetTitle(title);
                 }
-                
-                int hr = dialog.Show(IntPtr.Zero);
+
+                if (!string.IsNullOrEmpty(initialPath) && Directory.Exists(initialPath)) {
+                    try {
+                        Guid iid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
+                        IShellItem folderItem;
+                        if (SHCreateItemFromParsingName(initialPath, IntPtr.Zero, ref iid, out folderItem) == 0 && folderItem != null) {
+                            dialog.SetFolder(folderItem);
+                            dialog.SetDefaultFolder(folderItem);
+                        }
+                    } catch {}
+                }
+
+                IntPtr fg = GetForegroundWindow();
+                int hr = dialog.Show(fg);
                 if (hr == 0) {
                     IShellItem item;
                     dialog.GetResult(out item);
-                    string selectedPath;
-                    item.GetDisplayName(0x80058000, out selectedPath); // SIGDN_FILESYSPATH
-                    if (!string.IsNullOrEmpty(selectedPath) && !string.IsNullOrEmpty(outPath)) {
-                        File.WriteAllText(outPath, selectedPath);
+                    if (item != null) {
+                        string selectedPath;
+                        item.GetDisplayName(0x80058000, out selectedPath); // SIGDN_FILESYSPATH
+                        if (!string.IsNullOrEmpty(selectedPath) && !string.IsNullOrEmpty(outPath)) {
+                            File.WriteAllText(outPath, selectedPath);
+                        }
+                        return 0;
                     }
-                    return 0;
                 }
-            } catch {
+                return 2;
+            } catch (Exception ex) {
+                if (!string.IsNullOrEmpty(outPath)) {
+                    File.WriteAllText(outPath + ".err", ex.ToString());
+                }
                 return 1;
             }
-            return 2;
         }
     }
 }
 """
-    cs_path = os.path.join(temp_dir, "pai_folder_picker.cs")
+    cs_path = os.path.join(temp_dir, "pai_folder_picker_v3.cs")
     try:
         with open(cs_path, "w", encoding="utf-8") as f:
             f.write(cs_source)
@@ -1088,20 +1277,21 @@ namespace Pai {
     return None
 
 
-def open_native_folder_dialog(title: str = "Select Project Workspace Folder") -> Optional[str]:
+def open_native_folder_dialog(title: str = "Select Project Workspace Folder", initial_path: str = "") -> Optional[str]:
     """Open modern native Windows File Explorer folder picker dialog (IFileOpenDialog with FOS_PICKFOLDERS)."""
     if sys.platform == "win32":
-        # 1. Primary: Native Modern Windows Explorer Dialog (same as VS Code, Chrome, etc.)
+        # 1. Primary: Native Modern Windows Explorer Dialog (IFileOpenDialog with FOS_PICKFOLDERS)
         try:
             picker_exe = _get_or_compile_windows_folder_picker()
             if picker_exe and os.path.isfile(picker_exe):
                 temp_dir = tempfile.gettempdir()
                 out_txt = os.path.join(temp_dir, f"pai_picked_{os.getpid()}_{int(time.time()*1000)}.txt")
-                flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                cmd = [picker_exe, title, out_txt]
+                if initial_path and os.path.isdir(initial_path):
+                    cmd.append(initial_path)
                 subprocess.run(
-                    [picker_exe, title, out_txt],
+                    cmd,
                     capture_output=True,
-                    creationflags=flags,
                     timeout=300.0,
                 )
                 if os.path.isfile(out_txt):
@@ -1116,7 +1306,60 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
         except Exception:
             pass
 
-        # 2. Fallback: Tkinter with withdrawn root (zero visible popup window)
+        # 2. Secondary Fallback: PowerShell FolderBrowserDialog using dedicated .ps1 file
+        try:
+            temp_dir = tempfile.gettempdir()
+            out_txt = os.path.join(temp_dir, f"pai_picked_ps_{os.getpid()}_{int(time.time()*1000)}.txt")
+            ps1_file = os.path.join(temp_dir, f"pai_picker_{os.getpid()}_{int(time.time()*1000)}.ps1")
+            ps_code = """param([string]$dlgTitle, [string]$targetOut, [string]$initPath)
+Add-Type -AssemblyName System.Windows.Forms
+$top = New-Object System.Windows.Forms.Form
+$top.TopMost = $true
+$top.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+$top.Show()
+$top.Activate()
+$f = New-Object System.Windows.Forms.FolderBrowserDialog
+$f.Description = if ($dlgTitle) { $dlgTitle } else { "Select Folder" }
+$f.ShowNewFolderButton = $true
+if ($initPath -and [System.IO.Directory]::Exists($initPath)) {
+    $f.SelectedPath = $initPath
+}
+$res = $f.ShowDialog($top)
+$top.Dispose()
+if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $f.SelectedPath) {
+    [System.IO.File]::WriteAllText($targetOut, $f.SelectedPath, [System.Text.Encoding]::UTF8)
+}
+"""
+            with open(ps1_file, "w", encoding="utf-8") as f:
+                f.write(ps_code)
+
+            cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_file, title, out_txt]
+            if initial_path and os.path.isdir(initial_path):
+                cmd.append(initial_path)
+
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=180.0,
+            )
+            try:
+                os.remove(ps1_file)
+            except Exception:
+                pass
+
+            if os.path.isfile(out_txt):
+                with open(out_txt, "r", encoding="utf-8") as f:
+                    selected_path = f.read().strip()
+                try:
+                    os.remove(out_txt)
+                except Exception:
+                    pass
+                if selected_path and os.path.isdir(selected_path):
+                    return os.path.normpath(selected_path)
+        except Exception:
+            pass
+
+        # 3. Tertiary Fallback: Tkinter with topmost window
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
                 tmp_path = tmp.name
@@ -1126,9 +1369,11 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
                 "try:\n"
                 "    r = tk.Tk()\n"
                 "    r.withdraw()\n"
+                "    r.attributes('-topmost', True)\n"
                 "    t = sys.argv[1] if len(sys.argv) > 1 else 'Select Folder'\n"
                 "    out_path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
-                "    p = fd.askdirectory(title=t)\n"
+                "    init_dir = sys.argv[3] if len(sys.argv) > 3 and os.path.isdir(sys.argv[3]) else None\n"
+                "    p = fd.askdirectory(title=t, initialdir=init_dir, parent=r)\n"
                 "    r.destroy()\n"
                 "    if p and os.path.isdir(p) and out_path:\n"
                 "        with open(out_path, 'w', encoding='utf-8') as f:\n"
@@ -1141,8 +1386,12 @@ def open_native_folder_dialog(title: str = "Select Project Workspace Folder") ->
             bin_to_run = pythonw_bin if os.path.exists(pythonw_bin) else sys.executable
             flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
+            cmd = [bin_to_run, "-c", py_code, title, tmp_path]
+            if initial_path and os.path.isdir(initial_path):
+                cmd.append(initial_path)
+
             subprocess.run(
-                [bin_to_run, "-c", py_code, title, tmp_path],
+                cmd,
                 capture_output=True,
                 creationflags=flags,
                 timeout=180.0,
@@ -1388,13 +1637,16 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send_json(self, data: Any, status: int = 200) -> None:
-        raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(raw)))
-        self._send_cors_headers()
-        self.end_headers()
-        self.wfile.write(raw)
+        try:
+            raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
 
     def _read_json_body(self) -> Dict[str, Any]:
         try:
@@ -1605,12 +1857,15 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             m_name = body.get("name", "").strip() or body.get("model", "").strip()
             if not m_name:
                 self._send_json({"success": False, "error": "Model name is required for uninstallation."}, status=400)
-            elif m_name.lower() in ("sd-turbo", "stable-diffusion-v1-5"):
-                set_installed_image_model(m_name, is_installed=False)
-                self._send_json({"success": True, "message": f"Successfully uninstalled {m_name}."})
             else:
                 ok_del, msg_del = delete_local_model(m_name)
-                self._send_json({"success": ok_del, "message": msg_del, "error": None if ok_del else msg_del})
+                st = get_disk_free_for_path(get_model_storage_path())
+                self._send_json({
+                    "success": ok_del,
+                    "message": msg_del,
+                    "error": None if ok_del else msg_del,
+                    "storage": st,
+                })
         # 2c. Refresh Recommended Models Catalog
         elif path == "/api/models/recommended/refresh":
             recs = refresh_recommended_catalog()
@@ -1730,7 +1985,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 13. Native Folder Picker
         elif path == "/api/utils/select_folder":
             dlg_title = body.get("title") if isinstance(body, dict) and body.get("title") else "Select Project Workspace Folder"
-            self._handle_select_folder(dlg_title)
+            initial_path = body.get("initial_path") if isinstance(body, dict) and body.get("initial_path") else ""
+            self._handle_select_folder(dlg_title, initial_path=initial_path)
         # 14. MCP Save Server
         elif path == "/api/mcp/save":
             name = body.get("name", "").strip()
@@ -2286,9 +2542,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-    def _handle_select_folder(self, title: str = "Select Project Workspace Folder") -> None:
+    def _handle_select_folder(self, title: str = "Select Project Workspace Folder", initial_path: str = "") -> None:
         """Open native Windows folder picker dialog and return selected path."""
-        folder = open_native_folder_dialog(title=title)
+        folder = open_native_folder_dialog(title=title, initial_path=initial_path)
         if folder:
             self._send_json({"success": True, "path": folder, "name": Path(folder).name})
         else:
