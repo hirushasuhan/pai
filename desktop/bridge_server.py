@@ -429,10 +429,9 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
     except Exception:
         pass
 
-    # 2. Disk manifest scanning across all configured & common model directories
+    # 2. Disk manifest scanning across configured model directories
     manifest_dirs = [
         Path(get_model_storage_path()) / "manifests",
-        Path("D:/ai/manifests"),
         Path.home() / ".ollama" / "models" / "manifests",
     ]
     seen_dirs = set()
@@ -442,6 +441,7 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
             if m_res in seen_dirs or not m_res.is_dir():
                 continue
             seen_dirs.add(m_res)
+            blobs_dir = m_res.parent / "blobs"
             for f in m_res.rglob("*"):
                 if f.is_file():
                     try:
@@ -453,13 +453,23 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
                             full_name = f"{model_name}:{tag}"
                             if full_name.lower() in models_dict:
                                 continue
-                            size_gb = 0.0
-                            try:
-                                m_data = json.loads(f.read_text(encoding="utf-8"))
-                                size_bytes = sum(l.get("size", 0) for l in m_data.get("layers", []))
-                                size_gb = round(size_bytes / (1024 ** 3), 2)
-                            except Exception:
-                                pass
+                            m_data = json.loads(f.read_text(encoding="utf-8"))
+                            layers = m_data.get("layers", [])
+                            # Grounding check: verify that model weight blobs actually exist on disk!
+                            has_real_blobs = False
+                            size_bytes = 0
+                            for l in layers:
+                                l_digest = l.get("digest", "")
+                                l_size = l.get("size", 0)
+                                size_bytes += l_size
+                                if l_size > 50 * 1024 * 1024 and l_digest:
+                                    clean_digest = l_digest.replace(":", "-")
+                                    blob_path = blobs_dir / clean_digest
+                                    if blob_path.is_file() and blob_path.stat().st_size > 0:
+                                        has_real_blobs = True
+                            if not has_real_blobs and layers:
+                                continue
+                            size_gb = round(size_bytes / (1024 ** 3), 2)
                             m_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime))
                             models_dict[full_name.lower()] = {
                                 "name": full_name,
@@ -568,18 +578,18 @@ DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
         "category": "Vision Understanding",
     },
     {
-        "name": "sd-turbo",
-        "tag": "sd-turbo",
-        "size": "2.3 GB",
-        "desc": "SD-Turbo - Real-time local text-to-image synthesis (High-speed 1-step diffusion)",
-        "category": "Image Synthesis (Local)",
+        "name": "qwen2.5-coder:1.5b",
+        "tag": "qwen2.5-coder:1.5b",
+        "size": "986 MB",
+        "desc": "Qwen 2.5 Coder 1.5B - Ultra-lightweight coding model for fast agentic reasoning",
+        "category": "Software Engineering",
     },
     {
-        "name": "stable-diffusion-v1-5",
-        "tag": "stable-diffusion-v1-5",
-        "size": "4.0 GB",
-        "desc": "Stable Diffusion 1.5 - Local photorealistic image synthesis & creative generation",
-        "category": "Image Synthesis (Local)",
+        "name": "llama3.2:1b",
+        "tag": "llama3.2:1b",
+        "size": "1.3 GB",
+        "desc": "Meta Llama 3.2 1B - Ultra-compact, low latency conversational model",
+        "category": "Chat & Fast Reasoning",
     },
 ]
 
@@ -863,13 +873,7 @@ def create_physical_model_folder(storage_path: str, model_name: str, model_type:
         (m_dir / "README.txt").write_text(readme_content, encoding="utf-8")
 
         if model_type == "image":
-            models_sub = target_dir / "models" / clean_tag
-            models_sub.mkdir(parents=True, exist_ok=True)
-            (models_sub / "config.json").write_text(json.dumps({"model_type": "latent-diffusion", "architecture": clean_tag}, indent=2), encoding="utf-8")
-            (models_sub / "model_index.json").write_text(json.dumps({"_class_name": "StableDiffusionPipeline"}, indent=2), encoding="utf-8")
-            weights_file = models_sub / "diffusion_pytorch_model.safetensors"
-            if not weights_file.exists():
-                weights_file.write_bytes(b"PAI_MODEL_WEIGHTS_SAFETENSORS_V1\x00" * 128)
+            pass
     except Exception:
         pass
 
@@ -2203,32 +2207,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.close_connection = True
 
-            total_bytes = 2300000000 if "sd-turbo" in clean_model else 4000000000
-            steps = [
-                (0.12, "Connecting to Stability AI model registry..."),
-                (0.32, "Downloading UNet & Text Encoder safetensors..."),
-                (0.60, "Streaming latent diffusion VAE tensors..."),
-                (0.82, "Verifying local model weight checksums..."),
-                (0.95, "Configuring local image synthesis pipeline..."),
-                (1.00, f"Model {model_name} installed successfully! Ready for /image generation."),
-            ]
+            err_data = json.dumps({
+                "status": "error",
+                "error": "Local image models (Stable Diffusion) require an external Stable Diffusion WebUI (A1111/ComfyUI on http://127.0.0.1:7860) or Cloud AI (Google Imagen 3 / OpenAI DALL-E). Model weights cannot be pulled via Ollama."
+            })
             try:
-                for frac, msg in steps:
-                    evt = {
-                        "status": msg,
-                        "completed": int(total_bytes * frac),
-                        "total": total_bytes,
-                    }
-                    self.wfile.write(f"data: {json.dumps(evt)}\n\n".encode("utf-8"))
-                    self.wfile.flush()
-                    time.sleep(0.35)
-
-                create_physical_model_folder(target_storage, model_name, model_type="image")
-                set_installed_image_model(model_name, is_installed=True)
-                success_evt = {"status": "success"}
-                self.wfile.write(f"data: {json.dumps(success_evt)}\n\n".encode("utf-8"))
+                self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, OSError):
+            except Exception:
                 pass
             return
 
@@ -2266,17 +2252,30 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
         has_succeeded = False
         try:
-            with urllib.request.urlopen(req, timeout=600) as resp:
+            with urllib.request.urlopen(req, timeout=1800) as resp:
                 for line in resp:
                     if line:
                         chunk = line.decode("utf-8").strip()
                         if chunk:
-                            if '"status":"success"' in chunk or '"status": "success"' in chunk:
-                                has_succeeded = True
+                            try:
+                                chunk_json = json.loads(chunk)
+                                if chunk_json.get("status") == "success":
+                                    has_succeeded = True
+                                elif chunk_json.get("error"):
+                                    self.wfile.write(f"data: {chunk}\n\n".encode("utf-8"))
+                                    self.wfile.flush()
+                                    return
+                            except Exception:
+                                if '"status":"success"' in chunk or '"status": "success"' in chunk:
+                                    has_succeeded = True
                             self.wfile.write(f"data: {chunk}\n\n".encode("utf-8"))
                             self.wfile.flush()
             if has_succeeded:
                 create_physical_model_folder(target_storage, model_name, model_type="text")
+            else:
+                err_data = json.dumps({"status": "error", "error": "Download stream ended before Ollama confirmed completion."})
+                self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
+                self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         except Exception as exc:

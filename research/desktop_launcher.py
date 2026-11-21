@@ -80,6 +80,20 @@ def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer]]:
     return is_bridge_server_running(), None
 
 
+def find_native_desktop_executable() -> Optional[str]:
+    """Find native PAI Studio Tauri release binary if present and up-to-date."""
+    app_js = _CURR_DIR / "app.js"
+    min_mtime = app_js.stat().st_mtime if app_js.is_file() else 0
+    cand_paths = [
+        _CURR_DIR / "src-tauri" / "target" / "release" / "pai-desktop.exe",
+        _INSTALL_ROOT / "desktop" / "src-tauri" / "target" / "release" / "pai-desktop.exe",
+    ]
+    for p in cand_paths:
+        if p.is_file() and p.stat().st_mtime >= min_mtime:
+            return str(p.resolve())
+    return None
+
+
 def find_browser_app_executable() -> Optional[str]:
     """Find Google Chrome, Microsoft Edge, or Brave executable for standalone App Mode."""
     # Check standard Windows directories (Chrome preferred for standalone PWA isolation)
@@ -110,6 +124,40 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
     if not ok_server:
         return False, "Could not start local desktop bridge server on 127.0.0.1:8765."
 
+    flags = 0
+    if sys.platform == "win32":
+        flags = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+
+    # 1. Prefer True Native Tauri Desktop Executable
+    native_exe = find_native_desktop_executable()
+    if native_exe:
+        try:
+            proc = subprocess.Popen([native_exe], creationflags=flags)
+            msg = f"PAI Studio Desktop opened in native application mode ({os.path.basename(native_exe)})."
+            if wait_for_exit:
+                if proc is not None and proc.poll() is None:
+                    try:
+                        proc.wait()
+                    except Exception:
+                        pass
+                    if server_instance is not None:
+                        try:
+                            server_instance.shutdown()
+                            server_instance.server_close()
+                        except Exception:
+                            pass
+                elif server_instance is not None:
+                    try:
+                        while True:
+                            time.sleep(1)
+                    except KeyboardInterrupt:
+                        server_instance.shutdown()
+                        server_instance.server_close()
+            return True, msg
+        except Exception:
+            pass
+
+    # 2. Fallback to Browser App Mode (Edge or Chrome)
     browser_exe = find_browser_app_executable()
     if not browser_exe:
         return False, "Neither Google Chrome nor Microsoft Edge was found to launch PAI Studio in App Mode."
@@ -134,6 +182,9 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
         "--disable-default-apps",
         "--disable-background-mode",
         "--enable-features=OverlayScrollbar",
+        "--disable-features=Translate,OptimizationHints",
+        "--disable-save-password-bubble",
+        "--disable-blink-features=AutomationControlled",
     ]
 
     flags = 0

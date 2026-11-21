@@ -3236,6 +3236,8 @@ function startModelDownload(modelInfo, targetPath = "") {
   isDownloadPaused = false;
   activeDownloadingModelTag = modelName;
   activeDownloadAbortController = new AbortController();
+  activeDownloadPct = 0;
+  activeDownloadBytes = "0 MB / 0 MB";
 
   const progressSec = document.getElementById("install-modal-progress-section");
   const targetEl = document.getElementById("install-modal-save-target");
@@ -3284,10 +3286,10 @@ function startModelDownload(modelInfo, targetPath = "") {
     function read() {
       reader.read().then(({ done, value }) => {
         if (done) {
-          if (hasCompletedSuccess || activeDownloadPct >= 95) {
+          if (hasCompletedSuccess) {
             handleDownloadSuccess(modelName);
           } else {
-            handleDownloadFailure("Download stream ended before completion.");
+            handleDownloadFailure("Download was interrupted before completion. Model weights were not fully saved.");
           }
           return;
         }
@@ -3317,16 +3319,22 @@ function startModelDownload(modelInfo, targetPath = "") {
 
               let statusMsg = d.status || "";
               let bytesStr = activeDownloadBytes;
-              let pct = activeDownloadPct;
+              let pct = activeDownloadPct || 0;
 
               if (d.total && d.completed) {
-                // Ensure small manifest layers don't skew the UI to 100% prematurely
-                if (d.total > 5 * 1024 * 1024 || !activeDownloadPct) {
-                  pct = Math.min(99, Math.round((d.completed / d.total) * 100));
+                // Large layers (>= 5MB) represent actual model weights
+                if (d.total >= 5 * 1024 * 1024) {
+                  pct = Math.max(2, Math.min(99, Math.round((d.completed / d.total) * 100)));
+                  const completedMB = (d.completed / (1024 * 1024)).toFixed(1);
+                  const totalMB = (d.total / (1024 * 1024)).toFixed(1);
+                  bytesStr = `${completedMB} MB / ${totalMB} MB`;
+                } else {
+                  // Metadata / manifest preparation layer
+                  pct = Math.max(pct, 2);
+                  const completedKB = (d.completed / 1024).toFixed(0);
+                  const totalKB = (d.total / 1024).toFixed(0);
+                  bytesStr = `${completedKB} KB / ${totalKB} KB (Manifest)`;
                 }
-                const completedMB = (d.completed / (1024 * 1024)).toFixed(1);
-                const totalMB = (d.total / (1024 * 1024)).toFixed(1);
-                bytesStr = `${completedMB} MB / ${totalMB} MB`;
               }
 
               if (hasCompletedSuccess) {

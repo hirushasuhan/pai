@@ -3807,7 +3807,24 @@ body.light-theme select.role-model-select,
 body.light-theme textarea.form-input,
 body.light-theme textarea.chat-textarea,
 body.light-theme textarea.code-editor-textarea,
-body.light-theme .code-editor-textarea {
+body.light-theme .code-editor-textarea,
+body.light-theme #proj-name-input,
+body.light-theme #proj-path-input,
+body.light-theme #team-task-input,
+body.light-theme #antigravity-task-input,
+body.light-theme #tool-search-query,
+body.light-theme #mcp-name-input,
+body.light-theme #mcp-command-input,
+body.light-theme #mcp-desc-input,
+body.light-theme #mcp-transport-select,
+body.light-theme #plugin-name-input,
+body.light-theme #plugin-category-input,
+body.light-theme #plugin-instructions-input,
+body.light-theme #custom-model-tag,
+body.light-theme #cfg-model-name,
+body.light-theme #cfg-provider-url,
+body.light-theme #cfg-api-key,
+body.light-theme #install-modal-path-input {
   background-color: #ffffff !important;
   background: #ffffff !important;
   border: 1px solid #cbd5e1 !important;
@@ -3829,7 +3846,21 @@ body.light-theme select.nav-control-select:focus,
 body.light-theme select.role-model-select:focus,
 body.light-theme textarea.form-input:focus,
 body.light-theme textarea.code-editor-textarea:focus,
-body.light-theme .code-editor-textarea:focus {
+body.light-theme .code-editor-textarea:focus,
+body.light-theme #proj-name-input:focus,
+body.light-theme #proj-path-input:focus,
+body.light-theme #team-task-input:focus,
+body.light-theme #antigravity-task-input:focus,
+body.light-theme #tool-search-query:focus,
+body.light-theme #mcp-name-input:focus,
+body.light-theme #mcp-command-input:focus,
+body.light-theme #mcp-desc-input:focus,
+body.light-theme #plugin-name-input:focus,
+body.light-theme #custom-model-tag:focus,
+body.light-theme #cfg-model-name:focus,
+body.light-theme #cfg-provider-url:focus,
+body.light-theme #cfg-api-key:focus,
+body.light-theme #install-modal-path-input:focus {
   background-color: #ffffff !important;
   background: #ffffff !important;
   border-color: #0284c7 !important;
@@ -4643,10 +4674,36 @@ body.light-theme .skill-icon-wrap svg {
   stroke: #0284c7 !important;
 }
 
-body.light-theme .mcp-card-cmd {
+body.light-theme .mcp-card-cmd,
+body.light-theme .mcp-cmd-box,
+body.light-theme .mcp-server-cmd {
   background: #f8fafc !important;
   border: 1px solid #e2e8f0 !important;
   color: #0284c7 !important;
+  padding: 6px 10px !important;
+  border-radius: 4px !important;
+}
+
+body.light-theme .mcp-name,
+body.light-theme .mcp-server-name {
+  color: #0f172a !important;
+}
+
+body.light-theme .mcp-desc,
+body.light-theme .mcp-server-desc {
+  color: #475569 !important;
+}
+
+body.light-theme .card-badge {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+body.light-theme .card-badge.ready {
+  background: #dcfce7 !important;
+  color: #15803d !important;
+  border: 1px solid #86efac !important;
 }
 
 body.light-theme .model-storage-banner {
@@ -4663,7 +4720,7 @@ body.light-theme .model-storage-path {
   color: #0284c7 !important;
   background: #ffffff !important;
   border: 1px solid #cbd5e1 !important;
-  padding: 3px 8px !important;
+  padding: 4px 10px !important;
   border-radius: 4px !important;
 }
 

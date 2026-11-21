@@ -69,12 +69,30 @@ fn resolve_bridge_script() -> Option<PathBuf> {
             if p1.is_file() {
                 return Some(p1);
             }
+            let p2 = parent.join("../../../desktop/bridge_server.py");
+            if p2.is_file() {
+                return Some(p2);
+            }
+            let p3 = parent.join("../../../../desktop/bridge_server.py");
+            if p3.is_file() {
+                return Some(p3);
+            }
+            let p4 = parent.join("../../../research/desktop/bridge_server.py");
+            if p4.is_file() {
+                return Some(p4);
+            }
+            let p5 = parent.join("../../desktop/bridge_server.py");
+            if p5.is_file() {
+                return Some(p5);
+            }
         }
     }
     let candidates = [
         "desktop/bridge_server.py",
         "research/desktop/bridge_server.py",
         "../desktop/bridge_server.py",
+        "../../desktop/bridge_server.py",
+        "bridge_server.py",
     ];
     for c in &candidates {
         let p = Path::new(c);
