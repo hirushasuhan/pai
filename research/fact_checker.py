@@ -80,8 +80,11 @@ def extract_verifiable_claims(text: str, max_claims: int = 3) -> List[str]:
 
     candidate_sentences: List[str] = []
     for line in lines:
-        # Split on sentence terminals
-        parts = re.split(r"(?<=[.!?])\s+", line)
+        # Protect single letter initials (e.g. Donald J. Trump, U.S.) and common titles/abbreviations
+        safe = re.sub(r'\b([A-Z])\.\s+', r'\1.<PROTECTED_SPACE>', line)
+        safe = re.sub(r'\b(Dr|Mr|Mrs|Ms|Prof|Inc|Corp|Jan|Feb|Mar|Apr|Aug|Sept?|Oct|Nov|Dec|vs|etc)\.\s+', r'\1.<PROTECTED_SPACE>', safe)
+        raw_parts = re.split(r'(?<=[.!?])\s+', safe)
+        parts = [p.replace('<PROTECTED_SPACE>', ' ') for p in raw_parts]
         for p in parts:
             p = p.strip()
             if not p:
@@ -160,11 +163,19 @@ def evaluate_entailment(
     matched_citations: List[Dict[str, str]] = []
     conflicting_signals = False
     missing_key_entity = False
+    temporal_contradiction = False
 
     for ev in evidence_snippets:
         snippet_text = (ev.get("snippet", "") + " " + ev.get("title", "")).lower()
         snippet_words = set(re.findall(r"[a-z0-9]+", snippet_text)) - STOPWORDS
         snippet_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", snippet_text))
+
+        # Check temporal contradiction for current vs former status
+        is_current_claim = bool(re.search(r"\b(current|sitting|incumbent|now|presently|is\s+(?:the\s+)?(?:4[5-9]th\s+)?president|is\s+(?:the\s+)?prime minister)\b", claim, re.I))
+        is_past_evidence = bool(re.search(r"\b(was\s+the|former\s+(?:president|prime minister|leader|ceo)|retired\s+politician|served\s+from|predecessor|succeeded\s+by)\b", snippet_text, re.I))
+        if is_current_claim and is_past_evidence:
+            conflicting_signals = True
+            temporal_contradiction = True
 
         # Word overlap (Jaccard similarity on non-stopwords)
         if not claim_words:
@@ -173,10 +184,18 @@ def evaluate_entailment(
             intersection = claim_words.intersection(snippet_words)
             overlap = len(intersection) / len(claim_words)
 
-        # Entity verification: if multiple entities exist in claim, all must be present
-        if len(claim_entities) >= 2:
+        # Apply temporal contradiction penalty
+        if is_current_claim and is_past_evidence:
+            overlap *= 0.15
+
+        # Entity verification
+        if claim_entities:
             present_entities = [e for e in claim_entities if e in snippet_text]
-            if len(present_entities) < len(claim_entities):
+            entity_ratio = len(present_entities) / len(claim_entities)
+            if entity_ratio >= 0.70:
+                # Majority of entities confirmed in snippet
+                overlap = max(overlap, 0.40 + 0.50 * entity_ratio)
+            elif len(claim_entities) >= 2 and len(present_entities) < len(claim_entities):
                 # An entity mentioned in claim was not found in snippet
                 overlap *= 0.35
                 missing_key_entity = True
@@ -185,11 +204,10 @@ def evaluate_entailment(
         # Numerical consistency check
         if claim_numbers:
             matching_nums = claim_numbers.intersection(snippet_numbers)
-            if not matching_nums:
-                # If claim had specific years/numbers and none appeared in snippet, downweight
-                overlap *= 0.65
-                if len(snippet_numbers) > 0:
-                    conflicting_signals = True
+            if not matching_nums and len(snippet_numbers) > 0:
+                # Snippet contained different numbers for the same topic
+                overlap *= 0.80
+                conflicting_signals = True
 
         if overlap > best_score:
             best_score = overlap
@@ -198,14 +216,18 @@ def evaluate_entailment(
             matched_citations.append(ev)
 
     # Classify verdict based on threshold and conflict signals
-    if conflicting_signals and best_score < 0.40:
+    if temporal_contradiction:
+        verdict = "CONTRADICTED"
+        confidence = 0.95
+        notes = "Evidence indicates the individual is a former officeholder, contradicting the claim of current tenure."
+    elif best_score >= 0.60:
+        verdict = "VERIFIED"
+        confidence = min(0.98, round(best_score + 0.10, 2))
+        notes = "Corroborated by independent reference data."
+    elif conflicting_signals and best_score < 0.40:
         verdict = "CONTRADICTED"
         confidence = 0.75 if missing_key_entity else 0.85
         notes = "Evidence indicates key entities or details contradict web sources."
-    elif best_score >= 0.60:
-        verdict = "VERIFIED"
-        confidence = min(0.95, round(best_score + 0.15, 2))
-        notes = "Corroborated by independent reference data."
     elif best_score >= 0.35:
         verdict = "UNVERIFIED"
         confidence = round(best_score, 2)
@@ -230,10 +252,14 @@ def verify_text_claims(text: str, max_claims: int = 3) -> List[FactualClaim]:
     results: List[FactualClaim] = []
     for stmt in candidate_statements:
         entities, keywords = extract_keywords_and_entities(stmt)
-        # Construct focused search query: prefer primary subject entity
+        # Construct focused search query: prefer named entities excluding months/days
+        months_days = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+        filtered_entities = [e for e in entities if e.lower() not in months_days]
         search_query = ""
-        if entities:
-            search_query = entities[0]
+        if len(filtered_entities) >= 3:
+            search_query = " ".join(filtered_entities[:3])
+        elif filtered_entities:
+            search_query = " ".join(filtered_entities)
         elif len(keywords) >= 2:
             search_query = " ".join(keywords[:3])
         else:

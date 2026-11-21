@@ -1544,11 +1544,18 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertEqual(proc_main_help.returncode, 0)
         golden_main = (golden_dir / "help_pai.txt").read_text(encoding="utf-8")
 
+        # Strip newly added cognitive / cowork subcommands when verifying against the legacy 8ce81cb tag baseline
+        import re
+        filtered_help = proc_main_help.stdout
+        for cmd in ["memory", "voice", "cowork", "council"]:
+            filtered_help = re.sub(r"," + cmd, "", filtered_help)
+            filtered_help = re.sub(r"\n\s+" + cmd + r"\s+[^\n]+(?:\n\s{20,}[^\n]+)*", "", filtered_help)
+
         # Verify that removing ',setup' from choices and the one 'setup' line reproduces the golden baseline
         # after whitespace normalization (Finding EE: line joining and space collapsing)
         setup_line = "    setup               Hardware survey, model fit analysis, and setup engine\n"
-        self.assertIn(setup_line, proc_main_help.stdout, "Top-level help must include 'setup' subcommand description")
-        normalized_help = proc_main_help.stdout.replace(",setup,", ",").replace(setup_line, "")
+        self.assertIn(setup_line, filtered_help, "Top-level help must include 'setup' subcommand description")
+        normalized_help = filtered_help.replace(",setup,", ",").replace(setup_line, "")
 
         def normalize_ws(s: str) -> str:
             return " ".join(s.split())
@@ -1562,7 +1569,7 @@ class TestPaiSetupP3(unittest.TestCase):
         # Verify unified diff between baseline and current consists solely of lines containing 'setup' (Finding EE)
         diff = list(difflib.unified_diff(
             golden_main.splitlines(keepends=True),
-            proc_main_help.stdout.splitlines(keepends=True),
+            filtered_help.splitlines(keepends=True),
             fromfile="golden_8ce81cb",
             tofile="current_pai",
         ))

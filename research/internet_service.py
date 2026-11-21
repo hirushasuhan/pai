@@ -20,27 +20,27 @@ from typing import Any, Dict, List, Optional, Tuple
 USER_AGENT = "PAIAssistantApp/1.1 (Interactive AI Assistant; Windows x64; contact: pai-dev@localdomain.org)"
 
 _WEATHER_CODE_MAP: Dict[int, Tuple[str, str, str]] = {
-    0: ("Clear sky", "පැහැදිලි අහස", "☀️"),
-    1: ("Mainly clear", "ප්‍රධාන වශයෙන් පැහැදිලි", "🌤️"),
+    0: ("Clear sky", "පැහැදිලි අහස", "☀"),
+    1: ("Mainly clear", "ප්‍රධාන වශයෙන් පැහැදිලි", ""),
     2: ("Partly cloudy", "වලාකුළු ස්වල්පයක් සහිත", "⛅"),
-    3: ("Overcast", "වලාකුළු වලින් බර වූ", "☁️"),
-    45: ("Foggy", "මීදුම් සහිත", "🌫️"),
-    48: ("Depositing rime fog", "ඝන මීදුම් සහිත", "🌫️"),
-    51: ("Light drizzle", "සැහැල්ලු පොද වැසි", "🌦️"),
-    53: ("Moderate drizzle", "මධ්‍යස්ථ පොද වැසි", "🌦️"),
-    55: ("Dense drizzle", "තද පොද වැසි", "🌧️"),
-    61: ("Slight rain", "සුළු වැසි", "🌧️"),
-    63: ("Moderate rain", "මධ්‍යස්ථ වැසි", "🌧️"),
-    65: ("Heavy rain", "තද වැසි", "🌧️"),
-    71: ("Slight snow fall", "සුළු හිම පතනය", "🌨️"),
-    73: ("Moderate snow fall", "මධ්‍යස්ථ හිම පතනය", "🌨️"),
-    75: ("Heavy snow fall", "තද හිම පතනය", "❄️"),
-    80: ("Slight rain showers", "සුළු වැසි වාර", "🌦️"),
-    81: ("Moderate rain showers", "මධ්‍යස්ථ වැසි වාර", "🌧️"),
-    82: ("Violent rain showers", "තද වැසි කුණාටු", "⛈️"),
-    95: ("Thunderstorm", "ගිගුරුම් සහිත වැසි", "⛈️"),
-    96: ("Thunderstorm with slight hail", "ගිගුරුම් සහ අයිස් කැට වැසි", "⛈️"),
-    99: ("Thunderstorm with heavy hail", "දරුණු ගිගුරුම් සහ අයිස් කැට වැසි", "⛈️"),
+    3: ("Overcast", "වලාකුළු වලින් බර වූ", "☁"),
+    45: ("Foggy", "මීදුම් සහිත", ""),
+    48: ("Depositing rime fog", "ඝන මීදුම් සහිත", ""),
+    51: ("Light drizzle", "සැහැල්ලු පොද වැසි", ""),
+    53: ("Moderate drizzle", "මධ්‍යස්ථ පොද වැසි", ""),
+    55: ("Dense drizzle", "තද පොද වැසි", ""),
+    61: ("Slight rain", "සුළු වැසි", ""),
+    63: ("Moderate rain", "මධ්‍යස්ථ වැසි", ""),
+    65: ("Heavy rain", "තද වැසි", ""),
+    71: ("Slight snow fall", "සුළු හිම පතනය", ""),
+    73: ("Moderate snow fall", "මධ්‍යස්ථ හිම පතනය", ""),
+    75: ("Heavy snow fall", "තද හිම පතනය", "❄"),
+    80: ("Slight rain showers", "සුළු වැසි වාර", ""),
+    81: ("Moderate rain showers", "මධ්‍යස්ථ වැසි වාර", ""),
+    82: ("Violent rain showers", "තද වැසි කුණාටු", "⛈"),
+    95: ("Thunderstorm", "ගිගුරුම් සහිත වැසි", "⛈"),
+    96: ("Thunderstorm with slight hail", "ගිගුරුම් සහ අයිස් කැට වැසි", "⛈"),
+    99: ("Thunderstorm with heavy hail", "දරුණු ගිගුරුම් සහ අයිස් කැට වැසි", "⛈"),
 }
 
 
@@ -130,8 +130,9 @@ def fetch_live_weather(query: str = "", timeout: float = 6.0) -> Tuple[bool, str
     wind = cw.get("windspeed", 0.0)
     wcode = cw.get("weathercode", 0)
     time_str = cw.get("time", "")
+    is_day = cw.get("is_day", 1)
 
-    desc_en, desc_si, emoji = _WEATHER_CODE_MAP.get(wcode, ("Cloudy", "වලාකුළු සහිත", "☁️"))
+    desc_en, desc_si, emoji = _WEATHER_CODE_MAP.get(wcode, ("Cloudy", "වලාකුළු සහිත", "☁"))
     loc_display = f"{city}, {country}" if country else city
 
     msg = (
@@ -139,6 +140,7 @@ def fetch_live_weather(query: str = "", timeout: float = 6.0) -> Tuple[bool, str
         f"  • Temperature (උෂ්ණත්වය) : {temp:.1f} °C\n"
         f"  • Condition (තත්ත්වය)    : {desc_en} ({desc_si})\n"
         f"  • Wind Speed (සුළඟ)       : {wind:.1f} km/h\n"
+        f"  • Day/Night (දිවා/රාත්‍රී) : {'Day' if is_day == 1 else 'Night'}\n"
         f"  • Timestamp              : {time_str}\n"
         f"Real-time data provided by Open-Meteo."
     )
@@ -150,6 +152,7 @@ def fetch_live_weather(query: str = "", timeout: float = 6.0) -> Tuple[bool, str
         "condition_en": desc_en,
         "condition_si": desc_si,
         "weathercode": wcode,
+        "is_day": is_day,
         "time": time_str,
     }
     return True, msg, result_data
@@ -164,8 +167,54 @@ def _clean_html_text(text: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def search_duckduckgo_lite(query: str, max_results: int = 5, timeout: float = 6.0) -> List[Dict[str, str]]:
+    """Performs live web search using DuckDuckGo Lite to retrieve real, current web snippets."""
+    url = "https://lite.duckduckgo.com/lite/"
+    data = urllib.parse.urlencode({"q": query}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+    )
+    results = []
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+            links = re.findall(r"<a\b(?=[^>]*class=['\"]result-link['\"])(?=[^>]*href=['\"]([^'\"]+)['\"])[^>]*>([\s\S]*?)</a>", html)
+            snippets = re.findall(r"<td[^>]+class=['\"]result-snippet['\"][^>]*>([\s\S]*?)</td>", html)
+            
+            for i in range(min(len(links), len(snippets))):
+                raw_href, raw_title = links[i]
+                raw_snippet = snippets[i]
+                clean_url = raw_href
+                if "uddg=" in raw_href:
+                    m = re.search(r"uddg=([^&]+)", raw_href)
+                    if m:
+                        clean_url = urllib.parse.unquote(m.group(1))
+                        
+                clean_title = _clean_html_text(raw_title)
+                clean_snippet = _clean_html_text(raw_snippet)
+                
+                if clean_title and clean_snippet:
+                    results.append({
+                        "title": clean_title,
+                        "url": clean_url,
+                        "snippet": clean_snippet,
+                        "source": "Live Web Search",
+                    })
+                if len(results) >= max_results:
+                    break
+    except Exception:
+        pass
+    return results
+
+
 def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[bool, str, List[Dict[str, str]]]:
-    """Perform multi-source verified web search using Wikipedia, Tech News, arXiv, and DuckDuckGo."""
+    """Perform multi-source verified web search using DuckDuckGo Lite, Wikipedia, and Tech News."""
     if not is_internet_enabled():
         return False, "Internet access is disabled in PAI settings (/internet on to enable).", []
 
@@ -199,40 +248,40 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
         search_queries.append(clean_q)
     if any(k in q.lower() for k in ("president", "prime minister", "governor", "leader", "chancellor", "king")):
         if "president" in q.lower() and any(u in q.lower() for u in ("sri lanka", "lanka")):
-            search_queries.insert(0, "President of Sri Lanka")
-            search_queries.insert(1, "List of presidents of Sri Lanka")
+            search_queries.append("current President of Sri Lanka")
         elif "president" in q.lower() and any(u in q.lower() for u in ("us", "united states", "u.s.", "america")):
-            search_queries.insert(0, "List of presidents of the United States")
-            search_queries.insert(1, "President of the United States")
+            search_queries.append("current President of the United States")
         elif "prime minister" in q.lower() and any(u in q.lower() for u in ("uk", "united kingdom", "u.k.", "britain")):
-            search_queries.insert(0, "Prime Minister of the United Kingdom")
-            search_queries.insert(1, "List of prime ministers of the United Kingdom")
+            search_queries.append("current Prime Minister of the United Kingdom")
 
-    # 1. Wikipedia Summary & Search API
-    for sq in search_queries[:3]:
-        try:
-            summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(sq.replace(' ', '_'))}"
-            req_sum = urllib.request.Request(summary_url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req_sum, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if "title" in data and "extract" in data:
-                    add_result(
-                        data["title"],
-                        data.get("content_urls", {}).get("desktop", {}).get("page") or f"https://en.wikipedia.org/wiki/{urllib.parse.quote(data['title'].replace(' ', '_'))}",
-                        data["extract"],
-                        "Wikipedia",
-                    )
-                    break
-                elif "query" in data and "search" in data.get("query", {}):
-                    for item in data["query"]["search"][:3]:
+    # 1. Tier 1: Real Live Web Search (DuckDuckGo Lite)
+    live_ddg = search_duckduckgo_lite(q, max_results=max_results, timeout=timeout)
+    for r in live_ddg:
+        add_result(r["title"], r["url"], r["snippet"], r["source"])
+
+    if len(results) < 3 and clean_q and clean_q.lower() != q.lower():
+        ddg_clean = search_duckduckgo_lite(f"current {clean_q}", max_results=3, timeout=timeout)
+        for r in ddg_clean:
+            add_result(r["title"], r["url"], r["snippet"], r["source"])
+
+    # 2. Tier 2: Wikipedia Summary & Search API
+    if len(results) < max_results:
+        for sq in search_queries[:2]:
+            try:
+                summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(sq.replace(' ', '_'))}"
+                req_sum = urllib.request.Request(summary_url, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(req_sum, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if "title" in data and "extract" in data:
                         add_result(
-                            item.get("title", ""),
-                            f"https://en.wikipedia.org/wiki/{urllib.parse.quote(item.get('title', '').replace(' ', '_'))}",
-                            item.get("snippet", ""),
+                            data["title"],
+                            data.get("content_urls", {}).get("desktop", {}).get("page") or f"https://en.wikipedia.org/wiki/{urllib.parse.quote(data['title'].replace(' ', '_'))}",
+                            data["extract"],
                             "Wikipedia",
                         )
-        except Exception:
-            pass
+                        break
+            except Exception:
+                pass
 
     # If Wikipedia summary didn't produce enough results, run Wikipedia query search
     if len(results) < 3:
@@ -318,7 +367,7 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
     if not results:
         return False, f"No verified web results found online for '{q}'. Please check your search terms.", []
 
-    lines = [f"🌐 Web Search Results for '{q}':"]
+    lines = [f" Web Search Results for '{q}':"]
     for i, r in enumerate(results[:max_results], 1):
         lines.append(f"[{i}] {r['title']} ({r['source']})")
         lines.append(f"    {r['snippet'][:250]}{'...' if len(r['snippet']) > 250 else ''}")
@@ -420,22 +469,32 @@ def get_live_grounding_context(query: str, timeout: float = 6.0) -> Tuple[bool, 
     if not ok_s or not results:
         return False, "", []
 
-    lines = [
-        "[REAL-TIME LIVE INTERNET GROUNDING]:",
-        "Current System Date: 2026-11-13 (Year 2026)",
-        "Verified Live Web Sources:",
-    ]
-    for i, r in enumerate(results[:4], 1):
-        lines.append(f"  Source {i}: {r.get('title')} ({r.get('url')})")
-        lines.append(f"  Summary: {r.get('snippet', '')[:1200]}")
-    lines.append("")
-    lines.append("CRITICAL INSTRUCTIONS: You have active real-time internet web access enabled via PAI Studio. "
-                 "The current year is 2026. Carefully read the live web summaries above (for example, the current officeholder is explicitly named in the summaries). "
-                 "Directly state the verified person, name, and facts found in the sources. "
-                 "Do NOT claim the information is missing, do NOT say 'I do not have access to real-time information', "
-                 "and do NOT say 'I cannot predict future elections'. Answer directly and factually.")
+    import datetime
+    now_dt = datetime.datetime.now().astimezone()
+    cur_date_str = now_dt.strftime("%Y-%m-%d")
 
-    return True, "\n".join(lines), results[:4]
+    xml_snippets = ["<search_results>"]
+    for i, r in enumerate(results[:4], 1):
+        s_title = r.get("title", "").replace("<", "&lt;").replace(">", "&gt;")
+        s_url = r.get("url", "").replace("<", "&lt;").replace(">", "&gt;")
+        s_snip = r.get("snippet", "").replace("<", "&lt;").replace(">", "&gt;")
+        xml_snippets.append(f'  <source id="{i}" title="{s_title}" url="{s_url}">')
+        xml_snippets.append(f"    <snippet>{s_snip}</snippet>")
+        xml_snippets.append("  </source>")
+    xml_snippets.append("</search_results>")
+
+    instructions = (
+        f"\n<grounding_directives>\n"
+        f"1. Verified real-time web search results have been retrieved for this query as of {cur_date_str}.\n"
+        f"2. Synthesize a direct, factual, and confident answer using the verified search results above.\n"
+        f"3. Your pre-training memory is strictly out-of-date regarding current officeholders and events. "
+        f"If a fact in your pre-training memory contradicts <search_results>, you MUST discard your memory and state the fact from <search_results>.\n"
+        f"4. Do not hedge, do not provide disclaimers about cutoffs or future predictions, and do not say you cannot access real-time information.\n"
+        f"</grounding_directives>"
+    )
+
+    ctx = "\n".join(xml_snippets) + instructions
+    return True, ctx, results[:4]
 
 
 def fetch_url_text(url: str, max_chars: int = 6000, timeout: float = 8.0) -> Tuple[bool, str]:

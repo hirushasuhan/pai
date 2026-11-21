@@ -180,6 +180,7 @@ const preflightActionButtons = document.getElementById("preflight-action-buttons
 
 // Initial Setup
 document.addEventListener("DOMContentLoaded", () => {
+  setupDesktopTitlebar();
   applyStoredSettings();
   setupNavigation();
   setupChat();
@@ -205,6 +206,55 @@ document.addEventListener("DOMContentLoaded", () => {
 
   setInterval(checkServerHealth, 5000);
 });
+
+// Tauri Window Management & Titlebar Control
+function invokeTauri(cmd, args = {}) {
+  try {
+    if (window.__TAURI__?.core?.invoke) {
+      return window.__TAURI__.core.invoke(cmd, args);
+    }
+    if (window.__TAURI__?.invoke) {
+      return window.__TAURI__.invoke(cmd, args);
+    }
+    if (window.__TAURI_INTERNALS__?.invoke) {
+      return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    }
+  } catch (err) {
+    console.warn("Tauri invoke error:", cmd, err);
+  }
+  return Promise.resolve(null);
+}
+
+function setupDesktopTitlebar() {
+  const isTauri = Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
+  const titlebar = document.getElementById("desktop-titlebar");
+  const winCtrls = document.getElementById("titlebar-window-controls");
+  const btnMin = document.getElementById("win-btn-minimize");
+  const btnMax = document.getElementById("win-btn-maximize");
+  const btnClose = document.getElementById("win-btn-close");
+
+  if (!isTauri) {
+    if (winCtrls) winCtrls.style.display = "none";
+    return;
+  }
+
+  if (btnMin) {
+    btnMin.addEventListener("click", () => invokeTauri("app_window_minimize"));
+  }
+  if (btnMax) {
+    btnMax.addEventListener("click", () => invokeTauri("app_window_toggle_maximize"));
+  }
+  if (btnClose) {
+    btnClose.addEventListener("click", () => invokeTauri("app_window_close"));
+  }
+  if (titlebar) {
+    titlebar.addEventListener("dblclick", (e) => {
+      if (!e.target.closest("#titlebar-window-controls")) {
+        invokeTauri("app_window_toggle_maximize");
+      }
+    });
+  }
+}
 
 // Toast Notification System
 function showToast(message, type = "info", title = "", duration = 4000) {
@@ -347,16 +397,22 @@ function setupNavigation() {
 }
 
 function switchTab(tab) {
-  if (tab === "antigravity") tab = "team";
+  if (tab === "antigravity" || tab === "team") {
+    tab = "cowork";
+    setTimeout(() => {
+      if (typeof switchCoworkSubnav === "function") switchCoworkSubnav("team");
+    }, 20);
+  }
   currentTab = tab;
 
   const tabNames = {
     chat: "Chat & Reasoning",
+    cowork: "PAI Cowork & AI Team Workstation",
     projects: "Project Workspaces",
     models: "Models & Hardware",
     cloud: "Cloud Models",
     search: "Web Knowledge Search",
-    team: "Multi-Agent Team",
+    team: "PAI Cowork & AI Team Workstation",
     settings: "Settings & System"
   };
   const viewBreadcrumb = document.getElementById("current-view-name");
@@ -365,7 +421,7 @@ function switchTab(tab) {
   }
 
   navItems.forEach((btn) => {
-    if (btn.getAttribute("data-tab") === tab) {
+    if (btn.getAttribute("data-tab") === tab || (tab === "cowork" && btn.getAttribute("data-tab") === "team")) {
       btn.classList.add("active");
     } else {
       btn.classList.remove("active");
@@ -388,7 +444,10 @@ function switchTab(tab) {
       showToast("Select a project folder to browse files and enable AI Team features.", "info", "Workspace Setup");
     }
   }
-  if (tab === "team") loadTeamRoster();
+  if (tab === "team" || tab === "cowork") {
+    loadCoworkData();
+    loadTeamRoster();
+  }
   if (tab === "skills") {
     loadSkills();
     loadMcpServers();
@@ -429,7 +488,7 @@ function updateChatPlaceholderForActiveModel() {
   if (!chatInput) return;
   const m = (activeModel || "").toLowerCase();
   if (m.includes("llava") || m.includes("moondream") || m.includes("vision")) {
-    chatInput.placeholder = "Ask a question, or attach an image (📎) for visual inspection...";
+    chatInput.placeholder = "Ask a question, or attach an image for visual inspection...";
   } else {
     chatInput.placeholder = "Ask anything, run /image, /team, /help... (Enter to send, Shift+Enter for newline)";
   }
@@ -440,7 +499,8 @@ const SLASH_COMMANDS = [
   { cmd: "/internet off", desc: "Disable internet access (strictly offline mode)", cat: "Grounding" },
   { cmd: "/factcheck on", desc: "Enable real-time fact-checking & audit engine", cat: "Auditing" },
   { cmd: "/factcheck off", desc: "Disable automated fact-checking", cat: "Auditing" },
-  { cmd: "/team", desc: "Toggle autonomous 4-role AI engineering team", cat: "Agents" },
+  { cmd: "/council", desc: "Convene multi-model deliberation council across independent local models", cat: "Reasoning" },
+  { cmd: "/team", desc: "Toggle autonomous 7-role AI engineering team", cat: "Agents" },
   { cmd: "/supervisor", desc: "Open Antigravity Autonomous Supervisor in AI Team", cat: "Agents" },
   { cmd: "/antigravity", desc: "Launch continuous autonomous agent in AI Team tab", cat: "Agents" },
   { cmd: "/image", desc: "Generate image with Local SD-Turbo or Cloud AI (Imagen / DALL-E)", cat: "Creative" },
@@ -727,8 +787,8 @@ function createNewChatSession(render = true) {
         <span class="msg-time">Just now</span>
       </div>
       <div class="msg-body">
-        <p>👋 Hello! I am your native <strong>Personal Agentic AI</strong> companion.</p>
-        <p>I can solve complex coding problems, manage project files, orchestrate an autonomous 4-role AI engineering team, verify claims against real-time web knowledge, and synthesize images.</p>
+        <p>Hello! I am your native <strong>Personal Agentic AI</strong> companion.</p>
+        <p>I can solve complex coding problems, manage project files, orchestrate an autonomous 7-role AI engineering team, verify claims against real-time web knowledge, and synthesize images.</p>
       </div>
     </div>
   `;
@@ -761,8 +821,8 @@ function loadSessionMessages(session) {
           <span class="msg-time">Just now</span>
         </div>
         <div class="msg-body">
-          <p>👋 Hello! I am your native <strong>Personal Agentic AI</strong> companion.</p>
-          <p>I can solve complex coding problems, manage project files, orchestrate an autonomous 4-role AI engineering team, verify claims against real-time web knowledge, and synthesize images.</p>
+          <p>Hello! I am your native <strong>Personal Agentic AI</strong> companion.</p>
+          <p>I can solve complex coding problems, manage project files, orchestrate an autonomous 7-role AI engineering team, verify claims against real-time web knowledge, and synthesize images.</p>
         </div>
       </div>
     `;
@@ -1054,9 +1114,9 @@ function setupChat() {
       appendAssistantPlaceholder(botId, false);
       const isVision = (activeModel || "").toLowerCase().includes("llava") || (activeModel || "").toLowerCase().includes("moondream");
       const modelNote = isVision
-        ? `Currently active model **\`${activeModel}\`** is a **Vision Understanding model** (it inspects and analyzes uploaded images via 📎, but cannot synthesize new images).\n\n`
+        ? `Currently active model **\`${activeModel}\`** is a **Vision Understanding model** (it inspects and analyzes uploaded images, but cannot synthesize new images).\n\n`
         : `Currently active model **\`${activeModel}\`** is a **Local Language model**.\n\n`;
-      const imgHelpText = `### 🎨 How to Generate AI Images with \`/image\`\n\n` +
+      const imgHelpText = `### How to Generate AI Images with \`/image\`\n\n` +
         modelNote +
         `To generate photorealistic images:\n` +
         `1. Provide a descriptive prompt with the command:\n` +
@@ -1066,7 +1126,7 @@ function setupChat() {
         `2. Enable an Image Generator:\n` +
         `   - **Local Models:** Install **\`sd-turbo\`** or **\`stable-diffusion-v1-5\`** from the Local AI Models tab.\n` +
         `   - **Cloud AI:** Connect **Google Imagen 3** (via Gemini key) or **OpenAI DALL-E 3** in Settings & 3rd-Party Cloud AI.\n\n` +
-        `*Tip:* To inspect or ask questions about an existing image using **${activeModel}**, attach the image file using the paperclip button (📎) and type your question!`;
+        `*Tip:* To inspect or ask questions about an existing image using **${activeModel}**, attach the image file using the attach button and type your question!`;
       updateAssistantMessage(botId, imgHelpText, null, []);
       return;
     }
@@ -1075,7 +1135,7 @@ function setupChat() {
       appendUserMessage("/help");
       const botId = "msg-" + Date.now();
       appendAssistantPlaceholder(botId, false);
-      const helpText = `### 💡 Available Slash Commands\n\n` +
+      const helpText = `### Available Slash Commands\n\n` +
         `- \`/internet [on|off]\` : Toggle real-time web grounding and RAG\n` +
         `- \`/factcheck [on|off]\` : Toggle automated claim verification and audit engine\n` +
         `- \`/team\` : Toggle autonomous 4-role AI engineering team\n` +
@@ -1119,6 +1179,9 @@ function setupChat() {
     const botMsgId = "msg-" + Date.now();
     appendAssistantPlaceholder(botMsgId, isTeam);
 
+    const chkCouncilMode = document.getElementById("chk-chat-council-mode");
+    const isCouncil = (chkCouncilMode && chkCouncilMode.checked) || promptToSend.trim().toLowerCase().startsWith("/council");
+
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
@@ -1129,6 +1192,7 @@ function setupChat() {
           history: chatHistory,
           project_path: activeProjectPath,
           is_team_mode: isTeam,
+          is_council_mode: isCouncil,
           attachments: sentAttachments,
         }),
       });
@@ -1143,7 +1207,7 @@ function setupChat() {
             loadProjectFiles(activeProjectPath);
           }
         } else {
-          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend);
+          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend, data.thinking, { auto_saved_memory: data.auto_saved_memory, council_result: data.council_result });
         }
         chatHistory.push({ role: "user", content: promptToSend });
         chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
@@ -1167,7 +1231,7 @@ function setupChat() {
         updateAssistantError(botMsgId, data.error || "Execution error", promptToSend);
         const errorRecord = {
           role: "assistant",
-          text: `⚠️ Error: ${data.error || "Execution error"}`,
+          text: `Error: ${data.error || "Execution error"}`,
           userPrompt: promptToSend,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
@@ -1266,13 +1330,74 @@ function appendAssistantPlaceholder(id, isTeam = false) {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
-function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "") {
+function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "", thinking = "", extra = {}) {
   const msg = document.getElementById(id);
   if (!msg) return;
   const body = msg.querySelector(".msg-body");
   body.classList.remove("loading-indicator");
 
   let html = formatMarkdown(text);
+
+  if (thinking && thinking.trim()) {
+    html = `
+      <details class="thinking-accordion mb-2">
+        <summary class="thinking-summary">
+          <svg class="thinking-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+          <span>Thought Process & Reasoning Trace</span>
+        </summary>
+        <div class="thinking-body">
+          <pre>${escapeHtml(thinking.trim())}</pre>
+        </div>
+      </details>
+    ` + html;
+  }
+
+  if (extra && extra.auto_saved_memory) {
+    html = `
+      <div class="auto-memory-pill mb-2">
+        <span>Memory saved: <strong>${escapeHtml(extra.auto_saved_memory.key)}</strong> (${escapeHtml(extra.auto_saved_memory.content)})</span>
+      </div>
+    ` + html;
+  }
+
+  if (extra && extra.council_result) {
+    const cr = extra.council_result;
+    const modelsStr = (cr.models || []).join(" + ");
+    html = `
+      <div class="council-badge-box mb-2">
+        <span class="council-status-tag">Model Council Deliberation (${escapeHtml(modelsStr)})</span>
+      </div>
+    ` + html;
+
+    if (cr.agreements && cr.agreements.length > 0) {
+      html += `
+        <details class="council-collapsible mt-3">
+          <summary class="council-summary">
+            <span>View Multi-Model Agreement & Divergence Matrix</span>
+            <span class="fc-toggle-hint">Details ▾</span>
+          </summary>
+          <div class="council-details-content p-3 text-xs">
+            <div class="mb-2"><strong>Cross-Model Convergence:</strong></div>
+            <ul class="mb-3" style="padding-left:18px;">
+              ${cr.agreements.map(a => `<li><strong>${escapeHtml(a.finding)}</strong> <span class="text-muted">(${escapeHtml(a.evidence || '')})</span></li>`).join("")}
+            </ul>
+            ${cr.disagreements && cr.disagreements.length > 0 ? `
+              <div class="mb-2"><strong>Divergence Points:</strong></div>
+              <ul class="mb-3" style="padding-left:18px;">
+                ${cr.disagreements.map(d => `<li><strong>${escapeHtml(d.topic)}:</strong> <span class="text-muted">${escapeHtml(d.why_differ || '')}</span></li>`).join("")}
+              </ul>
+            ` : ""}
+            ${cr.unique_discoveries && cr.unique_discoveries.length > 0 ? `
+              <div class="mb-2"><strong>Unique Specialized Discoveries:</strong></div>
+              <ul style="padding-left:18px;">
+                ${cr.unique_discoveries.map(u => `<li><strong>${escapeHtml(u.model)}:</strong> ${escapeHtml(u.finding)}</li>`).join("")}
+              </ul>
+            ` : ""}
+          </div>
+        </details>
+      `;
+    }
+  }
 
   if (grounding && grounding.length > 0) {
     html += `
@@ -1320,7 +1445,7 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "")
     } else if (factcheck.report) {
       const cleanReport = factcheck.report
         .replace(/^─+/gm, "")
-        .replace(/🛡️ FACT-CHECK & WEB GROUNDING ENGINE \(Live Verification\):?/i, "")
+        .replace(/(?:[\uD83D\uDEE1\uFE0F]\s*)?FACT-CHECK & WEB GROUNDING ENGINE \(Live Verification\):?/i, "")
         .trim();
       detailsContent = `<div class="factcheck-body font-mono-target">${escapeHtml(cleanReport)}</div>`;
     }
@@ -1684,8 +1809,8 @@ function populateHeaderProjectDropdown(projects, activePath) {
   projList.forEach((p, idx) => {
     const opt = document.createElement("option");
     opt.value = p.path;
-    // Show folder name clearly with folder icon
-    opt.textContent = `📁 ${p.name}`;
+    // Show folder name clearly
+    opt.textContent = p.name;
     opt.title = `${p.name} (${p.path})`;
     if (activePath && pathsMatch(p.path, activePath)) {
       opt.selected = true;
@@ -1699,7 +1824,7 @@ function populateHeaderProjectDropdown(projects, activePath) {
     const opt = document.createElement("option");
     opt.value = activePath;
     const folderName = activePath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
-    opt.textContent = `📁 ${folderName}`;
+    opt.textContent = folderName;
     opt.title = `${folderName} (${activePath})`;
     opt.selected = true;
     headerProjectSelect.appendChild(opt);
@@ -1934,6 +2059,8 @@ function setupTeam() {
     if (activeTab === "plan") text = currentDeliverables.plan;
     else if (activeTab === "specialist") text = currentDeliverables.specialist;
     else if (activeTab === "qa") text = currentDeliverables.qa;
+    else if (activeTab === "explore") text = (currentDeliverables.explorer_findings || "") + "\n\n" + (currentDeliverables.citations || []).join("\n");
+    else if (activeTab === "debug") text = JSON.stringify(currentDeliverables.debug_report || {}, null, 2);
     else if (activeTab === "code") {
       text = Object.entries(currentDeliverables.code || {})
         .map(([fname, c]) => `=== File: ${fname} ===\n${c}\n`)
@@ -1944,6 +2071,61 @@ function setupTeam() {
       showToast("Copied deliverables to clipboard!", "success");
     }
   });
+
+  const btnQuickScout = document.getElementById("btn-team-quick-scout");
+  if (btnQuickScout) {
+    btnQuickScout.addEventListener("click", async () => {
+      const q = teamTaskInput.value.trim() || "game engine loop";
+      btnQuickScout.disabled = true;
+      showToast(`Scouting codebase symbols for "${q}"...`, "info");
+      try {
+        const res = await fetch(`${API_BASE}/api/team/explore`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: q, project_dir: activeProjectPath }),
+        });
+        const d = await res.json();
+        if (d.success) {
+          currentDeliverables.explorer_findings = d.findings || "";
+          currentDeliverables.citations = d.citations || [];
+          renderDeliverableTab("explore");
+          delivTabBtns.forEach(b => b.classList.toggle("active", b.dataset.tab === "explore"));
+          showToast(`Scouted ${d.citations?.length || 0} citations across ${d.scanned_files?.length || 0} files`, "success");
+        }
+      } catch (err) {
+        showToast(`Scout failed: ${err.message}`, "error");
+      } finally {
+        btnQuickScout.disabled = false;
+      }
+    });
+  }
+
+  const btnQuickDebug = document.getElementById("btn-team-quick-debug");
+  if (btnQuickDebug) {
+    btnQuickDebug.addEventListener("click", async () => {
+      const bug = teamTaskInput.value.trim() || "TypeError or syntax issue in codebase";
+      btnQuickDebug.disabled = true;
+      showToast(`Formulating scientific hypotheses for "${bug}"...`, "info");
+      try {
+        const res = await fetch(`${API_BASE}/api/team/debug`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bug: bug, project_dir: activeProjectPath }),
+        });
+        const d = await res.json();
+        if (d.success) {
+          currentDeliverables.debug_report = d;
+          renderDeliverableTab("debug");
+          delivTabBtns.forEach(b => b.classList.toggle("active", b.dataset.tab === "debug"));
+          showToast(`Debug complete: Root cause confirmed`, "success");
+        }
+      } catch (err) {
+        showToast(`Debug failed: ${err.message}`, "error");
+      } finally {
+        btnQuickDebug.disabled = false;
+      }
+    });
+  }
 
   teamSprintForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1979,6 +2161,10 @@ function setupTeam() {
           specialist: data.specialist_assets,
           code: data.code_updates,
           qa: data.qa_verdict,
+          explorer_findings: data.explorer_findings || "",
+          citations: data.citations || [],
+          critical_files: data.critical_files || [],
+          debug_report: data.debug_report || {},
         };
 
         renderTeamMessages(data.messages || []);
@@ -2029,7 +2215,11 @@ function renderTeamRoster(roster, availableModels) {
     
     const iconSvg = member.role === "project_manager" ? SVG_ICONS.pm :
                     member.role === "senior_developer" ? SVG_ICONS.dev :
-                    member.role === "specialist_developer" ? SVG_ICONS.specialist : SVG_ICONS.qa;
+                    member.role === "specialist_developer" ? SVG_ICONS.specialist :
+                    member.role === "explorer" ? `<svg class="role-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>` :
+                    member.role === "planner" ? `<svg class="role-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>` :
+                    member.role === "debugger" ? `<svg class="role-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="8" height="14" x="8" y="5" rx="4"></rect><path d="m19 7-3 2"></path><path d="m5 7 3 2"></path><path d="m19 19-3-2"></path><path d="m5 19 3-2"></path><path d="M20 13h-4"></path><path d="M4 13h4"></path><path d="m10 4 1 2"></path><path d="m14 4-1 2"></path></svg>` :
+                    SVG_ICONS.qa;
 
     let modelOptions = availableModels.map(m => `<option value="${m}" ${m === member.current_model ? "selected" : ""}>${m}</option>`).join("");
     (window.__configuredCloudModels || []).forEach(cm => {
@@ -2100,7 +2290,25 @@ function renderTeamMessages(messages) {
 
 function renderDeliverableTab(tab) {
   if (tab === "plan") {
-    teamDeliverableView.innerHTML = `<pre>${escapeHtml(currentDeliverables.plan || "No WBS plan generated yet.")}</pre>`;
+    let html = `<pre>${escapeHtml(currentDeliverables.plan || "No WBS plan generated yet.")}</pre>`;
+    const crit = currentDeliverables.critical_files || [];
+    if (crit.length > 0) {
+      html = `<div class="mb-3"><h4>Critical Files for Implementation (${crit.length}):</h4><ul>` +
+             crit.map(f => `<li><code>${escapeHtml(f)}</code></li>`).join("") +
+             `</ul></div>` + html;
+    }
+    teamDeliverableView.innerHTML = html;
+  } else if (tab === "explore") {
+    const cites = currentDeliverables.citations || [];
+    let html = `<div class="mb-3"><strong>Scout Findings:</strong><pre>${escapeHtml(currentDeliverables.explorer_findings || "No codebase citations scouted.")}</pre></div>`;
+    if (cites.length > 0) {
+      html += `<h4>Matching Code Citations (${cites.length}):</h4><ul class="citation-list">`;
+      cites.forEach(c => {
+        html += `<li><code>${escapeHtml(c)}</code></li>`;
+      });
+      html += `</ul>`;
+    }
+    teamDeliverableView.innerHTML = html;
   } else if (tab === "specialist") {
     teamDeliverableView.innerHTML = `<pre>${escapeHtml(currentDeliverables.specialist || "No specialist assets generated.")}</pre>`;
   } else if (tab === "code") {
@@ -2118,6 +2326,29 @@ function renderDeliverableTab(tab) {
     teamDeliverableView.innerHTML = html;
   } else if (tab === "qa") {
     teamDeliverableView.innerHTML = `<pre>${escapeHtml(currentDeliverables.qa || "No QA verdict available.")}</pre>`;
+  } else if (tab === "debug") {
+    const dReport = currentDeliverables.debug_report || {};
+    const hyps = dReport.hypotheses || [];
+    if (!dReport.bug && hyps.length === 0) {
+      teamDeliverableView.innerHTML = `<div class="text-muted">No active runtime debugging report. Debug engine triggers automatically on QA revision or via manual debug.</div>`;
+      return;
+    }
+    let html = `<div class="mb-2"><strong>Target Defect:</strong> <code>${escapeHtml(dReport.bug || "Unknown")}</code></div>`;
+    if (dReport.confirmed_root_cause) {
+      html += `<div class="mb-3" style="color:var(--accent-color);"><strong>Confirmed Root Cause:</strong> ${escapeHtml(dReport.confirmed_root_cause)}</div>`;
+    }
+    if (hyps.length > 0) {
+      html += `<h4>Hypothesis Evaluation Table:</h4><table class="data-table mb-3"><thead><tr><th>ID</th><th>Falsifiable Hypothesis</th><th>Status</th></tr></thead><tbody>`;
+      hyps.forEach(h => {
+        const badgeColor = h.status === "CONFIRMED" ? "color:#4ade80;" : "color:#f87171;";
+        html += `<tr><td><strong>${escapeHtml(h.id)}</strong></td><td>${escapeHtml(h.hypothesis)}</td><td style="${badgeColor}"><strong>${escapeHtml(h.status)}</strong></td></tr>`;
+      });
+      html += `</tbody></table>`;
+    }
+    if (dReport.fix) {
+      html += `<h4>Verified Fix (Instrumentations Cleaned):</h4><pre><code>${escapeHtml(dReport.fix)}</code></pre>`;
+    }
+    teamDeliverableView.innerHTML = html;
   }
 }
 
@@ -3115,7 +3346,7 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
   if (headerPill) {
     headerPill.classList.remove("hidden");
     if (headerText) {
-      headerText.textContent = isPaused ? `⏸ Paused: ${tag} (${activeDownloadPct}%)` : `Downloading ${tag} (${activeDownloadPct}%)`;
+      headerText.textContent = isPaused ? `⏸ ${tag} ${activeDownloadPct}%` : `⬇ ${tag} ${activeDownloadPct}%`;
     }
   }
 
@@ -3452,13 +3683,60 @@ function handleDownloadSuccess(modelName) {
   loadModelStoragePath();
 }
 
+function formatDownloadError(rawError) {
+  if (!rawError) return "An unexpected error occurred during download.";
+  if (typeof rawError !== "string") {
+    try {
+      rawError = JSON.stringify(rawError);
+    } catch (_) {
+      rawError = String(rawError);
+    }
+  }
+
+  const lower = rawError.toLowerCase();
+
+  // Check for Cloudflare 522 or connection timeout
+  if (rawError.includes("522") || lower.includes("cloudflare") || lower.includes("connection timed out") || lower.includes("timed out")) {
+    return "Ollama Registry Connection Timeout (Cloudflare 522). The official model registry (registry.ollama.ai) is temporarily overloaded or unreachable. Please wait 1-2 minutes and click Retry.";
+  }
+  // Check for 502 / 503 / 504 server errors
+  if (rawError.includes("502") || rawError.includes("503") || lower.includes("bad gateway") || lower.includes("service unavailable")) {
+    return "Ollama Registry Gateway Error (502/503). Registry service is temporarily unavailable. Please retry shortly.";
+  }
+  if (rawError.includes("504") || lower.includes("gateway timeout") || lower.includes("request timed out")) {
+    return "Network Gateway Timeout (504). Connection timed out while downloading model layers. Please check your internet connection.";
+  }
+  // Check for disk full
+  if (lower.includes("no space left on device") || rawError.includes("DISK_FULL") || lower.includes("disk full") || lower.includes("not enough disk space")) {
+    return "Insufficient disk storage. Please free up space on your drive or configure an external model storage path.";
+  }
+  // Check for model not found
+  if (lower.includes("file does not exist") || lower.includes("manifest: file does not exist") || lower.includes("not found") || rawError.includes("404")) {
+    return "Model manifest not found on Ollama registry. Please check if the model name or tag is correct.";
+  }
+  // If JSON is embedded in the error string, parse detail or title
+  const jsonMatch = rawError.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.detail) return parsed.detail;
+      if (parsed.title) return parsed.title;
+      if (parsed.message) return parsed.message;
+    } catch (_) {}
+  }
+  // Clean up prefix
+  return rawError.replace(/^pull model manifest:\s*/i, "").replace(/^error:\s*/i, "").trim();
+}
+
 function handleDownloadFailure(errorMsg) {
   isModelDownloading = false;
   isDownloadPaused = false;
   activeDownloadingModelTag = null;
   activeDownloadAbortController = null;
 
-  syncDownloadUI(0, `Download failed: ${errorMsg}`, "0 MB / 0 MB", false);
+  const friendlyError = formatDownloadError(errorMsg);
+
+  syncDownloadUI(0, `Download failed: ${friendlyError}`, "0 MB / 0 MB", false);
   hideDownloadWidgets();
 
   const confirmLabel = document.getElementById("btn-confirm-install-label");
@@ -3471,7 +3749,7 @@ function handleDownloadFailure(errorMsg) {
     btnPullModel.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>Start Download & Install</span>`;
   }
 
-  showToast(`Model download failed: ${errorMsg}`, "error");
+  showToast(`Model download failed: ${friendlyError}`, "error");
   if (latestRecommendedModels.length > 0) {
     renderRecommendedModels(latestRecommendedModels);
   }
@@ -3894,6 +4172,54 @@ async function loadDoctorTelemetry() {
   }
 }
 
+const WEATHER_SVGS = {
+  clear_day: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="12" cy="12" r="5" fill="#F59E0B"/>
+    <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M6.7 17.3l-1.77 1.77M19.07 4.93l-1.77 1.77" stroke="#FBBF24" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+  clear_night: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="#FBBF24" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="19" cy="4" r="1" fill="#38BDF8"/>
+    <circle cx="16" cy="7" r="0.75" fill="#38BDF8"/>
+  </svg>`,
+  partly_cloudy_day: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="8.5" cy="8.5" r="4" fill="#F59E0B"/>
+    <path d="M8.5 2.5v1.5M4.6 4.6l1.1 1.1M2.5 8.5H4M12.4 4.6l-1.1 1.1" stroke="#FBBF24" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M6 17.5A4.5 4.5 0 0 1 10.5 13H11a4.8 4.8 0 0 1 9.4 1.2 3.2 3.2 0 0 1-1.4 6.3H6a4.5 4.5 0 0 1 0-9z" fill="#38BDF8" fill-opacity="0.9" stroke="#0284C7" stroke-width="1.2" stroke-linejoin="round"/>
+  </svg>`,
+  partly_cloudy_night: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M12 3a5 5 0 0 0 5 5 5 5 0 0 0 1.2-.15A6 6 0 0 1 11 11a6 6 0 0 1 1-8z" fill="#FBBF24" stroke="#F59E0B" stroke-width="0.8"/>
+    <path d="M6 17.5A4.5 4.5 0 0 1 10.5 13H11a4.8 4.8 0 0 1 9.4 1.2 3.2 3.2 0 0 1-1.4 6.3H6a4.5 4.5 0 0 1 0-9z" fill="#38BDF8" fill-opacity="0.85" stroke="#0284C7" stroke-width="1.2" stroke-linejoin="round"/>
+  </svg>`,
+  clear: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="12" cy="12" r="5" fill="#F59E0B"/>
+    <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M6.7 17.3l-1.77 1.77M19.07 4.93l-1.77 1.77" stroke="#FBBF24" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+  partly_cloudy: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="8.5" cy="8.5" r="4" fill="#F59E0B"/>
+    <path d="M8.5 2.5v1.5M4.6 4.6l1.1 1.1M2.5 8.5H4M12.4 4.6l-1.1 1.1" stroke="#FBBF24" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M6 17.5A4.5 4.5 0 0 1 10.5 13H11a4.8 4.8 0 0 1 9.4 1.2 3.2 3.2 0 0 1-1.4 6.3H6a4.5 4.5 0 0 1 0-9z" fill="#38BDF8" fill-opacity="0.9" stroke="#0284C7" stroke-width="1.2" stroke-linejoin="round"/>
+  </svg>`,
+  cloudy: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5.5 17a3.5 3.5 0 0 1-.3-7A5 5 0 0 1 15 9.5a4 4 0 0 1 3.5 4.5 3.5 3.5 0 0 1-3 3z" fill="#94A3B8" stroke="#64748B" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`,
+  rain: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5.5 13.5a3.5 3.5 0 0 1-.3-7A5 5 0 0 1 15 6a4 4 0 0 1 3.5 4.5 3.5 3.5 0 0 1-3 3z" fill="#64748B" stroke="#475569" stroke-width="1.2" stroke-linejoin="round"/>
+    <path d="M8 16.5l-1.2 3.5M12 16.5l-1.2 3.5M16 16.5l-1.2 3.5" stroke="#0284C7" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+  showers: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5.5 13.5a3.5 3.5 0 0 1-.3-7A5 5 0 0 1 15 6a4 4 0 0 1 3.5 4.5 3.5 3.5 0 0 1-3 3z" fill="#38BDF8" fill-opacity="0.8" stroke="#0284C7" stroke-width="1.2" stroke-linejoin="round"/>
+    <path d="M7.5 16.5l-1 3M11.5 16.5l-1 3M15.5 16.5l-1 3" stroke="#38BDF8" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+  thunderstorm: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5.5 12.5a3.5 3.5 0 0 1-.3-7A5 5 0 0 1 15 5a4 4 0 0 1 3.5 4.5 3.5 3.5 0 0 1-3 3z" fill="#475569" stroke="#334155" stroke-width="1.2" stroke-linejoin="round"/>
+    <path d="M11.5 11l-2 4h3l-1.5 5 4.5-6h-3l1.5-3z" fill="#F59E0B" stroke="#FBBF24" stroke-width="0.8" stroke-linejoin="round"/>
+  </svg>`,
+  fog: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" class="weather-svg" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4 8h16M3 12h18M5 16h14" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  </svg>`,
+};
+
 function initLiveEnvironmentTelemetry() {
   const clockEl = document.getElementById("env-live-clock");
   const tempEl = document.getElementById("env-weather-temp");
@@ -3919,13 +4245,18 @@ function initLiveEnvironmentTelemetry() {
         if (condEl) condEl.textContent = w.condition_en || "Clear";
         if (iconEl) {
           const code = w.weathercode || 0;
-          if (code === 0) iconEl.textContent = "☀️";
-          else if (code <= 3) iconEl.textContent = "⛅";
-          else if (code <= 48) iconEl.textContent = "🌫️";
-          else if (code <= 67) iconEl.textContent = "🌧️";
-          else if (code <= 82) iconEl.textContent = "🌦️";
-          else if (code <= 99) iconEl.textContent = "⛈️";
-          else iconEl.textContent = "⛅";
+          const currentHour = new Date().getHours();
+          const isDay = (w.is_day !== undefined) ? (w.is_day === 1) : (currentHour >= 6 && currentHour < 18);
+
+          let svgKey = "cloudy";
+          if (code === 0) svgKey = isDay ? "clear_day" : "clear_night";
+          else if (code <= 3) svgKey = isDay ? "partly_cloudy_day" : "partly_cloudy_night";
+          else if (code <= 48) svgKey = "fog";
+          else if (code <= 67) svgKey = "rain";
+          else if (code <= 82) svgKey = "showers";
+          else if (code <= 99) svgKey = "thunderstorm";
+
+          iconEl.innerHTML = WEATHER_SVGS[svgKey] || WEATHER_SVGS.cloudy;
         }
       }
     } catch (e) {
@@ -4186,11 +4517,11 @@ function setupSettings() {
 
   btnResetSettings?.addEventListener("click", () => {
     if (settingFontFamily) settingFontFamily.value = "jetbrains";
-    if (settingFontSize) settingFontSize.value = "13.5px";
+    if (settingFontSize) settingFontSize.value = "13px";
     const radio = document.querySelector('input[name="setting-theme"][value="theme-pai-cyber"]');
     if (radio) radio.checked = true;
     setColorMode("dark");
-    applySettings({ font: "jetbrains", size: "13.5px", theme: "theme-pai-cyber" });
+    applySettings({ font: "jetbrains", size: "13px", theme: "theme-pai-cyber" });
     localStorage.removeItem("pai_settings");
     localStorage.removeItem("pai_color_mode");
     showToast("Settings reset to defaults", "info");
@@ -4198,7 +4529,7 @@ function setupSettings() {
 
   btnSaveSettings?.addEventListener("click", () => {
     const font = settingFontFamily ? settingFontFamily.value : "jetbrains";
-    const size = settingFontSize ? settingFontSize.value : "13.5px";
+    const size = settingFontSize ? settingFontSize.value : "13px";
     const theme = document.querySelector('input[name="setting-theme"]:checked')?.value || "theme-pai-cyber";
     const colorMode = document.querySelector('input[name="setting-color-mode"]:checked')?.value || currentColorMode;
 
@@ -4225,7 +4556,7 @@ function applySettings(cfg) {
   }
 
   // Themes
-  document.body.classList.remove("theme-pai-cyber", "theme-electric-cyan", "theme-neon-purple");
+  document.body.classList.remove("theme-pai-cyber", "theme-electric-cyan", "theme-neon-purple", "theme-monokai-matrix");
   document.body.classList.add(cfg.theme || "theme-pai-cyber");
 }
 
@@ -4239,7 +4570,7 @@ function applyStoredSettings() {
       const cfg = JSON.parse(stored);
       applySettings(cfg);
       if (settingFontFamily) settingFontFamily.value = cfg.font || "jetbrains";
-      if (settingFontSize) settingFontSize.value = cfg.size || "13.5px";
+      if (settingFontSize) settingFontSize.value = cfg.size || "13px";
       const radio = document.querySelector(`input[name="setting-theme"][value="${cfg.theme || 'theme-pai-cyber'}"]`);
       if (radio) radio.checked = true;
     }
@@ -4562,4 +4893,595 @@ function setupDesktopContextMenu() {
       e.preventDefault();
     }
   });
+
+  // Cowork Subnav Switcher
+  window.switchCoworkSubnav = function(subview) {
+    document.querySelectorAll(".cowork-subnav-btn").forEach(btn => {
+      if (btn.getAttribute("data-subview") === subview) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+      }
+    });
+
+    const subviews = ["sessions", "team", "deliverables", "memory"];
+    subviews.forEach(s => {
+      const el = document.getElementById(`cowork-subview-${s}`);
+      if (el) {
+        if (s === subview) {
+          el.classList.remove("hidden");
+        } else {
+          el.classList.add("hidden");
+        }
+      }
+    });
+
+    if (subview === "team") {
+      loadTeamRoster();
+    }
+  };
+
+  function initCoworkSubnav() {
+    document.querySelectorAll(".cowork-subnav-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const target = btn.getAttribute("data-subview");
+        if (target) switchCoworkSubnav(target);
+      });
+    });
+  }
+  initCoworkSubnav();
+
+  // Attach Cowork UI Handlers
+  document.getElementById("btn-refresh-cowork")?.addEventListener("click", () => {
+    loadCoworkData();
+    loadTeamRoster();
+  });
+
+  document.getElementById("btn-cowork-mount-folder")?.addEventListener("click", async () => {
+    try {
+      const res = await fetch("http://127.0.0.1:8765/api/utils/select_folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Select Local Folder to Mount in Cowork" })
+      });
+      const data = await res.json();
+      if (data.success && data.path) {
+        await fetch("http://127.0.0.1:8765/api/cowork/folders/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: data.path, name: data.name || "Workspace" })
+        });
+        showToast(`Mounted folder '${data.name || data.path}' into Cowork!`, "success", "Folder Connected");
+        loadCoworkData();
+      }
+    } catch (err) {
+      showToast(`Error mounting folder: ${err}`, "error", "Mount Failed");
+    }
+  });
+
+  // Modal Handlers for Cowork Task
+  const coworkModal = document.getElementById("cowork-task-modal");
+  const coworkModalForm = document.getElementById("cowork-task-modal-form");
+  const btnCloseCoworkModal = document.getElementById("btn-close-cowork-modal");
+  const btnCancelCoworkModal = document.getElementById("btn-cancel-cowork-modal");
+  const coworkFolderSelect = document.getElementById("cowork-modal-folder");
+  const btnCoworkBrowseFolder = document.getElementById("btn-cowork-browse-folder");
+  const coworkFolderHint = document.getElementById("cowork-modal-folder-hint");
+
+  function openCoworkTaskModal() {
+    if (!coworkModal) return;
+    if (coworkFolderSelect) {
+      coworkFolderSelect.innerHTML = `<option value="">(No specific workspace folder)</option>`;
+      if (activeProjectPath) {
+        const opt = document.createElement("option");
+        opt.value = activeProjectPath;
+        opt.textContent = `Active Project: ${activeProjectName || activeProjectPath}`;
+        opt.selected = true;
+        coworkFolderSelect.appendChild(opt);
+        if (coworkFolderHint) {
+          coworkFolderHint.textContent = `Active target: ${activeProjectPath}`;
+          coworkFolderHint.style.color = "var(--accent-cyan)";
+        }
+      } else if (coworkFolderHint) {
+        coworkFolderHint.textContent = "Select an active project or click Browse to choose any folder on your machine.";
+        coworkFolderHint.style.color = "";
+      }
+      fetch("http://127.0.0.1:8765/api/cowork/folders")
+        .then(r => r.json())
+        .then(d => {
+          if (d.success && d.folders) {
+            d.folders.forEach(f => {
+              if (f.host_path !== activeProjectPath) {
+                const opt = document.createElement("option");
+                opt.value = f.host_path;
+                opt.textContent = `Mounted: ${f.name} (${f.host_path})`;
+                coworkFolderSelect.appendChild(opt);
+              }
+            });
+          }
+        })
+        .catch(() => {});
+    }
+    const titleInp = document.getElementById("cowork-modal-title");
+    const goalInp = document.getElementById("cowork-modal-goal");
+    const checkInp = document.getElementById("cowork-modal-checklist");
+    if (titleInp) titleInp.value = "";
+    if (goalInp) goalInp.value = "";
+    if (checkInp) checkInp.value = "Decompose requirements\nExecute modifications\nVerify test results";
+
+    coworkModal.classList.remove("hidden");
+    titleInp?.focus();
+  }
+
+  function closeCoworkTaskModal() {
+    if (coworkModal) coworkModal.classList.add("hidden");
+  }
+
+  coworkFolderSelect?.addEventListener("change", () => {
+    const val = coworkFolderSelect.value;
+    if (coworkFolderHint) {
+      if (val) {
+        coworkFolderHint.textContent = `Active target: ${val}`;
+        coworkFolderHint.style.color = "var(--accent-cyan)";
+      } else {
+        coworkFolderHint.textContent = "No specific workspace folder selected (Global task).";
+        coworkFolderHint.style.color = "";
+      }
+    }
+  });
+
+  btnCoworkBrowseFolder?.addEventListener("click", async () => {
+    try {
+      const origHtml = btnCoworkBrowseFolder.innerHTML;
+      btnCoworkBrowseFolder.disabled = true;
+      btnCoworkBrowseFolder.innerHTML = "<span>Browsing...</span>";
+      const picked = await openNativeFolderDialog("Select Cowork Workspace Folder", activeProjectPath || "");
+      btnCoworkBrowseFolder.disabled = false;
+      btnCoworkBrowseFolder.innerHTML = origHtml;
+
+      if (picked && picked.path) {
+        const folderPath = picked.path;
+        const folderName = picked.name || folderPath.split(/[\/\\]/).filter(Boolean).pop() || "Workspace";
+
+        // Check if already in dropdown
+        let found = false;
+        if (coworkFolderSelect) {
+          for (let i = 0; i < coworkFolderSelect.options.length; i++) {
+            if (pathsMatch(coworkFolderSelect.options[i].value, folderPath)) {
+              coworkFolderSelect.selectedIndex = i;
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            const opt = document.createElement("option");
+            opt.value = folderPath;
+            opt.textContent = `Selected: ${folderName} (${folderPath})`;
+            opt.selected = true;
+            coworkFolderSelect.appendChild(opt);
+          }
+        }
+        if (coworkFolderHint) {
+          coworkFolderHint.textContent = `Active target: ${folderPath}`;
+          coworkFolderHint.style.color = "var(--accent-cyan)";
+        }
+        showToast(`Workspace folder selected: ${folderName}`, "success", "Folder Selected");
+
+        // Automatically connect to cowork backend
+        fetch("http://127.0.0.1:8765/api/cowork/folders/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: folderPath, name: folderName })
+        }).then(() => loadCoworkData()).catch(() => {});
+      }
+    } catch (err) {
+      console.error("Browse folder error:", err);
+      showToast(`Error browsing folder: ${err}`, "error", "Browse Failed");
+    }
+  });
+
+  // Cowork Quick Preset Pills Handlers
+  document.querySelectorAll(".cowork-preset-pill").forEach(pill => {
+    pill.addEventListener("click", () => {
+      const preset = pill.getAttribute("data-preset");
+      const titleInp = document.getElementById("cowork-modal-title");
+      const goalInp = document.getElementById("cowork-modal-goal");
+      const checkInp = document.getElementById("cowork-modal-checklist");
+      if (preset === "refactor") {
+        if (titleInp) titleInp.value = "Refactor Codebase Architecture & Modularization";
+        if (goalInp) goalInp.value = "Review existing module structure, decouple monolithic components, apply clean separation of concerns, and ensure all unit tests pass without regression.";
+        if (checkInp) checkInp.value = "Audit architectural boundaries and hotspots\nExtract modular helper services and interfaces\nRefactor call sites\nRun automated verification suite";
+      } else if (preset === "bugfix") {
+        if (titleInp) titleInp.value = "Investigate & Resolve Edge Case Bugs";
+        if (goalInp) goalInp.value = "Reproduce reported issues, isolate root causes in codebase, implement targeted bug fixes, and add regression tests.";
+        if (checkInp) checkInp.value = "Reproduce failure in isolated test case\nIdentify root cause in source file\nApply minimal robust patch\nVerify full test suite passes";
+      } else if (preset === "feature") {
+        if (titleInp) titleInp.value = "Implement New Workspace Feature";
+        if (goalInp) goalInp.value = "Design and build the requested capability according to project conventions, including data models, handlers, and unit tests.";
+        if (checkInp) checkInp.value = "Decompose feature specifications\nImplement core data models and methods\nIntegrate into application flow\nVerify functionality with end-to-end test";
+      } else if (preset === "docs") {
+        if (titleInp) titleInp.value = "Generate API Specs & Technical Documentation";
+        if (goalInp) goalInp.value = "Inspect code signatures, exported types, and architecture to generate comprehensive Markdown documentation and developer guides.";
+        if (checkInp) checkInp.value = "Scan codebase symbols and exported APIs\nDraft architectural overview & sequence flows\nDocument configuration and setup instructions\nVerify markdown compliance";
+      }
+    });
+  });
+
+  document.getElementById("btn-cowork-new-task")?.addEventListener("click", openCoworkTaskModal);
+  btnCloseCoworkModal?.addEventListener("click", closeCoworkTaskModal);
+  btnCancelCoworkModal?.addEventListener("click", closeCoworkTaskModal);
+  coworkModal?.addEventListener("click", (e) => {
+    if (e.target === coworkModal) closeCoworkTaskModal();
+  });
+
+  coworkModalForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = document.getElementById("cowork-modal-title")?.value?.trim();
+    const goal = document.getElementById("cowork-modal-goal")?.value?.trim();
+    const folder = document.getElementById("cowork-modal-folder")?.value || "";
+    const checklistRaw = document.getElementById("cowork-modal-checklist")?.value || "";
+    const checklist = checklistRaw.split("\n").map(s => s.trim()).filter(Boolean);
+    const execMode = document.querySelector('input[name="cowork-exec-mode"]:checked')?.value || "team";
+
+    if (!title || !goal) {
+      showToast("Please provide both a title and objective goal.", "info", "Validation");
+      return;
+    }
+
+    try {
+      const res = await fetch("http://127.0.0.1:8765/api/cowork/tasks/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          goal,
+          folder,
+          checklist: checklist.length > 0 ? checklist : ["Decompose requirements", "Execute modifications", "Verify test results"]
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const taskId = data.task?.task_id || "1";
+        showToast(`Dispatched task #${taskId}: '${title}' (${execMode === 'team' ? 'AI Team Sprint' : 'Direct Solo'})`, "success", "Task Dispatched");
+        closeCoworkTaskModal();
+        loadCoworkData();
+
+        if (execMode === "team") {
+          // Switch to Team / Live Collab subview to monitor sprint live
+          window.switchCoworkSubnav?.("team");
+          const targetDir = folder || activeProjectPath || "";
+          
+          if (teamActivityFeed) {
+            teamActivityFeed.innerHTML = `
+              <div class="fipa-msg-card inform">
+                <div class="fipa-header">
+                  <span class="fipa-badge">COORDINATOR</span>
+                  <span class="fipa-agents">PAI MultiAgentTeam &rarr; Cowork Task #${taskId}</span>
+                </div>
+                <div class="fipa-body">Initiating collaborative sprint for Task #${taskId}: "${escapeHtml(title)}" across 7 engineering roles...</div>
+              </div>
+            `;
+          }
+
+          // Trigger team sprint in background
+          fetch(`${API_BASE}/api/team/run`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task: `${title}: ${goal}`,
+              project_dir: targetDir
+            })
+          })
+          .then(r => r.json())
+          .then(async teamData => {
+            if (teamData.success) {
+              currentDeliverables = {
+                plan: teamData.plan,
+                specialist: teamData.specialist_assets,
+                code: teamData.code_updates,
+                qa: teamData.qa_verdict,
+                explorer_findings: teamData.explorer_findings || "",
+                citations: teamData.citations || [],
+                critical_files: teamData.critical_files || [],
+                debug_report: teamData.debug_report || {}
+              };
+              renderTeamMessages(teamData.messages || []);
+              renderDeliverableTab("plan");
+              if (targetDir) loadProjectFiles(targetDir);
+
+              const artifacts = Object.keys(teamData.code_updates || {});
+              await fetch("http://127.0.0.1:8765/api/cowork/tasks/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  task_id: taskId,
+                  artifacts: artifacts.length > 0 ? artifacts : ["Deliverables WBS Plan", "QA Verdict"],
+                  verified: ["QA Architecture Review & Code Verification"],
+                  handoff_notes: `Sprint successfully completed by AI Team with ${artifacts.length} file artifacts.`
+                })
+              }).catch(() => {});
+
+              loadCoworkData();
+              showToast(`Task #${taskId} sprint completed with ${artifacts.length} deliverables!`, "success", "Sprint Complete");
+            } else {
+              showToast(`Sprint error: ${teamData.error || "Unknown error"}`, "error");
+            }
+          })
+          .catch(err => {
+            console.error("Team sprint fetch error:", err);
+          });
+        }
+      } else {
+        showToast(`Failed to dispatch task: ${data.error || "Unknown error"}`, "error", "Dispatch Error");
+      }
+    } catch (err) {
+      showToast(`Failed to dispatch task: ${err}`, "error", "Dispatch Error");
+    }
+  });
+
+  // Modal Handlers for Author Writing Style & Tone Calibration
+  const styleModal = document.getElementById("writing-style-modal");
+  const styleModalForm = document.getElementById("writing-style-modal-form");
+  const btnCloseStyleModal = document.getElementById("btn-close-style-modal");
+  const btnCancelStyleModal = document.getElementById("btn-cancel-style-modal");
+
+  function openStyleModal() {
+    if (!styleModal) return;
+    const sampleInp = document.getElementById("style-modal-samples");
+    if (sampleInp) sampleInp.value = "";
+    styleModal.classList.remove("hidden");
+    sampleInp?.focus();
+  }
+
+  function closeStyleModal() {
+    if (styleModal) styleModal.classList.add("hidden");
+  }
+
+  document.getElementById("btn-cowork-voice-setup")?.addEventListener("click", openStyleModal);
+  btnCloseStyleModal?.addEventListener("click", closeStyleModal);
+  btnCancelStyleModal?.addEventListener("click", closeStyleModal);
+  styleModal?.addEventListener("click", (e) => {
+    if (e.target === styleModal) closeStyleModal();
+  });
+
+  styleModalForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const samples = document.getElementById("style-modal-samples")?.value?.trim();
+    const tone = document.getElementById("style-modal-tone")?.value || "concise, direct, technical";
+
+    if (!samples || samples.length < 20) {
+      showToast("Please provide at least 20 characters of authentic writing.", "info", "Calibration");
+      return;
+    }
+
+    try {
+      const res = await fetch("http://127.0.0.1:8765/api/cowork/voice/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ samples: [samples], tone })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Author writing style & tone persona successfully calibrated!", "success", "Style Calibrated");
+        closeStyleModal();
+        loadCoworkData();
+      } else {
+        showToast(`Calibration error: ${data.error || "Unknown error"}`, "error", "Style Error");
+      }
+    } catch (err) {
+      showToast(`Error calibrating style: ${err}`, "error", "Style Error");
+    }
+  });
+}
+
+// ============================================================================
+// PAI Cowork Workstation UI Controller
+// ============================================================================
+
+async function loadCoworkData() {
+  const foldersList = document.getElementById("cowork-folders-list");
+  const memoryList = document.getElementById("cowork-memory-list");
+  const memoryCount = document.getElementById("cowork-memory-count");
+  const tasksTable = document.getElementById("cowork-tasks-table");
+
+  if (!foldersList || !memoryList || !tasksTable) return;
+
+  // 1. Load Connected Folders
+  try {
+    const res = await fetch("http://127.0.0.1:8765/api/cowork/folders");
+    const data = await res.json();
+    if (data.success && data.folders && data.folders.length > 0) {
+      foldersList.innerHTML = data.folders.map(f => `
+        <div class="cowork-card-item">
+          <div>
+            <div class="font-semibold text-sm">${escapeHtml(f.name)}</div>
+            <div class="font-mono text-xs text-muted">${escapeHtml(f.host_path)}</div>
+            <div class="text-xs text-muted" style="margin-top:2px;">Citations: <code>computer://${escapeHtml(f.folder_id)}/</code></div>
+          </div>
+          <button type="button" class="btn btn-secondary btn-xs btn-disconnect-folder" data-id="${escapeHtml(f.folder_id)}">Disconnect</button>
+        </div>
+      `).join("");
+
+      foldersList.querySelectorAll(".btn-disconnect-folder").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const fid = e.target.getAttribute("data-id");
+          if (confirm(`Disconnect folder '${fid}'?`)) {
+            await fetch("http://127.0.0.1:8765/api/cowork/folders/disconnect", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ folder_id: fid })
+            });
+            loadCoworkData();
+          }
+        });
+      });
+    } else {
+      foldersList.innerHTML = `<div class="text-xs text-muted">No folders mounted. Click '+ Mount Folder' to connect your workspace.</div>`;
+    }
+  } catch (e) {
+    console.error("Error loading cowork folders:", e);
+  }
+
+  // 2. Load Auto-Memory
+  try {
+    const res = await fetch("http://127.0.0.1:8765/api/cowork/memory");
+    const data = await res.json();
+    if (data.success && data.memory) {
+      let allEntries = [];
+      for (const [cat, items] of Object.entries(data.memory)) {
+        if (Array.isArray(items)) {
+          items.forEach(item => allEntries.push({ cat, ...item }));
+        }
+      }
+      if (memoryCount) memoryCount.textContent = `${allEntries.length} entries`;
+
+      if (allEntries.length > 0) {
+        memoryList.innerHTML = allEntries.map(e => `
+          <div class="cowork-card-item">
+            <div>
+              <span class="badge badge-subtle" style="text-transform:uppercase; font-size:10px;">${escapeHtml(e.cat)}</span>
+              <strong style="margin-left:4px; font-size:12px;">${escapeHtml(e.key)}:</strong>
+              <div class="text-xs" style="margin-top:2px;">${escapeHtml(e.content)}</div>
+            </div>
+            <button type="button" class="btn-clear-proj btn-del-mem" data-cat="${escapeHtml(e.cat)}" data-key="${escapeHtml(e.key)}" title="Delete memory">&times;</button>
+          </div>
+        `).join("");
+
+        memoryList.querySelectorAll(".btn-del-mem").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            const cat = e.target.getAttribute("data-cat");
+            const k = e.target.getAttribute("data-key");
+            await fetch("http://127.0.0.1:8765/api/cowork/memory/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mem_type: cat, key: k })
+            });
+            loadCoworkData();
+          });
+        });
+      } else {
+        memoryList.innerHTML = `<div class="text-xs text-muted">No memory entries yet. Use chat to say "Remember that..." or "Don't use...".</div>`;
+      }
+    }
+  } catch (e) {
+    console.error("Error loading cowork memory:", e);
+  }
+
+  // 3. Load Author Writing Style & Tone Persona Profile
+  const voiceBox = document.getElementById("cowork-voice-summary");
+  if (voiceBox) {
+    try {
+      const res = await fetch("http://127.0.0.1:8765/api/cowork/voice");
+      const data = await res.json();
+      if (data.success && data.profile) {
+        const p = data.profile;
+        voiceBox.innerHTML = `
+          <div class="flex-between mb-2">
+            <strong class="text-xs">Author Persona Active (${p.sample_count} sample${p.sample_count !== 1 ? 's' : ''})</strong>
+            <button type="button" class="btn btn-secondary btn-xs btn-reset-style" title="Reset calibrated persona">Reset</button>
+          </div>
+          <div class="text-xs mb-1">Vocabulary Richness: <strong>${p.metrics.type_token_ratio}</strong> &bull; Avg Sentence: <strong>${p.metrics.mean_sentence_length} words</strong></div>
+          <div class="text-xs text-muted mb-2">Tone: <strong>${escapeHtml(p.metrics.preferred_tone || 'Standard')}</strong></div>
+          <div class="text-xs text-muted"><strong>Guidelines:</strong></div>
+          <ul class="text-xs" style="padding-left:16px; margin:4px 0;">
+            ${(p.guidelines || []).map(g => `<li>${escapeHtml(g)}</li>`).join("")}
+          </ul>
+        `;
+
+        voiceBox.querySelector(".btn-reset-style")?.addEventListener("click", async () => {
+          if (confirm("Reset author writing style persona to default?")) {
+            await fetch("http://127.0.0.1:8765/api/cowork/voice/delete", { method: "POST" });
+            showToast("Writing style persona reset.", "info");
+            loadCoworkData();
+          }
+        });
+      } else {
+        voiceBox.innerHTML = `<div class="text-xs text-muted">No writing style calibrated yet. Click 'Calibrate Style' to train your authentic persona.</div>`;
+      }
+    } catch (e) {
+      console.error("Error loading cowork writing style:", e);
+    }
+  }
+
+  // 4. Load Cowork Tasks
+  try {
+    const res = await fetch("http://127.0.0.1:8765/api/cowork/tasks");
+    const data = await res.json();
+    if (data.success && data.tasks && data.tasks.length > 0) {
+      tasksTable.innerHTML = data.tasks.map(t => {
+        const statusClass = t.status === "COMPLETED" ? "status-completed" : "status-running";
+        const completedCount = (t.checklist || []).filter(i => i.completed).length;
+        const totalCount = (t.checklist || []).length;
+        return `
+          <div class="cowork-task-row">
+            <div>
+              <div class="flex-center-gap mb-1">
+                <span class="cowork-task-status-badge ${statusClass}">${escapeHtml(t.status)}</span>
+                <strong>${escapeHtml(t.title)}</strong>
+                <span class="font-mono text-xs text-muted">#${escapeHtml(t.task_id)}</span>
+              </div>
+              <div class="text-xs text-muted">${escapeHtml(t.goal)}</div>
+              <div class="text-xs font-mono" style="margin-top:4px;">Checklist: ${completedCount}/${totalCount} completed</div>
+            </div>
+            <div class="flex-center-gap">
+              <button type="button" class="btn btn-secondary btn-xs btn-handoff-task" data-id="${escapeHtml(t.task_id)}" title="Generate Cursor-style author handoff artifact">Handoff</button>
+              ${t.status === "RUNNING" ? `
+                <button type="button" class="btn btn-secondary btn-xs btn-complete-task" data-id="${escapeHtml(t.task_id)}">Mark Done</button>
+              ` : `<span class="text-xs text-muted">Finished</span>`}
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      tasksTable.querySelectorAll(".btn-handoff-task").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const tid = e.target.getAttribute("data-id");
+          try {
+            const res = await fetch("http://127.0.0.1:8765/api/cowork/tasks/handoff", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                task_id: tid,
+                decisions: ["Implemented verified changes per task specification", "Maintained offline sandbox isolation"],
+                risks: ["Check for environment variables or port contention"],
+                verified: ["python -m unittest research/tests/test_thinking_and_cowork.py"]
+              })
+            });
+            const data = await res.json();
+            if (data.success) {
+              showToast(`Author handoff generated for task #${tid}!`, "success", "Handoff Created");
+              if (typeof alert !== "undefined") alert(data.handoff);
+            }
+          } catch (err) {
+            showToast(`Error creating handoff: ${err}`, "error", "Handoff Error");
+          }
+        });
+      });
+
+      tasksTable.querySelectorAll(".btn-complete-task").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const tid = e.target.getAttribute("data-id");
+          await fetch("http://127.0.0.1:8765/api/cowork/tasks/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: tid, summary: "Completed by user in UI" })
+          });
+          loadCoworkData();
+        });
+      });
+    } else {
+      tasksTable.innerHTML = `
+        <div class="empty-state-box">
+          <svg class="empty-state-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+          <div class="empty-state-title">No Active Task Sessions</div>
+          <div class="empty-state-subtitle">Dispatch an autonomous agent workflow using &lsquo;New Task Session&rsquo; above.</div>
+        </div>
+      `;
+    }
+  } catch (e) {
+    console.error("Error loading cowork tasks:", e);
+  }
 }

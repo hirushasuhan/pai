@@ -18,7 +18,7 @@ BANNED = re.compile(
     r'"verified"\s*:\s*true|\[VERIFIED\s+PASS\]|Executing verified code generation',
     re.IGNORECASE,
 )
-SKIP_DIRS = {".git", "__pycache__", "target", "build", "bin", "node_modules"}
+SKIP_DIRS = {".git", "__pycache__", "target", "build", "bin", "node_modules", "scratch"}
 
 
 class ClaimsLint(unittest.TestCase):

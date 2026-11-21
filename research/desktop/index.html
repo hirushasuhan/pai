@@ -17,6 +17,27 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme theme-pai-cyber font-jetbrains">
+  <!-- Native Integrated Desktop Titlebar (Dark & Light Mode Responsive) -->
+  <div class="desktop-titlebar" id="desktop-titlebar" data-tauri-drag-region>
+    <div class="titlebar-drag-area" data-tauri-drag-region>
+      <div class="titlebar-brand" data-tauri-drag-region>
+        <img src="/assets/pai-logo-512.png" alt="PAI" class="titlebar-logo" />
+        <span class="titlebar-title" data-tauri-drag-region>PAI Studio <span class="titlebar-subtitle">&mdash; Personal Agentic AI</span></span>
+      </div>
+    </div>
+    <div class="titlebar-window-controls" id="titlebar-window-controls">
+      <button type="button" class="titlebar-ctrl-btn btn-win-minimize" id="win-btn-minimize" title="Minimize">
+        <svg viewBox="0 0 12 12" width="10" height="10"><rect x="1" y="5.5" width="10" height="1" fill="currentColor"></rect></svg>
+      </button>
+      <button type="button" class="titlebar-ctrl-btn btn-win-maximize" id="win-btn-maximize" title="Maximize">
+        <svg viewBox="0 0 12 12" width="10" height="10"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"></rect></svg>
+      </button>
+      <button type="button" class="titlebar-ctrl-btn btn-win-close" id="win-btn-close" title="Close">
+        <svg viewBox="0 0 12 12" width="10" height="10"><path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.2"></path></svg>
+      </button>
+    </div>
+  </div>
+
   <div class="app-container">
     
     <!-- Sidebar Navigation -->
@@ -36,13 +57,13 @@
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
           <span>Chat & Reasoning</span>
         </button>
+        <button class="nav-item" data-tab="cowork" id="nav-cowork-team">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          <span>AI Team Cowork</span>
+        </button>
         <button class="nav-item" data-tab="projects">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
           <span>Projects</span>
-        </button>
-        <button class="nav-item" data-tab="team">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-          <span>AI Team</span>
         </button>
         <button class="nav-item" data-tab="search">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -75,7 +96,7 @@
           </div>
           <div class="sidebar-env-weather" id="env-weather-container">
             <span class="env-weather-badge">
-              <span class="env-weather-icon" id="env-weather-icon">⛅</span>
+              <span class="env-weather-icon" id="env-weather-icon"></span>
               <span class="env-weather-temp" id="env-weather-temp">--°C</span>
             </span>
             <span class="env-weather-cond" id="env-weather-cond">Syncing telemetry...</span>
@@ -219,6 +240,16 @@
                 </button>
                 <div class="chat-session-indicator">
                   <span id="current-chat-title" class="current-chat-title">New Conversation</span>
+                </div>
+                <div class="chat-header-actions flex-center-gap">
+                  <label class="toggle-pill" id="label-chat-council-mode" title="Convene multi-model deliberation council across independent local models for complex reasoning">
+                    <input type="checkbox" id="chk-chat-council-mode" />
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">
+                      <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                      <span>Model Council</span>
+                    </span>
+                  </label>
                 </div>
               </div>
 
@@ -389,105 +420,7 @@
           </div>
         </section>
 
-        <!-- 3. AI TEAM TAB (Collaborative Multi-Agent SDLC System) -->
-        <section id="view-team" class="tab-view">
-          <div class="panel-header">
-            <h2>Autonomous AI Engineering Team</h2>
-            <p>Collaborative 4-role multi-agent team adhering to IEEE / FIPA-ACL protocol specifications. The agents plan, architect, synthesize, and audit full-stack software together.</p>
-          </div>
-
-          <!-- Team Roster Grid -->
-          <div class="team-roster-grid mb-4" id="team-roster-cards">
-            <div class="loading-spinner">Loading team roster...</div>
-          </div>
-
-          <!-- Team Sprint Launcher Card -->
-          <div class="glass-card mb-4">
-            <h3 class="card-title flex-center-gap">
-              <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              <span>Launch Collaborative Team Sprint</span>
-            </h3>
-            <p class="text-muted mb-3">Give the multi-agent team a software objective. The Project Manager will generate a WBS plan, the Architect & Specialist will synthesize components, and the QA Engineer will perform automated verification.</p>
-            
-            <form id="team-sprint-form" class="team-sprint-form">
-              <div class="form-group mb-3">
-                <label for="team-task-input" class="form-label">Software Goal / Sprint Objective</label>
-                <input type="text" id="team-task-input" class="input-text" placeholder="e.g. Build an interactive HTML5 Retro Space Shooter game with canvas graphics and particle effects" required />
-              </div>
-              <div class="flex-between">
-                <span class="text-muted text-sm" id="team-target-proj-note">Target: Active project directory</span>
-                <button type="submit" id="btn-run-team" class="btn btn-primary">
-                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                  <span>Start Team Sprint</span>
-                </button>
-              </div>
-            </form>
-          </div>
-
-          <!-- Live Activity Feed & Deliverables -->
-          <div class="grid-2-cols">
-            <!-- FIPA-ACL Protocol Communication Feed -->
-            <div class="glass-card">
-              <h3 class="card-title flex-center-gap">
-                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
-                <span>FIPA-ACL Inter-Agent Communication</span>
-              </h3>
-              <div id="team-activity-feed" class="activity-feed-box">
-                <div class="text-muted feed-placeholder">No active sprint. Start a sprint to observe multi-agent collaboration in real-time.</div>
-              </div>
-            </div>
-
-            <!-- Deliverables & QA Audit Verdict -->
-            <div class="glass-card">
-              <div class="flex-between mb-2">
-                <h3 class="card-title flex-center-gap">
-                  <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                  <span>Sprint Deliverables</span>
-                </h3>
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-deliverable">Copy All</button>
-              </div>
-              <div class="deliverables-tab-bar">
-                <button type="button" class="deliv-tab-btn active" data-tab="plan">WBS Plan</button>
-                <button type="button" class="deliv-tab-btn" data-tab="specialist">Specialist Assets</button>
-                <button type="button" class="deliv-tab-btn" data-tab="code">Synthesized Code</button>
-                <button type="button" class="deliv-tab-btn" data-tab="qa">QA Verdict</button>
-              </div>
-              <div id="team-deliverable-view" class="deliverable-content-box font-mono-target">
-                <div class="text-muted">Sprint deliverables will appear here once synthesized.</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Antigravity Autonomous Supervisor Card (Integrated into AI Team) -->
-          <div class="glass-card mb-4">
-            <h3 class="card-title flex-center-gap">
-              <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
-              <span>Antigravity Autonomous Supervisor</span>
-            </h3>
-            <p class="text-muted mb-3">Steer the continuous autonomous agent to scaffold, code, test, style, and preview projects automatically in coordination with the 4-role AI Team.</p>
-
-            <div class="task-form-options mb-3 flex-between">
-              <label class="toggle-pill" title="Delegate autonomous steps to 4-role AI Engineering Team">
-                <input type="checkbox" id="toggle-ag-team-mode" checked />
-                <span class="toggle-slider"></span>
-                <span class="toggle-text">
-                  <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                  Collaborate with AI Team (PM, Architect, Specialist, QA)
-                </span>
-              </label>
-              <span class="text-muted text-sm font-mono" id="ag-target-workspace-badge">Target: Active Project Workspace</span>
-            </div>
-
-            <div class="task-form mb-3">
-              <input type="text" id="antigravity-task-input" class="input-text" placeholder="e.g. Build an interactive Three.js 3D solar system with orbital physics and controls" />
-              <button id="btn-run-antigravity" class="btn btn-accent">Run Autonomous Agent</button>
-            </div>
-
-            <div class="console-box font-mono-target" id="antigravity-log">
-              <div class="log-line info">[IDLE] Enter an autonomous objective and click 'Run Autonomous Agent'.</div>
-            </div>
-          </div>
-        </section>
+        <!-- 3. AI TEAM CONSOLIDATED INTO UNIFIED PAI COWORK & TEAM WORKSTATION (See #view-cowork) -->
 
         <!-- 4. PLUGINS & MCPs TAB (Model Context Protocol & Cognitive Extensions) -->
         <section id="view-skills" class="tab-view">
@@ -526,11 +459,11 @@
             <!-- Quick 1-Click MCP Presets -->
             <div class="mcp-preset-pills">
               <span class="preset-pill-label">1-Click Presets:</span>
-              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="filesystem">📁 Filesystem</button>
-              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="fetch">🌐 Web Fetch</button>
-              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="memory">🧠 Memory Graph</button>
-              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sqlite">🗄️ SQLite</button>
-              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sse">📡 Remote SSE</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="filesystem">Filesystem</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="fetch">Web Fetch</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="memory">Memory Graph</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sqlite">SQLite</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sse">Remote SSE</button>
             </div>
 
             <!-- Add MCP Server Form -->
@@ -580,10 +513,10 @@
             <!-- Quick Custom Plugin Presets -->
             <div class="mcp-preset-pills">
               <span class="preset-pill-label">1-Click Presets:</span>
-              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="nextjs">⚡ Next.js Architect</button>
-              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="fastapi">🐍 FastAPI Backend</button>
-              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="qa">🧪 QA Test Suite</button>
-              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="security">🛡️ Security Auditor</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="nextjs">Next.js Architect</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="fastapi">FastAPI Backend</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="qa">QA Test Suite</button>
+              <button type="button" class="preset-pill-btn btn-plugin-preset" data-preset="security">Security Auditor</button>
             </div>
 
             <!-- Add Custom Plugin Form -->
@@ -661,7 +594,7 @@
               </button>
               <button type="button" class="btn btn-primary btn-xs flex-center-gap" id="btn-models-strip-expand" title="Open full download progress popup modal">
                 <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
-                <span>View Popup ↗</span>
+                <span>View Popup &nearr;</span>
               </button>
             </div>
           </div>
@@ -902,11 +835,10 @@
               <div class="form-group">
                 <label class="form-label" for="setting-font-family">Editor & Code Typography</label>
                 <select id="setting-font-family" class="input-text">
-                  <option value="jetbrains">JetBrains Mono (Default Developer Font)</option>
+                  <option value="jetbrains">JetBrains Mono (Recommended Developer Font)</option>
                   <option value="fira">Fira Code (With Programming Ligatures)</option>
                   <option value="cascadia">Cascadia Code</option>
                   <option value="consolas">Consolas (Standard Windows)</option>
-                  <option value="inter">Inter (Clean Prose & UI Font)</option>
                 </select>
                 <span class="field-hint">Changes typography across In-App Editor, Deliverables, and Code Blocks.</span>
               </div>
@@ -915,9 +847,9 @@
                 <label class="form-label" for="setting-font-size">Editor Font Size</label>
                 <select id="setting-font-size" class="input-text">
                   <option value="12px">12px (Compact)</option>
-                  <option value="13.5px" selected>13.5px (Standard Coding)</option>
-                  <option value="15px">15px (Large / High DPI)</option>
-                  <option value="17px">17px (Extra Large)</option>
+                  <option value="13px" selected>13px (Standard Coding - Recommended)</option>
+                  <option value="14px">14px (Comfortable)</option>
+                  <option value="16px">16px (Large / High DPI)</option>
                 </select>
                 <span class="field-hint">Dynamically adjusts code editor line height and font size.</span>
               </div>
@@ -945,19 +877,23 @@
             </div>
 
             <div class="form-group mb-4">
-              <label class="form-label">Theme Color Accent</label>
+              <label class="form-label">Theme Persona & Color Accent</label>
               <div class="radio-pill-group">
                 <label class="radio-pill">
                   <input type="radio" name="setting-theme" value="theme-pai-cyber" checked />
-                  <span>PAI Cyber (Cyan / Blue / Magenta)</span>
+                  <span>PAI Studio Obsidian (Precision Indigo)</span>
                 </label>
                 <label class="radio-pill">
                   <input type="radio" name="setting-theme" value="theme-electric-cyan" />
-                  <span>Electric Cyan</span>
+                  <span>Glacial Cyan (Polar Ice & Deep Navy)</span>
                 </label>
                 <label class="radio-pill">
                   <input type="radio" name="setting-theme" value="theme-neon-purple" />
-                  <span>Neon Purple</span>
+                  <span>Cyberpunk Horizon (Synthwave Violet)</span>
+                </label>
+                <label class="radio-pill">
+                  <input type="radio" name="setting-theme" value="theme-monokai-matrix" />
+                  <span>Monokai Matrix (Hacker Emerald)</span>
                 </label>
               </div>
             </div>
@@ -1019,6 +955,242 @@
           </div>
         </section>
 
+        <!-- 10. PAI COWORK & AI TEAM WORKSTATION (Consolidated Unified Powerhouse) -->
+        <section id="view-cowork" class="tab-view">
+          <div class="panel-header flex-between mb-3">
+            <div>
+              <h2 style="display: flex; align-items: center; gap: 10px;">
+                <span style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 8px; background: rgba(99, 102, 241, 0.15); color: #818cf8;">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                </span>
+                <span>PAI Cowork & AI Team Workstation</span>
+              </h2>
+              <p>Autonomous multi-agent sprint execution, role-based collaboration, workspace mounting, and persistent memory.</p>
+            </div>
+            <div class="flex-center-gap">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-cowork" title="Refresh Workstation Status">
+                <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <span>Refresh</span>
+              </button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-cowork-new-task">
+                <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>New Task / Sprint</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Unified Sub-Navigation Tabs inside Cowork Workstation -->
+          <div class="cowork-subnav-bar mb-4">
+            <button type="button" class="cowork-subnav-btn active" data-subview="sessions">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+              <span>Task Sessions & Sprints</span>
+            </button>
+            <button type="button" class="cowork-subnav-btn" data-subview="team">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+              <span>AI Team Roles & Live Collab</span>
+            </button>
+            <button type="button" class="cowork-subnav-btn" data-subview="deliverables">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+              <span>Workspace & Deliverables</span>
+            </button>
+            <button type="button" class="cowork-subnav-btn" data-subview="memory">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
+              <span>Memory & Tone Profile</span>
+            </button>
+          </div>
+
+          <!-- SUBVIEW 1: Task Sessions & Sprints -->
+          <div id="cowork-subview-sessions" class="cowork-subview">
+            <!-- Team Sprint Launcher Card -->
+            <div class="glass-card mb-4">
+              <h3 class="card-title flex-center-gap">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span>Launch Collaborative Team Sprint</span>
+              </h3>
+              <p class="text-muted mb-3">Give the multi-agent team a software objective. The Scout explores codebase symbols, the Architect drafts the WBS plan & critical files, the Engineers synthesize components, QA verifies playability, and Debugger repairs defects.</p>
+              
+              <form id="team-sprint-form" class="team-sprint-form">
+                <div class="form-group mb-3">
+                  <label for="team-task-input" class="form-label">Software Goal / Sprint Objective</label>
+                  <input type="text" id="team-task-input" class="input-text" placeholder="e.g. Build an interactive HTML5 Retro Space Shooter game with canvas graphics and particle effects" required />
+                </div>
+                <div class="flex-between">
+                  <span class="text-muted text-sm" id="team-target-proj-note">Target: Active project directory</span>
+                  <div class="flex-gap-2">
+                    <button type="button" id="btn-team-quick-scout" class="btn btn-secondary btn-sm" title="Run fast read-only Claude Code regex exploration">
+                      <span>Scout Codebase</span>
+                    </button>
+                    <button type="button" id="btn-team-quick-debug" class="btn btn-secondary btn-sm" title="Formulate scientific hypotheses and execute runtime debugging">
+                      <span>Debug Defect</span>
+                    </button>
+                    <button type="submit" id="btn-run-team" class="btn btn-primary">
+                      <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                      <span>Start Team Sprint</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+
+            <!-- Active Task Sessions & Transcripts List -->
+            <div class="glass-card">
+              <div class="card-header flex-between mb-3">
+                <h3 class="card-title flex-center-gap">
+                  <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+                  <span>Active Task Sessions & Transcripts</span>
+                </h3>
+              </div>
+              <div id="cowork-tasks-table" class="cowork-tasks-container">
+                <div class="text-xs text-muted">No active task sessions. Dispatch a task using 'New Task / Sprint' or the sprint form above.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUBVIEW 2: AI Team Roles & Live Collab -->
+          <div id="cowork-subview-team" class="cowork-subview hidden">
+            <!-- Team Roster Grid -->
+            <div class="mb-4">
+              <div class="flex-between mb-2">
+                <h3 class="card-title flex-center-gap" style="font-size: 14px; font-weight: 700;">
+                  <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+                  <span>Collaborative 7-Role AI Engineering Roster</span>
+                </h3>
+                <span class="text-xs text-muted">IEEE / FIPA-ACL Standard Architecture</span>
+              </div>
+              <div class="team-roster-grid" id="team-roster-cards">
+                <div class="loading-spinner">Loading team roster...</div>
+              </div>
+            </div>
+
+            <!-- FIPA-ACL Protocol Communication Feed -->
+            <div class="glass-card mb-4">
+              <h3 class="card-title flex-center-gap mb-3">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                <span>FIPA-ACL Inter-Agent Communication Feed</span>
+              </h3>
+              <div id="team-activity-feed" class="activity-feed-box" style="max-height: 280px; overflow-y: auto;">
+                <div class="text-muted feed-placeholder">No active sprint. Start a sprint to observe multi-agent collaboration in real-time.</div>
+              </div>
+            </div>
+
+            <!-- Antigravity Autonomous Supervisor Card -->
+            <div class="glass-card">
+              <h3 class="card-title flex-center-gap">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+                <span>Antigravity Autonomous Supervisor</span>
+              </h3>
+              <p class="text-muted mb-3">Steer the continuous autonomous agent to scaffold, code, test, style, and preview projects automatically in coordination with the AI Team.</p>
+
+              <div class="task-form-options mb-3 flex-between">
+                <label class="toggle-pill" title="Delegate autonomous steps to 4-role AI Engineering Team">
+                  <input type="checkbox" id="toggle-ag-team-mode" checked />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-text">
+                    <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    Collaborate with AI Team (PM, Architect, Specialist, QA)
+                  </span>
+                </label>
+                <span class="text-muted text-sm font-mono" id="ag-target-workspace-badge">Target: Active Project Workspace</span>
+              </div>
+
+              <div class="task-form mb-3">
+                <input type="text" id="antigravity-task-input" class="input-text" placeholder="e.g. Build an interactive Three.js 3D solar system with orbital physics and controls" />
+                <button id="btn-run-antigravity" class="btn btn-accent">Run Autonomous Agent</button>
+              </div>
+
+              <div class="console-box font-mono-target" id="antigravity-log">
+                <div class="log-line info">[IDLE] Enter an autonomous objective and click 'Run Autonomous Agent'.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUBVIEW 3: Workspace & Deliverables -->
+          <div id="cowork-subview-deliverables" class="cowork-subview hidden">
+            <!-- Connected Local Folders -->
+            <div class="glass-card mb-4">
+              <div class="card-header flex-between mb-3">
+                <h3 class="card-title flex-center-gap">
+                  <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                  <span>Connected Workspace Folders</span>
+                </h3>
+                <button type="button" class="btn btn-secondary btn-xs" id="btn-cowork-mount-folder" title="Mount local folder">
+                  <span>+ Mount Folder</span>
+                </button>
+              </div>
+              <p class="text-xs text-muted mb-3">Folders accessible to background workers and AI Team via <code>computer://</code> workspace bridges.</p>
+              <div id="cowork-folders-list" class="cowork-items-list">
+                <div class="text-xs text-muted">No folders mounted. Click '+ Mount Folder' to connect your workspace.</div>
+              </div>
+            </div>
+
+            <!-- Deliverables & QA Audit Verdict -->
+            <div class="glass-card">
+              <div class="flex-between mb-2">
+                <h3 class="card-title flex-center-gap">
+                  <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                  <span>Sprint Deliverables & Codebase Output</span>
+                </h3>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-deliverable">Copy All</button>
+              </div>
+              <div class="deliverables-tab-bar">
+                <button type="button" class="deliv-tab-btn active" data-tab="plan">WBS Plan</button>
+                <button type="button" class="deliv-tab-btn" data-tab="explore">Scout Citations</button>
+                <button type="button" class="deliv-tab-btn" data-tab="specialist">Specialist Assets</button>
+                <button type="button" class="deliv-tab-btn" data-tab="code">Synthesized Code</button>
+                <button type="button" class="deliv-tab-btn" data-tab="qa">QA Verdict</button>
+                <button type="button" class="deliv-tab-btn" data-tab="debug">Runtime Debug Report</button>
+              </div>
+              <div id="team-deliverable-view" class="deliverable-content-box font-mono-target">
+                <div class="text-muted">Sprint deliverables will appear here once synthesized.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUBVIEW 4: Memory & Tone Profile -->
+          <div id="cowork-subview-memory" class="cowork-subview hidden">
+            <div class="cowork-grid mb-4">
+              <!-- Persistent Auto-Memory -->
+              <div class="glass-card">
+                <div class="card-header flex-between mb-3">
+                  <h3 class="card-title flex-center-gap">
+                    <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
+                    <span>Persistent Auto-Memory</span>
+                  </h3>
+                  <span class="badge badge-subtle" id="cowork-memory-count">0 entries</span>
+                </div>
+                <p class="text-xs text-muted mb-3">Categorized persistent knowledge (User profile, feedback, project conventions).</p>
+                <div id="cowork-memory-list" class="cowork-items-list">
+                  <div class="text-xs text-muted">No memory entries yet.</div>
+                </div>
+              </div>
+
+              <!-- Author Writing Style & Tone Calibration Profile -->
+              <div class="glass-card">
+                <div class="card-header flex-between mb-3">
+                  <h3 class="card-title flex-center-gap">
+                    <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"></path><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path><path d="M2 2l7.586 7.586"></path><circle cx="11" cy="11" r="2"></circle></svg>
+                    <span>Author Writing Style & Tone</span>
+                  </h3>
+                  <div class="flex-center-gap">
+                    <button type="button" class="btn btn-secondary btn-xs" id="btn-cowork-voice-setup" title="Calibrate your authentic writing tone and phrasing style">
+                      <span>Calibrate Style</span>
+                    </button>
+                  </div>
+                </div>
+                <p class="text-xs text-muted mb-3">Calibrates AI syntax, sentence cadence, and vocabulary to match your authentic writing style across sprints and reports.</p>
+                <div id="cowork-voice-summary" class="cowork-items-list">
+                  <div class="text-xs text-muted">No writing style calibrated yet. Click 'Calibrate Style' to train your authentic persona.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
       </div>
     </main>
 
@@ -1035,7 +1207,9 @@
           <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
           <span>System Environment & Model Initialization</span>
         </h3>
-        <button type="button" class="btn-close-modal" id="btn-close-preflight">&times;</button>
+        <button type="button" class="btn-close-modal" id="btn-close-preflight" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="modal-body">
         <p class="text-muted mb-3">Verifying local prerequisites (Ollama service, Python runtime, and AI model weights)...</p>
@@ -1067,7 +1241,9 @@
           </svg>
           <span>Uninstall Local Model</span>
         </h3>
-        <button type="button" class="btn-close-modal" id="btn-close-delete-modal" title="Close">&times;</button>
+        <button type="button" class="btn-close-modal" id="btn-close-delete-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="modal-body">
         <div class="delete-model-warning-box mb-3">
@@ -1122,7 +1298,9 @@
           </svg>
           <span id="install-modal-title">Install AI Model</span>
         </h3>
-        <button type="button" class="btn-close-modal" id="btn-close-install-modal" title="Close">&times;</button>
+        <button type="button" class="btn-close-modal" id="btn-close-install-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="modal-body">
         <!-- Model Specification Preview Box -->
@@ -1175,7 +1353,7 @@
             <span id="install-modal-save-target">Saving to chosen folder</span>
           </div>
           <p class="text-xs text-muted mb-2" id="install-modal-bg-note">
-            💡 Download runs in background. You may keep this open or close it to continue your work.
+            Download runs in background. You may keep this open or close it to continue your work.
           </p>
           <div class="progress-actions flex-between mt-2">
             <div class="flex-center-gap">
@@ -1263,6 +1441,151 @@
           </button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- New Cowork Task Modal -->
+  <div id="cowork-task-modal" class="modal-backdrop hidden">
+    <div class="modal-card" style="max-width: 580px;">
+      <div class="modal-header flex-between pb-3" style="border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 34px; height: 34px; border-radius: 8px; background: rgba(99, 102, 241, 0.15); display: flex; align-items: center; justify-content: center; color: #818cf8;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title" style="margin: 0; font-size: 16px; font-weight: 700;">New Cowork Task Session</h3>
+            <p class="text-xs text-muted" style="margin: 2px 0 0 0;">Autonomous multi-step execution with milestone decomposition</p>
+          </div>
+        </div>
+        <button type="button" class="btn-close-modal" id="btn-close-cowork-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="cowork-task-modal-form" class="modal-body pt-3">
+        <!-- Quick Template Presets -->
+        <div class="cowork-quick-presets mb-3" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+          <span class="text-xs text-muted" style="font-weight: 600;">Presets:</span>
+          <button type="button" class="cowork-preset-pill" data-preset="refactor">Refactor Architecture</button>
+          <button type="button" class="cowork-preset-pill" data-preset="bugfix">Bug Fix & Tests</button>
+          <button type="button" class="cowork-preset-pill" data-preset="feature">Feature Build</button>
+          <button type="button" class="cowork-preset-pill" data-preset="docs">Docs & Specs</button>
+        </div>
+
+        <div class="form-group mb-3">
+          <label for="cowork-modal-title" class="form-label" style="font-weight: 600;">Task Title</label>
+          <input type="text" id="cowork-modal-title" class="input-text" placeholder="e.g. Refactor API Handlers & Verification Suite" required />
+        </div>
+
+        <div class="form-group mb-3">
+          <label for="cowork-modal-goal" class="form-label" style="font-weight: 600;">Objective / Goal</label>
+          <textarea id="cowork-modal-goal" class="textarea-field" rows="3" placeholder="Describe the desired outcome, requirements, and completion criteria..." required></textarea>
+        </div>
+
+        <div class="form-group mb-3">
+          <div class="flex-between mb-1">
+            <label for="cowork-modal-folder" class="form-label mb-0" style="font-weight: 600;">Workspace Folder</label>
+            <span class="text-xs text-muted">Target Codebase</span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <select id="cowork-modal-folder" class="select-field flex-1" style="height: 38px;">
+              <option value="">(No specific workspace folder)</option>
+            </select>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-cowork-browse-folder" style="height: 38px; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; font-weight: 600; white-space: nowrap;" title="Browse local directory">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span>Browse...</span>
+            </button>
+          </div>
+          <div class="form-hint text-xs text-muted mt-1" id="cowork-modal-folder-hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            Select an active project or click Browse to choose any folder on your machine.
+          </div>
+        </div>
+
+        <!-- Execution Engine Mode Selection -->
+        <div class="form-group mb-3">
+          <label class="form-label mb-1" style="font-weight: 600;">Execution Engine</label>
+          <div class="cowork-mode-toggle-group">
+            <label class="cowork-mode-card">
+              <input type="radio" name="cowork-exec-mode" value="team" checked style="margin-top: 3px;" />
+              <div>
+                <div style="font-size: 13px; font-weight: 600; color: var(--text-primary, #fff);">AI Team Sprint (Recommended)</div>
+                <div class="text-xs text-muted">7 specialized roles: Scout, Architect, Specialists, QA, and Debugger</div>
+              </div>
+            </label>
+            <label class="cowork-mode-card">
+              <input type="radio" name="cowork-exec-mode" value="solo" style="margin-top: 3px;" />
+              <div>
+                <div style="font-size: 13px; font-weight: 600; color: var(--text-primary, #fff);">Direct Solo Agent</div>
+                <div class="text-xs text-muted">Linear single-model autonomous task runner</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group mb-4">
+          <div class="flex-between mb-1">
+            <label for="cowork-modal-checklist" class="form-label mb-0" style="font-weight: 600;">Checklist Milestones (one per line, optional)</label>
+            <span class="text-xs text-muted">Progressive Verification</span>
+          </div>
+          <textarea id="cowork-modal-checklist" class="textarea-field font-mono text-xs" rows="3" placeholder="Decompose requirements&#10;Execute modifications&#10;Verify test results"></textarea>
+        </div>
+
+        <div class="modal-actions flex-between pt-2" style="border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-cowork-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-cowork-modal" style="display: inline-flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09zM12 15l-3-3m0 0l8.5-8.5a2.12 2.12 0 1 1 3 3L12 15m-3-3v3h3"></path>
+            </svg>
+            <span>Dispatch Task Session</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Author Writing Style & Tone Calibration Modal -->
+  <div id="writing-style-modal" class="modal-backdrop hidden">
+    <div class="modal-card" style="max-width: 600px;">
+      <div class="modal-header flex-between">
+        <h3 class="modal-title">Calibrate Author Writing Style & Tone</h3>
+        <button type="button" class="btn-close-modal" id="btn-close-style-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="writing-style-modal-form" class="modal-body">
+        <p class="text-xs text-muted mb-3">
+          Paste 1-3 paragraphs of your authentic writing (e.g., from an email, blog post, code PR summary, or message). The stylometry engine analyzes vocabulary richness, sentence cadence, and phrasing habits to mirror your tone across all chats and cowork deliverables.
+        </p>
+        <div class="form-group mb-3">
+          <label for="style-modal-samples" class="form-label">Your Writing Sample(s)</label>
+          <textarea id="style-modal-samples" class="textarea-field font-mono text-xs" rows="6" placeholder="Paste your authentic writing here... (At least 20 words recommended)" required></textarea>
+        </div>
+        <div class="form-group mb-3">
+          <label for="style-modal-tone" class="form-label">Preferred Tone Orientation</label>
+          <select id="style-modal-tone" class="select-field">
+            <option value="concise, direct, technical">Concise, Direct & Technical (Engineering Focus)</option>
+            <option value="warm, collaborative, outcome-driven">Warm, Collaborative & Outcome-Driven (Product Focus)</option>
+            <option value="analytical, rigorous, evidence-first">Analytical & Evidence-First (Research Focus)</option>
+            <option value="casual, friendly, conversational">Casual & Conversational (Daily Chat)</option>
+          </select>
+        </div>
+        <div class="form-group mb-4">
+          <label class="form-label">Cliché Filter</label>
+          <p class="text-xs text-muted">Automatically forbids generic AI fluff words: <code>delve</code>, <code>leverage</code>, <code>robust</code>, <code>seamless</code>, <code>streamline</code>, <code>ecosystem</code>, <code>tapestry</code>.</p>
+        </div>
+        <div class="modal-actions flex-between">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-style-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-style-modal">
+            <span>Analyze & Save Persona</span>
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 

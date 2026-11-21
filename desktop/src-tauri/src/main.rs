@@ -25,6 +25,27 @@ fn get_engine_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command]
+fn app_window_minimize(window: tauri::Window) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn app_window_toggle_maximize(window: tauri::Window) {
+    if let Ok(is_max) = window.is_maximized() {
+        if is_max {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
+        }
+    }
+}
+
+#[tauri::command]
+fn app_window_close(window: tauri::Window) {
+    let _ = window.close();
+}
+
 fn is_bridge_running() -> bool {
     TcpStream::connect_timeout(
         &"127.0.0.1:8765".parse().unwrap(),
@@ -150,7 +171,12 @@ fn main() {
         .manage(AppState {
             bridge_child: Mutex::new(bridge_proc),
         })
-        .invoke_handler(tauri::generate_handler![get_engine_status])
+        .invoke_handler(tauri::generate_handler![
+            get_engine_status,
+            app_window_minimize,
+            app_window_toggle_maximize,
+            app_window_close
+        ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<AppState>();

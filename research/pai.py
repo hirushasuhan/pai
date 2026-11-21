@@ -33,6 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1365,6 +1366,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--pull-model", default=None, help="Download a specific model ID via Ollama pull API")
     p_setup.add_argument("--pull-preselected", action="store_true", help="Download preselected models from catalog")
     p_setup.add_argument("--allow-unverified-model", action="store_true", help="Explicit confirmation to pull models not present in signed catalog")
+
+    # Auto-Memory CLI
+    p_mem = subparsers.add_parser("memory", help="Persistent categorized auto-memory management (user, feedback, project, reference)")
+    p_mem.add_argument("memory_action", choices=["list", "set", "delete", "clear"], nargs="?", default="list", help="Memory action")
+    p_mem.add_argument("--type", choices=["user", "feedback", "project", "reference"], default=None, help="Memory category")
+    p_mem.add_argument("--key", type=str, default="", help="Memory key name")
+    p_mem.add_argument("--content", type=str, default="", help="Memory text content")
+    p_mem.add_argument("--json", action="store_true", help="Output in JSON format")
+
+    # Writing Voice / Stylometry CLI
+    p_voice = subparsers.add_parser("voice", help="Personalized writing voice profiling and stylometry engine")
+    p_voice.add_argument("voice_action", choices=["show", "setup"], nargs="?", default="show", help="Voice action")
+    p_voice.add_argument("--dir", type=str, default=None, help="Directory containing user writing samples (.txt)")
+    p_voice.add_argument("--text", type=str, default=None, help="Direct writing sample text")
+    p_voice.add_argument("--json", action="store_true", help="Output profile in JSON format")
+
+    # Cowork Workstation CLI
+    p_cowork = subparsers.add_parser("cowork", help="PAI Cowork collaborative task orchestrator and connected folders")
+    p_cowork.add_argument("cowork_action", choices=["list", "new", "folders", "mount"], nargs="?", default="list", help="Cowork action")
+    p_cowork.add_argument("--title", type=str, default="Task", help="Task title")
+    p_cowork.add_argument("--goal", type=str, default="", help="Task goal / instructions")
+    p_cowork.add_argument("--folder", type=str, default="", help="Workspace folder path")
+    p_cowork.add_argument("--name", type=str, default="", help="Connected folder friendly name")
+    p_cowork.add_argument("--json", action="store_true", help="Output in JSON format")
+
+    # Model Council CLI (Perplexity Model Council Pattern)
+    p_council = subparsers.add_parser("council", help="PAI Model Council multi-model deliberation & consensus synthesis")
+    p_council.add_argument("prompt", type=str, help="Research or architectural decision prompt")
+    p_council.add_argument("--models", type=str, default="", help="Comma-separated model names (e.g. qwen3.5:4b,llama3.2:3b)")
+    p_council.add_argument("--json", action="store_true", help="Output in JSON format")
 
     # Deferred execution commands (M6+)
     for deferred in ("generate",):
@@ -3278,24 +3309,84 @@ def cmd_chat(args) -> int:
         except Exception:
             pass
 
+    try:
+        from thinking_engine import (
+            assess_temporal_stability,
+            detect_puzzle_or_constraints,
+            enforce_commonmark_compliance,
+            format_cognitive_system_prompt,
+            parse_thinking_response,
+            evaluate_clarification_vs_assumption,
+            quarantine_untrusted_input,
+        )
+        from auto_memory import AutoMemoryManager, detect_memory_intent
+        from stylometry import StylometryAnalyzer
+    except ImportError:
+        from research.thinking_engine import (
+            assess_temporal_stability,
+            detect_puzzle_or_constraints,
+            enforce_commonmark_compliance,
+            format_cognitive_system_prompt,
+            parse_thinking_response,
+            evaluate_clarification_vs_assumption,
+            quarantine_untrusted_input,
+        )
+        from research.auto_memory import AutoMemoryManager, detect_memory_intent
+        from research.stylometry import StylometryAnalyzer
+
+    # Check auto-memory intent (Anthropic Cowork auto-memory pattern)
+    mem_mgr = AutoMemoryManager()
+    mem_intent = detect_memory_intent(user_prompt)
+    auto_saved_memory = None
+    if mem_intent:
+        m_type, m_key, m_content = mem_intent
+        saved_entry = mem_mgr.save(mem_type=m_type, key=m_key, content=m_content)
+        from dataclasses import asdict
+        auto_saved_memory = asdict(saved_entry)
+        if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
+            print(f"🧠 Memory saved [{m_type.upper()}]: {m_content}")
+
+    # Check temporal stability (OpenAI / Anthropic Search-First rule)
+    temporal_eval = assess_temporal_stability(user_prompt)
+    if temporal_eval.is_unstable and not time_sensitive:
+        time_sensitive = True
+
+    # Check puzzle & constraints (Claude Sonnet 3.7 constraint quoting rule)
+    puzzle_eval = detect_puzzle_or_constraints(user_prompt)
+
+    # Check clarification vs autonomous assumption (Anthropic Compass / OpenAI Agent Mode)
+    clarification_eval = evaluate_clarification_vs_assumption(user_prompt)
+    clarification_guidance = ""
+    if clarification_eval.action == "assume" and clarification_eval.assumptions:
+        clarification_guidance = f"\n<autonomous_assumption>Proceed with standard default: {'; '.join(clarification_eval.assumptions)}</autonomous_assumption>\n"
+    elif clarification_eval.action == "clarify" and clarification_eval.questions:
+        clarification_guidance = f"\n<clarification_protocol>Request is open-ended. If needed, ask these targeted questions: {'; '.join(clarification_eval.questions)}</clarification_protocol>\n"
+
+    # Active memory & voice profile
+    active_mem_ctx = mem_mgr.format_context_for_prompt()
+    voice_prof = StylometryAnalyzer().load_profile()
+    voice_ctx = StylometryAnalyzer().format_voice_prompt(voice_prof) if voice_prof else ""
+
+    # Build cognitive system prompt using PAI Cognitive Engine v2
+    cognitive_sys = format_cognitive_system_prompt(
+        clock_context=clock_ctx,
+        workspace_path=str(Path.cwd()),
+        internet_enabled=False,
+        memory_context=active_mem_ctx,
+        skills_context=skills_context,
+        history_context=history_context,
+        user_voice_profile=voice_ctx,
+        oververbosity=3,
+        active_model=model_name,
+    )
+    puzzle_guidance = f"\n<puzzle_guidance>{puzzle_eval.guidance}</puzzle_guidance>\n" if puzzle_eval.is_puzzle else ""
+    wifi_block = f"\n{wifi_context}" if wifi_context else ""
+
     chat_prompt = (
-        "You are Personal Agentic AI (PAI), a helpful, accurate, privacy-first local assistant.\n"
-        f"System Clock: Current local date and time is {clock_ctx}.\n"
-        f"{wifi_context}"
-        f"{skills_context}"
-        f"{history_context}"
-        "Operating Mode: Fully offline local execution without internet access.\n"
-        "Knowledge and Temporal Boundaries:\n"
-        "- Your knowledge ends at your model training cut-off.\n"
-        "- You do NOT have live web access, real-time news, or external search capabilities.\n"
-        "- For live or time-sensitive facts (such as current events, office holders, market prices, news, weather, or sports scores), you must state clearly that you work offline, cannot verify live facts, and that your knowledge may be outdated.\n"
-        "Instructions:\n"
-        "- When Relevant Learned Skills are provided, prioritize using the methodologies, design patterns, and best practices specified in those skills.\n"
-        "- When prior conversation context is provided, use it to understand follow-up questions and references (such as 'can you do it', 'make it faster', 'change it', 'explain that').\n"
-        "- When asked to write code, a web page, or a game, provide the complete, ready-to-run code in standard markdown code fences (```lang ... ```).\n"
-        "- Reply in the same language and style as the user's message (if the user writes in Singlish, reply in natural Singlish; if Sinhala, reply in Sinhala; if English, reply in English).\n"
-        "- Keep all code snippets, CLI commands, file paths, and technical identifiers in English.\n"
-        "- Be concise, clear, and technically accurate.\n\n"
+        f"{cognitive_sys}\n"
+        f"{wifi_block}"
+        f"{puzzle_guidance}"
+        f"{clarification_guidance}\n"
         f"User Message:\n{user_prompt}\n"
     )
 
@@ -3363,7 +3454,12 @@ def cmd_chat(args) -> int:
                 print(f"Error: Model generation failed: {e}", file=sys.stderr)
             return 2
 
+    # Extract <think> reasoning trace & enforce CommonMark compliance
+    clean_reply, think_trace = parse_thinking_response(raw_reply)
+    formatted_reply = enforce_commonmark_compliance(clean_reply)
+
     if getattr(args, "json", False):
+        from dataclasses import asdict
         payload = {
             "success": True,
             "selected_model": model_name,
@@ -3372,17 +3468,251 @@ def cmd_chat(args) -> int:
             "route_reason_codes": route_reason_codes,
             "route_explanation": route_explanation,
             "prompt": user_prompt,
-            "response": raw_reply.strip(),
+            "response": formatted_reply.strip(),
+            "thinking": think_trace,
+            "temporal_eval": asdict(temporal_eval) if "temporal_eval" in locals() else None,
+            "puzzle_eval": asdict(puzzle_eval) if "puzzle_eval" in locals() else None,
+            "clarification_eval": asdict(clarification_eval) if "clarification_eval" in locals() else None,
+            "auto_saved_memory": auto_saved_memory if "auto_saved_memory" in locals() else None,
         }
         if time_sensitive:
             payload["notice"] = TIME_SENSITIVE_NOTICE
         print(json.dumps(payload, indent=2))
     else:
-        print(sanitize_terminal_output(raw_reply.strip()))
+        if think_trace and os.environ.get("PAI_SHOW_THINKING") == "1":
+            from shell import colorize, should_enable_color, CYAN
+            print(colorize(f"--- [Thinking Trace] ---\n{think_trace}\n------------------------\n", CYAN, should_enable_color()))
+        print(sanitize_terminal_output(formatted_reply.strip()))
         if time_sensitive:
             from shell import colorize, should_enable_color, YELLOW
             colored_notice = colorize(f"\nNotice: {TIME_SENSITIVE_NOTICE}", YELLOW, should_enable_color())
             print(colored_notice)
+    return 0
+
+
+def cmd_memory(args: argparse.Namespace) -> int:
+    """Manages persistent categorized auto-memory (user, feedback, project, reference)."""
+    try:
+        from auto_memory import AutoMemoryManager
+    except ImportError:
+        from research.auto_memory import AutoMemoryManager
+    from dataclasses import asdict
+
+    mgr = AutoMemoryManager()
+    action = getattr(args, "memory_action", "list") or "list"
+    m_type = getattr(args, "type", None)
+
+    if action == "list":
+        mems = mgr.list_all(mem_type=m_type)
+        if getattr(args, "json", False):
+            serializable = {k: [asdict(e) for e in v] for k, v in mems.items()}
+            print(json.dumps(serializable, indent=2))
+        else:
+            print("=== PAI Persistent Auto-Memory ===")
+            has_any = False
+            for cat, entries in mems.items():
+                if entries:
+                    has_any = True
+                    print(f"\n[{cat.upper()}] ({len(entries)} entries):")
+                    for e in entries:
+                        print(f"  * {e.key}: {e.content}")
+            if not has_any:
+                print("No memory entries found. Use 'pai memory set' or say 'Remember that...' in chat.")
+        return 0
+
+    elif action == "set":
+        k = getattr(args, "key", "").strip()
+        c = getattr(args, "content", "").strip()
+        t = m_type or "user"
+        if not k or not c:
+            print("Error: --key and --content are required for 'set'.", file=sys.stderr)
+            return 1
+        entry = mgr.save(mem_type=t, key=k, content=c)
+        if getattr(args, "json", False):
+            print(json.dumps(asdict(entry), indent=2))
+        else:
+            print(f"Memory saved [{t.upper()}]: '{k}' -> {c}")
+        return 0
+
+    elif action == "delete":
+        k = getattr(args, "key", "").strip()
+        t = m_type or "user"
+        if not k:
+            print("Error: --key is required for 'delete'.", file=sys.stderr)
+            return 1
+        ok = mgr.delete(mem_type=t, key=k)
+        if getattr(args, "json", False):
+            print(json.dumps({"success": ok, "key": k}))
+        else:
+            print(f"Memory entry '{k}' {'deleted.' if ok else 'not found.'}")
+        return 0 if ok else 1
+
+    elif action == "clear":
+        mgr.clear(mem_type=m_type)
+        print(f"Cleared memory for {'category ' + m_type if m_type else 'all categories'}.")
+        return 0
+    return 0
+
+
+def cmd_voice(args: argparse.Namespace) -> int:
+    """Manages user writing voice profile and stylometry."""
+    try:
+        from stylometry import StylometryAnalyzer
+    except ImportError:
+        from research.stylometry import StylometryAnalyzer
+    from dataclasses import asdict
+
+    analyzer = StylometryAnalyzer()
+    action = getattr(args, "voice_action", "show") or "show"
+
+    if action == "show":
+        prof = analyzer.load_profile()
+        if not prof:
+            if getattr(args, "json", False):
+                print(json.dumps({"profile": None}))
+            else:
+                print("No writing voice profile configured. Run 'pai voice setup' with text samples to create one.")
+            return 0
+        if getattr(args, "json", False):
+            print(json.dumps(asdict(prof), indent=2))
+        else:
+            print("=== PAI Writing Voice Profile ===")
+            print(f"User ID: {prof.user_id} (Analyzed samples: {prof.sample_count})")
+            print(f"Mean Sentence Length: {prof.metrics.mean_sentence_length} words (stdev: ±{prof.metrics.stdev_sentence_length})")
+            print(f"Contraction Rate: {prof.metrics.contraction_rate_per_100}% | Vocabulary Richness (TTR): {prof.metrics.type_token_ratio}")
+            print("\nStyle Guidelines:")
+            for g in prof.guidelines:
+                print(f"  - {g}")
+            if prof.forbidden_words:
+                print(f"\nFiltered AI Cliches: {', '.join(prof.forbidden_words[:8])}...")
+        return 0
+
+    elif action == "setup":
+        samples: List[str] = []
+        samples_dir = getattr(args, "dir", None)
+        sample_text = getattr(args, "text", None)
+
+        if sample_text:
+            samples.append(sample_text)
+        if samples_dir and Path(samples_dir).is_dir():
+            for f in Path(samples_dir).glob("*.txt"):
+                try:
+                    samples.append(f.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+        if not samples:
+            print("Error: Please provide writing samples via --text or --dir containing .txt files.", file=sys.stderr)
+            return 1
+
+        prof = analyzer.analyze_samples(samples)
+        p = analyzer.save_profile(prof)
+        if getattr(args, "json", False):
+            print(json.dumps(asdict(prof), indent=2))
+        else:
+            print(f"Voice Profile analyzed from {len(samples)} samples and saved to: {p}")
+            print(f"Mean sentence length: {prof.metrics.mean_sentence_length} words.")
+        return 0
+    return 0
+
+
+def cmd_cowork(args: argparse.Namespace) -> int:
+    """Coordinates PAI Cowork tasks and connected folders."""
+    try:
+        from cowork import ConnectedFoldersManager, CoworkOrchestrator
+    except ImportError:
+        from research.cowork import ConnectedFoldersManager, CoworkOrchestrator
+    from dataclasses import asdict
+
+    orchestrator = CoworkOrchestrator()
+    folders_mgr = ConnectedFoldersManager()
+    action = getattr(args, "cowork_action", "list") or "list"
+
+    if action == "list":
+        tasks = orchestrator.list_tasks(limit=15)
+        if getattr(args, "json", False):
+            print(json.dumps([asdict(t) for t in tasks], indent=2))
+        else:
+            print("=== PAI Cowork Tasks ===")
+            if not tasks:
+                print("No cowork tasks found. Create one using 'pai cowork new --title \"...\" --goal \"...\"'")
+            for t in tasks:
+                print(f"[{t.status}] ID: {t.task_id} | {t.title}")
+                print(f"    Goal: {t.goal[:80]}...")
+                print(f"    Checklist: {sum(1 for i in t.checklist if i.get('completed'))}/{len(t.checklist)} steps completed")
+        return 0
+
+    elif action == "new":
+        title = getattr(args, "title", "Task").strip()
+        goal = getattr(args, "goal", "").strip()
+        folder = getattr(args, "folder", "").strip() or None
+        if not goal:
+            print("Error: --goal is required for 'new'.", file=sys.stderr)
+            return 1
+        task = orchestrator.start_task(title=title, goal=goal, workspace_dir=folder)
+        if getattr(args, "json", False):
+            print(json.dumps(asdict(task), indent=2))
+        else:
+            print(f"Dispatched Cowork Task #{task.task_id}: '{title}'")
+            print(f"Workspace: {task.workspace_dir}")
+        return 0
+
+    elif action in ("folders", "mount"):
+        if action == "mount":
+            folder_path = getattr(args, "folder", "").strip()
+            name = getattr(args, "name", "").strip() or None
+            if not folder_path:
+                print("Error: --folder is required for 'mount'.", file=sys.stderr)
+                return 1
+            try:
+                cf = folders_mgr.connect_folder(folder_path, name=name)
+                print(f"Mounted folder '{cf.name}' ({cf.folder_id}) at: {cf.host_path}")
+            except Exception as e:
+                print(f"Error mounting folder: {e}", file=sys.stderr)
+                return 1
+            return 0
+        else:
+            folders = folders_mgr.list_folders()
+            if getattr(args, "json", False):
+                print(json.dumps([asdict(f) for f in folders], indent=2))
+            else:
+                print("=== Connected Workspace Folders ===")
+                if not folders:
+                    print("No folders mounted. Mount one with 'pai cowork mount --folder <path>'")
+                for f in folders:
+                    print(f"  * [{f.folder_id}] {f.name} -> {f.host_path}")
+            return 0
+
+    return 0
+
+
+def cmd_council(args: argparse.Namespace) -> int:
+    """Executes Perplexity-style multi-model deliberation and consensus synthesis."""
+    enforce_sandbox_boundary()
+    try:
+        from council import ModelCouncilRunner
+    except ImportError:
+        from research.council import ModelCouncilRunner
+
+    prompt = getattr(args, "prompt", "").strip()
+    if not prompt:
+        print("Error: Council prompt cannot be empty.", file=sys.stderr)
+        return 1
+
+    models_arg = getattr(args, "models", None)
+    models_list = [m.strip() for m in models_arg.split(",") if m.strip()] if models_arg else None
+
+    if not getattr(args, "json", False) and os.environ.get("PAI_SHELL_ACTIVE") != "1":
+        print(f"🏛️ Convening PAI Model Council...")
+
+    runner = ModelCouncilRunner()
+    result = runner.run(prompt=prompt, models=models_list)
+
+    if getattr(args, "json", False):
+        from dataclasses import asdict
+        print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
+    else:
+        print(result.formatted_markdown)
     return 0
 
 
@@ -3483,6 +3813,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_route(args)
         elif args.subcommand == "setup":
             return cmd_setup(args)
+        elif args.subcommand == "memory":
+            return cmd_memory(args)
+        elif args.subcommand == "voice":
+            return cmd_voice(args)
+        elif args.subcommand == "cowork":
+            return cmd_cowork(args)
+        elif args.subcommand == "council":
+            return cmd_council(args)
         else:
             parser.print_help()
             return 1
