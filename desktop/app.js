@@ -6376,13 +6376,13 @@ async function checkSoftwareUpdates(interactive = false) {
         dotStatus.className = "status-indicator-dot online";
       }
       if (statusTitle) {
-        statusTitle.textContent = `PAI Studio is Up to Date (v${data.current_version || "1.3.0"})`;
+        statusTitle.textContent = `PAI Studio is Up to Date (v${data.current_version || "1.4.0"})`;
       }
       if (callout) {
         callout.classList.add("hidden");
       }
       if (interactive) {
-        showToast(`You are using the latest version of PAI Studio (v${data.current_version || "1.3.0"})`, "info", "Up to Date");
+        showToast(`You are using the latest version of PAI Studio (v${data.current_version || "1.4.0"})`, "info", "Up to Date");
       }
     }
   } catch (err) {
@@ -6403,7 +6403,7 @@ function openSoftwareUpdateModal() {
 
   const data = currentCachedUpdate || {};
   const targetVer = data.latest_version || data.target_version || "1.4.0-beta.1";
-  const currVer = data.current_version || "1.3.0";
+  const currVer = data.current_version || "1.4.0";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 

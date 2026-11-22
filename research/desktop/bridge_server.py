@@ -1974,7 +1974,7 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.3.0"
+PAI_CURRENT_VERSION = "1.4.0"
 GITHUB_REPO_OWNER = "hirushasuhan"
 GITHUB_REPO_NAME = "pai"
 
