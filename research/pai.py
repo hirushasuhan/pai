@@ -1397,6 +1397,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_council.add_argument("--models", type=str, default="", help="Comma-separated model names (e.g. qwen3.5:4b,llama3.2:3b)")
     p_council.add_argument("--json", action="store_true", help="Output in JSON format")
 
+    # Cloud AI & Universal Free LLM Pool CLI
+    p_cloud = subparsers.add_parser("cloud", help="PAI Universal Cloud AI & Free LLM Pool Management")
+    p_cloud.add_argument("cloud_action", choices=["status", "list", "set-key", "remove-key", "test", "model"], nargs="?", default="status", help="Cloud action")
+    p_cloud.add_argument("--provider", type=str, default="", help="Cloud provider (e.g. gemini, groq, cerebras, openrouter)")
+    p_cloud.add_argument("--key", type=str, default="", help="API key to add or remove")
+    p_cloud.add_argument("--model", type=str, default="", help="Model name to activate or test")
+    p_cloud.add_argument("--json", action="store_true", help="Output in JSON format")
+
     # Deferred execution commands (M6+)
     for deferred in ("generate",):
         p_def = subparsers.add_parser(deferred, help=f"Direct {deferred} execution (deferred to M6+)")
@@ -3391,68 +3399,102 @@ def cmd_chat(args) -> int:
     )
 
     raw_reply = None
-    try:
-        raw_reply = call_model_generate(
-            model_name=model_name,
-            prompt=chat_prompt,
-            timeout=getattr(args, "model_timeout", None),
-            temperature=getattr(args, "temperature", 0.0),
-            seed=getattr(args, "seed", 42),
-        )
-    except Exception as e:
-        err_lower = str(e).lower()
-        is_timeout = "timeout" in err_lower or "timed out" in err_lower
-        offline_tokens = (
-            "is not running",
-            "service is not running",
-            "connection refused",
-            "10061",
-            "failed to establish a new connection",
-            "pai setup",
-            "start ollama",
-        )
-        is_service_offline = any(tok in err_lower for tok in offline_tokens)
-        disable_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER", "").strip().lower() in ("1", "true", "yes")
-        # Resilient Model Failover: Only switch models when Ollama is reachable and failover is enabled.
-        if not is_service_offline and not disable_failover:
-            fallback_candidates = ["qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"]
-            for fb_m in fallback_candidates:
-                if fb_m == model_name:
-                    continue
-                try:
-                    if not getattr(args, "json", False):
-                        warn_msg = f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'..."
-                        try:
-                            print(warn_msg, file=sys.stderr)
-                        except UnicodeEncodeError:
-                            print(warn_msg.replace("⚠️", "[WARN]").encode("ascii", errors="replace").decode("ascii"), file=sys.stderr)
-                    raw_reply = call_model_generate(
-                        model_name=fb_m,
-                        prompt=chat_prompt,
-                        timeout=getattr(args, "model_timeout", None) or 180.0,
-                        temperature=getattr(args, "temperature", 0.0),
-                        seed=getattr(args, "seed", 42),
-                    )
-                    if raw_reply and raw_reply.strip():
-                        model_name = fb_m
-                        break
-                except Exception as inner_e:
-                    if any(tok in str(inner_e).lower() for tok in offline_tokens):
-                        e = inner_e
-                        break
-                    continue
 
-        if not raw_reply or not raw_reply.strip():
-            if getattr(args, "json", False):
-                print(json.dumps({
-                    "success": False,
-                    "error": "GENERATOR_ERROR",
-                    "detail": str(e),
-                    "is_timeout": is_timeout,
-                }, indent=2))
-            else:
-                print(f"Error: Model generation failed: {e}", file=sys.stderr)
-            return 2
+    # Check if target model is a cloud model or virtual model (e.g. auto, fusion)
+    try:
+        from cloud_ai import is_cloud_model, query_cloud_ai
+    except ImportError:
+        from research.cloud_ai import is_cloud_model, query_cloud_ai
+
+    if is_cloud_model(model_name):
+        ok_cloud, res_cloud = query_cloud_ai(
+            prompt=chat_prompt,
+            model=model_name,
+            temperature=getattr(args, "temperature", 0.0),
+        )
+        if ok_cloud:
+            raw_reply = res_cloud
+        else:
+            if not getattr(args, "json", False):
+                print(f"[Notice] Cloud model '{model_name}' throttled or unavailable ({res_cloud}). Attempting local fallback...", file=sys.stderr)
+
+    if raw_reply is None:
+        target_local_model = model_name
+        if is_cloud_model(model_name):
+            try:
+                from cloud_ai import resolve_local_virtual_model
+            except ImportError:
+                from research.cloud_ai import resolve_local_virtual_model
+            try:
+                from router import ModelRouter
+                r = ModelRouter()
+                inst_m = list(r.candidates.keys())
+            except Exception:
+                inst_m = []
+            target_local_model = resolve_local_virtual_model(model_name, inst_m)
+
+        try:
+            raw_reply = call_model_generate(
+                model_name=target_local_model,
+                prompt=chat_prompt,
+                timeout=getattr(args, "model_timeout", None),
+                temperature=getattr(args, "temperature", 0.0),
+                seed=getattr(args, "seed", 42),
+            )
+        except Exception as e:
+            err_lower = str(e).lower()
+            is_timeout = "timeout" in err_lower or "timed out" in err_lower
+            offline_tokens = (
+                "is not running",
+                "service is not running",
+                "connection refused",
+                "10061",
+                "failed to establish a new connection",
+                "pai setup",
+                "start ollama",
+            )
+            is_service_offline = any(tok in err_lower for tok in offline_tokens)
+            disable_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER", "").strip().lower() in ("1", "true", "yes")
+            # Resilient Model Failover: Only switch models when Ollama is reachable and failover is enabled.
+            if not is_service_offline and not disable_failover:
+                fallback_candidates = ["qwen3.5:4b", "qwen2.5-coder:1.5b", "llama3.2:3b", "llama3.2:1b"]
+                for fb_m in fallback_candidates:
+                    if fb_m == model_name:
+                        continue
+                    try:
+                        if not getattr(args, "json", False):
+                            warn_msg = f"⚠️ Model '{model_name}' timed out or was unresponsive. Auto-switching to fallback model '{fb_m}'..."
+                            try:
+                                print(warn_msg, file=sys.stderr)
+                            except UnicodeEncodeError:
+                                print(warn_msg.replace("⚠️", "[WARN]").encode("ascii", errors="replace").decode("ascii"), file=sys.stderr)
+                        raw_reply = call_model_generate(
+                            model_name=fb_m,
+                            prompt=chat_prompt,
+                            timeout=getattr(args, "model_timeout", None) or 180.0,
+                            temperature=getattr(args, "temperature", 0.0),
+                            seed=getattr(args, "seed", 42),
+                        )
+                        if raw_reply and raw_reply.strip():
+                            model_name = fb_m
+                            break
+                    except Exception as inner_e:
+                        if any(tok in str(inner_e).lower() for tok in offline_tokens):
+                            e = inner_e
+                            break
+                        continue
+
+            if not raw_reply or not raw_reply.strip():
+                if getattr(args, "json", False):
+                    print(json.dumps({
+                        "success": False,
+                        "error": "GENERATOR_ERROR",
+                        "detail": str(e),
+                        "is_timeout": is_timeout,
+                    }, indent=2))
+                else:
+                    print(f"Error: Model generation failed: {e}", file=sys.stderr)
+                return 2
 
     # Extract <think> reasoning trace & enforce CommonMark compliance
     clean_reply, think_trace = parse_thinking_response(raw_reply)
@@ -3722,6 +3764,111 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return pai_setup.run_setup(args)
 
 
+def cmd_cloud(args) -> int:
+    """Manages 3rd-party Cloud AI providers, keys, and quota status."""
+    try:
+        from cloud_ai import (
+            format_cloud_status,
+            list_available_cloud_models,
+            add_provider_key,
+            remove_provider_key,
+            set_active_cloud_model,
+            test_provider_connection,
+            load_cloud_config,
+        )
+    except ImportError:
+        from research.cloud_ai import (
+            format_cloud_status,
+            list_available_cloud_models,
+            add_provider_key,
+            remove_provider_key,
+            set_active_cloud_model,
+            test_provider_connection,
+            load_cloud_config,
+        )
+
+    action = getattr(args, "cloud_action", "status")
+    as_json = getattr(args, "json", False)
+
+    if action == "status":
+        if as_json:
+            cfg = load_cloud_config()
+            models = list_available_cloud_models()
+            print(json.dumps({"config": cfg, "models": models}, indent=2))
+        else:
+            print(format_cloud_status())
+        return 0
+
+    elif action == "list":
+        models = list_available_cloud_models()
+        if as_json:
+            print(json.dumps(models, indent=2))
+        else:
+            print("\nAvailable Cloud & Virtual Models:")
+            for m in models:
+                active_str = " (ACTIVE)" if m.get("is_active") else ""
+                key_str = " [READY]" if m.get("has_key") else " [NO KEY]"
+                print(f"  - {m['model']:<36} {m['display_provider']:<22} {key_str}{active_str}")
+        return 0
+
+    elif action == "set-key":
+        prov = getattr(args, "provider", "").strip().lower()
+        key = getattr(args, "key", "").strip()
+        if not prov or not key:
+            print("Error: Both --provider and --key are required for set-key.", file=sys.stderr)
+            return 1
+        ok = add_provider_key(prov, key)
+        if ok:
+            print(f"API key successfully registered for '{prov}'.")
+            return 0
+        else:
+            print(f"API key already registered for '{prov}'.")
+            return 0
+
+    elif action == "remove-key":
+        prov = getattr(args, "provider", "").strip().lower()
+        key = getattr(args, "key", "").strip()
+        if not prov or not key:
+            print("Error: Both --provider and --key are required for remove-key.", file=sys.stderr)
+            return 1
+        ok = remove_provider_key(prov, key)
+        if ok:
+            print(f"Key removed for '{prov}'.")
+            return 0
+        else:
+            print(f"Key not found for '{prov}'.", file=sys.stderr)
+            return 1
+
+    elif action == "model":
+        mod = getattr(args, "model", "").strip()
+        if not mod:
+            print("Error: --model <model_name> is required.", file=sys.stderr)
+            return 1
+        ok = set_active_cloud_model(mod)
+        if ok:
+            print(f"Active cloud model set to '{mod}'.")
+            return 0
+        else:
+            print(f"Failed to set model '{mod}'.", file=sys.stderr)
+            return 1
+
+    elif action == "test":
+        prov = getattr(args, "provider", "").strip().lower()
+        if not prov:
+            print("Error: --provider <provider_name> is required for test.", file=sys.stderr)
+            return 1
+        key = getattr(args, "key", None)
+        ok, msg, lat = test_provider_connection(prov, key)
+        if ok:
+            print(f"SUCCESS: {msg}")
+            return 0
+        else:
+            print(f"FAILED: {msg}", file=sys.stderr)
+            return 1
+
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if raw_args and raw_args[0].lower() in ("desktop", "studio", "gui", "ui"):
@@ -3821,6 +3968,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_cowork(args)
         elif args.subcommand == "council":
             return cmd_council(args)
+        elif args.subcommand == "cloud":
+            return cmd_cloud(args)
         else:
             parser.print_help()
             return 1

@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#0b1120" />
-  <title>PAI Studio - Personal Agentic AI Desktop</title>
+  <title>PAI Studio</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/pai-logo-512.png" />
@@ -22,7 +22,7 @@
     <div class="titlebar-drag-area" data-tauri-drag-region>
       <div class="titlebar-brand" data-tauri-drag-region>
         <img src="/assets/pai-logo-512.png" alt="PAI" class="titlebar-logo" />
-        <span class="titlebar-title" data-tauri-drag-region>PAI Studio <span class="titlebar-subtitle">&mdash; Personal Agentic AI</span></span>
+        <span class="titlebar-title" data-tauri-drag-region>PAI Studio</span>
       </div>
     </div>
     <div class="titlebar-window-controls" id="titlebar-window-controls">
@@ -127,13 +127,20 @@
         <!-- Center: Unified Workspace Controls -->
         <div class="top-nav-center">
           <div class="nav-controls-group">
-            <!-- Model Selector -->
-            <div class="nav-control-item">
+            <!-- Model Selector (with Cascading Cloud Provider Flyout Submenus) -->
+            <div class="nav-control-item" id="nav-model-picker-wrapper">
               <svg class="box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
               <span class="nav-control-label">Model:</span>
-              <select id="header-model-select" class="nav-control-select">
+              <select id="header-model-select" class="nav-control-select hidden-accessible">
                 <option value="">Loading installed models...</option>
               </select>
+              <div class="custom-model-dropdown" id="custom-model-dropdown">
+                <button type="button" class="custom-model-trigger" id="custom-model-trigger" aria-haspopup="true" aria-expanded="false" title="Select AI Model or Strategy">
+                  <span class="cmd-trigger-text" id="cmd-trigger-text">Auto (Balanced Routing)</span>
+                  <svg class="cmd-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div class="custom-model-menu hidden" id="custom-model-menu"></div>
+              </div>
             </div>
 
             <div class="nav-control-divider"></div>
@@ -242,6 +249,28 @@
                   <span id="current-chat-title" class="current-chat-title">New Conversation</span>
                 </div>
                 <div class="chat-header-actions flex-center-gap">
+                  <div class="virtual-models-bar" id="virtual-models-bar" title="Intelligent AI Strategy Presets">
+                    <button type="button" class="btn-vmodel" data-model="auto" title="Auto: Best balanced model routing">
+                      <svg class="vmodel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Auto</span>
+                    </button>
+                    <button type="button" class="btn-vmodel" data-model="auto:fast" title="Fast: Speed-optimized generation (1B-2B / Low Latency)">
+                      <svg class="vmodel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path></svg>
+                      <span>Fast</span>
+                    </button>
+                    <button type="button" class="btn-vmodel" data-model="auto:smart" title="Smart: Deep reasoning & complex problem solving (DeepSeek-R1 / Coder)">
+                      <svg class="vmodel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"></path></svg>
+                      <span>Smart</span>
+                    </button>
+                    <button type="button" class="btn-vmodel" data-model="fusion" title="Fusion: Collaborative dual-model synthesis (Draft + Review)">
+                      <svg class="vmodel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+                      <span>Fusion</span>
+                    </button>
+                  </div>
+                  <div class="chat-engine-badge" id="chat-active-engine-badge" title="Active Engine & Strategy Tier">
+                    <span class="engine-badge-dot"></span>
+                    <span class="engine-badge-text" id="chat-engine-badge-text">Engine: Auto</span>
+                  </div>
                   <label class="toggle-pill" id="label-chat-council-mode" title="Convene multi-model deliberation council across independent local models for complex reasoning">
                     <input type="checkbox" id="chk-chat-council-mode" />
                     <span class="toggle-slider"></span>
@@ -681,8 +710,26 @@
         <!-- 6. CLOUD AI & IMAGE GENERATION VIEW -->
         <section id="view-cloud" class="tab-view">
           <div class="panel-header">
-            <h2>3rd-Party Cloud AI & Image Generation</h2>
-            <p>Configure external cloud models and image generators. Credentials are saved locally in <code>~/.pai/cloud_ai.json</code> and never committed to git.</p>
+            <h2>3rd-Party Cloud AI & Free Multi-Provider Hub</h2>
+            <p>Pool free inference tiers across Google Gemini, Groq, Cerebras, OpenRouter, and more. 4D Quota management and automatic failover protect against rate limits. Credentials saved locally in <code>~/.pai/cloud_ai.json</code>.</p>
+          </div>
+
+          <!-- Free Provider Hub Cards Grid -->
+          <div class="glass-card mb-4">
+            <div class="flex-between mb-3">
+              <h3 class="card-title flex-center-gap">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>
+                <span>Universal Free LLM Provider Pool</span>
+              </h3>
+              <div class="cloud-hub-badges flex-center-gap">
+                <span class="hub-pill bg-glow-blue" id="hub-total-keys">0 Keys Pooled</span>
+                <span class="hub-pill bg-glow-green">Automatic 429 Failover Active</span>
+              </div>
+            </div>
+            <p class="text-muted text-sm mb-3">Aggregate free inference tiers with automatic multi-key rotation and 4D quota management (RPM/RPD/TPM/TPD). Click a model to activate, or add keys to expand your free quota pool.</p>
+            <div id="cloud-providers-hub" class="providers-hub-grid">
+              <div class="text-muted">Loading cloud providers and quota telemetry...</div>
+            </div>
           </div>
 
           <!-- Configuration Form Card -->
@@ -696,14 +743,18 @@
 
             <!-- Quick Presets -->
             <div class="preset-section mb-3">
-              <span class="preset-label">Quick Presets:</span>
+              <span class="preset-label">Quick Free Presets:</span>
               <div class="preset-pill-row">
                 <button type="button" class="preset-pill" data-name="gemini-2.0-flash" data-url="https://generativelanguage.googleapis.com/v1beta/openai/" data-type="chat" data-prov="gemini">Gemini 2.0 Flash</button>
-                <button type="button" class="preset-pill" data-name="imagen-3.0-generate-002" data-url="https://generativelanguage.googleapis.com/v1beta" data-type="image" data-prov="gemini">Google Imagen 3</button>
-                <button type="button" class="preset-pill" data-name="gpt-4o" data-url="https://api.openai.com/v1" data-type="chat" data-prov="openai">OpenAI GPT-4o</button>
-                <button type="button" class="preset-pill" data-name="dall-e-3" data-url="https://api.openai.com/v1" data-type="image" data-prov="openai">DALL-E 3</button>
-                <button type="button" class="preset-pill" data-name="llama-3.3-70b-versatile" data-url="https://api.groq.com/openai/v1" data-type="chat" data-prov="groq">Groq Fast LPU</button>
+                <button type="button" class="preset-pill" data-name="gemini-2.5-flash" data-url="https://generativelanguage.googleapis.com/v1beta/openai/" data-type="chat" data-prov="gemini">Gemini 2.5 Flash</button>
+                <button type="button" class="preset-pill" data-name="llama-3.3-70b-versatile" data-url="https://api.groq.com/openai/v1" data-type="chat" data-prov="groq">Groq Llama 3.3 70B</button>
+                <button type="button" class="preset-pill" data-name="llama-3.3-70b" data-url="https://api.cerebras.ai/v1" data-type="chat" data-prov="cerebras">Cerebras (2,000 tps)</button>
+                <button type="button" class="preset-pill" data-name="meta-llama/llama-3.3-70b-instruct:free" data-url="https://openrouter.ai/api/v1" data-type="chat" data-prov="openrouter">OpenRouter Free</button>
+                <button type="button" class="preset-pill" data-name="mistral-small-latest" data-url="https://api.mistral.ai/v1" data-type="chat" data-prov="mistral">Mistral Free</button>
                 <button type="button" class="preset-pill" data-name="deepseek-chat" data-url="https://api.deepseek.com" data-type="chat" data-prov="deepseek">DeepSeek V3</button>
+                <button type="button" class="preset-pill" data-name="openai" data-url="https://text.pollinations.ai/openai" data-type="chat" data-prov="pollinations" data-zero="true">Pollinations (Zero-Key)</button>
+                <button type="button" class="preset-pill" data-name="imagen-3.0-generate-002" data-url="https://generativelanguage.googleapis.com/v1beta" data-type="image" data-prov="gemini">Google Imagen 3</button>
+                <button type="button" class="preset-pill" data-name="dall-e-3" data-url="https://api.openai.com/v1" data-type="image" data-prov="openai">DALL-E 3</button>
               </div>
             </div>
 
@@ -907,6 +958,177 @@
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                 <span>Save & Apply Settings</span>
               </button>
+            </div>
+          </div>
+
+          <!-- Application Lifecycle & Background System Tray Settings Card -->
+          <div class="glass-card mb-4">
+            <h3 class="card-title flex-center-gap mb-3">
+              <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+              <span>Application Lifecycle & Background Task Tray</span>
+            </h3>
+            <p class="field-hint mb-3" style="font-size: 12px; color: var(--text-dim);">
+              Configure whether closing the window keeps PAI running in the background (Windows Task Tray) or terminates the app completely.
+            </p>
+
+            <div class="form-group mb-3">
+              <label class="form-label" style="font-weight: 600;">Window Close Action</label>
+              <div class="radio-pill-group" id="group-close-behavior">
+                <label class="radio-pill flex-center-gap">
+                  <input type="radio" name="setting-close-behavior" value="tray" checked />
+                  <span><strong>Run in Background (Minimize to System Tray)</strong> <em>(Recommended)</em></span>
+                </label>
+                <label class="radio-pill flex-center-gap">
+                  <input type="radio" name="setting-close-behavior" value="exit" />
+                  <span><strong>Quit Completely</strong> <em>(Terminate PAI Studio & Engine)</em></span>
+                </label>
+              </div>
+              <span class="field-hint" style="margin-top: 6px; display: block; font-size: 11.5px; color: var(--text-muted);">
+                When set to <strong>Run in Background</strong>, clicking [X] minimizes PAI to the Windows Taskbar Notification Area (System Tray). Cowork multi-agent teams, thinking, and background chat tasks continue running uninterrupted without consuming high CPU.
+              </span>
+            </div>
+
+            <div class="form-group mb-3">
+              <label class="form-label" style="font-weight: 600;">Desktop Notifications</label>
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="setting-notify-complete" checked />
+                <span style="font-size: 13px;">Show Windows Desktop Notification when a background task or Cowork sprint completes</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Software Updates & Release Channel Settings Card -->
+          <div class="glass-card mb-4" id="card-software-update">
+            <div class="flex-between mb-3">
+              <h3 class="card-title flex-center-gap">
+                <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                </svg>
+                <span>Software Updates & Release Channel</span>
+              </h3>
+              <span class="badge badge-info" id="badge-current-version">v1.3.0 (Installed)</span>
+            </div>
+
+            <p class="field-hint mb-3" style="font-size: 12px; color: var(--text-dim);">
+              Keep Personal Agentic AI updated with the latest memory-safe reasoning core, security patches, and desktop features via verified GitHub Releases (ADR-005 compliant).
+            </p>
+
+            <div class="grid-2-cols mb-3">
+              <div class="form-group">
+                <label class="form-label" for="setting-update-channel">Release Channel</label>
+                <select id="setting-update-channel" class="input-text">
+                  <option value="stable" selected>Stable (Recommended - Production Evaluated)</option>
+                  <option value="beta">Beta / Preview (Early Features & Testing)</option>
+                </select>
+                <span class="field-hint">Choose whether to receive only evaluated stable releases or early preview builds.</span>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Auto-Check on Startup</label>
+                <div style="margin-top: 10px;">
+                  <label class="checkbox-container flex-center-gap" style="cursor: pointer;">
+                    <input type="checkbox" id="setting-auto-check-update" checked />
+                    <span style="font-size: 13px;">Silently notify when a new release is available on GitHub</span>
+                  </label>
+                </div>
+                <span class="field-hint" style="margin-top: 6px; display: block;">When enabled, PAI Studio checks for updates on launch without interrupting workflows.</span>
+              </div>
+            </div>
+
+            <!-- Dynamic Update Status Box -->
+            <div id="update-status-panel" class="update-status-panel mb-3">
+              <div class="update-status-inner flex-between" id="update-status-content">
+                <div class="status-left flex-center-gap">
+                  <span class="status-indicator-dot online" id="dot-update-status"></span>
+                  <div>
+                    <strong id="update-status-title">PAI Studio is Up to Date</strong>
+                    <div class="text-xs text-muted" id="update-last-checked-time">Last checked: Not checked yet</div>
+                  </div>
+                </div>
+                <div class="status-actions flex-center-gap">
+                  <button type="button" class="btn btn-primary btn-sm flex-center-gap" id="btn-check-update">
+                    <svg class="btn-icon-xs" id="icon-check-update" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                    </svg>
+                    <span id="text-check-update">Check for Updates</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-simulate-update-dev" title="Simulate a test update flow (v1.3.0)">
+                    <span>Test Flow</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Available Update Callout (Hidden by default) -->
+              <div id="update-available-callout" class="update-callout hidden">
+                <div class="callout-header flex-between mb-2">
+                  <div class="flex-center-gap">
+                    <span class="badge badge-success" id="callout-badge-tag">NEW RELEASE</span>
+                    <strong id="callout-version-tag">v1.3.0 Available</strong>
+                  </div>
+                  <span class="text-xs text-muted" id="callout-release-date">Just released</span>
+                </div>
+                <p class="callout-notes text-sm text-muted mb-3" id="callout-release-notes">
+                  A new release of Personal Agentic AI is available with upgraded reasoning performance and fixes.
+                </p>
+                <div class="callout-actions flex-gap">
+                  <button type="button" class="btn btn-primary btn-sm flex-center-gap" id="btn-download-update">
+                    <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+                    </svg>
+                    <span>Download & Install Update</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-open-update-modal">
+                    <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="16" x2="12" y2="12"></line>
+                      <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    <span>View Release Notes</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- In-Progress Download Bar (Hidden by default) -->
+              <div id="update-downloading-panel" class="update-downloading-panel hidden">
+                <div class="flex-between mb-2">
+                  <span class="text-sm font-semibold flex-center-gap">
+                    <span class="spinner-small"></span>
+                    <span id="update-progress-label">Downloading release payload...</span>
+                  </span>
+                  <span class="text-xs text-muted" id="update-progress-metrics">0 MB / 0 MB (0%)</span>
+                </div>
+                <div class="progress-bar-bg mb-2">
+                  <div class="progress-bar-fill" id="update-progress-bar" style="width: 0%;"></div>
+                </div>
+                <span class="text-xs text-muted" id="update-progress-sub">Streaming full package from GitHub Releases with Ed25519 signature verification...</span>
+              </div>
+
+              <!-- Ready to Restart Banner (Hidden by default) -->
+              <div id="update-ready-banner" class="update-ready-banner hidden">
+                <div class="flex-between">
+                  <div class="flex-center-gap">
+                    <svg class="text-success" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    <div>
+                      <strong class="text-success" id="update-ready-title">Update Ready to Install!</strong>
+                      <p class="text-xs text-muted mb-0">Payload verified with ADR-005 security checks. Restart PAI Studio to apply.</p>
+                    </div>
+                  </div>
+                  <button type="button" class="btn btn-success btn-sm flex-center-gap" id="btn-restart-for-update">
+                    <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="1 4 1 10 7 10"></polyline>
+                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                    <span>Restart PAI Studio</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1586,6 +1808,144 @@
           </button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Cloud Provider API Key Modal -->
+  <div id="api-key-modal" class="modal-backdrop hidden">
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header flex-between">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 34px; height: 34px; border-radius: 8px; background: rgba(99, 102, 241, 0.15); display: flex; align-items: center; justify-content: center; color: #818cf8;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 2l-2 2m-1.5 1.5L14 9l-1.5-1.5-4 4 1.5 1.5-3 3 1.5 1.5-3 3 1.5 1.5L3 21l3-3 1.5 1.5 3-3 1.5 1.5 4-4-1.5-1.5 3.5-3.5z"></path>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title" id="api-key-modal-title" style="margin: 0; font-size: 15px; font-weight: 700;">Add API Key</h3>
+            <p class="text-xs text-muted" id="api-key-modal-subtitle" style="margin: 2px 0 0 0;">Add an API key to the provider pool</p>
+          </div>
+        </div>
+        <button type="button" class="btn-close-modal" id="btn-close-key-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="api-key-modal-form" class="modal-body pt-3">
+        <input type="hidden" id="key-modal-provider-id" value="" />
+        <div class="form-group mb-3">
+          <label for="key-modal-input" class="form-label" style="font-size: 12px; font-weight: 600;">API Key</label>
+          <div style="position: relative; display: flex; align-items: center;">
+            <input type="password" id="key-modal-input" class="form-input" placeholder="Paste your API key here..." required autocomplete="off" spellcheck="false" style="font-family: var(--font-mono); font-size: 13px; width: 100%; padding-right: 38px;" />
+            <button type="button" id="btn-toggle-key-visibility" title="Show/Hide Key" style="position: absolute; right: 8px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: flex; align-items: center;">
+              <svg id="icon-eye-key" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            </button>
+          </div>
+          <div id="key-modal-help" class="text-xs text-muted mt-2" style="line-height: 1.4;">
+            <!-- Dynamic provider link hint -->
+          </div>
+        </div>
+        <div class="modal-actions flex-between pt-2" style="border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-key-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-save-key-modal" style="display: inline-flex; align-items: center; gap: 6px;">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span>Save Key</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- API Key Remove Confirmation Modal -->
+  <div id="api-key-remove-modal" class="modal-backdrop hidden">
+    <div class="modal-card" style="max-width: 420px;">
+      <div class="modal-header flex-between">
+        <h3 class="modal-title flex-center-gap text-danger">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          <span>Remove API Key</span>
+        </h3>
+        <button type="button" class="btn-close-modal" id="btn-close-remove-key-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm text-muted mb-3" id="remove-key-modal-desc">
+          Are you sure you want to remove the most recently added API key from this provider pool?
+        </p>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-remove-key-modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-remove-key-modal">Remove Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Software Update Modal Dialog -->
+  <div id="update-modal" class="modal-backdrop hidden">
+    <div class="modal-card update-modal-card">
+      <div class="modal-header flex-between">
+        <h3 class="flex-center-gap modal-title">
+          <svg class="title-icon text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+          </svg>
+          <span>PAI Studio Software Update</span>
+        </h3>
+        <button type="button" class="btn-close-modal" id="btn-close-update-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="update-version-row flex-between mb-3">
+          <div class="version-pill current">
+            <span class="label">Current Version:</span>
+            <strong id="modal-curr-ver">v1.3.0</strong>
+          </div>
+          <div class="version-arrow">&rarr;</div>
+          <div class="version-pill target">
+            <span class="label">New Version:</span>
+            <strong id="modal-target-ver">v1.4.0</strong>
+          </div>
+        </div>
+
+        <div class="update-meta-info mb-3">
+          <div class="meta-item"><span class="meta-label">Release:</span> <span id="modal-rel-name">Loading...</span></div>
+          <div class="meta-item"><span class="meta-label">Published:</span> <span id="modal-rel-date">-</span></div>
+          <div class="meta-item"><span class="meta-label">Payload Size:</span> <span id="modal-rel-size">~65 MB</span></div>
+          <div class="meta-item"><span class="meta-label">Security:</span> <span class="badge badge-success text-xs">ADR-005 Ed25519 Verified</span></div>
+        </div>
+
+        <h4 class="mb-2" style="font-size: 13px; font-weight: 600;">What's New in this Release:</h4>
+        <div class="update-notes-container mb-3" id="modal-release-notes-content">
+          <div class="text-muted text-sm">Loading release notes...</div>
+        </div>
+
+        <div id="modal-download-progress-box" class="hidden mb-3">
+          <div class="flex-between mb-1">
+            <span class="text-xs font-semibold" id="modal-progress-label">Downloading update payload...</span>
+            <span class="text-xs text-muted" id="modal-progress-metrics">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="modal-progress-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-update-modal">Close</button>
+        <div class="modal-footer-actions flex-gap">
+          <button type="button" class="btn btn-primary" id="btn-modal-download">
+            <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+            </svg>
+            <span>Download & Install Now</span>
+          </button>
+          <button type="button" class="btn btn-success hidden" id="btn-modal-restart">
+            <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="1 4 1 10 7 10"></polyline>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+            <span>Restart & Apply Update</span>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -1,0 +1,167 @@
+name: Release Publisher (Stable & Beta)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release Version (e.g. 1.3.0 or 1.4.0-beta.1)'
+        required: true
+        default: '1.3.0'
+      channel:
+        description: 'Release Channel'
+        required: true
+        default: 'stable'
+        type: choice
+        options:
+          - stable
+          - beta
+      release_title:
+        description: 'Release Title'
+        required: false
+        default: ''
+      release_notes:
+        description: 'Release Notes (Markdown)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Determine Version & Channel
+        id: vars
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $ver = "${{ github.event.inputs.version }}".TrimStart("vV")
+            $chan = "${{ github.event.inputs.channel }}"
+            $title = "${{ github.event.inputs.release_title }}"
+            $notes = "${{ github.event.inputs.release_notes }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+            $ver = $tag.TrimStart("vV")
+            if ($ver -match "(beta|rc|preview|alpha)") {
+              $chan = "beta"
+            } else {
+              $chan = "stable"
+            }
+            $title = "Personal Agentic AI v$ver"
+            $notes = "Automated release of Personal Agentic AI (PAI) v$ver."
+          }
+
+          $isPre = ($chan -eq "beta") -or ($ver -match "(beta|rc|preview|alpha)")
+          
+          if ([string]::IsNullOrWhiteSpace($title)) {
+            $title = "Personal Agentic AI v$ver"
+          }
+
+          Write-Output "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          Write-Output "CHANNEL=$chan" >> $env:GITHUB_OUTPUT
+          Write-Output "IS_PRERELEASE=$isPre" >> $env:GITHUB_OUTPUT
+          Write-Output "TITLE=$title" >> $env:GITHUB_OUTPUT
+          Write-Output "NOTES=$notes" >> $env:GITHUB_OUTPUT
+          Write-Output "TAG=v$ver" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Configured Release: Version=$ver, Channel=$chan, IsPrerelease=$isPre"
+
+      - name: Build Rust Policy Core Binary
+        working-directory: core
+        run: |
+          cargo build --release
+
+      - name: Build Tauri 2.0 Desktop Application
+        working-directory: desktop/src-tauri
+        run: |
+          cargo build --release
+
+      - name: Package Desktop Standalone & Payload
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.vars.outputs.VERSION }}"
+          $distDir = "dist"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+          
+          $pkgDir = "$distDir\pai-desktop-v$ver-win-x64"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+
+          # Copy compiled binaries & desktop runtime
+          Copy-Item "desktop\src-tauri\target\release\pai-desktop.exe" "$pkgDir\pai-desktop.exe"
+          if (Test-Path "core\target\release\pai-core.exe") {
+            New-Item -ItemType Directory -Force -Path "$pkgDir\core" | Out-Null
+            Copy-Item "core\target\release\pai-core.exe" "$pkgDir\core\pai-core.exe"
+          }
+
+          # Copy UI distribution and bridge server
+          Copy-Item -Recurse "desktop\ui" "$pkgDir\ui"
+          Copy-Item -Recurse "desktop\assets" "$pkgDir\assets"
+          Copy-Item "desktop\bridge_server.py" "$pkgDir\bridge_server.py"
+          Copy-Item "desktop\manifest.json" "$pkgDir\manifest.json"
+
+          # Assemble zip archive
+          $zipPath = "$distDir\pai-payload-$ver-win-x64.zip"
+          Compress-Archive -Path "$pkgDir\*" -DestinationPath $zipPath -Force
+
+          # Also create desktop standalone zip
+          $desktopZip = "$distDir\pai-desktop-$ver-win-x64.zip"
+          Copy-Item $zipPath $desktopZip
+
+          # Generate ADR-005 manifest.json with SHA-256
+          $hashPayload = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          $hashDesktop = (Get-FileHash $desktopZip -Algorithm SHA256).Hash.ToLower()
+          $sizePayload = (Get-Item $zipPath).Length
+
+          $manifestObj = @{
+            format = 1
+            product = "pai-desktop"
+            version = $ver
+            channel = "${{ steps.vars.outputs.CHANNEL }}"
+            files = @{
+              "pai-payload-$ver-win-x64.zip" = @{ sha256 = $hashPayload; size = $sizePayload }
+            }
+          }
+          $manifestJson = $manifestObj | ConvertTo-Json -Depth 5
+          Set-Content -Path "$distDir\manifest.json" -Value $manifestJson -Encoding utf8
+
+          # Checksums file
+          $shaContent = "$hashPayload  pai-payload-$ver-win-x64.zip`n$hashDesktop  pai-desktop-$ver-win-x64.zip"
+          Set-Content -Path "$distDir\SHA256SUMS.txt" -Value $shaContent -Encoding utf8
+
+          Write-Host "Packaging complete for v$ver:"
+          Get-ChildItem $distDir | Select-Object Name, Length
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.TAG }}
+          name: ${{ steps.vars.outputs.TITLE }}
+          body: ${{ steps.vars.outputs.NOTES }}
+          draft: false
+          prerelease: ${{ steps.vars.outputs.IS_PRERELEASE == 'True' || steps.vars.outputs.IS_PRERELEASE == 'true' }}
+          files: |
+            dist/pai-payload-${{ steps.vars.outputs.VERSION }}-win-x64.zip
+            dist/pai-desktop-${{ steps.vars.outputs.VERSION }}-win-x64.zip
+            dist/manifest.json
+            dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

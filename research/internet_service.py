@@ -213,6 +213,63 @@ def search_duckduckgo_lite(query: str, max_results: int = 5, timeout: float = 6.
     return results
 
 
+def search_wikidata_entities(query: str, max_results: int = 3, timeout: float = 4.0) -> List[Dict[str, str]]:
+    """Query Wikidata Knowledge Graph for structured, authoritative entity definitions and relations."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    url = f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(q)}&language=en&format=json&limit={max_results}"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    results = []
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for item in data.get("search", []):
+                label = item.get("label") or ""
+                desc = item.get("description") or ""
+                qid = item.get("id") or ""
+                if label and desc:
+                    results.append({
+                        "title": f"{label} (Wikidata {qid})",
+                        "url": f"https://www.wikidata.org/wiki/{qid}",
+                        "snippet": f"{label}: {desc}",
+                        "source": "Wikidata Knowledge Base",
+                    })
+    except Exception:
+        pass
+    return results
+
+
+def search_openalex_works(query: str, max_results: int = 3, timeout: float = 4.0) -> List[Dict[str, str]]:
+    """Query OpenAlex global scholarly graph for verified peer-reviewed publications and research."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    url = f"https://api.openalex.org/works?search={urllib.parse.quote_plus(q)}&per_page={max_results}"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    results = []
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for item in data.get("results", []):
+                title = item.get("title") or ""
+                year = item.get("publication_year") or ""
+                doi = item.get("doi") or item.get("id") or "https://openalex.org"
+                authors = [a.get("author", {}).get("display_name") for a in item.get("authorships", [])[:3] if a.get("author")]
+                author_str = f"Authors: {', '.join(authors)}" if authors else ""
+                snippet = f"'{title}' (Published: {year}). {author_str}. Scholarly DOI: {doi}"
+                if title:
+                    results.append({
+                        "title": title,
+                        "url": doi,
+                        "snippet": snippet,
+                        "source": "OpenAlex Scholarly Index",
+                    })
+    except Exception:
+        pass
+    return results
+
+
 def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[bool, str, List[Dict[str, str]]]:
     """Perform multi-source verified web search using DuckDuckGo Lite, Wikipedia, and Tech News."""
     if not is_internet_enabled():
@@ -305,7 +362,16 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
             except Exception:
                 pass
 
-    # 2. Tech News & Community Intelligence (Hacker News Algolia API)
+    # 3. Tier 3: Wikidata Knowledge Graph (Structured Entity Definitions & Relations)
+    for sq in search_queries[:2]:
+        try:
+            w_items = search_wikidata_entities(sq, max_results=2, timeout=timeout)
+            for w in w_items:
+                add_result(w["title"], w["url"], w["snippet"], w["source"])
+        except Exception:
+            pass
+
+    # 4. Tech News & Community Intelligence (Hacker News Algolia API)
     try:
         hn_url = f"https://hn.algolia.com/api/v1/search?query={urllib.parse.quote_plus(clean_q or q)}&tags=story&hitsPerPage=4"
         req_hn = urllib.request.Request(hn_url, headers={"User-Agent": USER_AGENT})
@@ -344,7 +410,16 @@ def search_web(query: str, max_results: int = 5, timeout: float = 6.0) -> Tuple[
         except Exception:
             pass
 
-    # 4. DuckDuckGo Instant Answer API
+    # 5. OpenAlex Scholarly Graph (Peer-Reviewed Scientific Publications & Citations)
+    if any(k in q.lower() for k in ("ai", "llm", "paper", "research", "quantum", "study", "algorithm", "science", "medical", "discovery", "physics", "biology", "attention")):
+        try:
+            alex_items = search_openalex_works(clean_q or q, max_results=2, timeout=timeout)
+            for a in alex_items:
+                add_result(a["title"], a["url"], a["snippet"], a["source"])
+        except Exception:
+            pass
+
+    # 6. DuckDuckGo Instant Answer API
     try:
         ddg_encoded = urllib.parse.quote_plus(q)
         ddg_url = f"https://api.duckduckgo.com/?q={ddg_encoded}&format=json&no_html=1&skip_disambig=1"

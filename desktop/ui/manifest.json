@@ -1,5 +1,5 @@
 {
-  "name": "PAI Studio - Personal Agentic AI Assistant",
+  "name": "PAI Studio",
   "short_name": "PAI Studio",
   "description": "Privacy-first Agentic AI Assistant running locally on PC",
   "start_url": "/",

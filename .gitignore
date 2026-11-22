@@ -58,6 +58,10 @@ tokens*.json
 *.env
 local_settings*.json
 
+# Scratch / debug test files
+scratch/
+bridge_server_test.log
+
 # Packaging and distribution artifacts
 dist/
 

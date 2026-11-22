@@ -183,7 +183,9 @@ document.addEventListener("DOMContentLoaded", () => {
   setupDesktopTitlebar();
   applyStoredSettings();
   setupNavigation();
+  setupCustomModelDropdown();
   setupChat();
+  setupVirtualModelsBar();
   setupProjects();
   setupTeam();
   setupSkills();
@@ -192,6 +194,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupAntigravity();
   setupWebSearch();
   setupSettings();
+  setupUpdateSystem();
   setupDesktopContextMenu();
   checkStartupPreflight();
 
@@ -245,7 +248,14 @@ function setupDesktopTitlebar() {
     btnMax.addEventListener("click", () => invokeTauri("app_window_toggle_maximize"));
   }
   if (btnClose) {
-    btnClose.addEventListener("click", () => invokeTauri("app_window_close"));
+    btnClose.addEventListener("click", () => {
+      const closeBehavior = localStorage.getItem("pai_close_behavior") || "tray";
+      if (closeBehavior === "exit") {
+        invokeTauri("app_window_exit");
+      } else {
+        invokeTauri("app_window_close");
+      }
+    });
   }
   if (titlebar) {
     titlebar.addEventListener("dblclick", (e) => {
@@ -310,7 +320,16 @@ function setupNavigation() {
       const data = await res.json();
       if (data.success) {
         activeModel = selected;
+        updateTriggerLabel(selected);
         updateChatPlaceholderForActiveModel();
+        updateVirtualModelsBarActive(selected);
+        document.querySelectorAll(".phub-model-pill").forEach((pill) => {
+          if (pill.getAttribute("data-model") === selected) {
+            pill.classList.add("active");
+          } else {
+            pill.classList.remove("active");
+          }
+        });
         showToast(`Switched active model to ${selected}`, "success", "Model Changed");
       }
     } catch (err) {
@@ -812,7 +831,9 @@ function loadSessionMessages(session) {
   messagesList.innerHTML = "";
   chatHistory = [];
 
-  if (!session.messages || session.messages.length === 0) {
+  const ongoingJob = Array.from(activeChatJobs.values()).find(j => j.targetSessionId === session.id);
+
+  if ((!session.messages || session.messages.length === 0) && !ongoingJob) {
     messagesList.innerHTML = `
       <div class="message assistant welcome">
         <div class="msg-header">
@@ -826,26 +847,41 @@ function loadSessionMessages(session) {
         </div>
       </div>
     `;
+    setSendButtonState("idle");
     return;
   }
 
-  session.messages.forEach(item => {
-    if (item.role === "user") {
-      appendUserMessage(item.text, item.attachments || []);
-      chatHistory.push({ role: "user", content: item.text });
-    } else if (item.role === "assistant") {
-      const botId = "hist-msg-" + Math.random().toString(36).substring(2, 8);
-      appendAssistantPlaceholder(botId, item.is_team);
-      if (item.is_image) {
-        updateAssistantMessageImage(botId, item.image_url, item.text, item.model, item.filename);
-      } else if (item.is_team && item.teamData) {
-        updateAssistantTeamMessage(botId, item.teamData, item.userPrompt || "");
-      } else {
-        updateAssistantMessage(botId, item.text, item.factcheck, item.grounding, item.userPrompt || "");
+  if (session.messages && session.messages.length > 0) {
+    session.messages.forEach(item => {
+      if (item.role === "user") {
+        appendUserMessage(item.text, item.attachments || []);
+        chatHistory.push({ role: "user", content: item.text });
+      } else if (item.role === "assistant") {
+        const botId = "hist-msg-" + Math.random().toString(36).substring(2, 8);
+        appendAssistantPlaceholder(botId, item.is_team);
+        if (item.is_image) {
+          updateAssistantMessageImage(botId, item.image_url, item.text, item.model, item.filename);
+        } else if (item.is_team && item.teamData) {
+          updateAssistantTeamMessage(botId, item.teamData, item.userPrompt || "");
+        } else {
+          updateAssistantMessage(botId, item.text, item.factcheck, item.grounding, item.userPrompt || "");
+        }
+        chatHistory.push({ role: "assistant", content: item.text });
       }
-      chatHistory.push({ role: "assistant", content: item.text });
+    });
+  }
+
+  if (ongoingJob) {
+    appendAssistantPlaceholder(ongoingJob.botMsgId, ongoingJob.isTeam);
+    const botMsgEl = document.getElementById(ongoingJob.botMsgId);
+    if (botMsgEl && ongoingJob.lastPhase) {
+      const thText = botMsgEl.querySelector(".thinking-stage-text");
+      if (thText) thText.textContent = ongoingJob.lastPhase;
     }
-  });
+    setSendButtonState("generating");
+  } else {
+    setSendButtonState("idle");
+  }
 
   const scrollContainer = document.getElementById("messages-scroll");
   if (scrollContainer) {
@@ -898,37 +934,84 @@ function saveChatSessions() {
   }
 }
 
-function saveTurnToActiveSession(userRecord, assistantRecord) {
-  let activeSession = chatSessions.find(s => s.id === activeSessionId);
-  if (!activeSession) {
-    activeSession = {
-      id: activeSessionId || ("session_" + Date.now()),
+function showSystemNotification(title, body) {
+  try {
+    const notifyEnabled = localStorage.getItem("pai_notify_complete") !== "false";
+    if (!notifyEnabled) return;
+    if (!("Notification" in window)) return;
+
+    if (Notification.permission === "granted") {
+      const n = new Notification(title, {
+        body: body,
+        icon: "icons/icon.png"
+      });
+      n.onclick = () => {
+        window.focus();
+        if (typeof invokeTauri === "function") {
+          invokeTauri("app_window_unminimize");
+        }
+      };
+    } else if (Notification.permission !== "denied") {
+      Notification.requestPermission().then(perm => {
+        if (perm === "granted") {
+          const n = new Notification(title, {
+            body: body,
+            icon: "icons/icon.png"
+          });
+          n.onclick = () => {
+            window.focus();
+            if (typeof invokeTauri === "function") {
+              invokeTauri("app_window_unminimize");
+            }
+          };
+        }
+      });
+    }
+  } catch (_) {}
+}
+
+function saveTurnToSessionById(sessionId, userRecord, assistantRecord) {
+  let session = chatSessions.find(s => s.id === sessionId);
+  if (!session) {
+    session = {
+      id: sessionId || ("session_" + Date.now()),
       title: "New Conversation",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       messages: []
     };
-    chatSessions.unshift(activeSession);
-    activeSessionId = activeSession.id;
+    chatSessions.unshift(session);
   }
 
-  activeSession.messages.push(userRecord);
-  activeSession.messages.push(assistantRecord);
-  activeSession.updatedAt = new Date().toISOString();
+  const msgs = session.messages;
+  const alreadyHasUser = msgs && msgs.length > 0 && msgs.some(m => m.role === "user" && m.text === userRecord.text);
+  if (!alreadyHasUser) {
+    session.messages.push(userRecord);
+  }
+  session.messages.push(assistantRecord);
+  session.updatedAt = new Date().toISOString();
 
-  if (activeSession.title === "New Conversation" || activeSession.messages.filter(m => m.role === 'user').length === 1) {
+  if (session.title === "New Conversation" || session.messages.filter(m => m.role === 'user').length <= 1) {
     let clean = (userRecord.text || "").replace(/^[\/\#\*\-\s]+/, "").trim();
     if (clean.length > 28) {
       clean = clean.substring(0, 28) + "...";
     }
-    activeSession.title = clean || "Conversation";
-    if (currentChatTitle) {
-      currentChatTitle.textContent = activeSession.title;
+    session.title = clean || "Conversation";
+    if (currentChatTitle && session.id === activeSessionId) {
+      currentChatTitle.textContent = session.title;
     }
   }
 
   saveChatSessions();
   renderChatHistorySidebar();
+}
+
+function saveTurnToActiveSession(userRecord, assistantRecord) {
+  saveTurnToSessionById(activeSessionId, userRecord, assistantRecord);
+}
+
+function isSessionGenerating(sessionId) {
+  return Array.from(activeChatJobs.values()).some(j => j.targetSessionId === sessionId);
 }
 
 function renderChatHistorySidebar() {
@@ -941,6 +1024,7 @@ function renderChatHistorySidebar() {
   }
 
   chatSessions.forEach(session => {
+    const isRunning = isSessionGenerating(session.id);
     const item = document.createElement("div");
     item.className = `chat-history-item ${session.id === activeSessionId ? "active" : ""}`;
     item.title = session.title || "Conversation";
@@ -952,12 +1036,15 @@ function renderChatHistorySidebar() {
         </svg>
         <span class="chat-history-item-title">${escapeHtml(session.title || "New Conversation")}</span>
       </div>
-      <button type="button" class="btn-delete-session" title="Delete conversation">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-        </svg>
-      </button>
+      <div class="chat-history-item-actions">
+        ${isRunning ? `<span class="chat-generating-spinner" title="AI thinking & generating in background..."></span>` : ""}
+        <button type="button" class="btn-delete-session" title="Delete conversation">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+      </div>
     `;
 
     item.addEventListener("click", () => switchChatSession(session.id));
@@ -1022,8 +1109,21 @@ function setupChat() {
     });
   }
 
+  // Direct click interceptor on Send/Stop button for instant cancellation
+  btnSend.addEventListener("click", (e) => {
+    if (isGeneratingResponse) {
+      e.preventDefault();
+      e.stopPropagation();
+      stopCurrentChatGeneration();
+    }
+  });
+
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (isSessionGenerating(activeSessionId)) {
+      stopCurrentChatGeneration();
+      return;
+    }
     if (slashCommandsPopup && !slashCommandsPopup.classList.contains("hidden")) {
       slashCommandsPopup.classList.add("hidden");
     }
@@ -1159,6 +1259,11 @@ function setupChat() {
       if (!activeProjectPath) return;
     }
 
+    if (isGeneratingResponse) {
+      stopCurrentChatGeneration();
+      return;
+    }
+
     const promptToSend = prompt || "Please analyze and summarize the attached document(s).";
     const sentAttachments = [...currentChatAttachments];
     currentChatAttachments = [];
@@ -1167,7 +1272,6 @@ function setupChat() {
     lastSentPrompt = promptToSend;
     chatInput.value = "";
     appendUserMessage(promptToSend, sentAttachments);
-    btnSend.disabled = true;
 
     const userMsgRecord = {
       role: "user",
@@ -1176,86 +1280,46 @@ function setupChat() {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
+    // Save user message immediately to session so switching chats retains it
+    let currentSession = chatSessions.find(s => s.id === activeSessionId);
+    if (!currentSession) {
+      currentSession = {
+        id: activeSessionId || ("session_" + Date.now()),
+        title: promptToSend.substring(0, 28) || "New Conversation",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: []
+      };
+      chatSessions.unshift(currentSession);
+    }
+    currentSession.messages.push(userMsgRecord);
+    currentSession.updatedAt = new Date().toISOString();
+    if (currentSession.title === "New Conversation" || currentSession.messages.filter(m => m.role === 'user').length <= 1) {
+      let clean = promptToSend.replace(/^[\/\#\*\-\s]+/, "").trim();
+      if (clean.length > 28) clean = clean.substring(0, 28) + "...";
+      currentSession.title = clean || "Conversation";
+      if (currentChatTitle) currentChatTitle.textContent = currentSession.title;
+    }
+    saveChatSessions();
+    renderChatHistorySidebar();
+
     const botMsgId = "msg-" + Date.now();
     appendAssistantPlaceholder(botMsgId, isTeam);
 
-    const chkCouncilMode = document.getElementById("chk-chat-council-mode");
-    const isCouncil = (chkCouncilMode && chkCouncilMode.checked) || promptToSend.trim().toLowerCase().startsWith("/council");
-
-    try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: promptToSend,
-          model: activeModel,
-          history: chatHistory,
-          project_path: activeProjectPath,
-          is_team_mode: isTeam,
-          is_council_mode: isCouncil,
-          attachments: sentAttachments,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        if (data.is_image) {
-          updateAssistantMessageImage(botMsgId, data.image_url, data.prompt, data.model, data.filename);
-        } else if (data.is_team) {
-          updateAssistantTeamMessage(botMsgId, data, promptToSend);
-          if (activeProjectPath) {
-            loadProjectFiles(activeProjectPath);
-          }
-        } else {
-          updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend, data.thinking, { auto_saved_memory: data.auto_saved_memory, council_result: data.council_result });
-        }
-        chatHistory.push({ role: "user", content: promptToSend });
-        chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
-
-        const assistantMsgRecord = {
-          role: "assistant",
-          text: data.response || (data.is_image ? `[Generated Image: ${data.prompt}]` : `[Action Completed]`),
-          factcheck: data.factcheck,
-          grounding: data.grounding,
-          is_image: !!data.is_image,
-          image_url: data.image_url,
-          model: data.model,
-          filename: data.filename,
-          is_team: !!data.is_team,
-          teamData: data.is_team ? data : null,
-          userPrompt: promptToSend,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        saveTurnToActiveSession(userMsgRecord, assistantMsgRecord);
-      } else {
-        updateAssistantError(botMsgId, data.error || "Execution error", promptToSend);
-        const errorRecord = {
-          role: "assistant",
-          text: `Error: ${data.error || "Execution error"}`,
-          userPrompt: promptToSend,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        saveTurnToActiveSession(userMsgRecord, errorRecord);
-      }
-    } catch (err) {
-      updateAssistantError(botMsgId, `Server connection error: ${err.message}`, promptToSend);
-      const connErrRecord = {
-        role: "assistant",
-        text: `⚠️ Server connection error: ${err.message}`,
-        userPrompt: promptToSend,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      saveTurnToActiveSession(userMsgRecord, connErrRecord);
-    } finally {
-      btnSend.disabled = false;
-      chatInput.focus();
-    }
+    await dispatchChatRequest(promptToSend, botMsgId, sentAttachments, userMsgRecord, isTeam);
   });
 
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       chatForm.dispatchEvent(new Event("submit"));
+    } else if (e.key === "ArrowUp" && chatInput.value === "") {
+      const userMsgs = messagesList.querySelectorAll(".message.user");
+      if (userMsgs.length > 0) {
+        const lastUserMsg = userMsgs[userMsgs.length - 1];
+        e.preventDefault();
+        enterUserMessageEditMode(lastUserMsg);
+      }
     }
   });
 
@@ -1264,23 +1328,419 @@ function setupChat() {
   });
 }
 
+// -----------------------------------------------------------------------------
+// Chat Generation State & Controller Management (Stop / Abort)
+// -----------------------------------------------------------------------------
+let currentChatAbortController = null;
+let isGeneratingResponse = false;
+let currentGeneratingBotId = null;
+
+function setSendButtonState(state) {
+  if (!btnSend) return;
+  if (state === "generating") {
+    btnSend.classList.add("btn-stop-mode");
+    btnSend.setAttribute("type", "button");
+    btnSend.setAttribute("title", "Stop generation (Cancel thinking & grounding)");
+    btnSend.innerHTML = `
+      <svg class="stop-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+      </svg>
+    `;
+    btnSend.disabled = false;
+  } else {
+    btnSend.classList.remove("btn-stop-mode");
+    btnSend.setAttribute("type", "submit");
+    btnSend.setAttribute("title", "Send message");
+    btnSend.innerHTML = `
+      <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="19" x2="12" y2="5"></line>
+        <polyline points="5 12 12 5 19 12"></polyline>
+      </svg>
+    `;
+    btnSend.disabled = false;
+  }
+}
+
+function stopCurrentChatGeneration() {
+  const activeJob = Array.from(activeChatJobs.values()).find(j => j.targetSessionId === activeSessionId);
+  if (activeJob) {
+    try {
+      fetch(`${API_BASE}/api/chat/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: activeJob.taskId })
+      }).catch(() => {});
+    } catch (_) {}
+    activeChatJobs.delete(activeJob.taskId);
+    renderGenerationStopped(activeJob.botMsgId, activeJob.promptToSend);
+    setSendButtonState("idle");
+    renderChatHistorySidebar();
+    showToast("Generation stopped for this conversation", "info");
+    return;
+  }
+  if (currentChatAbortController) {
+    try {
+      currentChatAbortController.abort();
+    } catch (_) {}
+    currentChatAbortController = null;
+  }
+  try {
+    fetch(`${API_BASE}/api/chat/abort`, { method: "POST" }).catch(() => {});
+  } catch (_) {}
+
+  if (currentGeneratingBotId) {
+    renderGenerationStopped(currentGeneratingBotId, lastSentPrompt);
+  }
+  isGeneratingResponse = false;
+  currentGeneratingBotId = null;
+  setSendButtonState("idle");
+  renderChatHistorySidebar();
+  showToast("Generation stopped by user", "info");
+}
+
+function renderGenerationStopped(id, userPrompt = "") {
+  const msg = document.getElementById(id);
+  if (!msg) return;
+  const body = msg.querySelector(".msg-body");
+  if (!body) return;
+  body.classList.remove("loading-indicator");
+
+  const promptForRetry = userPrompt || lastSentPrompt;
+  body.innerHTML = `
+    <div class="generation-stopped-box">
+      <div class="stopped-status-pill">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+        <span>Generation cancelled by user</span>
+      </div>
+    </div>
+    <div class="msg-footer-actions">
+      ${promptForRetry ? `
+        <button type="button" class="btn-msg-action btn-regenerate-msg" title="Retry generation">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          <span>Retry</span>
+        </button>
+      ` : ""}
+    </div>
+  `;
+
+  const btnRegen = body.querySelector(".btn-regenerate-msg");
+  if (btnRegen && promptForRetry) {
+    btnRegen.addEventListener("click", () => regeneratePrompt(promptForRetry));
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Unified Chat Request Dispatcher (With Background Daemon & Poller)
+// -----------------------------------------------------------------------------
+const activeChatJobs = new Map();
+
+async function dispatchChatRequest(promptToSend, botMsgId, sentAttachments, userMsgRecord, isTeam) {
+  isGeneratingResponse = true;
+  currentGeneratingBotId = botMsgId;
+  currentChatAbortController = new AbortController();
+  setSendButtonState("generating");
+
+  const chkCouncilMode = document.getElementById("chk-chat-council-mode");
+  const isCouncil = (chkCouncilMode && chkCouncilMode.checked) || promptToSend.trim().toLowerCase().startsWith("/council");
+  const targetSessionId = activeSessionId;
+
+  try {
+    const payload = {
+      prompt: promptToSend,
+      model: activeModel,
+      history: chatHistory,
+      session_id: targetSessionId,
+      project_path: activeProjectPath,
+      is_team_mode: isTeam,
+      is_council_mode: isCouncil,
+      attachments: sentAttachments,
+    };
+
+    let isAsync = false;
+    let taskId = null;
+    try {
+      const submitRes = await fetch(`${API_BASE}/api/chat/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: currentChatAbortController.signal,
+        body: JSON.stringify(payload)
+      });
+      if (submitRes.ok) {
+        const submitData = await submitRes.json();
+        if (submitData.success && submitData.task_id) {
+          isAsync = true;
+          taskId = submitData.task_id;
+        }
+      }
+    } catch (e) {
+      console.warn("Async submit failed, falling back to synchronous chat:", e);
+    }
+
+    if (isAsync && taskId) {
+      activeChatJobs.set(taskId, {
+        taskId,
+        targetSessionId,
+        botMsgId,
+        promptToSend,
+        userMsgRecord,
+        isTeam,
+        lastPhase: "Reasoning and generating in background...",
+        startTime: Date.now()
+      });
+      renderChatHistorySidebar();
+      await pollChatJobUntilComplete(taskId);
+      return;
+    }
+
+    // Fallback: Synchronous fetch
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: currentChatAbortController.signal,
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      if (data.is_image) {
+        updateAssistantMessageImage(botMsgId, data.image_url, data.prompt, data.model, data.filename);
+      } else if (data.is_team) {
+        updateAssistantTeamMessage(botMsgId, data, promptToSend);
+        if (activeProjectPath) {
+          loadProjectFiles(activeProjectPath);
+        }
+      } else {
+        updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend, data.thinking, { auto_saved_memory: data.auto_saved_memory, council_result: data.council_result });
+      }
+      chatHistory.push({ role: "user", content: promptToSend });
+      chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
+
+      const assistantMsgRecord = {
+        role: "assistant",
+        text: data.response || (data.is_image ? `[Generated Image: ${data.prompt}]` : `[Action Completed]`),
+        factcheck: data.factcheck,
+        grounding: data.grounding,
+        is_image: !!data.is_image,
+        image_url: data.image_url,
+        model: data.model,
+        filename: data.filename,
+        is_team: !!data.is_team,
+        teamData: data.is_team ? data : null,
+        userPrompt: promptToSend,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      saveTurnToSessionById(targetSessionId, userMsgRecord, assistantMsgRecord);
+    } else {
+      if (data.aborted) {
+        renderGenerationStopped(botMsgId, promptToSend);
+        return;
+      }
+      updateAssistantError(botMsgId, data.error || "Execution error", promptToSend);
+      const errorRecord = {
+        role: "assistant",
+        text: `Error: ${data.error || "Execution error"}`,
+        userPrompt: promptToSend,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      saveTurnToSessionById(targetSessionId, userMsgRecord, errorRecord);
+    }
+  } catch (err) {
+    if (err.name === "AbortError" || !isGeneratingResponse) {
+      renderGenerationStopped(botMsgId, promptToSend);
+      return;
+    }
+    updateAssistantError(botMsgId, `Server connection error: ${err.message}`, promptToSend);
+    const connErrRecord = {
+      role: "assistant",
+      text: `Server connection error: ${err.message}`,
+      userPrompt: promptToSend,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    saveTurnToSessionById(targetSessionId, userMsgRecord, connErrRecord);
+  } finally {
+    isGeneratingResponse = false;
+    currentGeneratingBotId = null;
+    currentChatAbortController = null;
+    setSendButtonState("idle");
+    chatInput.focus();
+  }
+}
+
+function pollChatJobUntilComplete(taskId) {
+  return new Promise((resolve) => {
+    const jobInfo = activeChatJobs.get(taskId);
+    if (!jobInfo) {
+      resolve();
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/chat/status?task_id=${encodeURIComponent(taskId)}`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (!data.success || !data.task) return;
+
+        const task = data.task;
+        const status = task.status;
+
+        if (!isGeneratingResponse && currentChatAbortController?.signal?.aborted) {
+          clearInterval(interval);
+          activeChatJobs.delete(taskId);
+          renderGenerationStopped(jobInfo.botMsgId, jobInfo.promptToSend);
+          resolve();
+          return;
+        }
+
+        if (status === "aborted") {
+          clearInterval(interval);
+          activeChatJobs.delete(taskId);
+          renderGenerationStopped(jobInfo.botMsgId, jobInfo.promptToSend);
+          renderChatHistorySidebar();
+          setSendButtonState("idle");
+          resolve();
+          return;
+        }
+
+        if (status === "running") {
+          jobInfo.lastPhase = task.phase || "Reasoning and generating in background...";
+          if (activeSessionId === jobInfo.targetSessionId) {
+            const botMsgEl = document.getElementById(jobInfo.botMsgId);
+            if (botMsgEl) {
+              const thText = botMsgEl.querySelector(".thinking-stage-text");
+              if (thText && task.phase) {
+                thText.textContent = task.phase;
+              }
+            }
+          }
+        } else if (status === "completed") {
+          clearInterval(interval);
+          activeChatJobs.delete(taskId);
+
+          const result = task.result || {};
+          const assistantMsgRecord = {
+            role: "assistant",
+            text: result.response || (result.is_image ? `[Generated Image: ${result.prompt}]` : `[Action Completed]`),
+            factcheck: result.factcheck,
+            grounding: result.grounding,
+            is_image: !!result.is_image,
+            image_url: result.image_url,
+            model: result.model || activeModel,
+            filename: result.filename,
+            is_team: !!result.is_team,
+            teamData: result.is_team ? result : null,
+            userPrompt: jobInfo.promptToSend,
+            thinking: result.thinking,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          };
+
+          saveTurnToSessionById(jobInfo.targetSessionId, jobInfo.userMsgRecord, assistantMsgRecord);
+
+          if (activeSessionId === jobInfo.targetSessionId) {
+            const botMsgEl = document.getElementById(jobInfo.botMsgId);
+            if (!botMsgEl) {
+              const curSes = chatSessions.find(s => s.id === activeSessionId);
+              if (curSes) loadSessionMessages(curSes);
+            } else {
+              if (result.is_image) {
+                updateAssistantMessageImage(jobInfo.botMsgId, result.image_url, result.prompt, result.model, result.filename);
+              } else if (result.is_team) {
+                updateAssistantTeamMessage(jobInfo.botMsgId, result, jobInfo.promptToSend);
+                if (activeProjectPath) {
+                  loadProjectFiles(activeProjectPath);
+                }
+              } else {
+                updateAssistantMessage(
+                  jobInfo.botMsgId,
+                  result.response,
+                  result.factcheck,
+                  result.grounding,
+                  jobInfo.promptToSend,
+                  result.thinking,
+                  { auto_saved_memory: result.auto_saved_memory, council_result: result.council_result }
+                );
+              }
+            }
+            setSendButtonState("idle");
+          }
+
+          renderChatHistorySidebar();
+
+          if (document.hidden || activeSessionId !== jobInfo.targetSessionId) {
+            const shortQ = jobInfo.promptToSend.length > 40 ? jobInfo.promptToSend.substring(0, 40) + "..." : jobInfo.promptToSend;
+            showSystemNotification("PAI Studio: Answer Ready", `Completed response for: "${shortQ}"`);
+          }
+
+          resolve();
+        } else if (status === "error") {
+          clearInterval(interval);
+          activeChatJobs.delete(taskId);
+
+          const errText = task.error || "Execution error in background engine";
+          const errorRecord = {
+            role: "assistant",
+            text: `Error: ${errText}`,
+            userPrompt: jobInfo.promptToSend,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          };
+          saveTurnToSessionById(jobInfo.targetSessionId, jobInfo.userMsgRecord, errorRecord);
+
+          if (activeSessionId === jobInfo.targetSessionId) {
+            const botMsgEl = document.getElementById(jobInfo.botMsgId);
+            if (!botMsgEl) {
+              const curSes = chatSessions.find(s => s.id === activeSessionId);
+              if (curSes) loadSessionMessages(curSes);
+            } else {
+              updateAssistantError(jobInfo.botMsgId, errText, jobInfo.promptToSend);
+            }
+            setSendButtonState("idle");
+          }
+
+          renderChatHistorySidebar();
+          resolve();
+        }
+      } catch (e) {
+        console.warn("Poll status tick error:", e);
+      }
+    }, 1200);
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Message Rendering, Editing & Regeneration
+// -----------------------------------------------------------------------------
+function renderAttachmentsHtml(attachments = []) {
+  if (!attachments || attachments.length === 0) return "";
+  return `
+    <div class="msg-attachments-row">
+      ${attachments.map(att => `
+        <span class="msg-att-badge" title="${escapeHtml(att.name)} (${att.size_str || formatBytes(att.size)})">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          <span>${escapeHtml(att.name)}</span>
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function bindUserMessageActions(msg, text, attachments = []) {
+  const btnCopy = msg.querySelector(".btn-copy-msg");
+  if (btnCopy) {
+    btnCopy.addEventListener("click", () => copyToClipboard(text, btnCopy));
+  }
+  const btnEdit = msg.querySelector(".btn-edit-msg");
+  if (btnEdit) {
+    btnEdit.addEventListener("click", () => enterUserMessageEditMode(msg, attachments));
+  }
+}
+
 function appendUserMessage(text, attachments = []) {
   const msg = document.createElement("div");
   msg.className = "message user";
+  msg.setAttribute("data-raw-prompt", text);
 
-  let attachmentsHtml = "";
-  if (attachments && attachments.length > 0) {
-    attachmentsHtml = `
-      <div class="msg-attachments-row">
-        ${attachments.map(att => `
-          <span class="msg-att-badge" title="${escapeHtml(att.name)} (${att.size_str || formatBytes(att.size)})">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-            <span>${escapeHtml(att.name)}</span>
-          </span>
-        `).join("")}
-      </div>
-    `;
-  }
+  let attachmentsHtml = renderAttachmentsHtml(attachments);
 
   msg.innerHTML = `
     <div class="msg-header">
@@ -1288,6 +1748,10 @@ function appendUserMessage(text, attachments = []) {
       <span class="msg-author">User</span>
       <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       <div class="msg-actions">
+        <button type="button" class="btn-msg-action btn-edit-msg" title="Edit this instruction and regenerate response">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+          <span>Edit</span>
+        </button>
         <button type="button" class="btn-msg-action btn-copy-msg" title="Copy instruction to clipboard">
           <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
           <span>Copy</span>
@@ -1296,15 +1760,143 @@ function appendUserMessage(text, attachments = []) {
     </div>
     <div class="msg-body">
       ${attachmentsHtml}
-      <p>${escapeHtml(text)}</p>
+      <div class="user-msg-content">
+        <p class="user-msg-text">${escapeHtml(text)}</p>
+      </div>
     </div>
   `;
-  const btnCopy = msg.querySelector(".btn-copy-msg");
-  if (btnCopy) {
-    btnCopy.addEventListener("click", () => copyToClipboard(text, btnCopy));
-  }
+  bindUserMessageActions(msg, text, attachments);
   messagesList.appendChild(msg);
   messagesList.scrollTop = messagesList.scrollHeight;
+  return msg;
+}
+
+function enterUserMessageEditMode(msg, attachments = []) {
+  if (isGeneratingResponse) {
+    showToast("Please wait or stop current generation before editing", "info");
+    return;
+  }
+  const bodyEl = msg.querySelector(".msg-body");
+  if (!bodyEl || bodyEl.querySelector(".user-msg-edit-container")) return;
+
+  const currentPrompt = msg.getAttribute("data-raw-prompt") || msg.querySelector(".user-msg-text")?.innerText || "";
+  const attachmentsHtml = renderAttachmentsHtml(attachments);
+
+  bodyEl.innerHTML = `
+    ${attachmentsHtml}
+    <div class="user-msg-edit-container">
+      <textarea class="edit-msg-textarea" rows="2" placeholder="Edit instruction...">${escapeHtml(currentPrompt)}</textarea>
+      <div class="edit-msg-footer">
+        <span class="edit-shortcut-hint">Esc to cancel • Ctrl+Enter to save & regenerate</span>
+        <div class="edit-btn-group">
+          <button type="button" class="btn-edit-cancel">Cancel</button>
+          <button type="button" class="btn-edit-submit">Update & Regenerate</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const textarea = bodyEl.querySelector(".edit-msg-textarea");
+  const btnCancel = bodyEl.querySelector(".btn-edit-cancel");
+  const btnSubmit = bodyEl.querySelector(".btn-edit-submit");
+
+  if (textarea) {
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.style.height = "auto";
+    textarea.style.height = Math.max(65, textarea.scrollHeight) + "px";
+    textarea.addEventListener("input", () => {
+      textarea.style.height = "auto";
+      textarea.style.height = Math.max(65, textarea.scrollHeight) + "px";
+    });
+  }
+
+  function cancelEdit() {
+    bodyEl.innerHTML = `
+      ${attachmentsHtml}
+      <div class="user-msg-content">
+        <p class="user-msg-text">${escapeHtml(currentPrompt)}</p>
+      </div>
+    `;
+    bindUserMessageActions(msg, currentPrompt, attachments);
+  }
+
+  function submitEdit() {
+    const newText = (textarea?.value || "").trim();
+    if (!newText) {
+      showToast("Please enter an instruction", "warning");
+      return;
+    }
+    executeEditAndRegenerate(msg, newText, attachments);
+  }
+
+  btnCancel?.addEventListener("click", cancelEdit);
+  btnSubmit?.addEventListener("click", submitEdit);
+
+  textarea?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      submitEdit();
+    }
+  });
+}
+
+function executeEditAndRegenerate(userMsgEl, newPrompt, attachments = []) {
+  if (isGeneratingResponse) {
+    stopCurrentChatGeneration();
+  }
+
+  // 1. Update this user message in DOM
+  userMsgEl.setAttribute("data-raw-prompt", newPrompt);
+  const attachmentsHtml = renderAttachmentsHtml(attachments);
+  userMsgEl.querySelector(".msg-body").innerHTML = `
+    ${attachmentsHtml}
+    <div class="user-msg-content">
+      <p class="user-msg-text">${escapeHtml(newPrompt)}</p>
+    </div>
+  `;
+  bindUserMessageActions(userMsgEl, newPrompt, attachments);
+
+  // 2. Remove all subsequent siblings in messagesList (clearing the old assistant answer and any later turns)
+  let nextEl = userMsgEl.nextElementSibling;
+  while (nextEl) {
+    const toRemove = nextEl;
+    nextEl = nextEl.nextElementSibling;
+    toRemove.remove();
+  }
+
+  // 3. Truncate chatHistory up to this turn
+  const allUserMsgs = Array.from(messagesList.querySelectorAll(".message.user"));
+  const userIndex = allUserMsgs.indexOf(userMsgEl);
+  if (userIndex !== -1) {
+    const turnsToKeep = userIndex * 2;
+    chatHistory = chatHistory.slice(0, turnsToKeep);
+
+    let activeSession = chatSessions.find(s => s.id === activeSessionId);
+    if (activeSession && activeSession.messages) {
+      activeSession.messages = activeSession.messages.slice(0, turnsToKeep);
+      saveChatSessions();
+    }
+  }
+
+  // 4. Create new Assistant placeholder
+  const isTeam = toggleTeamMode.checked;
+  const botMsgId = "msg-" + Date.now();
+  appendAssistantPlaceholder(botMsgId, isTeam);
+
+  // 5. Build user record & dispatch
+  const userMsgRecord = {
+    role: "user",
+    text: newPrompt,
+    attachments: attachments,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  };
+
+  lastSentPrompt = newPrompt;
+  dispatchChatRequest(newPrompt, botMsgId, attachments, userMsgRecord, isTeam);
 }
 
 function appendAssistantPlaceholder(id, isTeam = false) {
@@ -1322,10 +1914,20 @@ function appendAssistantPlaceholder(id, isTeam = false) {
       <span class="msg-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
     </div>
     <div class="msg-body loading-indicator">
-      <span class="dot-flashing"></span>
-      <span class="text-muted" style="margin-left: 8px;">${statusNote}</span>
+      <div class="loading-status-line">
+        <span class="dot-flashing"></span>
+        <span class="status-note-text">${statusNote}</span>
+      </div>
+      <button type="button" class="btn-cancel-generating" id="btn-cancel-${id}" title="Stop generation (Cancel)">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>
+        <span>Stop</span>
+      </button>
     </div>
   `;
+  const btnCancel = msg.querySelector(".btn-cancel-generating");
+  if (btnCancel) {
+    btnCancel.addEventListener("click", () => stopCurrentChatGeneration());
+  }
   messagesList.appendChild(msg);
   messagesList.scrollTop = messagesList.scrollHeight;
 }
@@ -1414,16 +2016,33 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
       : (factcheck.fidelity !== undefined ? factcheck.fidelity : 0);
     const trustClass = trustPct >= 70 ? "trust-high" : (trustPct >= 35 ? "trust-med" : "trust-low");
 
+    const meterHtml = `
+      <div class="fc-meter-bar-container" style="margin-bottom: 12px; padding: 10px 12px; background: rgba(0,0,0,0.22); border-radius: 6px; border: 1px solid rgba(255,255,255,0.06);">
+        <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 6px;">
+          <span style="font-weight: 600; color: var(--text-dim);">Information Trust & Calibration</span>
+          <span style="font-weight: 700; font-family: var(--font-mono);" class="${trustClass}">${trustPct}% Confidence</span>
+        </div>
+        <div style="height: 6px; background: rgba(255,255,255,0.08); border-radius: 9999px; overflow: hidden;">
+          <div style="width: ${trustPct}%; height: 100%; border-radius: 9999px; background: ${trustPct >= 70 ? 'linear-gradient(90deg, #10b981, #059669)' : (trustPct >= 35 ? 'linear-gradient(90deg, #f59e0b, #d97706)' : 'linear-gradient(90deg, #ef4444, #dc2626)')}; transition: width 0.3s ease;"></div>
+        </div>
+      </div>
+    `;
+
     let detailsContent = "";
     if (factcheck.claims && factcheck.claims.length > 0) {
       detailsContent = `
+        ${meterHtml}
         <div class="factcheck-claims-list">
           ${factcheck.claims.map((c) => {
             const isV = c.verdict === "VERIFIED";
             const isC = c.verdict === "CONTRADICTED";
             const badgeClass = isV ? "badge-verified" : (isC ? "badge-contradicted" : "badge-unverified");
             const badgeLabel = isV ? "Verified" : (isC ? "Potential Hallucination" : "Unverified");
-            const badgeIcon = isV ? "✅" : (isC ? "❌" : "⚠️");
+            const badgeIcon = isV
+              ? `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:middle;margin-right:2px;"><polyline points="20 6 9 17 4 12"></polyline></svg>`
+              : (isC
+                ? `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:middle;margin-right:2px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`
+                : `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:middle;margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`);
             const confPct = Math.round((c.confidence || 0) * 100);
             const citeLinks = (c.citations || []).map(cite => 
               `<a href="${escapeHtml(cite.url)}" target="_blank" class="cite-link" title="${escapeHtml(cite.url)}">${escapeHtml(cite.title || cite.url)}</a>`
@@ -1447,7 +2066,10 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
         .replace(/^─+/gm, "")
         .replace(/(?:[\uD83D\uDEE1\uFE0F]\s*)?FACT-CHECK & WEB GROUNDING ENGINE \(Live Verification\):?/i, "")
         .trim();
-      detailsContent = `<div class="factcheck-body font-mono-target">${escapeHtml(cleanReport)}</div>`;
+      detailsContent = `
+        ${meterHtml}
+        <div class="factcheck-body font-mono-target">${escapeHtml(cleanReport)}</div>
+      `;
     }
 
     html += `
@@ -2222,8 +2844,15 @@ function renderTeamRoster(roster, availableModels) {
                     SVG_ICONS.qa;
 
     let modelOptions = availableModels.map(m => `<option value="${m}" ${m === member.current_model ? "selected" : ""}>${m}</option>`).join("");
+    (window.__cloudProviders || []).forEach(prov => {
+      if (prov.key_count > 0 && prov.models) {
+        prov.models.forEach(cm => {
+          modelOptions += `<option value="${cm}" ${cm === member.current_model ? "selected" : ""}>${cm} (${prov.name || prov.id.toUpperCase()})</option>`;
+        });
+      }
+    });
     (window.__configuredCloudModels || []).forEach(cm => {
-      modelOptions += `<option value="${cm.model_name}" ${cm.model_name === member.current_model ? "selected" : ""}>${cm.model_name} (Cloud)</option>`;
+      modelOptions += `<option value="${cm.model_name}" ${cm.model_name === member.current_model ? "selected" : ""}>${cm.model_name} (Custom Cloud)</option>`;
     });
 
     card.innerHTML = `
@@ -3488,41 +4117,421 @@ function resumeActiveDownload() {
   }
 }
 
+function setupCustomModelDropdown() {
+  const trigger = document.getElementById("custom-model-trigger");
+  const menu = document.getElementById("custom-model-menu");
+  if (!trigger || !menu) return;
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isClosed = menu.classList.contains("hidden") || menu.hasAttribute("hidden") || getComputedStyle(menu).display === "none";
+    if (isClosed) {
+      openCustomModelMenu();
+    } else {
+      closeCustomModelMenu();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!menu.contains(e.target) && !trigger.contains(e.target)) {
+      closeCustomModelMenu();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeCustomModelMenu();
+    }
+  });
+}
+
+function openCustomModelMenu() {
+  const trigger = document.getElementById("custom-model-trigger");
+  const menu = document.getElementById("custom-model-menu");
+  if (!menu || !trigger) return;
+  menu.classList.remove("hidden");
+  menu.removeAttribute("hidden");
+  trigger.classList.add("is-open");
+  trigger.setAttribute("aria-expanded", "true");
+}
+
+function closeCustomModelMenu() {
+  const trigger = document.getElementById("custom-model-trigger");
+  const menu = document.getElementById("custom-model-menu");
+  if (!menu || !trigger) return;
+  menu.classList.add("hidden");
+  menu.setAttribute("hidden", "");
+  trigger.classList.remove("is-open");
+  trigger.setAttribute("aria-expanded", "false");
+  menu.querySelectorAll(".cmd-provider-item.is-open, .cmd-provider-item.is-hovered").forEach((item) => {
+    item.classList.remove("is-open");
+    item.classList.remove("is-hovered");
+  });
+}
+
+function getModelCategoryBadge(modelName) {
+  const m = (modelName || "").toLowerCase();
+
+  // 1. Deep Reasoning & Math models
+  if (
+    m.includes("r1") ||
+    m.includes("reasoner") ||
+    m.includes("deepseek-r1") ||
+    m.includes("o1") ||
+    m.includes("o3") ||
+    m.includes("qwq")
+  ) {
+    return { label: "Reasoning", cssClass: "reasoning" };
+  }
+
+  // 2. Code specialized models
+  if (
+    m.includes("coder") ||
+    m.includes("starcoder") ||
+    (m.includes("code") && !m.includes("decode"))
+  ) {
+    return { label: "Code", cssClass: "code" };
+  }
+
+  // 3. Pro / Flagship / Frontier / High-parameter models
+  if (
+    m.includes("hydrogen") ||
+    m.includes("carbon") ||
+    m.includes("pro") ||
+    m.includes("ultra") ||
+    m.includes("opus") ||
+    m.includes("sonnet") ||
+    m.includes("70b") ||
+    m.includes("405b") ||
+    m.includes("large")
+  ) {
+    return { label: "Pro", cssClass: "pro" };
+  }
+
+  // 4. Ultra-Fast / lightweight models (must check BEFORE regular flash!)
+  if (
+    m.includes("flash-lite") ||
+    m.includes("instant") ||
+    (m.includes("mini") && !m.includes("gemini")) ||
+    m.includes("tiny") ||
+    m.includes("lite") ||
+    m.includes("nano") ||
+    m.includes("haiku") ||
+    m.includes("1b") ||
+    m.includes("1.5b") ||
+    m.includes("2b") ||
+    m.includes("e2b")
+  ) {
+    return { label: "Fast", cssClass: "fast" };
+  }
+
+  // 5. Balanced / Versatile / Medium Workhorse models
+  if (
+    m.includes("flash") ||
+    m.includes("versatile") ||
+    m.includes("balanced") ||
+    m.includes("turbo") ||
+    m.includes("3b") ||
+    m.includes("4b") ||
+    m.includes("7b") ||
+    m.includes("8b") ||
+    m.includes("9b") ||
+    m.includes("12b") ||
+    m.includes("14b") ||
+    m.includes("27b") ||
+    m.includes("32b")
+  ) {
+    return { label: "Balanced", cssClass: "balanced" };
+  }
+
+  return { label: "General", cssClass: "general" };
+}
+
+function updateTriggerLabel(labelText) {
+  const lbl = document.getElementById("cmd-trigger-text");
+  if (lbl) {
+    lbl.textContent = labelText;
+    lbl.setAttribute("title", labelText);
+  }
+}
+
+function selectCustomModel(modelValue) {
+  if (!headerModelSelect) return;
+  headerModelSelect.value = modelValue;
+  activeModel = modelValue;
+  headerModelSelect.dispatchEvent(new Event("change"));
+  closeCustomModelMenu();
+  populateModelSelectors(availableModels);
+}
+
 function populateModelSelectors(models) {
-  const currentVal = headerModelSelect.value;
+  const currentVal = activeModel || (headerModelSelect ? headerModelSelect.value : "auto");
+  if (!headerModelSelect) return;
   headerModelSelect.innerHTML = "";
   let hasSelected = false;
+  let activeDisplayLabel = "";
 
-  models.forEach((m) => {
+  const menuEl = document.getElementById("custom-model-menu");
+  if (menuEl) menuEl.innerHTML = "";
+
+  // 1. Intelligent Strategy Presets (Auto / Fast / Smart / Fusion)
+  const grpStrategies = document.createElement("optgroup");
+  grpStrategies.label = "Strategy Presets";
+  const virtualModels = [
+    { value: "auto", label: "Auto (Balanced Routing)" },
+    { value: "auto:fast", label: "Fast (Speed Optimized)" },
+    { value: "auto:smart", label: "Smart (Deep Reasoning / R1)" },
+    { value: "fusion", label: "Fusion (Multi-Model Synthesis)" },
+  ];
+
+  let stratHtml = `<div class="cmd-group"><div class="cmd-group-title">Strategy Presets</div>`;
+  virtualModels.forEach((vm) => {
     const opt = document.createElement("option");
-    opt.value = m.name;
-    opt.textContent = `${m.name} (Local)`;
-    if ((m.name === currentVal || m.is_active) && !hasSelected) {
+    opt.value = vm.value;
+    opt.textContent = vm.label;
+    const isAct = (vm.value === currentVal && !hasSelected);
+    if (isAct) {
       opt.selected = true;
-      activeModel = m.name;
+      activeModel = vm.value;
       hasSelected = true;
+      activeDisplayLabel = vm.label;
     }
-    headerModelSelect.appendChild(opt);
+    grpStrategies.appendChild(opt);
+
+    stratHtml += `
+      <div class="cmd-option ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(vm.value)}">
+        <div class="cmd-opt-main">
+          <span class="cmd-opt-name">${escapeHtml(vm.label)}</span>
+        </div>
+        ${isAct ? '<svg class="cmd-check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+      </div>
+    `;
+  });
+  stratHtml += `</div>`;
+  headerModelSelect.appendChild(grpStrategies);
+
+  // 2. Active Cloud Models (Cascading Hover Submenus by Provider Company!)
+  const cloudProviders = window.__cloudProviders || [];
+  let cloudHtml = "";
+
+  cloudProviders.forEach((prov) => {
+    const hasKeys = (prov.key_count && prov.key_count > 0) || (prov.has_key && prov.key_count > 0);
+    const modelsList = prov.models || [];
+    if (hasKeys && modelsList.length > 0) {
+      const grpProv = document.createElement("optgroup");
+      const provTitle = prov.name || prov.id.toUpperCase();
+      grpProv.label = `${provTitle} (Cloud)`;
+
+      let subItemsHtml = "";
+      modelsList.forEach((mName) => {
+        const opt = document.createElement("option");
+        opt.value = mName;
+        const badge = getModelCategoryBadge(mName);
+        opt.textContent = `${mName} (${badge.label} Cloud)`;
+        const isAct = (mName === currentVal && !hasSelected);
+        if (isAct) {
+          opt.selected = true;
+          activeModel = mName;
+          hasSelected = true;
+          activeDisplayLabel = `${mName} (${provTitle})`;
+        }
+        grpProv.appendChild(opt);
+
+        subItemsHtml += `
+          <div class="cmd-option ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(mName)}">
+            <div class="cmd-opt-main">
+              <span class="cmd-opt-name">${escapeHtml(mName)}</span>
+              <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}</span>
+            </div>
+            ${isAct ? '<svg class="cmd-check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+          </div>
+        `;
+      });
+      headerModelSelect.appendChild(grpProv);
+
+      const provHasActiveModel = modelsList.includes(currentVal);
+      cloudHtml += `
+        <div class="cmd-provider-item ${provHasActiveModel ? 'has-active-child' : ''}" data-provider-id="${escapeHtml(prov.id)}">
+          <div class="cmd-provider-row">
+            <div class="cmd-provider-left">
+              <span class="cmd-provider-bullet"></span>
+              <span class="cmd-provider-title">${escapeHtml(provTitle)}</span>
+              <span class="cmd-count-badge">${modelsList.length}</span>
+            </div>
+            <svg class="cmd-flyout-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </div>
+          <!-- Flyout Submenu on Hover or Click! -->
+          <div class="cmd-submenu">
+            <div class="cmd-submenu-header">
+              <span>${escapeHtml(provTitle)} Models</span>
+              <span class="cmd-active-key-dot" title="Active Key Connected">● Connected</span>
+            </div>
+            <div class="cmd-submenu-list">
+              ${subItemsHtml}
+            </div>
+          </div>
+        </div>
+      `;
+    }
   });
 
-  (window.__configuredCloudModels || []).forEach((cm) => {
-    const opt = document.createElement("option");
-    opt.value = cm.model_name;
-    opt.textContent = `${cm.model_name} (${cm.model_type === "image" ? "Cloud Image" : "Cloud Chat"})`;
-    if (cm.model_name === currentVal && !hasSelected) {
-      opt.selected = true;
-      activeModel = cm.model_name;
-      hasSelected = true;
+  // 3. Configured Custom Cloud Endpoints
+  const cloudList = window.__configuredCloudModels || [];
+  if (cloudList.length > 0) {
+    const grpCloud = document.createElement("optgroup");
+    grpCloud.label = "Custom Cloud Endpoints";
+    let customSubHtml = "";
+    cloudList.forEach((cm) => {
+      const opt = document.createElement("option");
+      opt.value = cm.model_name;
+      const badge = cm.model_type === "image" ? { label: "Image", cssClass: "pro" } : getModelCategoryBadge(cm.model_name);
+      opt.textContent = `${cm.model_name} (${badge.label})`;
+      const isAct = (cm.model_name === currentVal && !hasSelected);
+      if (isAct) {
+        opt.selected = true;
+        activeModel = cm.model_name;
+        hasSelected = true;
+        activeDisplayLabel = `${cm.model_name} (Custom)`;
+      }
+      grpCloud.appendChild(opt);
+
+      customSubHtml += `
+        <div class="cmd-option ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(cm.model_name)}">
+          <div class="cmd-opt-main">
+            <span class="cmd-opt-name">${escapeHtml(cm.model_name)}</span>
+            <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}</span>
+          </div>
+          ${isAct ? '<svg class="cmd-check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+        </div>
+      `;
+    });
+    headerModelSelect.appendChild(grpCloud);
+
+    cloudHtml += `
+      <div class="cmd-provider-item" data-provider-id="custom">
+        <div class="cmd-provider-row">
+          <div class="cmd-provider-left">
+            <span class="cmd-provider-bullet custom"></span>
+            <span class="cmd-provider-title">Custom Endpoints</span>
+            <span class="cmd-count-badge">${cloudList.length}</span>
+          </div>
+          <svg class="cmd-flyout-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </div>
+        <div class="cmd-submenu">
+          <div class="cmd-submenu-header">
+            <span>Custom Cloud Endpoints</span>
+          </div>
+          <div class="cmd-submenu-list">
+            ${customSubHtml}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 4. Local Installed Models (Ollama)
+  let localHtml = "";
+  if (models && models.length > 0) {
+    const grpLocal = document.createElement("optgroup");
+    grpLocal.label = "Local Installed Models (Ollama)";
+    localHtml += `<div class="cmd-group"><div class="cmd-group-title">Local Installed Models (Ollama)</div>`;
+
+    models.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.name;
+      const badge = getModelCategoryBadge(m.name);
+      opt.textContent = `${m.name} (${badge.label} Tier)`;
+      const isAct = ((m.name === currentVal || m.is_active) && !hasSelected);
+      if (isAct) {
+        opt.selected = true;
+        activeModel = m.name;
+        hasSelected = true;
+        activeDisplayLabel = `${m.name} (Local)`;
+      }
+      grpLocal.appendChild(opt);
+
+      localHtml += `
+        <div class="cmd-option ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(m.name)}">
+          <div class="cmd-opt-main">
+            <span class="cmd-opt-name">${escapeHtml(m.name)}</span>
+            <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}</span>
+          </div>
+          ${isAct ? '<svg class="cmd-check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
+        </div>
+      `;
+    });
+    localHtml += `</div>`;
+    headerModelSelect.appendChild(grpLocal);
+  }
+
+  // Assemble full custom menu HTML
+  if (menuEl) {
+    let fullMenuHtml = stratHtml;
+    if (cloudHtml) {
+      fullMenuHtml += `<div class="cmd-divider"></div><div class="cmd-group"><div class="cmd-group-title">Cloud AI Providers (Hover / Click for Models)</div>${cloudHtml}</div>`;
     }
-    headerModelSelect.appendChild(opt);
-  });
+    if (localHtml) {
+      fullMenuHtml += `<div class="cmd-divider"></div>${localHtml}`;
+    }
+    menuEl.innerHTML = fullMenuHtml;
+
+    // Provider flyout interaction: click-to-pin & hover grace period
+    menuEl.querySelectorAll(".cmd-provider-item").forEach((provItem) => {
+      let leaveTimer = null;
+      provItem.addEventListener("mouseenter", () => {
+        if (leaveTimer) {
+          clearTimeout(leaveTimer);
+          leaveTimer = null;
+        }
+        provItem.classList.add("is-hovered");
+      });
+      provItem.addEventListener("mouseleave", () => {
+        leaveTimer = setTimeout(() => {
+          provItem.classList.remove("is-hovered");
+        }, 220); // 220ms grace buffer so diagonal mouse movement never loses flyout
+      });
+    });
+
+    // Click on provider row toggles/pins submenu open
+    menuEl.querySelectorAll(".cmd-provider-row").forEach((pRow) => {
+      pRow.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const item = pRow.closest(".cmd-provider-item");
+        if (!item) return;
+        const isOpen = item.classList.contains("is-open");
+        menuEl.querySelectorAll(".cmd-provider-item.is-open").forEach((other) => {
+          if (other !== item) other.classList.remove("is-open");
+        });
+        if (isOpen) {
+          item.classList.remove("is-open");
+        } else {
+          item.classList.add("is-open");
+        }
+      });
+    });
+
+    // Attach click events on all .cmd-option items
+    menuEl.querySelectorAll(".cmd-option").forEach((optEl) => {
+      optEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const val = optEl.getAttribute("data-value");
+        if (val) {
+          selectCustomModel(val);
+        }
+      });
+    });
+  }
 
   // If nothing selected, choose first available model option
   if (!hasSelected && headerModelSelect.options.length > 0) {
     headerModelSelect.options[0].selected = true;
     activeModel = headerModelSelect.options[0].value;
+    activeDisplayLabel = headerModelSelect.options[0].textContent;
   }
+
+  updateTriggerLabel(activeDisplayLabel || currentVal || "Auto (Balanced Routing)");
   updateChatPlaceholderForActiveModel();
+  updateVirtualModelsBarActive(activeModel);
 }
 
 async function switchModel(modelName) {
@@ -3536,7 +4545,16 @@ async function switchModel(modelName) {
     if (data.success) {
       activeModel = modelName;
       headerModelSelect.value = modelName;
+      updateTriggerLabel(modelName);
       updateChatPlaceholderForActiveModel();
+      updateVirtualModelsBarActive(modelName);
+      document.querySelectorAll(".phub-model-pill").forEach((pill) => {
+        if (pill.getAttribute("data-model") === modelName) {
+          pill.classList.add("active");
+        } else {
+          pill.classList.remove("active");
+        }
+      });
       showToast(`Model switched to ${modelName}`, "success");
       loadInstalledModels();
     }
@@ -3558,10 +4576,10 @@ async function checkInstallPathStorage(pathVal) {
       const free = data.storage.free_gb;
       const drive = data.storage.drive || "C:";
       if (free < 2.0) {
-        infoEl.textContent = `⚠️ Low Disk Space: Only ${free} GB Free on ${drive}`;
+        infoEl.textContent = `Low Disk Space: Only ${free} GB Free on ${drive}`;
         infoEl.className = "storage-hint-warn";
       } else {
-        infoEl.textContent = `✓ Storage Available: ${free} GB Free on ${drive}`;
+        infoEl.textContent = `Storage Available: ${free} GB Free on ${drive}`;
         infoEl.className = "storage-hint-ok";
       }
     } else {
@@ -3664,7 +4682,7 @@ function handleDownloadSuccess(modelName) {
   activeDownloadAbortController = null;
   activeDownloadPct = 100;
 
-  syncDownloadUI(100, `✓ Successfully installed ${modelName}!`, activeDownloadBytes, false);
+  syncDownloadUI(100, `Successfully installed ${modelName}!`, activeDownloadBytes, false);
 
   const confirmLabel = document.getElementById("btn-confirm-install-label");
   const cancelBtn = document.getElementById("btn-cancel-install-modal");
@@ -3866,7 +4884,7 @@ function startModelDownload(modelInfo, targetPath = "") {
 
               if (hasCompletedSuccess) {
                 pct = 100;
-                statusMsg = `✓ Successfully installed ${modelName}!`;
+                statusMsg = `Successfully installed ${modelName}!`;
               }
 
               syncDownloadUI(pct, statusMsg, bytesStr, false);
@@ -3915,7 +4933,11 @@ function setupCloudKeys() {
       const mtype = btn.getAttribute("data-type") || "chat";
       const radio = document.querySelector(`input[name="model-type"][value="${mtype}"]`);
       if (radio) radio.checked = true;
-      cfgApiKey.focus();
+      if (btn.getAttribute("data-zero") === "true") {
+        cfgApiKey.value = "zero-key-open";
+      } else {
+        cfgApiKey.focus();
+      }
     });
   });
 
@@ -3962,45 +4984,615 @@ function setupCloudKeys() {
       showToast(`Save error: ${err.message}`, "error");
     }
   });
+
+  initApiKeyModals();
+}
+
+const PROVIDER_KEY_LINKS = {
+  groq: { name: "Groq Cloud Console", url: "https://console.groq.com/keys" },
+  cerebras: { name: "Cerebras Cloud Dashboard", url: "https://cloud.cerebras.ai/" },
+  gemini: { name: "Google AI Studio", url: "https://aistudio.google.com/app/apikey" },
+  deepseek: { name: "DeepSeek Open Platform", url: "https://platform.deepseek.com/api_keys" },
+  openrouter: { name: "OpenRouter Key Management", url: "https://openrouter.ai/keys" },
+  mistral: { name: "Mistral La Plateforme", url: "https://console.mistral.ai/api-keys/" },
+  cohere: { name: "Cohere Dashboard", url: "https://dashboard.cohere.com/api-keys" },
+  pollinations: { name: "Pollinations.ai", url: "https://enter.pollinations.ai/" },
+  together: { name: "Together AI Settings", url: "https://api.together.xyz/settings/api-keys" },
+};
+
+let pendingRemoveProviderId = null;
+let pendingRemoveProviderName = null;
+
+function openApiKeyModal(pId, pData) {
+  const modal = document.getElementById("api-key-modal");
+  const provIdInp = document.getElementById("key-modal-provider-id");
+  const titleEl = document.getElementById("api-key-modal-title");
+  const subtitleEl = document.getElementById("api-key-modal-subtitle");
+  const keyInp = document.getElementById("key-modal-input");
+  const helpEl = document.getElementById("key-modal-help");
+
+  if (!modal || !provIdInp || !keyInp) return;
+
+  const provName = pData?.name || pId.toUpperCase();
+  provIdInp.value = pId;
+  if (titleEl) titleEl.textContent = `Add API Key - ${provName}`;
+  if (subtitleEl) subtitleEl.textContent = `Add an API key to the ${provName} provider pool.`;
+
+  keyInp.value = "";
+  keyInp.type = "password";
+  const iconEye = document.getElementById("icon-eye-key");
+  if (iconEye) {
+    iconEye.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+  }
+
+  if (helpEl) {
+    const linkInfo = PROVIDER_KEY_LINKS[pId.toLowerCase()];
+    if (linkInfo) {
+      helpEl.innerHTML = `Need a key? Get one for free at <a href="${linkInfo.url}" target="_blank" rel="noopener noreferrer" style="color: #38bdf8; text-decoration: underline;">${linkInfo.name}</a>.`;
+    } else {
+      helpEl.textContent = "Your API key is securely stored in your local PAI configuration.";
+    }
+  }
+
+  modal.classList.remove("hidden");
+  modal.style.display = "flex";
+  setTimeout(() => keyInp.focus(), 60);
+}
+
+function closeApiKeyModal() {
+  const modal = document.getElementById("api-key-modal");
+  if (modal) {
+    modal.classList.add("hidden");
+    modal.style.display = "none";
+  }
+}
+
+function openRemoveKeyModal(pId, pData) {
+  const modal = document.getElementById("api-key-remove-modal");
+  const descEl = document.getElementById("remove-key-modal-desc");
+  if (!modal) return;
+  pendingRemoveProviderId = pId;
+  pendingRemoveProviderName = pData?.name || pId.toUpperCase();
+  if (descEl) {
+    descEl.textContent = `Are you sure you want to remove the most recently added API key from the ${pendingRemoveProviderName} pool?`;
+  }
+  modal.classList.remove("hidden");
+  modal.style.display = "flex";
+}
+
+function closeRemoveKeyModal() {
+  const modal = document.getElementById("api-key-remove-modal");
+  if (modal) {
+    modal.classList.add("hidden");
+    modal.style.display = "none";
+  }
+  pendingRemoveProviderId = null;
+  pendingRemoveProviderName = null;
+}
+
+function initApiKeyModals() {
+  const keyModal = document.getElementById("api-key-modal");
+  const keyForm = document.getElementById("api-key-modal-form");
+  const btnCloseKey = document.getElementById("btn-close-key-modal");
+  const btnCancelKey = document.getElementById("btn-cancel-key-modal");
+  const btnToggleVis = document.getElementById("btn-toggle-key-visibility");
+  const keyInp = document.getElementById("key-modal-input");
+
+  btnCloseKey?.addEventListener("click", closeApiKeyModal);
+  btnCancelKey?.addEventListener("click", closeApiKeyModal);
+  keyModal?.addEventListener("click", (e) => {
+    if (e.target === keyModal) closeApiKeyModal();
+  });
+
+  btnToggleVis?.addEventListener("click", () => {
+    if (!keyInp) return;
+    const isPass = keyInp.type === "password";
+    keyInp.type = isPass ? "text" : "password";
+    const iconEye = document.getElementById("icon-eye-key");
+    if (iconEye) {
+      iconEye.innerHTML = isPass
+        ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>'
+        : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+    }
+  });
+
+  keyForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const provId = document.getElementById("key-modal-provider-id")?.value;
+    const keyVal = keyInp?.value?.trim();
+    if (!provId || !keyVal) return;
+
+    const submitBtn = document.getElementById("btn-save-key-modal");
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/cloud/add_key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: provId, key: keyVal, api_key: keyVal }),
+      });
+      const resData = await res.json();
+      if (resData.success) {
+        closeApiKeyModal();
+        showToast(resData.message || `API Key added to ${provId.toUpperCase()} pool (${resData.key_count || 1} keys active)`, "success", "Pool Expanded");
+        loadCloudModels();
+      } else {
+        showToast(`Failed to add key: ${resData.error || resData.message || "Unknown error"}`, "error");
+      }
+    } catch (err) {
+      showToast(`Error adding key: ${err.message}`, "error");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+
+  // Remove Key Modal
+  const remModal = document.getElementById("api-key-remove-modal");
+  const btnCloseRem = document.getElementById("btn-close-remove-key-modal");
+  const btnCancelRem = document.getElementById("btn-cancel-remove-key-modal");
+  const btnConfirmRem = document.getElementById("btn-confirm-remove-key-modal");
+
+  btnCloseRem?.addEventListener("click", closeRemoveKeyModal);
+  btnCancelRem?.addEventListener("click", closeRemoveKeyModal);
+  remModal?.addEventListener("click", (e) => {
+    if (e.target === remModal) closeRemoveKeyModal();
+  });
+
+  btnConfirmRem?.addEventListener("click", async () => {
+    if (!pendingRemoveProviderId) return;
+    const pId = pendingRemoveProviderId;
+    const pName = pendingRemoveProviderName;
+    btnConfirmRem.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/cloud/remove_key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: pId, key_index: -1 }),
+      });
+      const resData = await res.json();
+      if (resData.success) {
+        closeRemoveKeyModal();
+        showToast(`Key removed from ${pName} (${resData.remaining_keys || 0} remaining)`, "info");
+        loadCloudModels();
+      } else {
+        showToast(`Failed to remove key: ${resData.error || resData.message || "Unknown error"}`, "error");
+      }
+    } catch (err) {
+      showToast(`Error removing key: ${err.message}`, "error");
+    } finally {
+      btnConfirmRem.disabled = false;
+    }
+  });
+
+  // Global escape key handler to close open modals
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeApiKeyModal();
+      closeRemoveKeyModal();
+    }
+  });
+}
+
+function classifyModelStrategy(modelName) {
+  if (!modelName) return "auto";
+  const m = modelName.toLowerCase();
+  if (m === "auto" || m === "pai-auto") return "auto";
+  if (m === "auto:fast" || m === "fast") return "auto:fast";
+  if (m === "auto:smart" || m === "smart") return "auto:smart";
+  if (m === "fusion" || m === "auto:fusion") return "fusion";
+
+  // Fast heuristics: lightweight parameter models / ultra-fast inference
+  if (
+    m.includes("flash-lite") ||
+    m.includes("instant") ||
+    (m.includes("mini") && !m.includes("gemini")) ||
+    m.includes("tiny") ||
+    m.includes("lite") ||
+    m.includes("nano") ||
+    m.includes("haiku") ||
+    m.includes("1b") ||
+    m.includes("1.5b") ||
+    m.includes("2b") ||
+    m.includes("e2b")
+  ) {
+    return "auto:fast";
+  }
+
+  // Smart heuristics: reasoning models, coder models, frontier & large parameter models
+  if (
+    m.includes("deepseek") ||
+    m.includes("r1") ||
+    m.includes("reasoner") ||
+    m.includes("coder") ||
+    m.includes("hydrogen") ||
+    m.includes("carbon") ||
+    m.includes("pro") ||
+    m.includes("ultra") ||
+    m.includes("opus") ||
+    m.includes("sonnet") ||
+    m.includes("70b") ||
+    m.includes("405b") ||
+    m.includes("large") ||
+    m.includes("thinking")
+  ) {
+    return "auto:smart";
+  }
+
+  return "auto";
+}
+
+function setupVirtualModelsBar() {
+  const bar = document.getElementById("virtual-models-bar");
+  if (!bar) return;
+  bar.querySelectorAll(".btn-vmodel").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetModel = btn.getAttribute("data-model");
+      if (targetModel) {
+        switchModel(targetModel);
+      }
+    });
+  });
+}
+
+function updateVirtualModelsBarActive(modelName) {
+  const current = modelName || activeModel || "auto";
+  const strategyTier = classifyModelStrategy(current);
+
+  // Synchronize active highlight on the strategy presets
+  document.querySelectorAll(".btn-vmodel").forEach((btn) => {
+    const targetModel = btn.getAttribute("data-model");
+    if (targetModel === strategyTier) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+
+  // Synchronize header dropdown to match active model if present
+  if (headerModelSelect && headerModelSelect.value !== current) {
+    const matchingOpt = Array.from(headerModelSelect.options).find(opt => opt.value === current);
+    if (matchingOpt) {
+      headerModelSelect.value = current;
+    }
+  }
+
+  // Update real-time chat header engine badge
+  const badgeDot = document.querySelector(".engine-badge-dot");
+  const badgeText = document.getElementById("chat-engine-badge-text");
+  if (badgeText) {
+    const isVirtual = ["auto", "auto:fast", "auto:smart", "fusion"].includes(current.toLowerCase());
+    if (isVirtual) {
+      const labels = {
+        "auto": "Auto (Balanced)",
+        "auto:fast": "Fast (Low-Latency)",
+        "auto:smart": "Smart (Reasoning R1)",
+        "fusion": "Dual Fusion (Draft + Review)"
+      };
+      badgeText.textContent = `Strategy: ${labels[current.toLowerCase()] || current}`;
+      if (badgeDot) {
+        badgeDot.className = current === "fusion" ? "engine-badge-dot fusion" : "engine-badge-dot cloud";
+      }
+    } else {
+      const badge = typeof getModelCategoryBadge === "function" ? getModelCategoryBadge(current) : { label: "Auto", cssClass: "auto" };
+      badgeText.textContent = `Engine: ${current} [${badge.label}]`;
+      if (badgeDot) {
+        const isCloud = (window.__cloudProviders || []).some(p => (p.models || []).includes(current)) ||
+                        (window.__configuredCloudModels || []).some(cm => cm.model_name === current);
+        badgeDot.className = isCloud ? "engine-badge-dot cloud" : "engine-badge-dot";
+      }
+    }
+  }
 }
 
 async function loadCloudModels() {
   try {
     const res = await fetch(`${API_BASE}/api/cloud/config`);
     const data = await res.json();
-    if (data.configured_models) {
-      window.__configuredCloudModels = data.configured_models;
-      renderConfiguredCloudModels(data.configured_models, data.active_model);
-      populateModelSelectors(availableModels);
+    let providersArr = [];
+    if (data.providers) {
+      providersArr = Array.isArray(data.providers)
+        ? data.providers
+        : Object.entries(data.providers).map(([k, v]) => ({ id: k, ...v }));
+      window.__cloudProviders = providersArr;
+      renderCloudProvidersHub(data.providers, data.active_model, data.health);
     }
+    const customList = data.configured_models || [];
+    window.__configuredCloudModels = customList;
+    renderConfiguredCloudModels(customList, data.active_model, providersArr);
+
+    populateModelSelectors(availableModels);
+    updateVirtualModelsBarActive(data.active_model || activeModel);
   } catch (err) {
     console.error("Cloud config error:", err);
   }
 }
 
-function renderConfiguredCloudModels(models, activeModel) {
-  configuredCountSpan.textContent = `${models.length} model${models.length === 1 ? '' : 's'}`;
-  configuredModelsList.innerHTML = "";
-  if (models.length === 0) {
-    configuredModelsList.innerHTML = `<div class="text-muted">No external models configured yet. Use the form above to add one!</div>`;
+function renderCloudProvidersHub(providers, activeModel, healthData) {
+  const container = document.getElementById("cloud-providers-hub");
+  if (!container) return;
+  container.innerHTML = "";
+
+  const providerList = Array.isArray(providers)
+    ? providers
+    : Object.entries(providers || {}).map(([k, v]) => ({ id: k, ...v }));
+
+  const totalKeys = providerList.reduce((acc, p) => acc + (p.key_count || 0), 0);
+  const hubTotalKeysEl = document.getElementById("hub-total-keys");
+  if (hubTotalKeysEl) {
+    hubTotalKeysEl.textContent = `${totalKeys} Key${totalKeys === 1 ? '' : 's'} Pooled`;
+  }
+
+  if (providerList.length === 0) {
+    container.innerHTML = `<div class="text-muted">No free cloud providers registered.</div>`;
     return;
   }
 
-  models.forEach((m) => {
+  providerList.forEach((pData) => {
+    const pId = pData.id || pData.provider || "custom";
+    const card = document.createElement("div");
+
+    let statusClass = "status-ready";
+    let statusText = "Ready";
+    const health = pData.health || {};
+    if (health.rate_limited) {
+      statusClass = "status-cooldown";
+      statusText = `Cooldown (${Math.round(health.cooldown_remaining_sec || 0)}s)`;
+    } else if (pData.is_free && pData.key_count === 0) {
+      statusClass = "status-ready";
+      statusText = "Zero-Key Ready";
+    } else if (pData.key_count === 0) {
+      statusClass = "status-nokey";
+      statusText = "No Keys";
+    }
+
+    const hasActiveModel = (pData.models || []).includes(activeModel);
+    card.className = `provider-hub-card ${hasActiveModel ? 'active-prov' : ''}`;
+    card.setAttribute("data-provider", pId);
+
+    const modelsHtml = (pData.models || []).map((m) => {
+      const isMActive = m === activeModel;
+      return `<span class="phub-model-pill ${isMActive ? 'active' : ''}" data-model="${escapeHtml(m)}" title="Click to activate ${escapeHtml(m)}">${escapeHtml(m)}</span>`;
+    }).join("");
+
+    const maskedKeys = pData.masked_keys || [];
+    let keysSectionHtml = "";
+    if (maskedKeys.length > 0) {
+      keysSectionHtml = `
+        <div class="phub-keys-section">
+          <div class="phub-keys-header">
+            <span>Configured Keys (${maskedKeys.length})</span>
+          </div>
+          <div class="phub-keys-list">
+            ${maskedKeys.map((k) => `
+              <div class="phub-key-chip" title="Active API Key">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;">
+                  <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                </svg>
+                <span class="phub-key-text">${escapeHtml(k.masked)}</span>
+                <span class="phub-key-badge-active">ACTIVE</span>
+                <button type="button" class="btn-del-key-chip" data-provider="${pId}" data-key-index="${k.index}" title="Remove this key">&times;</button>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    } else if (pData.is_free && pData.key_count === 0) {
+      keysSectionHtml = `
+        <div class="phub-keys-section phub-zero-key-section">
+          <div class="phub-no-keys-note zero-key">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0; vertical-align:middle; margin-right:4px;">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            <span>Public Zero-Key Provider &middot; No API key required</span>
+          </div>
+        </div>
+      `;
+    } else {
+      keysSectionHtml = `
+        <div class="phub-keys-section">
+          <div class="phub-no-keys-note">No API key saved yet. Click &ldquo;+ Add Key&rdquo; below.</div>
+        </div>
+      `;
+    }
+
+    card.innerHTML = `
+      <div class="phub-header">
+        <div class="phub-title-row">
+          <span class="phub-name">${escapeHtml(pData.name || pId)}</span>
+          ${pData.is_free ? `<span class="phub-badge-free">FREE TIER</span>` : ''}
+          ${pData.speed_tier === 'fast' ? `<span class="phub-badge-free" style="background:rgba(56,189,248,0.15);color:#38bdf8;border-color:rgba(56,189,248,0.3);">FAST</span>` : ''}
+        </div>
+        <span class="phub-status-badge ${statusClass}">${statusText}</span>
+      </div>
+      <div class="phub-meta-row">
+        <span>Keys: <strong>${pData.key_count}</strong> active</span>
+        <span>RPM: ${pData.rpm_cap || pData.rpm_limit || 15} · Speed: ${pData.speed_rank || 80}/100</span>
+      </div>
+      ${keysSectionHtml}
+      <div class="phub-models-list">
+        ${modelsHtml}
+      </div>
+      <div class="phub-actions">
+        <div class="flex-center-gap">
+          <button type="button" class="btn-phub-action btn-add-key" data-provider="${pId}">+ Add Key</button>
+          ${pData.key_count > 0 ? `<button type="button" class="btn-phub-action btn-remove-key" data-provider="${pId}" title="Remove Last Key"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>` : ''}
+        </div>
+        <div class="flex-center-gap">
+          <span class="latency-display" id="latency-${pId}" style="display:none; font-size:11px; font-weight:600; color:#38bdf8;"></span>
+          <button type="button" class="btn-phub-action btn-test btn-ping-prov" data-provider="${pId}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:2px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>Ping</button>
+        </div>
+      </div>
+    `;
+
+    card.querySelectorAll(".phub-model-pill").forEach((pill) => {
+      pill.addEventListener("click", () => {
+        const targetModel = pill.getAttribute("data-model");
+        if (targetModel) {
+          switchModel(targetModel);
+        }
+      });
+    });
+
+    card.querySelectorAll(".btn-del-key-chip").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const keyIdx = btn.getAttribute("data-key-index");
+        btn.disabled = true;
+        try {
+          const res = await fetch(`${API_BASE}/api/cloud/remove_key`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: pId, key_index: parseInt(keyIdx, 10) }),
+          });
+          const resData = await res.json();
+          if (resData.success) {
+            showToast(`Key removed from ${pData.name || pId.toUpperCase()}`, "info", "Key Removed");
+            loadCloudModels();
+          } else {
+            showToast(`Failed to remove key: ${resData.error || "Unknown error"}`, "error");
+          }
+        } catch (err) {
+          showToast(`Error removing key: ${err.message}`, "error");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    const addKeyBtn = card.querySelector(".btn-add-key");
+    if (addKeyBtn) {
+      addKeyBtn.addEventListener("click", () => {
+        openApiKeyModal(pId, pData);
+      });
+    }
+
+    const removeKeyBtn = card.querySelector(".btn-remove-key");
+    if (removeKeyBtn) {
+      removeKeyBtn.addEventListener("click", () => {
+        openRemoveKeyModal(pId, pData);
+      });
+    }
+
+    const pingBtn = card.querySelector(".btn-ping-prov");
+    if (pingBtn) {
+      pingBtn.addEventListener("click", async () => {
+        const latSpan = card.querySelector(`#latency-${pId}`);
+        pingBtn.disabled = true;
+        if (latSpan) {
+          latSpan.textContent = "...";
+          latSpan.style.display = "inline";
+          latSpan.style.color = "#94a3b8";
+        }
+        try {
+          const res = await fetch(`${API_BASE}/api/cloud/test_connection`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: pId }),
+          });
+          const testRes = await res.json();
+          if (testRes.success) {
+            const ms = Math.round((testRes.latency_sec || 0) * 1000);
+            if (latSpan) {
+              latSpan.textContent = `${ms}ms`;
+              latSpan.style.color = ms < 500 ? "#34d399" : "#38bdf8";
+            }
+            showToast(`${pData.name} responded in ${ms}ms`, "success", "Connection Verified");
+          } else {
+            if (latSpan) {
+              latSpan.textContent = "Fail";
+              latSpan.style.color = "#f87171";
+            }
+            const errMsg = testRes.message || testRes.error || "Unknown error";
+            showToast(`${pData.name} ping failed: ${errMsg}`, "warning", "Ping Failed");
+          }
+        } catch (err) {
+          if (latSpan) {
+            latSpan.textContent = "Err";
+            latSpan.style.color = "#f87171";
+          }
+          showToast(`Ping failed: ${err.message}`, "error");
+        } finally {
+          pingBtn.disabled = false;
+        }
+      });
+    }
+
+    container.appendChild(card);
+  });
+}
+
+function renderConfiguredCloudModels(customModels, activeModel, cloudProviders) {
+  const container = document.getElementById("configured-models-list");
+  const countSpan = document.getElementById("configured-count");
+  if (!container || !countSpan) return;
+
+  container.innerHTML = "";
+
+  const allActiveModels = [];
+  const providersList = Array.isArray(cloudProviders) ? cloudProviders : (window.__cloudProviders || []);
+
+  // 1. Models from connected Cloud Providers (with valid key count or has_key)
+  providersList.forEach((prov) => {
+    const hasKeys = (prov.key_count && prov.key_count > 0) || prov.has_key;
+    if (hasKeys && Array.isArray(prov.models) && prov.models.length > 0) {
+      prov.models.forEach((mName) => {
+        allActiveModels.push({
+          model_name: mName,
+          provider_name: prov.name || prov.id.toUpperCase(),
+          provider_id: prov.id,
+          provider_url: "Connected Cloud API",
+          model_type: prov.type || "chat",
+          is_provider: true,
+          key_count: prov.key_count || 1,
+        });
+      });
+    }
+  });
+
+  // 2. Custom Configured Endpoints
+  (customModels || []).forEach((cm) => {
+    allActiveModels.push({
+      model_name: cm.model_name,
+      provider_name: cm.provider || "Custom Endpoint",
+      provider_id: "custom",
+      provider_url: cm.provider_url || "Custom Base URL",
+      model_type: cm.model_type || "chat",
+      is_provider: false,
+    });
+  });
+
+  countSpan.textContent = `${allActiveModels.length} model${allActiveModels.length === 1 ? '' : 's'}`;
+
+  if (allActiveModels.length === 0) {
+    container.innerHTML = `<div class="text-muted">No external models configured yet. Connect a cloud provider above or use the form to add a custom endpoint!</div>`;
+    return;
+  }
+
+  allActiveModels.forEach((m) => {
     const card = document.createElement("div");
     const isActive = m.model_name === activeModel;
+    const badge = typeof getModelCategoryBadge === "function" ? getModelCategoryBadge(m.model_name) : { label: "General", cssClass: "general" };
     card.className = `model-card configured-model-card ${isActive ? 'active' : ''}`;
+    
     card.innerHTML = `
       <div class="model-card-header">
-        <span class="model-name font-mono-target">${escapeHtml(m.model_name)}</span>
+        <div class="model-title-wrap">
+          <span class="model-name font-mono-target">${escapeHtml(m.model_name)}</span>
+          <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}</span>
+        </div>
         <span class="type-badge ${m.model_type}">${m.model_type.toUpperCase()}</span>
       </div>
       <div class="model-meta">
-        <span>Endpoint: ${escapeHtml(m.provider_url)}</span>
+        <span class="model-provider-tag">${escapeHtml(m.provider_name)}</span>
+        <span class="model-endpoint-hint">${escapeHtml(m.provider_url)}</span>
       </div>
       <div class="model-actions">
-        ${!isActive ? `<button class="btn btn-secondary btn-sm btn-activate-cloud-model" data-name="${escapeHtml(m.model_name)}">Activate</button>` : `<span class="active-badge">Active</span>`}
-        <button class="btn btn-secondary btn-sm btn-delete-cloud-model" data-name="${escapeHtml(m.model_name)}" title="Delete Model">&times;</button>
+        ${!isActive 
+          ? `<button class="btn btn-secondary btn-sm btn-activate-cloud-model" data-name="${escapeHtml(m.model_name)}">Activate</button>` 
+          : `<span class="active-badge">Active</span>`}
+        ${!m.is_provider 
+          ? `<button class="btn btn-secondary btn-sm btn-delete-cloud-model" data-name="${escapeHtml(m.model_name)}" title="Delete Model">&times;</button>`
+          : `<span class="provider-key-status" title="Managed by ${escapeHtml(m.provider_name)}">● Connected (${m.key_count} Key${m.key_count === 1 ? '' : 's'})</span>`}
       </div>
     `;
 
@@ -4030,7 +5622,7 @@ function renderConfiguredCloudModels(models, activeModel) {
       });
     }
 
-    configuredModelsList.appendChild(card);
+    container.appendChild(card);
   });
 }
 
@@ -4532,11 +6124,30 @@ function setupSettings() {
     const size = settingFontSize ? settingFontSize.value : "13px";
     const theme = document.querySelector('input[name="setting-theme"]:checked')?.value || "theme-pai-cyber";
     const colorMode = document.querySelector('input[name="setting-color-mode"]:checked')?.value || currentColorMode;
+    const closeBehavior = document.querySelector('input[name="setting-close-behavior"]:checked')?.value || "tray";
+    const notifyComplete = document.getElementById("setting-notify-complete") ? document.getElementById("setting-notify-complete").checked : true;
 
     setColorMode(colorMode);
     applySettings({ font, size, theme });
     localStorage.setItem("pai_settings", JSON.stringify({ font, size, theme }));
-    showToast("Appearance & Developer font updated!", "success", "Settings Saved");
+    localStorage.setItem("pai_close_behavior", closeBehavior);
+    localStorage.setItem("pai_notify_complete", notifyComplete ? "true" : "false");
+    invokeTauri("set_close_behavior", { toTray: closeBehavior === "tray" });
+    showToast("Settings and background lifecycle options updated!", "success", "Settings Saved");
+  });
+
+  // Real-time listener on close behavior radio buttons
+  document.querySelectorAll('input[name="setting-close-behavior"]').forEach(radio => {
+    radio.addEventListener("change", (e) => {
+      const val = e.target.value;
+      localStorage.setItem("pai_close_behavior", val);
+      invokeTauri("set_close_behavior", { toTray: val === "tray" });
+      if (val === "tray") {
+        showToast("Window will minimize to Windows System Tray on close", "info", "Background Execution");
+      } else {
+        showToast("Window will quit PAI completely on close", "info", "Exit Mode");
+      }
+    });
   });
 
   document.getElementById("btn-refresh-diagnostics")?.addEventListener("click", () => {
@@ -4574,6 +6185,15 @@ function applyStoredSettings() {
       const radio = document.querySelector(`input[name="setting-theme"][value="${cfg.theme || 'theme-pai-cyber'}"]`);
       if (radio) radio.checked = true;
     }
+
+    const savedCloseBehavior = localStorage.getItem("pai_close_behavior") || "tray";
+    const radioClose = document.querySelector(`input[name="setting-close-behavior"][value="${savedCloseBehavior}"]`);
+    if (radioClose) radioClose.checked = true;
+    invokeTauri("set_close_behavior", { toTray: savedCloseBehavior === "tray" });
+
+    const savedNotify = localStorage.getItem("pai_notify_complete") !== "false";
+    const chkNotify = document.getElementById("setting-notify-complete");
+    if (chkNotify) chkNotify.checked = savedNotify;
   } catch (e) {
     console.warn("Could not read stored settings:", e);
   }
@@ -4594,6 +6214,331 @@ async function checkServerHealth() {
   } catch (err) {
     serverStatusDot.className = "status-dot offline";
     serverStatusText.textContent = "Offline";
+  }
+}
+
+// ==========================================================================
+// Software Update System Controller (ADR-005 & GitHub Releases)
+// ==========================================================================
+let currentCachedUpdate = null;
+let updatePollingTimer = null;
+
+function setupUpdateSystem() {
+  const btnCheckUpdate = document.getElementById("btn-check-update");
+  const btnDownloadUpdate = document.getElementById("btn-download-update");
+  const btnOpenUpdateModal = document.getElementById("btn-open-update-modal");
+  const btnCloseUpdateModal = document.getElementById("btn-close-update-modal");
+  const btnCancelUpdateModal = document.getElementById("btn-cancel-update-modal");
+  const btnModalDownload = document.getElementById("btn-modal-download");
+  const btnRestartForUpdate = document.getElementById("btn-restart-for-update");
+  const btnModalRestart = document.getElementById("btn-modal-restart");
+  const btnSimulateUpdateDev = document.getElementById("btn-simulate-update-dev");
+  const updateModal = document.getElementById("update-modal");
+  const selectChannel = document.getElementById("setting-update-channel");
+  const autoCheckToggle = document.getElementById("setting-auto-check-update");
+
+  // Restore saved preferences
+  if (selectChannel) {
+    const savedChannel = localStorage.getItem("pai_update_channel") || "stable";
+    selectChannel.value = savedChannel;
+    selectChannel.addEventListener("change", () => {
+      localStorage.setItem("pai_update_channel", selectChannel.value);
+      showToast(`Switched update channel to ${selectChannel.value}`, "info");
+    });
+  }
+
+  if (autoCheckToggle) {
+    const savedAuto = localStorage.getItem("pai_auto_check_update") !== "false";
+    autoCheckToggle.checked = savedAuto;
+    autoCheckToggle.addEventListener("change", () => {
+      localStorage.setItem("pai_auto_check_update", autoCheckToggle.checked ? "true" : "false");
+    });
+  }
+
+  // Check update button click
+  btnCheckUpdate?.addEventListener("click", () => {
+    checkSoftwareUpdates(true);
+  });
+
+  // Modal controls
+  btnOpenUpdateModal?.addEventListener("click", () => {
+    openSoftwareUpdateModal();
+  });
+  btnCloseUpdateModal?.addEventListener("click", () => {
+    updateModal?.classList.add("hidden");
+  });
+  btnCancelUpdateModal?.addEventListener("click", () => {
+    updateModal?.classList.add("hidden");
+  });
+
+  // Download actions
+  btnDownloadUpdate?.addEventListener("click", () => {
+    startSoftwareUpdateDownload();
+  });
+  btnModalDownload?.addEventListener("click", () => {
+    startSoftwareUpdateDownload();
+  });
+
+  // Restart actions
+  btnRestartForUpdate?.addEventListener("click", () => {
+    applySoftwareUpdateAndRestart();
+  });
+  btnModalRestart?.addEventListener("click", () => {
+    applySoftwareUpdateAndRestart();
+  });
+
+  // Test simulation
+  btnSimulateUpdateDev?.addEventListener("click", () => {
+    simulateSoftwareUpdateFlow();
+  });
+
+  // Startup auto-check after 3.5 seconds
+  const autoCheckOn = localStorage.getItem("pai_auto_check_update") !== "false";
+  if (autoCheckOn) {
+    setTimeout(() => {
+      checkSoftwareUpdates(false);
+    }, 3500);
+  }
+}
+
+async function checkSoftwareUpdates(interactive = false) {
+  const btnCheckUpdate = document.getElementById("btn-check-update");
+  const textCheckUpdate = document.getElementById("text-check-update");
+  const iconCheck = document.getElementById("icon-check-update");
+  const statusTitle = document.getElementById("update-status-title");
+  const lastCheckedLabel = document.getElementById("update-last-checked-time");
+  const dotStatus = document.getElementById("dot-update-status");
+  const callout = document.getElementById("update-available-callout");
+  const selectChannel = document.getElementById("setting-update-channel");
+  const channel = selectChannel ? selectChannel.value : "stable";
+
+  if (textCheckUpdate) textCheckUpdate.textContent = "Checking...";
+  if (iconCheck) iconCheck.classList.add("spin");
+  if (statusTitle) statusTitle.textContent = "Checking GitHub Releases...";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/update/check?channel=${encodeURIComponent(channel)}`);
+    const data = await res.json();
+
+    if (lastCheckedLabel) {
+      lastCheckedLabel.textContent = `Last checked: ${data.last_checked || new Date().toLocaleTimeString()}`;
+    }
+
+    if (data.update_available) {
+      currentCachedUpdate = data;
+      if (dotStatus) {
+        dotStatus.className = "status-indicator-dot warning";
+      }
+      if (statusTitle) {
+        statusTitle.textContent = `Update Available: v${data.latest_version}`;
+      }
+      if (callout) {
+        callout.classList.remove("hidden");
+        const tag = document.getElementById("callout-version-tag");
+        const notes = document.getElementById("callout-release-notes");
+        const dateSpan = document.getElementById("callout-release-date");
+        if (tag) tag.textContent = `v${data.latest_version} Available (${data.release_name || "New Release"})`;
+        if (notes) notes.textContent = data.release_notes || "A new verified update is available.";
+        if (dateSpan) dateSpan.textContent = data.published_at ? new Date(data.published_at).toLocaleDateString() : "New";
+      }
+
+      if (interactive) {
+        showToast(`New update v${data.latest_version} is available!`, "success", "Update Found");
+        openSoftwareUpdateModal();
+      } else {
+        showToast(`PAI Studio update v${data.latest_version} is available in Settings`, "info", "Update Ready");
+      }
+    } else {
+      if (dotStatus) {
+        dotStatus.className = "status-indicator-dot online";
+      }
+      if (statusTitle) {
+        statusTitle.textContent = `PAI Studio is Up to Date (v${data.current_version || "1.3.0"})`;
+      }
+      if (callout) {
+        callout.classList.add("hidden");
+      }
+      if (interactive) {
+        showToast(`You are using the latest version of PAI Studio (v${data.current_version || "1.3.0"})`, "info", "Up to Date");
+      }
+    }
+  } catch (err) {
+    console.error("Update check failed:", err);
+    if (statusTitle) statusTitle.textContent = "Could not check for updates";
+    if (interactive) {
+      showToast(`Failed to connect to update server: ${err.message}`, "error", "Check Failed");
+    }
+  } finally {
+    if (textCheckUpdate) textCheckUpdate.textContent = "Check for Updates";
+    if (iconCheck) iconCheck.classList.remove("spin");
+  }
+}
+
+function openSoftwareUpdateModal() {
+  const modal = document.getElementById("update-modal");
+  if (!modal) return;
+
+  const data = currentCachedUpdate || {
+    current_version: "1.3.0",
+    latest_version: "1.4.0",
+    release_name: "PAI Studio v1.4.0 - Deep Reasoning & Autonomous Code",
+    release_notes: "### What's New in v1.4.0\n\n- Tauri 2.0 Native Auto-Updater\n- 35% faster reasoning core\n- ADR-005 Ed25519 cryptographic security verification\n- Dynamic precision hardware telemetry",
+    published_at: new Date().toISOString(),
+    size_bytes: 68420112,
+  };
+
+  const currEl = document.getElementById("modal-curr-ver");
+  const targetEl = document.getElementById("modal-target-ver");
+  const nameEl = document.getElementById("modal-rel-name");
+  const dateEl = document.getElementById("modal-rel-date");
+  const sizeEl = document.getElementById("modal-rel-size");
+  const notesEl = document.getElementById("modal-release-notes-content");
+
+  if (currEl) currEl.textContent = `v${data.current_version || "1.3.0"}`;
+  if (targetEl) targetEl.textContent = `v${data.latest_version || "1.4.0"}`;
+  if (nameEl) nameEl.textContent = data.release_name || `PAI Release v${data.latest_version}`;
+  if (dateEl) dateEl.textContent = data.published_at ? new Date(data.published_at).toLocaleDateString() : "Recent";
+  if (sizeEl) {
+    const mb = data.size_bytes ? (data.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "~65 MB";
+    sizeEl.textContent = mb;
+  }
+  if (notesEl) notesEl.textContent = data.release_notes || "No release notes available.";
+
+  modal.classList.remove("hidden");
+}
+
+async function simulateSoftwareUpdateFlow() {
+  showToast("Simulating update discovery for v1.3.0...", "info");
+  try {
+    const res = await fetch(`${API_BASE}/api/update/simulate_test`, { method: "POST" });
+    const data = await res.json();
+    currentCachedUpdate = data;
+
+    const callout = document.getElementById("update-available-callout");
+    const statusTitle = document.getElementById("update-status-title");
+    const dotStatus = document.getElementById("dot-update-status");
+
+    if (dotStatus) dotStatus.className = "status-indicator-dot warning";
+    if (statusTitle) statusTitle.textContent = "New Update Available: v1.3.0";
+    if (callout) {
+      callout.classList.remove("hidden");
+      const tag = document.getElementById("callout-version-tag");
+      const notes = document.getElementById("callout-release-notes");
+      if (tag) tag.textContent = "v1.3.0 Available (Simulated Release)";
+      if (notes) notes.textContent = data.release_notes;
+    }
+
+    openSoftwareUpdateModal();
+    showToast("Simulated update v1.3.0 is ready for testing!", "success");
+  } catch (err) {
+    showToast(`Simulation failed: ${err.message}`, "error");
+  }
+}
+
+async function startSoftwareUpdateDownload() {
+  const downloadingPanel = document.getElementById("update-downloading-panel");
+  const modalProgressBox = document.getElementById("modal-download-progress-box");
+  const btnDownloadUpdate = document.getElementById("btn-download-update");
+  const btnModalDownload = document.getElementById("btn-modal-download");
+
+  if (btnDownloadUpdate) btnDownloadUpdate.disabled = true;
+  if (btnModalDownload) btnModalDownload.disabled = true;
+  if (downloadingPanel) downloadingPanel.classList.remove("hidden");
+  if (modalProgressBox) modalProgressBox.classList.remove("hidden");
+
+  showToast("Downloading update payload from GitHub Releases...", "info", "Download Started");
+
+  try {
+    const payload = currentCachedUpdate || { is_simulated: true, target_version: "1.3.0" };
+    await fetch(`${API_BASE}/api/update/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (updatePollingTimer) clearInterval(updatePollingTimer);
+    updatePollingTimer = setInterval(pollSoftwareUpdateProgress, 350);
+  } catch (err) {
+    showToast(`Failed to initiate download: ${err.message}`, "error");
+    if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
+    if (btnModalDownload) btnModalDownload.disabled = false;
+  }
+}
+
+async function pollSoftwareUpdateProgress() {
+  try {
+    const res = await fetch(`${API_BASE}/api/update/status`);
+    const data = await res.json();
+    const state = data.download_state;
+
+    const progressBar = document.getElementById("update-progress-bar");
+    const modalProgressBar = document.getElementById("modal-progress-bar");
+    const metricsLabel = document.getElementById("update-progress-metrics");
+    const modalMetrics = document.getElementById("modal-progress-metrics");
+    const progressLabel = document.getElementById("update-progress-label");
+
+    const pct = state.percentage || 0;
+    const mbDownloaded = (state.bytes_downloaded / (1024 * 1024)).toFixed(1);
+    const mbTotal = (state.total_bytes / (1024 * 1024)).toFixed(1);
+
+    if (progressBar) progressBar.style.width = `${pct}%`;
+    if (modalProgressBar) modalProgressBar.style.width = `${pct}%`;
+
+    const metricsText = `${mbDownloaded} MB / ${mbTotal} MB (${pct}%)`;
+    if (metricsLabel) metricsLabel.textContent = metricsText;
+    if (modalMetrics) modalMetrics.textContent = `${pct}% (${mbDownloaded} MB / ${mbTotal} MB)`;
+
+    if (state.status === "verifying") {
+      if (progressLabel) progressLabel.textContent = "Verifying cryptographic signatures (ADR-005)...";
+    }
+
+    if (state.status === "ready") {
+      clearInterval(updatePollingTimer);
+      updatePollingTimer = null;
+
+      // Update UI to Ready state
+      const downloadingPanel = document.getElementById("update-downloading-panel");
+      const readyBanner = document.getElementById("update-ready-banner");
+      const callout = document.getElementById("update-available-callout");
+      const modalProgressBox = document.getElementById("modal-download-progress-box");
+      const btnModalDownload = document.getElementById("btn-modal-download");
+      const btnModalRestart = document.getElementById("btn-modal-restart");
+
+      if (downloadingPanel) downloadingPanel.classList.add("hidden");
+      if (callout) callout.classList.add("hidden");
+      if (readyBanner) readyBanner.classList.remove("hidden");
+      if (modalProgressBox) modalProgressBox.classList.add("hidden");
+      if (btnModalDownload) btnModalDownload.classList.add("hidden");
+      if (btnModalRestart) btnModalRestart.classList.remove("hidden");
+
+      showToast("Update downloaded and verified! Restart to apply.", "success", "Update Ready", 6000);
+    } else if (state.status === "error") {
+      clearInterval(updatePollingTimer);
+      updatePollingTimer = null;
+      showToast(`Update download failed: ${state.error_message}`, "error", "Download Failed");
+      const btnDownloadUpdate = document.getElementById("btn-download-update");
+      const btnModalDownload = document.getElementById("btn-modal-download");
+      if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
+      if (btnModalDownload) btnModalDownload.disabled = false;
+    }
+  } catch (err) {
+    console.warn("Polling update status error:", err);
+  }
+}
+
+async function applySoftwareUpdateAndRestart() {
+  showToast("Staging update and restarting PAI Studio...", "info", "Restarting");
+  try {
+    await fetch(`${API_BASE}/api/update/apply`, { method: "POST" });
+    setTimeout(() => {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        invokeTauri("app_window_exit");
+      } else {
+        window.location.reload();
+      }
+    }, 1200);
+  } catch (err) {
+    showToast(`Restart failed: ${err.message}`, "error");
   }
 }
 
@@ -5203,6 +7148,7 @@ function setupDesktopContextMenu() {
 
               loadCoworkData();
               showToast(`Task #${taskId} sprint completed with ${artifacts.length} deliverables!`, "success", "Sprint Complete");
+              showSystemNotification("PAI Cowork: Task Completed", `Task #${taskId}: "${title}" completed with ${artifacts.length} deliverables.`);
             } else {
               showToast(`Sprint error: ${teamData.error || "Unknown error"}`, "error");
             }
@@ -5210,6 +7156,31 @@ function setupDesktopContextMenu() {
           .catch(err => {
             console.error("Team sprint fetch error:", err);
           });
+        } else {
+          // Direct Solo mode: Trigger autonomous background loop
+          fetch("http://127.0.0.1:8765/api/cowork/tasks/run_auto", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: taskId, mode: "solo" })
+          }).then(() => {
+            const pollTask = setInterval(async () => {
+              try {
+                const tr = await fetch("http://127.0.0.1:8765/api/cowork/tasks");
+                const td = await tr.json();
+                if (td.success && td.tasks) {
+                  const curr = td.tasks.find(t => t.task_id === taskId);
+                  if (curr && (curr.status === "COMPLETED" || curr.status === "FAILED")) {
+                    clearInterval(pollTask);
+                    loadCoworkData();
+                    if (curr.status === "COMPLETED") {
+                      showToast(`Task #${taskId} completed!`, "success", "Cowork Complete");
+                      showSystemNotification("PAI Cowork: Task Completed", `Task #${taskId}: "${title}" finished successfully.`);
+                    }
+                  }
+                }
+              } catch (_) {}
+            }, 2000);
+          }).catch(() => {});
         }
       } else {
         showToast(`Failed to dispatch task: ${data.error || "Unknown error"}`, "error", "Dispatch Error");

@@ -1544,10 +1544,10 @@ class TestPaiSetupP3(unittest.TestCase):
         self.assertEqual(proc_main_help.returncode, 0)
         golden_main = (golden_dir / "help_pai.txt").read_text(encoding="utf-8")
 
-        # Strip newly added cognitive / cowork subcommands when verifying against the legacy 8ce81cb tag baseline
+        # Strip newly added cognitive / cowork / cloud subcommands when verifying against the legacy 8ce81cb tag baseline
         import re
         filtered_help = proc_main_help.stdout
-        for cmd in ["memory", "voice", "cowork", "council"]:
+        for cmd in ["memory", "voice", "cowork", "council", "cloud"]:
             filtered_help = re.sub(r"," + cmd, "", filtered_help)
             filtered_help = re.sub(r"\n\s+" + cmd + r"\s+[^\n]+(?:\n\s{20,}[^\n]+)*", "", filtered_help)
 

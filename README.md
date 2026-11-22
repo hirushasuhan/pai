@@ -2,7 +2,8 @@
 
 > **A Stateless, Hardware-Aware, Recursive Self-Improving Personal Intelligence Engine**
 
-**Status (2026-11-14):**
+**Status (2026-11-22):**
+- **Release v1.3.0 (Software Auto-Updater & Multi-Channel Desktop Release):** Native auto-update manager with cryptographic Ed25519 verification (ADR-005 compliant), GitHub Releases API integration, configurable Stable and Beta/Preview release channels, dynamic in-app update progress telemetry, and zero-downtime Windows atomic restart.
 - **Release v1.2.0 (Tauri 2.0 Native Desktop Application):** Ultra-lightweight native desktop workstation for Windows (`desktop/`, `pai-desktop.exe`) featuring dual Clean Workstation Light and Deep Space Dark modes, headless native Windows folder picker dialogs, interactive Model Install modal with custom destination selection and real-time disk storage telemetry, pause/resume download engine with live progress bar and background download tracking.
 - **Release N (`v1.0.0-rc1`, commit `8ce81cb`):** Memory-safe Rust policy core (`core/`, `pai-core`) is **default-on** for runtime operations, with authoritative Python fallback and strict kill switch (`PAI_RUST_FALLBACK_PYTHON=1`).
 - **N+1 Evaluation Window:** Active 14-day operational shadow telemetry evaluation window is running with zero discrepancies across comparisons.

@@ -50,8 +50,8 @@ class ClarificationAssessment:
 # Temporal instability indicator patterns
 TEMPORAL_PATTERNS: List[Tuple[str, str, float]] = [
     # (Regex pattern, Category, Uncertainty Score)
-    (r"\b(who is|who's|who was|current|present|incumbent)\s+(?:the\s+)?(?:current\s+|present\s+)?(president|prime minister|minister|ceo|governor|leader|king|pope|chancellor|mayor|vice president|vp|potus)\b", "leadership", 0.95),
-    (r"\b(president|prime minister|leader)\s+of\s+(?:the\s+)?(us|united states|u\.s\.|america|sri lanka|uk|britain|india|france|russia|china|japan)\b", "leadership", 0.95),
+    (r"\b(who is|who's|who was|current|present|incumbent)\s+(?:the\s+)?(?:current\s+|present\s+)?(?:president|pesident|presidnet|prime minister|minister|ceo|governor|leader|king|pope|chancellor|mayor|vice president|vp|potus)\b", "leadership", 0.95),
+    (r"\b(?:president|pesident|presidnet|prime minister|leader)\s+of\s+(?:the\s+)?(us|united states|u\.s\.|america|sri lanka|lanka|uk|britain|india|france|russia|china|japan)\b", "leadership", 0.95),
     (r"\b(kauda|kavuda)\s+(?:dan\s+)?(janadipathi|agamathi|president|prime minister)\b", "leadership", 0.95),
     (r"\b(dan\s+inne|dan\s+inneh)\s+(kauda|kavuda)\b", "leadership", 0.90),
     (r"(ජනාධිපති|අගමැති)\s+(කවුද|කවුරුන්ද)", "leadership", 0.95),
@@ -87,7 +87,11 @@ def assess_temporal_stability(query: str) -> TemporalAssessment:
     If there is even a small (>10%) probability that a fact has drifted or changed
     since training weights, the system must trigger Search-First or warn the user.
     """
-    q_clean = query.strip().lower()
+    # Normalize common typos for officeholders and leadership roles
+    q_norm = re.sub(r"\b(pesident|presidnet|presedent|presidant|predident)\b", "president", query, flags=re.IGNORECASE)
+    q_norm = re.sub(r"\b(primeminister|prime minster|primeminster)\b", "prime minister", q_norm, flags=re.IGNORECASE)
+    q_clean = q_norm.strip().lower()
+
     highest_score = 0.0
     detected_cat = "stable"
     reason = "Topic appears temporally stable or conceptual."
@@ -102,8 +106,10 @@ def assess_temporal_stability(query: str) -> TemporalAssessment:
     # Suggest a clean search query if unstable
     suggested_search: Optional[str] = None
     if highest_score >= 0.10:
-        # Strip conversational prefix filler
-        clean_q = re.sub(r"^(can you tell me|what is|who is|who's|please tell me|do you know)\s+", "", query, flags=re.IGNORECASE).strip()
+        # Strip conversational greetings and prefix filler
+        clean_q = q_norm.strip()
+        clean_q = re.sub(r"^(hi|hey|hello|ayubowan|good\s+(morning|afternoon|evening))\s*[,!.-]?\s*", "", clean_q, flags=re.IGNORECASE).strip()
+        clean_q = re.sub(r"^(can you tell me|what is|who is|who's|please tell me|do you know)\s+", "", clean_q, flags=re.IGNORECASE).strip()
         clean_q = clean_q.rstrip("?.,!")
         if detected_cat == "leadership":
             clean_q = re.sub(r"(?i)^the\s+", "", clean_q)

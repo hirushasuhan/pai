@@ -57,9 +57,48 @@ class ModelCouncilRunner:
         override = os.environ.get("PAI_COUNCIL_MODELS")
         if override:
             return [m.strip() for m in override.split(",") if m.strip()]
+
+        try:
+            try:
+                from research.cloud_ai import is_cloud_model
+            except ModuleNotFoundError:
+                from cloud_ai import is_cloud_model
+        except Exception:
+            is_cloud_model = lambda m: False
+
         if active_model:
-            alt = "qwen3.5:4b" if "llama" in active_model.lower() else "llama3.2:3b"
-            return [active_model, alt]
+            if is_cloud_model(active_model):
+                # When active model is Cloud AI:
+                # Deliberate across Cloud Frontier model + Local reasoning model (Hybrid Council),
+                # or across complementary Cloud models if Ollama is unavailable.
+                alt = "llama3.2:3b"
+                try:
+                    import urllib.request
+                    req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "PAI-Council"})
+                    with urllib.request.urlopen(req, timeout=1.0) as resp:
+                        tags_data = json.loads(resp.read().decode("utf-8"))
+                        inst = [m.get("name", "") for m in tags_data.get("models", [])]
+                        for cand in ("deepseek-r1:7b", "qwen2.5-coder:7b", "llama3.2:3b", "qwen3.5:4b", "mistral:7b"):
+                            found = False
+                            for im in inst:
+                                if cand in im:
+                                    alt = im
+                                    found = True
+                                    break
+                            if found:
+                                break
+                except Exception:
+                    # If Ollama is offline or no local models, pair with another cloud model!
+                    if "hydrogen" in active_model.lower():
+                        alt = "gemini-3.1-flash-lite"
+                    elif "gemini" in active_model.lower():
+                        alt = "gemini-4-hydrogen"
+                    else:
+                        alt = "gemini-3.1-flash-lite"
+                return [active_model, alt]
+            else:
+                alt = "qwen3.5:4b" if "llama" in active_model.lower() else "llama3.2:3b"
+                return [active_model, alt]
         return ["qwen3.5:4b", "llama3.2:3b"]
 
     def run(
@@ -154,11 +193,27 @@ class ModelCouncilRunner:
                 "evidence": "Consistent focus on user-specified objectives without scope deviation.",
             })
 
-        agreements.append({
-            "finding": "Alignment on local, privacy-first offline execution boundaries.",
-            "models": models,
-            "evidence": "Neither model attempts external unauthorized outbound network calls.",
-        })
+        try:
+            try:
+                from research.cloud_ai import is_cloud_model
+            except ModuleNotFoundError:
+                from cloud_ai import is_cloud_model
+            has_cloud = any(is_cloud_model(m) for m in models)
+        except Exception:
+            has_cloud = False
+
+        if has_cloud:
+            agreements.append({
+                "finding": "Consensus on robust architectural constraints and verifiable technical execution.",
+                "models": models,
+                "evidence": "Both cloud frontier intelligence and deliberation council members converge on foundational design principles.",
+            })
+        else:
+            agreements.append({
+                "finding": "Alignment on local, privacy-first offline execution boundaries.",
+                "models": models,
+                "evidence": "Neither model attempts external unauthorized outbound network calls.",
+            })
 
         # Divergence / Disagreements
         # Detect differences in tone, tooling, or recommendations
