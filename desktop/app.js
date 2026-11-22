@@ -6278,12 +6278,8 @@ function setupUpdateSystem() {
   });
 
   const btnMinimizeUpdateModal = document.getElementById("btn-minimize-update-modal");
-  const btnModalMinimizeUpdate = document.getElementById("btn-modal-minimize-update");
   btnMinimizeUpdateModal?.addEventListener("click", () => {
     minimizeSoftwareUpdateModal();
-  });
-  btnModalMinimizeUpdate?.addEventListener("click", () => {
-    startSoftwareUpdateDownload({ minimize: true });
   });
 
   // Download actions (Single clear download action with background streaming)
@@ -6291,7 +6287,11 @@ function setupUpdateSystem() {
     startSoftwareUpdateDownload();
   });
   btnModalDownload?.addEventListener("click", () => {
-    startSoftwareUpdateDownload();
+    if (updatePollingTimer) {
+      minimizeSoftwareUpdateModal();
+    } else {
+      startSoftwareUpdateDownload();
+    }
   });
 
   // Pause & Resume actions
@@ -6477,6 +6477,34 @@ function openSoftwareUpdateModal() {
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/^- (.*)/gm, '<li style="margin-left: 18px; margin-bottom: 4px; color: var(--text-dim);">$1</li>');
     notesEl.innerHTML = htmlNotes;
+  }
+
+  // Update primary action button state
+  const btnModalDownload = document.getElementById("btn-modal-download");
+  const btnModalRestart = document.getElementById("btn-modal-restart");
+  const modalProgressBox = document.getElementById("modal-download-progress-box");
+  if (btnModalRestart) btnModalRestart.classList.add("hidden");
+  if (btnModalDownload) {
+    btnModalDownload.classList.remove("hidden");
+    btnModalDownload.disabled = false;
+    if (updatePollingTimer) {
+      btnModalDownload.title = "Click to minimize to background and continue working";
+      btnModalDownload.innerHTML = `
+        <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+        </svg>
+        <span id="btn-modal-download-text">Download in Background</span>
+      `;
+      if (modalProgressBox) modalProgressBox.classList.remove("hidden");
+    } else {
+      btnModalDownload.title = "Start downloading this verified update";
+      btnModalDownload.innerHTML = `
+        <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+        </svg>
+        <span id="btn-modal-download-text">Download & Install Now</span>
+      `;
+    }
   }
 
   modal.classList.remove("hidden");
@@ -6675,8 +6703,14 @@ async function startSoftwareUpdateDownload(options = {}) {
     btnDownloadUpdate.innerHTML = `<span class="spinner-small"></span><span>Downloading...</span>`;
   }
   if (btnModalDownload) {
-    btnModalDownload.disabled = true;
-    btnModalDownload.innerHTML = `<span class="spinner-small"></span><span>Downloading...</span>`;
+    btnModalDownload.disabled = false;
+    btnModalDownload.title = "Click to minimize to background and continue working";
+    btnModalDownload.innerHTML = `
+      <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+      </svg>
+      <span id="btn-modal-download-text">Download in Background</span>
+    `;
   }
 
   if (downloadingPanel) downloadingPanel.classList.remove("hidden");
@@ -6695,7 +6729,7 @@ async function startSoftwareUpdateDownload(options = {}) {
   if (progressBar) progressBar.style.width = "3%";
   if (modalProgressBar) modalProgressBar.style.width = "3%";
   if (metricsLabel) metricsLabel.textContent = "Connecting to update server... (3%)";
-  if (modalMetrics) modalMetrics.textContent = "3% (Connecting...)";
+  if (modalMetrics) modalMetrics.textContent = "Connecting to update server...";
 
   // Reset pause state
   isSoftwareUpdatePaused = false;

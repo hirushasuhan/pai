@@ -42,15 +42,42 @@ if sys.stderr is None:
 BRIDGE_URL = "http://127.0.0.1:8765"
 
 
-def is_bridge_server_running(timeout: float = 0.5) -> bool:
-    """Check if PAI desktop bridge server is responding on 127.0.0.1:8765."""
+def kill_stale_port_8765() -> None:
+    """Terminates any process holding port 8765 so new bridge server can bind cleanly."""
+    if sys.platform == "win32":
+        try:
+            cmd = (
+                "$c = Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue; "
+                "foreach ($x in $c) { if ($x.OwningProcess -gt 0) { Stop-Process -Id $x.OwningProcess -Force -ErrorAction SilentlyContinue } }"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", cmd], timeout=5, capture_output=True)
+            time.sleep(0.4)
+        except Exception:
+            pass
+
+
+def is_bridge_server_running(timeout: float = 0.8) -> bool:
+    """Check if PAI desktop bridge server is responding on 127.0.0.1:8765 and running >= 1.3.0."""
     try:
         req = urllib.request.Request(
             f"{BRIDGE_URL}/api/status",
-            headers={"User-Agent": "PAI-Launcher/1.1"},
+            headers={"User-Agent": "PAI-Launcher/1.3"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return False
+            import json
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("version", "1.0.0") < "1.3.0":
+                return False
+
+        # Verify update endpoints are alive
+        req_up = urllib.request.Request(
+            f"{BRIDGE_URL}/api/update/status",
+            headers={"User-Agent": "PAI-Launcher/1.3"},
+        )
+        with urllib.request.urlopen(req_up, timeout=timeout) as resp_up:
+            return resp_up.status == 200
     except Exception:
         return False
 
@@ -59,6 +86,9 @@ def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer]]:
     """Start bridge server if not already active. Returns (ok, server_instance)."""
     if is_bridge_server_running():
         return True, None
+
+    # Clear any stale bridge server before binding
+    kill_stale_port_8765()
 
     try:
         try:

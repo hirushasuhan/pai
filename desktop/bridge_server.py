@@ -2173,6 +2173,7 @@ class PAIUpdateManager:
             "success": True,
             "current_version": self.current_version,
             "latest_version": ver_tag,
+            "target_version": ver_tag,
             "update_available": is_newer,
             "channel": channel,
             "release_name": target_release.get("name") or f"Release v{ver_tag}",
@@ -3175,7 +3176,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             res = _update_manager.check_for_updates(channel=channel)
             self._send_json(res)
         elif path == "/api/update/download":
-            target_v = body.get("target_version") if body else None
+            target_v = (body.get("target_version") or body.get("latest_version")) if body else None
             dl_url = body.get("download_url") if body else None
             manifest_url = body.get("manifest_url") if body else None
             sig_url = body.get("signature_url") if body else None
@@ -3209,7 +3210,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
     def _handle_status(self) -> None:
         p_data = load_projects_data()
         self._send_json({
-            "version": "1.2.0",
+            "version": "1.3.0",
             "active_model": get_current_model(),
             "active_project": p_data.get("active_project", ""),
             "internet_enabled": is_internet_enabled(),

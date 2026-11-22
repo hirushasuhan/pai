@@ -15,6 +15,22 @@ def update_pai_installation():
 
     print(f"[+] Found installed PAI at: {target_pai}")
     
+    # 0. Terminate running PAI desktop and bridge server processes so files can be replaced
+    print("[+] Ensuring old PAI Studio and bridge server processes are stopped...")
+    if sys.platform == "win32":
+        try:
+            import subprocess
+            import time
+            cmd = (
+                "Get-Process -Name 'pai-desktop' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; "
+                "$c = Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue; "
+                "foreach ($x in $c) { if ($x.OwningProcess -gt 0) { Stop-Process -Id $x.OwningProcess -Force -ErrorAction SilentlyContinue } }"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", cmd], timeout=8, capture_output=True)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[WARN] Could not stop running PAI processes: {e}")
+
     # 1. Update native binary
     release_exe = repo_root / "desktop" / "src-tauri" / "target" / "release" / "pai-desktop.exe"
     if release_exe.is_file():
@@ -50,13 +66,17 @@ def update_pai_installation():
                 shutil.copy2(src_f, dest_f)
                 print(f"[OK] Synced UI {fname} -> {dest_f}")
 
-    # 3. Update backend python files
+    # 3. Update backend python files across all possible import locations
     backend_files = [
         ("desktop/bridge_server.py", target_pai / "bridge_server.py"),
         ("desktop/bridge_server.py", target_pai / "desktop" / "bridge_server.py"),
+        ("desktop/bridge_server.py", target_pai / "desktop" / "ui" / "bridge_server.py"),
+        ("desktop/bridge_server.py", target_pai / "research" / "bridge_server.py"),
+        ("desktop/bridge_server.py", target_pai / "research" / "desktop" / "bridge_server.py"),
         ("desktop/desktop_launcher.py", target_pai / "desktop_launcher.py"),
         ("desktop/desktop_launcher.py", target_pai / "desktop" / "desktop_launcher.py"),
         ("desktop/desktop_launcher.py", target_pai / "research" / "desktop_launcher.py"),
+        ("desktop/desktop_launcher.py", target_pai / "research" / "desktop" / "desktop_launcher.py"),
     ]
 
     # Also sync core research modules
