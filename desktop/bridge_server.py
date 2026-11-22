@@ -2221,9 +2221,15 @@ class PAIUpdateManager:
 
     def simulate_test_update(self) -> Dict[str, Any]:
         """Provides a test update simulation for developer demonstration without requiring an upstream GitHub release."""
-        sim_version = "1.4.0"
+        curr = get_pai_version()
+        self.current_version = curr
+        maj, min_v, pat, pre = _parse_semver_tuple(curr)
+        sim_version = f"{maj}.{min_v}.{pat + 1}"
+        if not _is_version_newer(sim_version, curr):
+            sim_version = f"{maj}.{min_v + 1}.0"
+
         sim_notes = (
-            "### 🌟 What's New in Personal Agentic AI v1.4.0\n\n"
+            f"### 🌟 What's New in Personal Agentic AI v{sim_version} (Simulation Mode)\n\n"
             "- **Tauri 2.0 Native Auto-Updater**: Zero-overhead background verification and seamless atomic install.\n"
             "- **Stateless Vector Reasoning**: 35% faster cognitive grammar decomposition.\n"
             "- **Enhanced AI Team Orchestration**: Unified multi-agent workspace synthesis.\n"
@@ -2235,8 +2241,8 @@ class PAIUpdateManager:
             "current_version": self.current_version,
             "latest_version": sim_version,
             "update_available": True,
-            "channel": "stable",
-            "release_name": "PAI Studio v1.4.0 - Deep Reasoning & Autonomous Code",
+            "channel": "beta" if "beta" in curr else "stable",
+            "release_name": f"PAI Studio v{sim_version} - Deep Reasoning & Autonomous Code (Simulated)",
             "release_notes": sim_notes,
             "published_at": time.strftime("%Y-%m-%d"),
             "html_url": f"https://github.com/{self.owner}/{self.repo}/releases/tag/v{sim_version}",

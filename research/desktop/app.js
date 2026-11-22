@@ -6480,8 +6480,8 @@ function openSoftwareUpdateModal() {
   if (!modal) return;
 
   const data = currentCachedUpdate || {};
-  const targetVer = data.latest_version || data.target_version || "1.4.0-beta.1";
-  const currVer = data.current_version || "1.3.0";
+  const targetVer = data.latest_version || data.target_version || "1.4.1";
+  const currVer = data.current_version || window.__pai_active_version || "1.4.0-beta.1";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 
@@ -6491,9 +6491,16 @@ function openSoftwareUpdateModal() {
   const dateEl = document.getElementById("modal-rel-date");
   const sizeEl = document.getElementById("modal-rel-size");
   const notesEl = document.getElementById("modal-release-notes-content");
+  const titleTextEl = document.getElementById("update-modal-title-text");
 
-  if (currEl) currEl.textContent = `v${currVer}`;
-  if (targetEl) targetEl.textContent = `v${targetVer}`;
+  if (titleTextEl) {
+    titleTextEl.textContent = data.is_simulated
+      ? "PAI Studio Software Update (Simulation Mode)"
+      : "PAI Studio Software Update";
+  }
+
+  if (currEl) currEl.textContent = currVer.startsWith("v") ? currVer : `v${currVer}`;
+  if (targetEl) targetEl.textContent = targetVer.startsWith("v") ? targetVer : `v${targetVer}`;
   if (nameEl) nameEl.textContent = relName;
   if (dateEl) dateEl.textContent = data.published_at ? new Date(data.published_at).toLocaleDateString() : new Date().toLocaleDateString();
   if (sizeEl) {
@@ -6540,7 +6547,7 @@ function openSoftwareUpdateModal() {
 }
 
 async function simulateSoftwareUpdateFlow() {
-  showToast("Simulating update discovery for v1.4.0-beta.1...", "info");
+  showToast("Simulating update discovery...", "info");
   try {
     const res = await fetch(`${API_BASE}/api/update/simulate_test`, { method: "POST" });
     const data = await res.json();
@@ -6551,17 +6558,17 @@ async function simulateSoftwareUpdateFlow() {
     const dotStatus = document.getElementById("dot-update-status");
 
     if (dotStatus) dotStatus.className = "status-indicator-dot warning";
-    if (statusTitle) statusTitle.textContent = `New Update Available: v${data.latest_version || "1.4.0-beta.1"}`;
+    if (statusTitle) statusTitle.textContent = `New Update Available: v${data.latest_version || "1.4.1"}`;
     if (callout) {
       callout.classList.remove("hidden");
       const tag = document.getElementById("callout-version-tag");
       const notes = document.getElementById("callout-release-notes");
-      if (tag) tag.textContent = `v${data.latest_version || "1.4.0-beta.1"} Available (${data.release_name || "Preview Build"})`;
+      if (tag) tag.textContent = `v${data.latest_version || "1.4.1"} Available (${data.release_name || "Preview Build"})`;
       if (notes) notes.textContent = data.release_notes || "A new verified release is available for Personal Agentic AI.";
     }
 
     openSoftwareUpdateModal();
-    showToast(`Update v${data.latest_version || "1.4.0-beta.1"} is ready for review!`, "success");
+    showToast(`Simulated update v${data.latest_version || "1.4.1"} is ready for review!`, "success");
   } catch (err) {
     showToast(`Simulation failed: ${err.message}`, "error");
   }

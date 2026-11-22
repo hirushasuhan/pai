@@ -66,6 +66,14 @@ def update_pai_installation():
                 shutil.copy2(src_f, dest_f)
                 print(f"[OK] Synced UI {fname} -> {dest_f}")
 
+    # 2.1 Sync VERSION file across targets
+    v_src = repo_root / "desktop" / "VERSION"
+    if v_src.is_file():
+        for dest in [target_pai, target_pai / "desktop", target_pai / "research" / "desktop"]:
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(v_src, dest / "VERSION")
+            print(f"[OK] Synced VERSION -> {dest / 'VERSION'}")
+
     # 3. Update backend python files across all possible import locations
     backend_files = [
         ("desktop/bridge_server.py", target_pai / "bridge_server.py"),
