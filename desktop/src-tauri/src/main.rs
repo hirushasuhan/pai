@@ -195,6 +195,10 @@ fn spawn_bridge_daemon() -> Option<Child> {
     let mut cmd = Command::new(&py_bin);
     cmd.arg(&script);
 
+    if let Some(script_dir) = script.parent() {
+        cmd.current_dir(script_dir);
+    }
+
     #[cfg(windows)]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 

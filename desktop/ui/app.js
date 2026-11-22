@@ -6259,15 +6259,27 @@ function setupUpdateSystem() {
   const btnFloatingUpdateClose = document.getElementById("btn-floating-update-close");
   const headerUpdatePill = document.getElementById("header-update-pill");
 
-  // Restore saved preferences
+  // Restore saved preferences & sync channel visibility
+  function syncTestFlowVisibility() {
+    if (!btnSimulateUpdateDev) return;
+    const currentChannel = selectChannel ? selectChannel.value : (localStorage.getItem("pai_update_channel") || "stable");
+    if (currentChannel === "beta") {
+      btnSimulateUpdateDev.classList.remove("hidden");
+    } else {
+      btnSimulateUpdateDev.classList.add("hidden");
+    }
+  }
+
   if (selectChannel) {
     const savedChannel = localStorage.getItem("pai_update_channel") || "stable";
     selectChannel.value = savedChannel;
     selectChannel.addEventListener("change", () => {
       localStorage.setItem("pai_update_channel", selectChannel.value);
-      showToast(`Switched update channel to ${selectChannel.value}`, "info");
+      syncTestFlowVisibility();
+      showToast(`Update channel set to ${selectChannel.value.toUpperCase()}`, "info");
     });
   }
+  syncTestFlowVisibility();
 
   if (autoCheckToggle) {
     const savedAuto = localStorage.getItem("pai_auto_check_update") !== "false";
@@ -6374,32 +6386,6 @@ function setupUpdateSystem() {
   btnModalRestart?.addEventListener("click", () => {
     applySoftwareUpdateAndRestart();
   });
-
-  // Test simulation (Beta Channel exclusive)
-  const selectChannel = document.getElementById("setting-update-channel");
-  function syncTestFlowVisibility() {
-    const sel = document.getElementById("setting-update-channel");
-    const btnSim = document.getElementById("btn-simulate-update-dev");
-    if (!btnSim) return;
-    const currentChannel = sel ? sel.value : (localStorage.getItem("pai_update_channel") || "stable");
-    if (currentChannel === "beta") {
-      btnSim.classList.remove("hidden");
-    } else {
-      btnSim.classList.add("hidden");
-    }
-  }
-
-  // Load saved channel or default to "stable"
-  const savedChannel = localStorage.getItem("pai_update_channel") || "stable";
-  if (selectChannel) {
-    selectChannel.value = savedChannel;
-    selectChannel.addEventListener("change", (e) => {
-      localStorage.setItem("pai_update_channel", e.target.value);
-      syncTestFlowVisibility();
-      showToast(`Update channel set to ${e.target.value.toUpperCase()}`, "info");
-    });
-  }
-  syncTestFlowVisibility();
 
   btnSimulateUpdateDev?.addEventListener("click", () => {
     simulateSoftwareUpdateFlow();
