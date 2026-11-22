@@ -77,6 +77,10 @@ def update_pai_installation():
         ("desktop/desktop_launcher.py", target_pai / "desktop" / "desktop_launcher.py"),
         ("desktop/desktop_launcher.py", target_pai / "research" / "desktop_launcher.py"),
         ("desktop/desktop_launcher.py", target_pai / "research" / "desktop" / "desktop_launcher.py"),
+        ("research/apply_pending_update.py", target_pai / "apply_pending_update.py"),
+        ("research/apply_pending_update.py", target_pai / "desktop" / "apply_pending_update.py"),
+        ("research/apply_pending_update.py", target_pai / "research" / "apply_pending_update.py"),
+        ("research/apply_pending_update.py", target_pai / "research" / "desktop" / "apply_pending_update.py"),
     ]
 
     # Also sync core research modules

@@ -1976,6 +1976,16 @@ def run_local_model_fusion(
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
 PAI_CURRENT_VERSION = "1.3.0"
+try:
+    _v_path = Path(__file__).resolve().parent / "VERSION"
+    if not _v_path.is_file():
+        _v_path = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "PAI" / "VERSION"
+    if _v_path.is_file():
+        _loaded_v = _v_path.read_text(encoding="utf-8").strip()
+        if _loaded_v:
+            PAI_CURRENT_VERSION = _loaded_v
+except Exception:
+    pass
 GITHUB_REPO_OWNER = "hirushasuhan"
 GITHUB_REPO_NAME = "pai"
 
@@ -2002,11 +2012,24 @@ def _is_version_newer(remote_v: str, current_v: str) -> bool:
     return False
 
 
+def get_pai_version() -> str:
+    for base in [Path(__file__).resolve().parent, Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "PAI"]:
+        v_file = base / "VERSION"
+        if v_file.is_file():
+            try:
+                v = v_file.read_text(encoding="utf-8").strip()
+                if v:
+                    return v
+            except Exception:
+                pass
+    return PAI_CURRENT_VERSION
+
+
 class PAIUpdateManager:
     """Manages update discovery, background downloads, cryptographic staging, and rollback."""
 
     def __init__(self, current_version: str = PAI_CURRENT_VERSION, owner: str = GITHUB_REPO_OWNER, repo: str = GITHUB_REPO_NAME):
-        self.current_version = current_version
+        self.current_version = get_pai_version()
         self.owner = os.environ.get("PAI_GITHUB_OWNER", owner)
         self.repo = os.environ.get("PAI_GITHUB_REPO", repo)
         self.lock = threading.Lock()
@@ -2032,6 +2055,7 @@ class PAIUpdateManager:
         self._download_thread: Optional[threading.Thread] = None
 
     def get_status(self) -> Dict[str, Any]:
+        self.current_version = get_pai_version()
         with self.lock:
             state = dict(self.download_state)
             cached = dict(self.cached_update_info) if self.cached_update_info else None
@@ -2044,6 +2068,7 @@ class PAIUpdateManager:
             }
 
     def check_for_updates(self, channel: str = "stable") -> Dict[str, Any]:
+        self.current_version = get_pai_version()
         with self.lock:
             self.download_state["status"] = "checking"
             self.last_checked_time = time.time()
@@ -2458,29 +2483,42 @@ class PAIUpdateManager:
             if self.download_state["status"] != "ready":
                 return {"success": False, "error": "No verified update is ready to install."}
             target_v = self.download_state.get("target_version") or "1.3.0"
+            staged_pkg = self.download_state.get("staged_path")
 
         append_log(f"[Updater] Applying update to version {target_v}. Staging atomic swap.")
         try:
             local_app = os.environ.get("LOCALAPPDATA", "")
-            if local_app:
-                pai_dir = Path(local_app) / "Programs" / "PAI"
-                pai_dir.mkdir(parents=True, exist_ok=True)
-                swap_file = pai_dir / "pending_update.json"
-                swap_file.write_text(
-                    json.dumps({
-                        "target_version": target_v,
-                        "timestamp": time.time(),
-                        "staged_path": self.download_state.get("staged_path"),
-                        "ready": True,
-                    }, indent=2),
-                    encoding="utf-8",
-                )
+            pai_dir = Path(local_app) / "Programs" / "PAI" if local_app else Path(__file__).resolve().parent.parent
+            pai_dir.mkdir(parents=True, exist_ok=True)
+            swap_file = pai_dir / "pending_update.json"
+            swap_file.write_text(
+                json.dumps({
+                    "target_version": target_v,
+                    "timestamp": time.time(),
+                    "staged_path": staged_pkg,
+                    "ready": True,
+                }, indent=2),
+                encoding="utf-8",
+            )
+
+            # Spawn detached background applicator to perform file swap and restart
+            py_bin = pai_dir / "python" / "pythonw.exe"
+            if not py_bin.is_file():
+                py_bin = Path(sys.executable)
+
+            applicator = pai_dir / "apply_pending_update.py"
+            if not applicator.is_file():
+                applicator = Path(__file__).resolve().parent / "apply_pending_update.py"
+
+            flags = 0x08000000 | 0x00000200 if sys.platform == "win32" else 0
+            subprocess.Popen([str(py_bin), str(applicator), "--restart"], cwd=str(pai_dir), creationflags=flags)
+            append_log(f"[Updater] Launched background applicator for v{target_v}.")
         except Exception as exc:
-            append_log(f"[Updater] Could not write pending_update.json: {exc}")
+            append_log(f"[Updater] Error launching update applicator: {exc}")
 
         return {
             "success": True,
-            "message": f"Update v{target_v} is staged and ready. Restarting PAI Studio will complete the installation.",
+            "message": f"Update v{target_v} is being applied. PAI Studio will restart automatically.",
             "target_version": target_v,
         }
 
@@ -3210,7 +3248,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
     def _handle_status(self) -> None:
         p_data = load_projects_data()
         self._send_json({
-            "version": "1.3.0",
+            "version": get_pai_version(),
             "active_model": get_current_model(),
             "active_project": p_data.get("active_project", ""),
             "internet_enabled": is_internet_enabled(),

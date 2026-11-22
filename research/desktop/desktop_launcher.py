@@ -39,6 +39,17 @@ if sys.stderr is None:
     except Exception:
         pass
 
+# Apply pending update if staged before launching app
+try:
+    from research.apply_pending_update import check_and_apply_pending
+    check_and_apply_pending()
+except ImportError:
+    try:
+        from apply_pending_update import check_and_apply_pending
+        check_and_apply_pending()
+    except Exception:
+        pass
+
 BRIDGE_URL = "http://127.0.0.1:8765"
 
 
