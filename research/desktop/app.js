@@ -6211,9 +6211,25 @@ async function checkServerHealth() {
       serverStatusDot.className = "status-dot offline";
       serverStatusText.textContent = "Degraded";
     }
+    if (data.version) {
+      updateActiveVersionDisplay(data.version);
+    }
   } catch (err) {
     serverStatusDot.className = "status-dot offline";
     serverStatusText.textContent = "Offline";
+  }
+}
+
+function updateActiveVersionDisplay(version) {
+  if (!version) return;
+  const cleanV = String(version).trim().replace(/^v/, "");
+  const badgeVer = document.getElementById("badge-current-version");
+  const modalCurrVer = document.getElementById("modal-curr-ver");
+  if (badgeVer) {
+    badgeVer.textContent = `v${cleanV} (Installed)`;
+  }
+  if (modalCurrVer) {
+    modalCurrVer.textContent = `v${cleanV}`;
   }
 }
 
@@ -6371,6 +6387,16 @@ function setupUpdateSystem() {
       checkSoftwareUpdates(false);
     }, 3500);
   }
+
+  // Immediately query status to synchronize version badge on startup
+  fetch(`${API_BASE}/api/status`)
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.version) {
+        updateActiveVersionDisplay(data.version);
+      }
+    })
+    .catch(() => {});
 }
 
 async function checkSoftwareUpdates(interactive = false) {
@@ -6395,6 +6421,9 @@ async function checkSoftwareUpdates(interactive = false) {
     if (lastCheckedLabel) {
       lastCheckedLabel.textContent = `Last checked: ${data.last_checked || new Date().toLocaleTimeString()}`;
     }
+
+    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.4.0-beta.1";
+    updateActiveVersionDisplay(activeVer);
 
     if (data.update_available) {
       currentCachedUpdate = data;
@@ -6425,13 +6454,13 @@ async function checkSoftwareUpdates(interactive = false) {
         dotStatus.className = "status-indicator-dot online";
       }
       if (statusTitle) {
-        statusTitle.textContent = `PAI Studio is Up to Date (v${data.current_version || "1.3.0"})`;
+        statusTitle.textContent = `PAI Studio is Up to Date (v${activeVer})`;
       }
       if (callout) {
         callout.classList.add("hidden");
       }
       if (interactive) {
-        showToast(`You are using the latest version of PAI Studio (v${data.current_version || "1.3.0"})`, "info", "Up to Date");
+        showToast(`You are using the latest version of PAI Studio (v${activeVer})`, "info", "Up to Date");
       }
     }
   } catch (err) {

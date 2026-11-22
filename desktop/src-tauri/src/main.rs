@@ -27,9 +27,19 @@ fn set_close_behavior(to_tray: bool, state: tauri::State<AppState>) {
 
 #[tauri::command]
 fn get_engine_status() -> Result<serde_json::Value, String> {
+    let mut ver = "1.4.0-beta.1".to_string();
+    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+        let v_file = Path::new(&local_app).join("Programs/PAI/VERSION");
+        if let Ok(v) = std::fs::read_to_string(v_file) {
+            let trimmed = v.trim().to_string();
+            if !trimmed.is_empty() {
+                ver = trimmed;
+            }
+        }
+    }
     Ok(serde_json::json!({
         "status": "ready",
-        "version": "1.3.0",
+        "version": ver,
         "framework": "Tauri 2.0 (Rust)",
         "loopback": "127.0.0.1:8765"
     }))

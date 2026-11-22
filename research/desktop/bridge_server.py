@@ -1975,7 +1975,7 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.3.0"
+PAI_CURRENT_VERSION = "1.4.0-beta.1"
 try:
     _v_path = Path(__file__).resolve().parent / "VERSION"
     if not _v_path.is_file():
