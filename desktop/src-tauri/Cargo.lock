@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "pai-desktop"
-version = "1.4.0-beta.1"
+version = "1.4.2"
 dependencies = [
  "serde",
  "serde_json",

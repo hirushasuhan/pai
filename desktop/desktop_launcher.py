@@ -54,15 +54,24 @@ BRIDGE_URL = "http://127.0.0.1:8765"
 
 
 def kill_stale_port_8765() -> None:
-    """Terminates any process holding port 8765 so new bridge server can bind cleanly."""
+    """Terminates any process holding port 8765 so new bridge server can bind cleanly (100% silent, no terminal)."""
     if sys.platform == "win32":
         try:
-            cmd = (
-                "$c = Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue; "
-                "foreach ($x in $c) { if ($x.OwningProcess -gt 0) { Stop-Process -Id $x.OwningProcess -Force -ErrorAction SilentlyContinue } }"
-            )
-            subprocess.run(["powershell", "-NoProfile", "-Command", cmd], timeout=5, capture_output=True)
-            time.sleep(0.4)
+            flags = 0x08000000  # CREATE_NO_WINDOW
+            out = subprocess.check_output("netstat -ano -p tcp", shell=True, creationflags=flags, text=True)
+            pids = set()
+            for line in out.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5 and ":8765" in parts[1] and parts[3] == "LISTENING":
+                    try:
+                        pid = int(parts[4])
+                        if pid > 0 and pid != os.getpid():
+                            pids.add(pid)
+                    except ValueError:
+                        pass
+            for pid in pids:
+                subprocess.run(f"taskkill /F /PID {pid}", shell=True, creationflags=flags, capture_output=True)
+            time.sleep(0.3)
         except Exception:
             pass
 

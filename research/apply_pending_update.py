@@ -169,16 +169,25 @@ def apply_and_restart():
     time.sleep(1.2)
     pai_dir = get_pai_install_dir()
 
-    # Kill remaining pai-desktop.exe or python processes on port 8765
+    # Kill remaining pai-desktop.exe or python processes on port 8765 silently (no console window)
     if sys.platform == "win32":
         try:
-            cmd = (
-                "Get-Process -Name 'pai-desktop' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; "
-                "$c = Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue; "
-                "foreach ($x in $c) { if ($x.OwningProcess -gt 0) { Stop-Process -Id $x.OwningProcess -Force -ErrorAction SilentlyContinue } }"
-            )
-            subprocess.run(["powershell", "-NoProfile", "-Command", cmd], timeout=6, capture_output=True)
-            time.sleep(0.5)
+            flags = 0x08000000  # CREATE_NO_WINDOW
+            subprocess.run("taskkill /F /IM pai-desktop.exe", shell=True, creationflags=flags, capture_output=True)
+            out = subprocess.check_output("netstat -ano -p tcp", shell=True, creationflags=flags, text=True)
+            pids = set()
+            for line in out.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5 and ":8765" in parts[1] and parts[3] == "LISTENING":
+                    try:
+                        pid = int(parts[4])
+                        if pid > 0 and pid != os.getpid():
+                            pids.add(pid)
+                    except ValueError:
+                        pass
+            for pid in pids:
+                subprocess.run(f"taskkill /F /PID {pid}", shell=True, creationflags=flags, capture_output=True)
+            time.sleep(0.4)
         except Exception:
             pass
 

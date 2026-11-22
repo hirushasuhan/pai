@@ -27,7 +27,7 @@ fn set_close_behavior(to_tray: bool, state: tauri::State<AppState>) {
 
 #[tauri::command]
 fn get_engine_status() -> Result<serde_json::Value, String> {
-    let mut ver = "1.4.0-beta.1".to_string();
+    let mut ver = "1.4.2".to_string();
     if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
         let v_file = Path::new(&local_app).join("Programs/PAI/VERSION");
         if let Ok(v) = std::fs::read_to_string(v_file) {
@@ -236,7 +236,7 @@ fn main() {
             app_window_exit
         ])
         .setup(|app| {
-            let status_i = MenuItemBuilder::with_id("status", "PAI Studio v1.3.0 (Active)")
+            let status_i = MenuItemBuilder::with_id("status", "PAI Studio v1.4.2 (Active)")
                 .enabled(false)
                 .build(app)?;
             let show_i = MenuItemBuilder::with_id("show", "Open PAI Studio").build(app)?;

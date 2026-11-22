@@ -6375,7 +6375,32 @@ function setupUpdateSystem() {
     applySoftwareUpdateAndRestart();
   });
 
-  // Test simulation
+  // Test simulation (Beta Channel exclusive)
+  const selectChannel = document.getElementById("setting-update-channel");
+  function syncTestFlowVisibility() {
+    const sel = document.getElementById("setting-update-channel");
+    const btnSim = document.getElementById("btn-simulate-update-dev");
+    if (!btnSim) return;
+    const currentChannel = sel ? sel.value : (localStorage.getItem("pai_update_channel") || "stable");
+    if (currentChannel === "beta") {
+      btnSim.classList.remove("hidden");
+    } else {
+      btnSim.classList.add("hidden");
+    }
+  }
+
+  // Load saved channel or default to "stable"
+  const savedChannel = localStorage.getItem("pai_update_channel") || "stable";
+  if (selectChannel) {
+    selectChannel.value = savedChannel;
+    selectChannel.addEventListener("change", (e) => {
+      localStorage.setItem("pai_update_channel", e.target.value);
+      syncTestFlowVisibility();
+      showToast(`Update channel set to ${e.target.value.toUpperCase()}`, "info");
+    });
+  }
+  syncTestFlowVisibility();
+
   btnSimulateUpdateDev?.addEventListener("click", () => {
     simulateSoftwareUpdateFlow();
   });
@@ -6422,7 +6447,7 @@ async function checkSoftwareUpdates(interactive = false) {
       lastCheckedLabel.textContent = `Last checked: ${data.last_checked || new Date().toLocaleTimeString()}`;
     }
 
-    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.4.0-beta.1";
+    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.4.2";
     updateActiveVersionDisplay(activeVer);
 
     if (data.update_available) {
@@ -6480,8 +6505,8 @@ function openSoftwareUpdateModal() {
   if (!modal) return;
 
   const data = currentCachedUpdate || {};
-  const targetVer = data.latest_version || data.target_version || "1.4.1";
-  const currVer = data.current_version || window.__pai_active_version || "1.4.0-beta.1";
+  const targetVer = data.latest_version || data.target_version || "1.4.3";
+  const currVer = data.current_version || window.__pai_active_version || "1.4.2";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 
@@ -6558,17 +6583,17 @@ async function simulateSoftwareUpdateFlow() {
     const dotStatus = document.getElementById("dot-update-status");
 
     if (dotStatus) dotStatus.className = "status-indicator-dot warning";
-    if (statusTitle) statusTitle.textContent = `New Update Available: v${data.latest_version || "1.4.1"}`;
+    if (statusTitle) statusTitle.textContent = `New Update Available: v${data.latest_version || "1.4.3"}`;
     if (callout) {
       callout.classList.remove("hidden");
       const tag = document.getElementById("callout-version-tag");
       const notes = document.getElementById("callout-release-notes");
-      if (tag) tag.textContent = `v${data.latest_version || "1.4.1"} Available (${data.release_name || "Preview Build"})`;
+      if (tag) tag.textContent = `v${data.latest_version || "1.4.3"} Available (${data.release_name || "Preview Build"})`;
       if (notes) notes.textContent = data.release_notes || "A new verified release is available for Personal Agentic AI.";
     }
 
     openSoftwareUpdateModal();
-    showToast(`Simulated update v${data.latest_version || "1.4.1"} is ready for review!`, "success");
+    showToast(`Simulated update v${data.latest_version || "1.4.3"} is ready for review!`, "success");
   } catch (err) {
     showToast(`Simulation failed: ${err.message}`, "error");
   }
