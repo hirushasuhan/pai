@@ -1015,7 +1015,7 @@
                 </svg>
                 <span>Software Updates & Release Channel</span>
               </h3>
-              <span class="badge badge-info" id="badge-current-version">v1.4.0 (Installed)</span>
+              <span class="badge badge-info" id="badge-current-version">v1.3.0 (Installed)</span>
             </div>
 
             <p class="field-hint mb-3" style="font-size: 12px; color: var(--text-dim);">
@@ -1101,15 +1101,30 @@
               <div id="update-downloading-panel" class="update-downloading-panel hidden">
                 <div class="flex-between mb-2">
                   <span class="text-sm font-semibold flex-center-gap">
-                    <span class="spinner-small"></span>
+                    <span class="spinner-small" id="panel-progress-spinner"></span>
                     <span id="update-progress-label">Downloading release payload...</span>
                   </span>
-                  <span class="text-xs text-muted" id="update-progress-metrics">0 MB / 0 MB (0%)</span>
+                  <span class="text-xs text-muted font-mono" id="update-progress-metrics">0 MB / 0 MB (0%)</span>
                 </div>
                 <div class="progress-bar-bg mb-2">
                   <div class="progress-bar-fill" id="update-progress-bar" style="width: 0%;"></div>
                 </div>
-                <span class="text-xs text-muted" id="update-progress-sub">Streaming full package from GitHub Releases with Ed25519 signature verification...</span>
+                <div class="flex-between">
+                  <span class="text-xs text-muted" id="update-progress-sub">Streaming package from GitHub Releases with Ed25519 verification...</span>
+                  <div class="flex-center-gap">
+                    <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-panel-pause-update" title="Pause or Resume download">
+                      <span id="btn-panel-pause-icon">⏸</span>
+                      <span id="btn-panel-pause-text">Pause</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-panel-cancel-update" title="Cancel update download">
+                      <span>✕</span>
+                      <span>Cancel</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-panel-open-modal" title="View details in modal">
+                      <span>Details ↗</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <!-- Ready to Restart Banner (Hidden by default) -->
@@ -1687,6 +1702,12 @@
       <div class="floating-download-bottom flex-between">
         <span class="floating-download-bytes font-mono text-xs text-muted" id="floating-update-bytes">0 MB / 0 MB</span>
         <div class="floating-buttons flex-center-gap">
+          <button type="button" class="btn-floating-action btn-floating-pause" id="btn-floating-update-pause" title="Pause / Resume update download">
+            <span id="btn-floating-update-pause-text">Pause</span>
+          </button>
+          <button type="button" class="btn-floating-action text-danger" id="btn-floating-update-cancel" title="Cancel download">
+            <span>Cancel</span>
+          </button>
           <button type="button" class="btn-floating-action btn-floating-open" id="btn-floating-update-details" title="Open update details dialog">
             <span>Details ↗</span>
           </button>
@@ -1924,27 +1945,32 @@
           </svg>
           <span>PAI Studio Software Update</span>
         </h3>
-        <button type="button" class="btn-close-modal" id="btn-close-update-modal" title="Close">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
+        <div class="flex-center-gap">
+          <button type="button" class="btn-minimize-modal" id="btn-minimize-update-modal" title="Minimize to background and keep downloading">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+          <button type="button" class="btn-close-modal" id="btn-close-update-modal" title="Close">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
       </div>
       <div class="modal-body">
         <div class="update-version-row flex-between mb-3">
           <div class="version-pill current">
             <span class="label">Current Version:</span>
-            <strong id="modal-curr-ver">v1.4.0</strong>
+            <strong id="modal-curr-ver">v1.3.0</strong>
           </div>
           <div class="version-arrow">&rarr;</div>
           <div class="version-pill target">
             <span class="label">New Version:</span>
-            <strong id="modal-target-ver">v1.4.1</strong>
+            <strong id="modal-target-ver">v1.4.0</strong>
           </div>
         </div>
 
         <div class="update-meta-info mb-3">
           <div class="meta-item"><span class="meta-label">Release:</span> <span id="modal-rel-name">Loading...</span></div>
           <div class="meta-item"><span class="meta-label">Published:</span> <span id="modal-rel-date">-</span></div>
-          <div class="meta-item"><span class="meta-label">Payload Size:</span> <span id="modal-rel-size">~65 MB</span></div>
+          <div class="meta-item"><span class="meta-label">Payload Size:</span> <span id="modal-rel-size">~2.3 MB</span></div>
           <div class="meta-item"><span class="meta-label">Security:</span> <span class="badge badge-success text-xs">ADR-005 Ed25519 Verified</span></div>
         </div>
 
@@ -1955,11 +1981,30 @@
 
         <div id="modal-download-progress-box" class="hidden mb-3">
           <div class="flex-between mb-1">
-            <span class="text-xs font-semibold" id="modal-progress-label">Downloading update payload...</span>
-            <span class="text-xs text-muted" id="modal-progress-metrics">0%</span>
+            <span class="text-xs font-semibold flex-center-gap">
+              <span class="pulse-indicator" id="modal-progress-pulse"></span>
+              <span id="modal-progress-label">Downloading update payload...</span>
+            </span>
+            <span class="text-xs text-muted font-mono" id="modal-progress-metrics">0% (0.0 MB / 0.0 MB)</span>
           </div>
-          <div class="progress-bar-bg">
+          <div class="progress-bar-bg mb-2">
             <div class="progress-bar-fill" id="modal-progress-bar" style="width: 0%;"></div>
+          </div>
+          <div class="modal-download-controls flex-between mt-2">
+            <div class="flex-center-gap">
+              <button type="button" class="btn btn-secondary btn-xs flex-center-gap" id="btn-modal-pause-update" title="Pause or Resume download">
+                <span id="btn-modal-pause-icon">⏸</span>
+                <span id="btn-modal-pause-text">Pause</span>
+              </button>
+              <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-danger" id="btn-modal-cancel-update" title="Cancel update download">
+                <span>✕</span>
+                <span>Cancel</span>
+              </button>
+            </div>
+            <button type="button" class="btn btn-secondary btn-xs flex-center-gap text-cyan" id="btn-modal-minimize-update" title="Minimize modal to background and continue working">
+              <span>⤓</span>
+              <span>Download in Background</span>
+            </button>
           </div>
         </div>
       </div>

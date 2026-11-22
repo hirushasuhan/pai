@@ -29,7 +29,7 @@ fn set_close_behavior(to_tray: bool, state: tauri::State<AppState>) {
 fn get_engine_status() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "status": "ready",
-        "version": "1.4.0",
+        "version": "1.3.0",
         "framework": "Tauri 2.0 (Rust)",
         "loopback": "127.0.0.1:8765"
     }))
@@ -226,7 +226,7 @@ fn main() {
             app_window_exit
         ])
         .setup(|app| {
-            let status_i = MenuItemBuilder::with_id("status", "PAI Studio v1.4.0 (Active)")
+            let status_i = MenuItemBuilder::with_id("status", "PAI Studio v1.3.0 (Active)")
                 .enabled(false)
                 .build(app)?;
             let show_i = MenuItemBuilder::with_id("show", "Open PAI Studio").build(app)?;

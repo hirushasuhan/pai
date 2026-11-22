@@ -6266,7 +6266,7 @@ function setupUpdateSystem() {
     checkSoftwareUpdates(true);
   });
 
-  // Modal controls
+  // Modal controls & minimize
   btnOpenUpdateModal?.addEventListener("click", () => {
     openSoftwareUpdateModal();
   });
@@ -6277,6 +6277,15 @@ function setupUpdateSystem() {
     updateModal?.classList.add("hidden");
   });
 
+  const btnMinimizeUpdateModal = document.getElementById("btn-minimize-update-modal");
+  const btnModalMinimizeUpdate = document.getElementById("btn-modal-minimize-update");
+  btnMinimizeUpdateModal?.addEventListener("click", () => {
+    minimizeSoftwareUpdateModal();
+  });
+  btnModalMinimizeUpdate?.addEventListener("click", () => {
+    minimizeSoftwareUpdateModal();
+  });
+
   // Download actions (Single clear download action with background streaming)
   btnDownloadUpdate?.addEventListener("click", () => {
     startSoftwareUpdateDownload();
@@ -6285,8 +6294,48 @@ function setupUpdateSystem() {
     startSoftwareUpdateDownload();
   });
 
+  // Pause & Resume actions
+  const btnModalPauseUpdate = document.getElementById("btn-modal-pause-update");
+  const btnPanelPauseUpdate = document.getElementById("btn-panel-pause-update");
+  const btnFloatingUpdatePause = document.getElementById("btn-floating-update-pause");
+
+  btnModalPauseUpdate?.addEventListener("click", () => {
+    toggleSoftwareUpdatePause();
+  });
+  btnPanelPauseUpdate?.addEventListener("click", () => {
+    toggleSoftwareUpdatePause();
+  });
+  btnFloatingUpdatePause?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSoftwareUpdatePause();
+  });
+
+  // Cancel actions
+  const btnModalCancelUpdate = document.getElementById("btn-modal-cancel-update");
+  const btnPanelCancelUpdate = document.getElementById("btn-panel-cancel-update");
+  const btnFloatingUpdateCancel = document.getElementById("btn-floating-update-cancel");
+  const btnPanelOpenModal = document.getElementById("btn-panel-open-modal");
+
+  btnModalCancelUpdate?.addEventListener("click", () => {
+    cancelSoftwareUpdateDownload();
+  });
+  btnPanelCancelUpdate?.addEventListener("click", () => {
+    cancelSoftwareUpdateDownload();
+  });
+  btnFloatingUpdateCancel?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cancelSoftwareUpdateDownload();
+  });
+  btnPanelOpenModal?.addEventListener("click", () => {
+    openSoftwareUpdateModal();
+  });
+
   // Floating widget & header pill actions
   btnFloatingUpdateDetails?.addEventListener("click", () => {
+    openSoftwareUpdateModal();
+  });
+  floatingWidget?.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
     openSoftwareUpdateModal();
   });
   btnFloatingUpdateRestart?.addEventListener("click", () => {
@@ -6376,13 +6425,13 @@ async function checkSoftwareUpdates(interactive = false) {
         dotStatus.className = "status-indicator-dot online";
       }
       if (statusTitle) {
-        statusTitle.textContent = `PAI Studio is Up to Date (v${data.current_version || "1.4.0"})`;
+        statusTitle.textContent = `PAI Studio is Up to Date (v${data.current_version || "1.3.0"})`;
       }
       if (callout) {
         callout.classList.add("hidden");
       }
       if (interactive) {
-        showToast(`You are using the latest version of PAI Studio (v${data.current_version || "1.4.0"})`, "info", "Up to Date");
+        showToast(`You are using the latest version of PAI Studio (v${data.current_version || "1.3.0"})`, "info", "Up to Date");
       }
     }
   } catch (err) {
@@ -6403,7 +6452,7 @@ function openSoftwareUpdateModal() {
 
   const data = currentCachedUpdate || {};
   const targetVer = data.latest_version || data.target_version || "1.4.0-beta.1";
-  const currVer = data.current_version || "1.4.0";
+  const currVer = data.current_version || "1.3.0";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 
@@ -6461,7 +6510,143 @@ async function simulateSoftwareUpdateFlow() {
   }
 }
 
-async function startSoftwareUpdateDownload() {
+let isSoftwareUpdatePaused = false;
+
+function minimizeSoftwareUpdateModal() {
+  const updateModal = document.getElementById("update-modal");
+  const floatingWidget = document.getElementById("floating-update-widget");
+  const headerPill = document.getElementById("header-update-pill");
+
+  if (updateModal) updateModal.classList.add("hidden");
+  if (floatingWidget) {
+    floatingWidget.classList.remove("hidden");
+    delete floatingWidget.dataset.dismissed;
+  }
+  if (headerPill) headerPill.classList.remove("hidden");
+  showToast("PAI update is downloading in the background. You can continue working.", "info", "Background Update", 4000);
+}
+
+async function toggleSoftwareUpdatePause() {
+  if (isSoftwareUpdatePaused) {
+    await resumeSoftwareUpdateDownload();
+  } else {
+    await pauseSoftwareUpdateDownload();
+  }
+}
+
+async function pauseSoftwareUpdateDownload() {
+  try {
+    const res = await fetch(`${API_BASE}/api/update/pause`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      isSoftwareUpdatePaused = true;
+      updatePauseUI(true);
+      showToast("PAI update download paused.", "info", "Download Paused");
+    } else {
+      showToast(data.error || "Could not pause download", "warning");
+    }
+  } catch (err) {
+    showToast(`Failed to pause download: ${err.message}`, "error");
+  }
+}
+
+async function resumeSoftwareUpdateDownload() {
+  try {
+    const res = await fetch(`${API_BASE}/api/update/resume`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      isSoftwareUpdatePaused = false;
+      updatePauseUI(false);
+      showToast("Resuming PAI update download...", "info", "Download Resumed");
+    } else {
+      showToast(data.error || "Could not resume download", "warning");
+    }
+  } catch (err) {
+    showToast(`Failed to resume download: ${err.message}`, "error");
+  }
+}
+
+function updatePauseUI(isPaused) {
+  const modalPauseText = document.getElementById("btn-modal-pause-text");
+  const modalPauseIcon = document.getElementById("btn-modal-pause-icon");
+  const panelPauseText = document.getElementById("btn-panel-pause-text");
+  const panelPauseIcon = document.getElementById("btn-panel-pause-icon");
+  const floatingPauseText = document.getElementById("btn-floating-update-pause-text");
+  const modalProgressLabel = document.getElementById("modal-progress-label");
+  const updateProgressLabel = document.getElementById("update-progress-label");
+
+  const text = isPaused ? "Resume" : "Pause";
+  const icon = isPaused ? "▶" : "⏸";
+
+  if (modalPauseText) modalPauseText.textContent = text;
+  if (modalPauseIcon) modalPauseIcon.textContent = icon;
+  if (panelPauseText) panelPauseText.textContent = text;
+  if (panelPauseIcon) panelPauseIcon.textContent = icon;
+  if (floatingPauseText) floatingPauseText.textContent = text;
+
+  if (modalProgressLabel) {
+    modalProgressLabel.textContent = isPaused ? "⏸ Download paused" : "Downloading update payload...";
+  }
+  if (updateProgressLabel) {
+    updateProgressLabel.textContent = isPaused ? "⏸ Download paused" : "Downloading release payload...";
+  }
+}
+
+async function cancelSoftwareUpdateDownload() {
+  try {
+    if (updatePollingTimer) {
+      clearInterval(updatePollingTimer);
+      updatePollingTimer = null;
+    }
+    await fetch(`${API_BASE}/api/update/cancel`, { method: "POST" });
+    isSoftwareUpdatePaused = false;
+    updatePauseUI(false);
+
+    // Reset UI elements
+    const downloadingPanel = document.getElementById("update-downloading-panel");
+    const modalProgressBox = document.getElementById("modal-download-progress-box");
+    const progressBar = document.getElementById("update-progress-bar");
+    const modalProgressBar = document.getElementById("modal-progress-bar");
+    const btnDownloadUpdate = document.getElementById("btn-download-update");
+    const btnModalDownload = document.getElementById("btn-modal-download");
+    const floatingWidget = document.getElementById("floating-update-widget");
+    const headerPill = document.getElementById("header-update-pill");
+
+    if (downloadingPanel) downloadingPanel.classList.add("hidden");
+    if (modalProgressBox) modalProgressBox.classList.add("hidden");
+    if (floatingWidget) floatingWidget.classList.add("hidden");
+    if (headerPill) headerPill.classList.add("hidden");
+
+    if (progressBar) progressBar.style.width = "0%";
+    if (modalProgressBar) modalProgressBar.style.width = "0%";
+
+    if (btnDownloadUpdate) {
+      btnDownloadUpdate.disabled = false;
+      btnDownloadUpdate.innerHTML = `
+        <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+        </svg>
+        <span>Download & Install Update</span>
+      `;
+    }
+    if (btnModalDownload) {
+      btnModalDownload.disabled = false;
+      btnModalDownload.innerHTML = `
+        <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+        </svg>
+        <span>Download & Install Now</span>
+      `;
+    }
+
+    showToast("PAI update download cancelled.", "info", "Download Cancelled");
+  } catch (err) {
+    showToast(`Error cancelling download: ${err.message}`, "error");
+  }
+}
+
+async function startSoftwareUpdateDownload(options = {}) {
+  const shouldMinimize = options.minimize === true;
   const downloadingPanel = document.getElementById("update-downloading-panel");
   const modalProgressBox = document.getElementById("modal-download-progress-box");
   const btnDownloadUpdate = document.getElementById("btn-download-update");
@@ -6477,10 +6662,8 @@ async function startSoftwareUpdateDownload() {
   }
   if (btnModalDownload) {
     btnModalDownload.disabled = true;
-    btnModalDownload.innerHTML = `<span class="spinner-small"></span><span>Downloading in Background...</span>`;
+    btnModalDownload.innerHTML = `<span class="spinner-small"></span><span>Downloading...</span>`;
   }
-
-  showToast("Downloading update payload in the background. You can continue using PAI.", "info", "Download Started", 4000);
 
   if (downloadingPanel) downloadingPanel.classList.remove("hidden");
   if (modalProgressBox) modalProgressBox.classList.remove("hidden");
@@ -6490,16 +6673,29 @@ async function startSoftwareUpdateDownload() {
   }
   if (headerPill) headerPill.classList.remove("hidden");
 
+  // Reset pause state
+  isSoftwareUpdatePaused = false;
+  updatePauseUI(false);
+
+  if (shouldMinimize) {
+    minimizeSoftwareUpdateModal();
+  } else {
+    showToast("Downloading update payload. You can minimize to background and continue working.", "info", "Download Started", 4500);
+  }
+
+  // Immediately kick off live polling so user never experiences frozen 0%
+  if (updatePollingTimer) clearInterval(updatePollingTimer);
+  updatePollingTimer = setInterval(pollSoftwareUpdateProgress, 350);
+
   try {
     const payload = currentCachedUpdate || { is_simulated: true, target_version: "1.4.0-beta.1" };
-    await fetch(`${API_BASE}/api/update/download`, {
+    fetch(`${API_BASE}/api/update/download`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+    }).catch(err => {
+      console.warn("Background update download trigger error:", err);
     });
-
-    if (updatePollingTimer) clearInterval(updatePollingTimer);
-    updatePollingTimer = setInterval(pollSoftwareUpdateProgress, 350);
   } catch (err) {
     showToast(`Failed to initiate download: ${err.message}`, "error");
     if (btnDownloadUpdate) {
@@ -6518,6 +6714,7 @@ async function pollSoftwareUpdateProgress() {
     const res = await fetch(`${API_BASE}/api/update/status`);
     const data = await res.json();
     const state = data.download_state;
+    if (!state) return;
 
     // Elements
     const progressBar = document.getElementById("update-progress-bar");
@@ -6525,6 +6722,7 @@ async function pollSoftwareUpdateProgress() {
     const metricsLabel = document.getElementById("update-progress-metrics");
     const modalMetrics = document.getElementById("modal-progress-metrics");
     const progressLabel = document.getElementById("update-progress-label");
+    const modalProgressLabel = document.getElementById("modal-progress-label");
 
     // Floating widget elements
     const floatingWidget = document.getElementById("floating-update-widget");
@@ -6542,8 +6740,8 @@ async function pollSoftwareUpdateProgress() {
     const pct = state.percentage || 0;
     const mbDownloaded = (state.bytes_downloaded / (1024 * 1024)).toFixed(1);
     const mbTotal = (state.total_bytes / (1024 * 1024)).toFixed(1);
-    const speed = state.speed_mbps ? `${state.speed_mbps} MB/s` : "Fast";
-    const targetVer = state.target_version || (currentCachedUpdate?.latest_version) || "1.3.0";
+    const speed = state.speed_mbps ? `${state.speed_mbps} MB/s` : "Normal";
+    const targetVer = state.target_version || (currentCachedUpdate?.latest_version) || "1.4.0-beta.1";
 
     if (progressBar) progressBar.style.width = `${pct}%`;
     if (modalProgressBar) modalProgressBar.style.width = `${pct}%`;
@@ -6554,16 +6752,25 @@ async function pollSoftwareUpdateProgress() {
     if (modalMetrics) modalMetrics.textContent = `${pct}% (${mbDownloaded} MB / ${mbTotal} MB)`;
     if (floatingPct) floatingPct.textContent = `${pct}%`;
     if (floatingBytes) floatingBytes.textContent = `${mbDownloaded} MB / ${mbTotal} MB • ${speed}`;
-    if (floatingTitle) floatingTitle.textContent = `Downloading PAI v${targetVer}...`;
-    if (headerText) headerText.textContent = `PAI Update: ${pct}%`;
 
-    if (state.status === "downloading") {
+    if (state.status === "paused") {
+      isSoftwareUpdatePaused = true;
+      updatePauseUI(true);
+      if (floatingTitle) floatingTitle.textContent = `⏸ Paused: PAI v${targetVer}`;
+      if (headerText) headerText.textContent = `⏸ PAI Update: ${pct}%`;
+      return;
+    } else if (state.status === "downloading") {
+      isSoftwareUpdatePaused = false;
+      updatePauseUI(false);
+      if (floatingTitle) floatingTitle.textContent = `Downloading PAI v${targetVer}...`;
+      if (headerText) headerText.textContent = `PAI Update: ${pct}%`;
       if (headerPill) headerPill.classList.remove("hidden");
       if (floatingWidget && !floatingWidget.dataset.dismissed) floatingWidget.classList.remove("hidden");
     }
 
     if (state.status === "verifying") {
       if (progressLabel) progressLabel.textContent = "Verifying cryptographic signatures (ADR-005)...";
+      if (modalProgressLabel) modalProgressLabel.textContent = "Verifying ADR-005 signatures...";
       if (floatingTitle) floatingTitle.textContent = `Verifying PAI v${targetVer}...`;
       if (headerText) headerText.textContent = "Verifying...";
     }
@@ -6571,6 +6778,7 @@ async function pollSoftwareUpdateProgress() {
     if (state.status === "ready") {
       clearInterval(updatePollingTimer);
       updatePollingTimer = null;
+      isSoftwareUpdatePaused = false;
 
       // Update UI to Ready state
       const downloadingPanel = document.getElementById("update-downloading-panel");
@@ -6620,6 +6828,7 @@ async function pollSoftwareUpdateProgress() {
     } else if (state.status === "error") {
       clearInterval(updatePollingTimer);
       updatePollingTimer = null;
+      isSoftwareUpdatePaused = false;
       showToast(`Update download failed: ${state.error_message}`, "error", "Download Failed");
       const btnDownloadUpdate = document.getElementById("btn-download-update");
       const btnModalDownload = document.getElementById("btn-modal-download");
