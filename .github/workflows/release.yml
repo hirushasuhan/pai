@@ -51,39 +51,33 @@ jobs:
 
       - name: Determine Version & Channel
         id: vars
-        shell: pwsh
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $ver = "${{ github.event.inputs.version }}".TrimStart("vV")
-            $chan = "${{ github.event.inputs.channel }}"
-            $title = "${{ github.event.inputs.release_title }}"
-            $notes = "${{ github.event.inputs.release_notes }}"
-          } else {
-            $tag = "${{ github.ref_name }}"
-            $ver = $tag.TrimStart("vV")
-            if ($ver -match "(beta|rc|preview|alpha)") {
-              $chan = "beta"
-            } else {
-              $chan = "stable"
-            }
-            $title = "Personal Agentic AI v$ver"
-            $notes = "Automated release of Personal Agentic AI (PAI) v$ver."
-          }
-
-          $isPre = ($chan -eq "beta") -or ($ver -match "(beta|rc|preview|alpha)")
-          
-          if ([string]::IsNullOrWhiteSpace($title)) {
-            $title = "Personal Agentic AI v$ver"
-          }
-
-          Write-Output "VERSION=$ver" >> $env:GITHUB_OUTPUT
-          Write-Output "CHANNEL=$chan" >> $env:GITHUB_OUTPUT
-          Write-Output "IS_PRERELEASE=$isPre" >> $env:GITHUB_OUTPUT
-          Write-Output "TITLE=$title" >> $env:GITHUB_OUTPUT
-          Write-Output "NOTES=$notes" >> $env:GITHUB_OUTPUT
-          Write-Output "TAG=v$ver" >> $env:GITHUB_OUTPUT
-
-          Write-Host "Configured Release: Version=$ver, Channel=$chan, IsPrerelease=$isPre"
+          python -c "
+          import os, re
+          event_name = '${{ github.event_name }}'
+          if event_name == 'workflow_dispatch':
+              ver = '${{ github.event.inputs.version }}'.strip().lstrip('vV')
+              chan = '${{ github.event.inputs.channel }}'.strip()
+              title = '${{ github.event.inputs.release_title }}'.strip() or f'Personal Agentic AI v{ver}'
+              notes = '''${{ github.event.inputs.release_notes }}'''.strip() or f'Automated release of Personal Agentic AI (PAI) v{ver}.'
+          else:
+              tag = '${{ github.ref_name }}'.strip()
+              ver = tag.lstrip('vV')
+              chan = 'beta' if re.search(r'(beta|rc|preview|alpha)', ver, re.I) else 'stable'
+              title = f'Personal Agentic AI v{ver}'
+              notes = f'Automated release of Personal Agentic AI (PAI) v{ver}.'
+          is_pre = 'true' if (chan == 'beta' or bool(re.search(r'(beta|rc|preview|alpha)', ver, re.I))) else 'false'
+          gh_out = os.environ.get('GITHUB_OUTPUT')
+          if gh_out:
+              with open(gh_out, 'a', encoding='utf-8') as f:
+                  f.write(f'VERSION={ver}\n')
+                  f.write(f'CHANNEL={chan}\n')
+                  f.write(f'IS_PRERELEASE={is_pre}\n')
+                  f.write(f'TITLE={title}\n')
+                  f.write(f'NOTES={notes}\n')
+                  f.write(f'TAG=v{ver}\n')
+          print(f'Configured Release: Version={ver}, Channel={chan}, IsPrerelease={is_pre}, Tag=v{ver}')
+          "
 
       - name: Build Rust Policy Core Binary
         working-directory: core
@@ -96,59 +90,8 @@ jobs:
           cargo build --release
 
       - name: Package Desktop Standalone & Payload
-        shell: pwsh
         run: |
-          $ver = "${{ steps.vars.outputs.VERSION }}"
-          $distDir = "dist"
-          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-          
-          $pkgDir = "$distDir\pai-desktop-v$ver-win-x64"
-          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-
-          # Copy compiled binaries & desktop runtime
-          Copy-Item "desktop\src-tauri\target\release\pai-desktop.exe" "$pkgDir\pai-desktop.exe"
-          if (Test-Path "core\target\release\pai-core.exe") {
-            New-Item -ItemType Directory -Force -Path "$pkgDir\core" | Out-Null
-            Copy-Item "core\target\release\pai-core.exe" "$pkgDir\core\pai-core.exe"
-          }
-
-          # Copy UI distribution and bridge server
-          Copy-Item -Recurse "desktop\ui" "$pkgDir\ui"
-          Copy-Item -Recurse "desktop\assets" "$pkgDir\assets"
-          Copy-Item "desktop\bridge_server.py" "$pkgDir\bridge_server.py"
-          Copy-Item "desktop\manifest.json" "$pkgDir\manifest.json"
-
-          # Assemble zip archive
-          $zipPath = "$distDir\pai-payload-$ver-win-x64.zip"
-          Compress-Archive -Path "$pkgDir\*" -DestinationPath $zipPath -Force
-
-          # Also create desktop standalone zip
-          $desktopZip = "$distDir\pai-desktop-$ver-win-x64.zip"
-          Copy-Item $zipPath $desktopZip
-
-          # Generate ADR-005 manifest.json with SHA-256
-          $hashPayload = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
-          $hashDesktop = (Get-FileHash $desktopZip -Algorithm SHA256).Hash.ToLower()
-          $sizePayload = (Get-Item $zipPath).Length
-
-          $manifestObj = @{
-            format = 1
-            product = "pai-desktop"
-            version = $ver
-            channel = "${{ steps.vars.outputs.CHANNEL }}"
-            files = @{
-              "pai-payload-$ver-win-x64.zip" = @{ sha256 = $hashPayload; size = $sizePayload }
-            }
-          }
-          $manifestJson = $manifestObj | ConvertTo-Json -Depth 5
-          Set-Content -Path "$distDir\manifest.json" -Value $manifestJson -Encoding utf8
-
-          # Checksums file
-          $shaContent = "$hashPayload  pai-payload-$ver-win-x64.zip`n$hashDesktop  pai-desktop-$ver-win-x64.zip"
-          Set-Content -Path "$distDir\SHA256SUMS.txt" -Value $shaContent -Encoding utf8
-
-          Write-Host "Packaging complete for v$ver:"
-          Get-ChildItem $distDir | Select-Object Name, Length
+          python tools/package_release.py --version "${{ steps.vars.outputs.VERSION }}" --channel "${{ steps.vars.outputs.CHANNEL }}" --output-dir dist
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -157,7 +100,7 @@ jobs:
           name: ${{ steps.vars.outputs.TITLE }}
           body: ${{ steps.vars.outputs.NOTES }}
           draft: false
-          prerelease: ${{ steps.vars.outputs.IS_PRERELEASE == 'True' || steps.vars.outputs.IS_PRERELEASE == 'true' }}
+          prerelease: ${{ steps.vars.outputs.IS_PRERELEASE == 'true' }}
           files: |
             dist/pai-payload-${{ steps.vars.outputs.VERSION }}-win-x64.zip
             dist/pai-desktop-${{ steps.vars.outputs.VERSION }}-win-x64.zip

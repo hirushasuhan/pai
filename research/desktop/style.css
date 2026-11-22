@@ -5986,6 +5986,25 @@ body.light-theme .btn-reset-pill:hover {
   display: none !important;
 }
 
+/* Header Software Update Pill */
+.header-update-pill {
+  background: rgba(16, 185, 129, 0.14) !important;
+  border-color: rgba(16, 185, 129, 0.4) !important;
+  color: #6ee7b7 !important;
+}
+
+.header-update-pill:hover {
+  background: rgba(16, 185, 129, 0.25) !important;
+  border-color: #34d399 !important;
+  color: #ffffff !important;
+}
+
+body.light-theme .header-update-pill {
+  background: #d1fae5 !important;
+  border-color: #10b981 !important;
+  color: #047857 !important;
+}
+
 body.light-theme .header-downloading-pill {
   background: #e0e7ff !important;
   border-color: #6366f1 !important;
@@ -6242,6 +6261,34 @@ body.light-theme .btn-floating-pause {
   background: rgba(99, 102, 241, 0.28);
   border-color: rgba(99, 102, 241, 0.5);
   color: #ffffff;
+}
+
+/* Floating Software Update Widget */
+.floating-update-widget {
+  bottom: 24px;
+  right: 24px;
+  z-index: 9998;
+}
+
+/* Offset upwards if the model download widget is open at the same time */
+body:has(#floating-download-widget:not(.hidden)) .floating-update-widget {
+  bottom: 125px !important;
+}
+
+.floating-update-widget .floating-mini-bar-fill {
+  background: linear-gradient(90deg, #059669, #10b981) !important;
+}
+
+.btn-floating-restart {
+  background: #10b981 !important;
+  border: 1px solid #059669 !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.btn-floating-restart:hover {
+  background: #059669 !important;
+  border-color: #047857 !important;
 }
 
 /* Active Models Strip Banner on Models Page */

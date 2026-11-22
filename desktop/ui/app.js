@@ -6226,16 +6226,24 @@ let updatePollingTimer = null;
 function setupUpdateSystem() {
   const btnCheckUpdate = document.getElementById("btn-check-update");
   const btnDownloadUpdate = document.getElementById("btn-download-update");
+  const btnBackgroundUpdate = document.getElementById("btn-background-update");
   const btnOpenUpdateModal = document.getElementById("btn-open-update-modal");
   const btnCloseUpdateModal = document.getElementById("btn-close-update-modal");
   const btnCancelUpdateModal = document.getElementById("btn-cancel-update-modal");
   const btnModalDownload = document.getElementById("btn-modal-download");
+  const btnModalBackgroundDownload = document.getElementById("btn-modal-background-download");
   const btnRestartForUpdate = document.getElementById("btn-restart-for-update");
   const btnModalRestart = document.getElementById("btn-modal-restart");
   const btnSimulateUpdateDev = document.getElementById("btn-simulate-update-dev");
   const updateModal = document.getElementById("update-modal");
   const selectChannel = document.getElementById("setting-update-channel");
   const autoCheckToggle = document.getElementById("setting-auto-check-update");
+
+  const floatingWidget = document.getElementById("floating-update-widget");
+  const btnFloatingUpdateDetails = document.getElementById("btn-floating-update-details");
+  const btnFloatingUpdateRestart = document.getElementById("btn-floating-update-restart");
+  const btnFloatingUpdateClose = document.getElementById("btn-floating-update-close");
+  const headerUpdatePill = document.getElementById("header-update-pill");
 
   // Restore saved preferences
   if (selectChannel) {
@@ -6271,12 +6279,35 @@ function setupUpdateSystem() {
     updateModal?.classList.add("hidden");
   });
 
-  // Download actions
+  // Download actions (Interactive & Background)
   btnDownloadUpdate?.addEventListener("click", () => {
-    startSoftwareUpdateDownload();
+    startSoftwareUpdateDownload({ background: false });
+  });
+  btnBackgroundUpdate?.addEventListener("click", () => {
+    startSoftwareUpdateDownload({ background: true });
   });
   btnModalDownload?.addEventListener("click", () => {
-    startSoftwareUpdateDownload();
+    startSoftwareUpdateDownload({ background: false });
+  });
+  btnModalBackgroundDownload?.addEventListener("click", () => {
+    startSoftwareUpdateDownload({ background: true });
+  });
+
+  // Floating widget & header pill actions
+  btnFloatingUpdateDetails?.addEventListener("click", () => {
+    openSoftwareUpdateModal();
+  });
+  btnFloatingUpdateRestart?.addEventListener("click", () => {
+    applySoftwareUpdateAndRestart();
+  });
+  btnFloatingUpdateClose?.addEventListener("click", () => {
+    if (floatingWidget) {
+      floatingWidget.classList.add("hidden");
+      floatingWidget.dataset.dismissed = "true";
+    }
+  });
+  headerUpdatePill?.addEventListener("click", () => {
+    openSoftwareUpdateModal();
   });
 
   // Restart actions
@@ -6435,18 +6466,39 @@ async function simulateSoftwareUpdateFlow() {
   }
 }
 
-async function startSoftwareUpdateDownload() {
+async function startSoftwareUpdateDownload(options = {}) {
+  const isBackground = options.background === true;
   const downloadingPanel = document.getElementById("update-downloading-panel");
   const modalProgressBox = document.getElementById("modal-download-progress-box");
   const btnDownloadUpdate = document.getElementById("btn-download-update");
+  const btnBackgroundUpdate = document.getElementById("btn-background-update");
   const btnModalDownload = document.getElementById("btn-modal-download");
+  const btnModalBg = document.getElementById("btn-modal-background-download");
+  const updateModal = document.getElementById("update-modal");
+
+  // Floating widget & header pill
+  const floatingWidget = document.getElementById("floating-update-widget");
+  const headerPill = document.getElementById("header-update-pill");
 
   if (btnDownloadUpdate) btnDownloadUpdate.disabled = true;
+  if (btnBackgroundUpdate) btnBackgroundUpdate.disabled = true;
   if (btnModalDownload) btnModalDownload.disabled = true;
+  if (btnModalBg) btnModalBg.disabled = true;
+
+  if (isBackground) {
+    if (updateModal) updateModal.classList.add("hidden");
+    showToast("PAI update is downloading in the background. You can continue working.", "info", "Background Update", 4500);
+  } else {
+    showToast("Downloading update payload from GitHub Releases...", "info", "Download Started");
+  }
+
   if (downloadingPanel) downloadingPanel.classList.remove("hidden");
   if (modalProgressBox) modalProgressBox.classList.remove("hidden");
-
-  showToast("Downloading update payload from GitHub Releases...", "info", "Download Started");
+  if (floatingWidget) {
+    floatingWidget.classList.remove("hidden");
+    delete floatingWidget.dataset.dismissed;
+  }
+  if (headerPill) headerPill.classList.remove("hidden");
 
   try {
     const payload = currentCachedUpdate || { is_simulated: true, target_version: "1.3.0" };
@@ -6461,7 +6513,9 @@ async function startSoftwareUpdateDownload() {
   } catch (err) {
     showToast(`Failed to initiate download: ${err.message}`, "error");
     if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
+    if (btnBackgroundUpdate) btnBackgroundUpdate.disabled = false;
     if (btnModalDownload) btnModalDownload.disabled = false;
+    if (btnModalBg) btnModalBg.disabled = false;
   }
 }
 
@@ -6471,25 +6525,53 @@ async function pollSoftwareUpdateProgress() {
     const data = await res.json();
     const state = data.download_state;
 
+    // Elements
     const progressBar = document.getElementById("update-progress-bar");
     const modalProgressBar = document.getElementById("modal-progress-bar");
     const metricsLabel = document.getElementById("update-progress-metrics");
     const modalMetrics = document.getElementById("modal-progress-metrics");
     const progressLabel = document.getElementById("update-progress-label");
 
+    // Floating widget elements
+    const floatingWidget = document.getElementById("floating-update-widget");
+    const floatingBar = document.getElementById("floating-update-bar-fill");
+    const floatingPct = document.getElementById("floating-update-pct");
+    const floatingBytes = document.getElementById("floating-update-bytes");
+    const floatingTitle = document.getElementById("floating-update-title");
+    const floatingRestartBtn = document.getElementById("btn-floating-update-restart");
+    const floatingPulse = document.getElementById("floating-update-pulse");
+
+    // Header pill
+    const headerPill = document.getElementById("header-update-pill");
+    const headerText = document.getElementById("header-update-text");
+
     const pct = state.percentage || 0;
     const mbDownloaded = (state.bytes_downloaded / (1024 * 1024)).toFixed(1);
     const mbTotal = (state.total_bytes / (1024 * 1024)).toFixed(1);
+    const speed = state.speed_mbps ? `${state.speed_mbps} MB/s` : "Fast";
+    const targetVer = state.target_version || (currentCachedUpdate?.latest_version) || "1.3.0";
 
     if (progressBar) progressBar.style.width = `${pct}%`;
     if (modalProgressBar) modalProgressBar.style.width = `${pct}%`;
+    if (floatingBar) floatingBar.style.width = `${pct}%`;
 
-    const metricsText = `${mbDownloaded} MB / ${mbTotal} MB (${pct}%)`;
+    const metricsText = `${mbDownloaded} MB / ${mbTotal} MB (${pct}%) • ${speed}`;
     if (metricsLabel) metricsLabel.textContent = metricsText;
     if (modalMetrics) modalMetrics.textContent = `${pct}% (${mbDownloaded} MB / ${mbTotal} MB)`;
+    if (floatingPct) floatingPct.textContent = `${pct}%`;
+    if (floatingBytes) floatingBytes.textContent = `${mbDownloaded} MB / ${mbTotal} MB • ${speed}`;
+    if (floatingTitle) floatingTitle.textContent = `Downloading PAI v${targetVer}...`;
+    if (headerText) headerText.textContent = `PAI Update: ${pct}%`;
+
+    if (state.status === "downloading") {
+      if (headerPill) headerPill.classList.remove("hidden");
+      if (floatingWidget && !floatingWidget.dataset.dismissed) floatingWidget.classList.remove("hidden");
+    }
 
     if (state.status === "verifying") {
       if (progressLabel) progressLabel.textContent = "Verifying cryptographic signatures (ADR-005)...";
+      if (floatingTitle) floatingTitle.textContent = `Verifying PAI v${targetVer}...`;
+      if (headerText) headerText.textContent = "Verifying...";
     }
 
     if (state.status === "ready") {
@@ -6502,6 +6584,7 @@ async function pollSoftwareUpdateProgress() {
       const callout = document.getElementById("update-available-callout");
       const modalProgressBox = document.getElementById("modal-download-progress-box");
       const btnModalDownload = document.getElementById("btn-modal-download");
+      const btnModalBg = document.getElementById("btn-modal-background-download");
       const btnModalRestart = document.getElementById("btn-modal-restart");
 
       if (downloadingPanel) downloadingPanel.classList.add("hidden");
@@ -6509,17 +6592,53 @@ async function pollSoftwareUpdateProgress() {
       if (readyBanner) readyBanner.classList.remove("hidden");
       if (modalProgressBox) modalProgressBox.classList.add("hidden");
       if (btnModalDownload) btnModalDownload.classList.add("hidden");
+      if (btnModalBg) btnModalBg.classList.add("hidden");
       if (btnModalRestart) btnModalRestart.classList.remove("hidden");
 
-      showToast("Update downloaded and verified! Restart to apply.", "success", "Update Ready", 6000);
+      // Floating widget -> Ready
+      if (floatingWidget) {
+        floatingWidget.classList.remove("hidden");
+        delete floatingWidget.dataset.dismissed;
+      }
+      if (floatingTitle) floatingTitle.textContent = `PAI v${targetVer} Ready to Install`;
+      if (floatingBar) {
+        floatingBar.style.width = "100%";
+        floatingBar.style.background = "#10b981";
+      }
+      if (floatingPct) {
+        floatingPct.textContent = "100%";
+        floatingPct.style.color = "#10b981";
+      }
+      if (floatingBytes) floatingBytes.textContent = "Verified ADR-005 • Restart to finish";
+      if (floatingRestartBtn) floatingRestartBtn.classList.remove("hidden");
+      if (floatingPulse) {
+        floatingPulse.style.background = "#10b981";
+        floatingPulse.style.animation = "none";
+      }
+
+      // Header pill -> Ready
+      if (headerPill) {
+        headerPill.classList.remove("hidden");
+        headerPill.style.background = "rgba(16, 185, 129, 0.2)";
+        headerPill.style.borderColor = "#10b981";
+      }
+      if (headerText) headerText.textContent = `PAI v${targetVer} Ready (Restart)`;
+
+      showToast(`PAI Studio update v${targetVer} is verified and ready! Restart to apply.`, "success", "Update Ready", 8000);
     } else if (state.status === "error") {
       clearInterval(updatePollingTimer);
       updatePollingTimer = null;
       showToast(`Update download failed: ${state.error_message}`, "error", "Download Failed");
       const btnDownloadUpdate = document.getElementById("btn-download-update");
+      const btnBackgroundUpdate = document.getElementById("btn-background-update");
       const btnModalDownload = document.getElementById("btn-modal-download");
+      const btnModalBg = document.getElementById("btn-modal-background-download");
       if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
+      if (btnBackgroundUpdate) btnBackgroundUpdate.disabled = false;
       if (btnModalDownload) btnModalDownload.disabled = false;
+      if (btnModalBg) btnModalBg.disabled = false;
+      if (floatingWidget) floatingWidget.classList.add("hidden");
+      if (headerPill) headerPill.classList.add("hidden");
     }
   } catch (err) {
     console.warn("Polling update status error:", err);

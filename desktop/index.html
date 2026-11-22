@@ -202,6 +202,11 @@
               <span class="pulse-indicator"></span>
               <span id="header-download-text">Downloading llama3.2:3b (0%)</span>
             </button>
+            <!-- Background Software Update Pill -->
+            <button type="button" id="header-update-pill" class="header-downloading-pill header-update-pill hidden" title="Click to view live software update progress">
+              <span class="pulse-indicator" id="header-update-pulse"></span>
+              <span id="header-update-text">PAI Update (0%)</span>
+            </button>
             <button type="button" id="btn-theme-mode-toggle" class="theme-toggle-btn" title="Toggle Light / Dark Workstation Mode (Ctrl+Shift+L)">
               <svg class="theme-icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
               <svg class="theme-icon icon-sun hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
@@ -1081,6 +1086,12 @@
                     </svg>
                     <span>Download & Install Update</span>
                   </button>
+                  <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-background-update" title="Download update in the background and continue working">
+                    <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                    </svg>
+                    <span>Download in Background</span>
+                  </button>
                   <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-open-update-modal">
                     <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="12" cy="12" r="10"></circle>
@@ -1666,6 +1677,36 @@
     </div>
   </div>
 
+  <!-- Global Persistent Floating Software Update Widget (ADR-005 Background Downloader) -->
+  <div id="floating-update-widget" class="floating-download-widget floating-update-widget hidden" title="PAI Studio Software Update Progress">
+    <div class="floating-download-card">
+      <div class="floating-download-top flex-between">
+        <div class="flex-center-gap">
+          <span class="pulse-indicator" id="floating-update-pulse"></span>
+          <span class="floating-download-name" id="floating-update-title">PAI Update Downloading...</span>
+        </div>
+        <span class="floating-download-pct font-mono font-semibold text-accent" id="floating-update-pct">0%</span>
+      </div>
+      <div class="floating-mini-bar-track">
+        <div id="floating-update-bar-fill" class="floating-mini-bar-fill" style="width: 0%"></div>
+      </div>
+      <div class="floating-download-bottom flex-between">
+        <span class="floating-download-bytes font-mono text-xs text-muted" id="floating-update-bytes">0 MB / 0 MB</span>
+        <div class="floating-buttons flex-center-gap">
+          <button type="button" class="btn-floating-action btn-floating-open" id="btn-floating-update-details" title="Open update details dialog">
+            <span>Details ↗</span>
+          </button>
+          <button type="button" class="btn-floating-action btn-floating-restart hidden" id="btn-floating-update-restart" title="Restart to Install Update Now">
+            <span>Restart ↻</span>
+          </button>
+          <button type="button" class="btn-floating-action text-muted" id="btn-floating-update-close" title="Hide to background (progress continues)">
+            <span>&times;</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- New Cowork Task Modal -->
   <div id="cowork-task-modal" class="modal-backdrop hidden">
     <div class="modal-card" style="max-width: 580px;">
@@ -1931,6 +1972,12 @@
       <div class="modal-footer flex-between">
         <button type="button" class="btn btn-secondary" id="btn-cancel-update-modal">Close</button>
         <div class="modal-footer-actions flex-gap">
+          <button type="button" class="btn btn-secondary flex-center-gap" id="btn-modal-background-download" title="Download update silently in the background and continue working">
+            <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+            </svg>
+            <span>Background Download</span>
+          </button>
           <button type="button" class="btn btn-primary" id="btn-modal-download">
             <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
