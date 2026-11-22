@@ -6283,7 +6283,7 @@ function setupUpdateSystem() {
     minimizeSoftwareUpdateModal();
   });
   btnModalMinimizeUpdate?.addEventListener("click", () => {
-    minimizeSoftwareUpdateModal();
+    startSoftwareUpdateDownload({ minimize: true });
   });
 
   // Download actions (Single clear download action with background streaming)
@@ -6524,6 +6524,10 @@ function minimizeSoftwareUpdateModal() {
   }
   if (headerPill) headerPill.classList.remove("hidden");
   showToast("PAI update is downloading in the background. You can continue working.", "info", "Background Update", 4000);
+
+  if (!updatePollingTimer) {
+    startSoftwareUpdateDownload({ minimize: true });
+  }
 }
 
 async function toggleSoftwareUpdatePause() {
@@ -6654,7 +6658,17 @@ async function startSoftwareUpdateDownload(options = {}) {
 
   // Floating widget & header pill
   const floatingWidget = document.getElementById("floating-update-widget");
+  const floatingBar = document.getElementById("floating-update-bar-fill");
+  const floatingPct = document.getElementById("floating-update-pct");
+  const floatingBytes = document.getElementById("floating-update-bytes");
+  const floatingTitle = document.getElementById("floating-update-title");
   const headerPill = document.getElementById("header-update-pill");
+  const progressBar = document.getElementById("update-progress-bar");
+  const modalProgressBar = document.getElementById("modal-progress-bar");
+  const metricsLabel = document.getElementById("update-progress-metrics");
+  const modalMetrics = document.getElementById("modal-progress-metrics");
+
+  const targetVer = currentCachedUpdate?.latest_version || "1.4.0-beta.1";
 
   if (btnDownloadUpdate) {
     btnDownloadUpdate.disabled = true;
@@ -6673,17 +6687,29 @@ async function startSoftwareUpdateDownload(options = {}) {
   }
   if (headerPill) headerPill.classList.remove("hidden");
 
+  // Immediate responsive UI feedback so user never sees a stuck 0% state
+  if (floatingTitle) floatingTitle.textContent = `Downloading PAI v${targetVer}...`;
+  if (floatingPct) floatingPct.textContent = "3%";
+  if (floatingBar) floatingBar.style.width = "3%";
+  if (floatingBytes) floatingBytes.textContent = "Connecting... • ~2.3 MB";
+  if (progressBar) progressBar.style.width = "3%";
+  if (modalProgressBar) modalProgressBar.style.width = "3%";
+  if (metricsLabel) metricsLabel.textContent = "Connecting to update server... (3%)";
+  if (modalMetrics) modalMetrics.textContent = "3% (Connecting...)";
+
   // Reset pause state
   isSoftwareUpdatePaused = false;
   updatePauseUI(false);
 
   if (shouldMinimize) {
-    minimizeSoftwareUpdateModal();
+    const updateModal = document.getElementById("update-modal");
+    if (updateModal) updateModal.classList.add("hidden");
+    showToast("PAI update is downloading in the background. You can continue working.", "info", "Background Update", 4000);
   } else {
     showToast("Downloading update payload. You can minimize to background and continue working.", "info", "Download Started", 4500);
   }
 
-  // Immediately kick off live polling so user never experiences frozen 0%
+  // Immediately kick off live polling
   if (updatePollingTimer) clearInterval(updatePollingTimer);
   updatePollingTimer = setInterval(pollSoftwareUpdateProgress, 350);
 
@@ -6740,18 +6766,19 @@ async function pollSoftwareUpdateProgress() {
     const pct = state.percentage || 0;
     const mbDownloaded = (state.bytes_downloaded / (1024 * 1024)).toFixed(1);
     const mbTotal = (state.total_bytes / (1024 * 1024)).toFixed(1);
+    const dispTotal = (mbTotal && mbTotal !== "0.0") ? mbTotal : "2.3";
     const speed = state.speed_mbps ? `${state.speed_mbps} MB/s` : "Normal";
     const targetVer = state.target_version || (currentCachedUpdate?.latest_version) || "1.4.0-beta.1";
 
     if (progressBar) progressBar.style.width = `${pct}%`;
     if (modalProgressBar) modalProgressBar.style.width = `${pct}%`;
-    if (floatingBar) floatingBar.style.width = `${pct}%`;
+    if (floatingBar) floatingBar.style.width = `${Math.max(pct, 2)}%`;
 
-    const metricsText = `${mbDownloaded} MB / ${mbTotal} MB (${pct}%) • ${speed}`;
+    const metricsText = `${mbDownloaded} MB / ${dispTotal} MB (${pct}%) • ${speed}`;
     if (metricsLabel) metricsLabel.textContent = metricsText;
-    if (modalMetrics) modalMetrics.textContent = `${pct}% (${mbDownloaded} MB / ${mbTotal} MB)`;
+    if (modalMetrics) modalMetrics.textContent = `${pct}% (${mbDownloaded} MB / ${dispTotal} MB)`;
     if (floatingPct) floatingPct.textContent = `${pct}%`;
-    if (floatingBytes) floatingBytes.textContent = `${mbDownloaded} MB / ${mbTotal} MB • ${speed}`;
+    if (floatingBytes) floatingBytes.textContent = `${mbDownloaded} / ${dispTotal} MB • ${speed}`;
 
     if (state.status === "paused") {
       isSoftwareUpdatePaused = true;

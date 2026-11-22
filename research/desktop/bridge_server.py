@@ -46,13 +46,14 @@ def _safe_asdict(val: Any) -> Any:
         pass
     return None
 
-# Add research directory and repository root to sys.path
-RESEARCH_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = RESEARCH_DIR.parent
-if str(RESEARCH_DIR) not in sys.path:
-    sys.path.insert(0, str(RESEARCH_DIR))
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+# Add app directory, research directory and repository root to sys.path
+CURR_DIR = Path(__file__).resolve().parent
+RESEARCH_DIR = CURR_DIR if (CURR_DIR / "agent_core.py").is_file() else (CURR_DIR / "research" if (CURR_DIR / "research").is_dir() else CURR_DIR.parent)
+REPO_ROOT = CURR_DIR.parent
+
+for p in [str(CURR_DIR), str(RESEARCH_DIR), str(REPO_ROOT), str(CURR_DIR / "research")]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 # Guard against None stdio when running under pythonw.exe on Windows
 if sys.stdout is None:

@@ -6265,9 +6265,92 @@ body.light-theme .btn-floating-pause {
 
 /* Floating Software Update Widget */
 .floating-update-widget {
+  width: 410px !important;
+  max-width: calc(100vw - 32px) !important;
   bottom: 24px;
   right: 24px;
   z-index: 9998;
+  padding: 12px 16px !important;
+}
+
+.floating-update-widget .floating-download-name {
+  max-width: 280px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.floating-update-widget .floating-download-bytes {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  font-size: 0.73rem !important;
+  color: #94a3b8 !important;
+  max-width: 170px !important;
+}
+
+.floating-update-widget .floating-buttons {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+}
+
+.floating-update-widget .btn-floating-action {
+  white-space: nowrap !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 24px !important;
+  padding: 2px 8px !important;
+  font-size: 0.72rem !important;
+  line-height: 1 !important;
+  border-radius: 6px !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+.floating-update-widget .btn-floating-pause {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  color: #f1f5f9 !important;
+}
+.floating-update-widget .btn-floating-pause:hover {
+  background: rgba(255, 255, 255, 0.18) !important;
+  color: #ffffff !important;
+}
+
+.floating-update-widget #btn-floating-update-cancel {
+  background: rgba(239, 68, 68, 0.14) !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+  color: #fca5a5 !important;
+}
+.floating-update-widget #btn-floating-update-cancel:hover {
+  background: rgba(239, 68, 68, 0.28) !important;
+  color: #ffffff !important;
+}
+
+.floating-update-widget #btn-floating-update-details {
+  background: rgba(99, 102, 241, 0.16) !important;
+  border-color: rgba(99, 102, 241, 0.35) !important;
+  color: #c7d2fe !important;
+}
+.floating-update-widget #btn-floating-update-details:hover {
+  background: rgba(99, 102, 241, 0.3) !important;
+  color: #ffffff !important;
+}
+
+.floating-update-widget #btn-floating-update-close {
+  background: transparent !important;
+  border: none !important;
+  color: #64748b !important;
+  padding: 0 4px !important;
+  font-size: 1.1rem !important;
+  line-height: 1 !important;
+}
+.floating-update-widget #btn-floating-update-close:hover {
+  color: #f1f5f9 !important;
 }
 
 /* Offset upwards if the model download widget is open at the same time */
