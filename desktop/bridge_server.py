@@ -2098,6 +2098,8 @@ class PAIUpdateManager:
                 "latest_version": self.current_version,
                 "update_available": False,
                 "channel": channel,
+                "release_name": f"PAI Studio v{self.current_version}",
+                "release_notes": f"PAI Studio v{self.current_version} is running the latest verified release on the {channel} channel.",
                 "message": f"PAI Studio v{self.current_version} is up to date. No remote releases found.",
                 "last_checked": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "releases_count": 0,
@@ -2124,6 +2126,8 @@ class PAIUpdateManager:
                 "latest_version": self.current_version,
                 "update_available": False,
                 "channel": channel,
+                "release_name": f"PAI Studio v{self.current_version}",
+                "release_notes": f"PAI Studio v{self.current_version} is up to date on the {channel} channel.",
                 "message": f"PAI Studio v{self.current_version} is up to date on the {channel} channel.",
                 "last_checked": time.strftime("%Y-%m-%d %H:%M:%S"),
             }

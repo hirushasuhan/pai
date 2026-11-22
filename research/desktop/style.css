@@ -8073,6 +8073,26 @@ body.light-theme .cmd-tier-pill.cloud {
   overflow-y: auto;
 }
 
+.callout-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  flex-wrap: wrap !important;
+  margin-top: 12px !important;
+}
+
+.modal-footer-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.flex-gap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
 .update-downloading-panel {
   margin-top: 14px;
   padding: 12px;

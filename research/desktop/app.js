@@ -6226,12 +6226,10 @@ let updatePollingTimer = null;
 function setupUpdateSystem() {
   const btnCheckUpdate = document.getElementById("btn-check-update");
   const btnDownloadUpdate = document.getElementById("btn-download-update");
-  const btnBackgroundUpdate = document.getElementById("btn-background-update");
   const btnOpenUpdateModal = document.getElementById("btn-open-update-modal");
   const btnCloseUpdateModal = document.getElementById("btn-close-update-modal");
   const btnCancelUpdateModal = document.getElementById("btn-cancel-update-modal");
   const btnModalDownload = document.getElementById("btn-modal-download");
-  const btnModalBackgroundDownload = document.getElementById("btn-modal-background-download");
   const btnRestartForUpdate = document.getElementById("btn-restart-for-update");
   const btnModalRestart = document.getElementById("btn-modal-restart");
   const btnSimulateUpdateDev = document.getElementById("btn-simulate-update-dev");
@@ -6279,18 +6277,12 @@ function setupUpdateSystem() {
     updateModal?.classList.add("hidden");
   });
 
-  // Download actions (Interactive & Background)
+  // Download actions (Single clear download action with background streaming)
   btnDownloadUpdate?.addEventListener("click", () => {
-    startSoftwareUpdateDownload({ background: false });
-  });
-  btnBackgroundUpdate?.addEventListener("click", () => {
-    startSoftwareUpdateDownload({ background: true });
+    startSoftwareUpdateDownload();
   });
   btnModalDownload?.addEventListener("click", () => {
-    startSoftwareUpdateDownload({ background: false });
-  });
-  btnModalBackgroundDownload?.addEventListener("click", () => {
-    startSoftwareUpdateDownload({ background: true });
+    startSoftwareUpdateDownload();
   });
 
   // Floating widget & header pill actions
@@ -6409,14 +6401,11 @@ function openSoftwareUpdateModal() {
   const modal = document.getElementById("update-modal");
   if (!modal) return;
 
-  const data = currentCachedUpdate || {
-    current_version: "1.3.0",
-    latest_version: "1.4.0",
-    release_name: "PAI Studio v1.4.0 - Deep Reasoning & Autonomous Code",
-    release_notes: "### What's New in v1.4.0\n\n- Tauri 2.0 Native Auto-Updater\n- 35% faster reasoning core\n- ADR-005 Ed25519 cryptographic security verification\n- Dynamic precision hardware telemetry",
-    published_at: new Date().toISOString(),
-    size_bytes: 68420112,
-  };
+  const data = currentCachedUpdate || {};
+  const targetVer = data.latest_version || data.target_version || "1.4.0-beta.1";
+  const currVer = data.current_version || "1.3.0";
+  const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
+  const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 
   const currEl = document.getElementById("modal-curr-ver");
   const targetEl = document.getElementById("modal-target-ver");
@@ -6425,21 +6414,27 @@ function openSoftwareUpdateModal() {
   const sizeEl = document.getElementById("modal-rel-size");
   const notesEl = document.getElementById("modal-release-notes-content");
 
-  if (currEl) currEl.textContent = `v${data.current_version || "1.3.0"}`;
-  if (targetEl) targetEl.textContent = `v${data.latest_version || "1.4.0"}`;
-  if (nameEl) nameEl.textContent = data.release_name || `PAI Release v${data.latest_version}`;
-  if (dateEl) dateEl.textContent = data.published_at ? new Date(data.published_at).toLocaleDateString() : "Recent";
+  if (currEl) currEl.textContent = `v${currVer}`;
+  if (targetEl) targetEl.textContent = `v${targetVer}`;
+  if (nameEl) nameEl.textContent = relName;
+  if (dateEl) dateEl.textContent = data.published_at ? new Date(data.published_at).toLocaleDateString() : new Date().toLocaleDateString();
   if (sizeEl) {
-    const mb = data.size_bytes ? (data.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "~65 MB";
+    const mb = data.size_bytes ? (data.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : "~2.3 MB";
     sizeEl.textContent = mb;
   }
-  if (notesEl) notesEl.textContent = data.release_notes || "No release notes available.";
+  if (notesEl) {
+    let htmlNotes = relNotes
+      .replace(/### (.*)/g, '<h4 style="font-size: 13px; font-weight: 600; margin: 6px 0; color: var(--text-normal);">$1</h4>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^- (.*)/gm, '<li style="margin-left: 18px; margin-bottom: 4px; color: var(--text-dim);">$1</li>');
+    notesEl.innerHTML = htmlNotes;
+  }
 
   modal.classList.remove("hidden");
 }
 
 async function simulateSoftwareUpdateFlow() {
-  showToast("Simulating update discovery for v1.3.0...", "info");
+  showToast("Simulating update discovery for v1.4.0-beta.1...", "info");
   try {
     const res = await fetch(`${API_BASE}/api/update/simulate_test`, { method: "POST" });
     const data = await res.json();
@@ -6450,47 +6445,42 @@ async function simulateSoftwareUpdateFlow() {
     const dotStatus = document.getElementById("dot-update-status");
 
     if (dotStatus) dotStatus.className = "status-indicator-dot warning";
-    if (statusTitle) statusTitle.textContent = "New Update Available: v1.3.0";
+    if (statusTitle) statusTitle.textContent = `New Update Available: v${data.latest_version || "1.4.0-beta.1"}`;
     if (callout) {
       callout.classList.remove("hidden");
       const tag = document.getElementById("callout-version-tag");
       const notes = document.getElementById("callout-release-notes");
-      if (tag) tag.textContent = "v1.3.0 Available (Simulated Release)";
-      if (notes) notes.textContent = data.release_notes;
+      if (tag) tag.textContent = `v${data.latest_version || "1.4.0-beta.1"} Available (${data.release_name || "Preview Build"})`;
+      if (notes) notes.textContent = data.release_notes || "A new verified release is available for Personal Agentic AI.";
     }
 
     openSoftwareUpdateModal();
-    showToast("Simulated update v1.3.0 is ready for testing!", "success");
+    showToast(`Update v${data.latest_version || "1.4.0-beta.1"} is ready for review!`, "success");
   } catch (err) {
     showToast(`Simulation failed: ${err.message}`, "error");
   }
 }
 
-async function startSoftwareUpdateDownload(options = {}) {
-  const isBackground = options.background === true;
+async function startSoftwareUpdateDownload() {
   const downloadingPanel = document.getElementById("update-downloading-panel");
   const modalProgressBox = document.getElementById("modal-download-progress-box");
   const btnDownloadUpdate = document.getElementById("btn-download-update");
-  const btnBackgroundUpdate = document.getElementById("btn-background-update");
   const btnModalDownload = document.getElementById("btn-modal-download");
-  const btnModalBg = document.getElementById("btn-modal-background-download");
-  const updateModal = document.getElementById("update-modal");
 
   // Floating widget & header pill
   const floatingWidget = document.getElementById("floating-update-widget");
   const headerPill = document.getElementById("header-update-pill");
 
-  if (btnDownloadUpdate) btnDownloadUpdate.disabled = true;
-  if (btnBackgroundUpdate) btnBackgroundUpdate.disabled = true;
-  if (btnModalDownload) btnModalDownload.disabled = true;
-  if (btnModalBg) btnModalBg.disabled = true;
-
-  if (isBackground) {
-    if (updateModal) updateModal.classList.add("hidden");
-    showToast("PAI update is downloading in the background. You can continue working.", "info", "Background Update", 4500);
-  } else {
-    showToast("Downloading update payload from GitHub Releases...", "info", "Download Started");
+  if (btnDownloadUpdate) {
+    btnDownloadUpdate.disabled = true;
+    btnDownloadUpdate.innerHTML = `<span class="spinner-small"></span><span>Downloading...</span>`;
   }
+  if (btnModalDownload) {
+    btnModalDownload.disabled = true;
+    btnModalDownload.innerHTML = `<span class="spinner-small"></span><span>Downloading in Background...</span>`;
+  }
+
+  showToast("Downloading update payload in the background. You can continue using PAI.", "info", "Download Started", 4000);
 
   if (downloadingPanel) downloadingPanel.classList.remove("hidden");
   if (modalProgressBox) modalProgressBox.classList.remove("hidden");
@@ -6501,7 +6491,7 @@ async function startSoftwareUpdateDownload(options = {}) {
   if (headerPill) headerPill.classList.remove("hidden");
 
   try {
-    const payload = currentCachedUpdate || { is_simulated: true, target_version: "1.3.0" };
+    const payload = currentCachedUpdate || { is_simulated: true, target_version: "1.4.0-beta.1" };
     await fetch(`${API_BASE}/api/update/download`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -6512,10 +6502,14 @@ async function startSoftwareUpdateDownload(options = {}) {
     updatePollingTimer = setInterval(pollSoftwareUpdateProgress, 350);
   } catch (err) {
     showToast(`Failed to initiate download: ${err.message}`, "error");
-    if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
-    if (btnBackgroundUpdate) btnBackgroundUpdate.disabled = false;
-    if (btnModalDownload) btnModalDownload.disabled = false;
-    if (btnModalBg) btnModalBg.disabled = false;
+    if (btnDownloadUpdate) {
+      btnDownloadUpdate.disabled = false;
+      btnDownloadUpdate.innerHTML = `<span>Download & Install Update</span>`;
+    }
+    if (btnModalDownload) {
+      btnModalDownload.disabled = false;
+      btnModalDownload.innerHTML = `<span>Download & Install Now</span>`;
+    }
   }
 }
 
@@ -6584,7 +6578,6 @@ async function pollSoftwareUpdateProgress() {
       const callout = document.getElementById("update-available-callout");
       const modalProgressBox = document.getElementById("modal-download-progress-box");
       const btnModalDownload = document.getElementById("btn-modal-download");
-      const btnModalBg = document.getElementById("btn-modal-background-download");
       const btnModalRestart = document.getElementById("btn-modal-restart");
 
       if (downloadingPanel) downloadingPanel.classList.add("hidden");
@@ -6592,7 +6585,6 @@ async function pollSoftwareUpdateProgress() {
       if (readyBanner) readyBanner.classList.remove("hidden");
       if (modalProgressBox) modalProgressBox.classList.add("hidden");
       if (btnModalDownload) btnModalDownload.classList.add("hidden");
-      if (btnModalBg) btnModalBg.classList.add("hidden");
       if (btnModalRestart) btnModalRestart.classList.remove("hidden");
 
       // Floating widget -> Ready
@@ -6630,13 +6622,15 @@ async function pollSoftwareUpdateProgress() {
       updatePollingTimer = null;
       showToast(`Update download failed: ${state.error_message}`, "error", "Download Failed");
       const btnDownloadUpdate = document.getElementById("btn-download-update");
-      const btnBackgroundUpdate = document.getElementById("btn-background-update");
       const btnModalDownload = document.getElementById("btn-modal-download");
-      const btnModalBg = document.getElementById("btn-modal-background-download");
-      if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
-      if (btnBackgroundUpdate) btnBackgroundUpdate.disabled = false;
-      if (btnModalDownload) btnModalDownload.disabled = false;
-      if (btnModalBg) btnModalBg.disabled = false;
+      if (btnDownloadUpdate) {
+        btnDownloadUpdate.disabled = false;
+        btnDownloadUpdate.innerHTML = `<span>Download & Install Update</span>`;
+      }
+      if (btnModalDownload) {
+        btnModalDownload.disabled = false;
+        btnModalDownload.innerHTML = `<span>Download & Install Now</span>`;
+      }
       if (floatingWidget) floatingWidget.classList.add("hidden");
       if (headerPill) headerPill.classList.add("hidden");
     }
