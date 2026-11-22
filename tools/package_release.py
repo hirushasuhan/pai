@@ -18,6 +18,12 @@ import time
 import zipfile
 from pathlib import Path
 
+# Ensure UTF-8 console output on Windows runners
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -38,7 +44,7 @@ def find_binary(search_paths: list[Path], name: str) -> Path | None:
 
 
 def make_zip(source_dir: Path, zip_dest: Path) -> None:
-    print(f"📦 Compressing {source_dir.name} -> {zip_dest.name}...")
+    print(f"  [Compressing] {source_dir.name} -> {zip_dest.name}...")
     with zipfile.ZipFile(zip_dest, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _, files in os.walk(source_dir):
             for file in files:
@@ -49,7 +55,7 @@ def make_zip(source_dir: Path, zip_dest: Path) -> None:
 
 def package_release(version: str, channel: str, output_dir: Path) -> None:
     print("=" * 64)
-    print(f"📦 Packaging PAI Release v{version} ({channel})")
+    print(f"  [Packaging] PAI Release v{version} ({channel})")
     print("=" * 64)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -149,11 +155,11 @@ def package_release(version: str, channel: str, output_dir: Path) -> None:
     )
     checksums_path.write_text(checksums_content, encoding="utf-8")
 
-    print("\n✅ Release artifacts created successfully in", output_dir)
-    print(f"  • {payload_zip.name} ({size_payload:,} bytes, sha256: {hash_payload[:16]}...)")
-    print(f"  • {desktop_zip.name} ({size_desktop:,} bytes, sha256: {hash_desktop[:16]}...)")
-    print(f"  • {manifest_path.name}")
-    print(f"  • {checksums_path.name}")
+    print(f"\n[OK] Release artifacts created successfully in {output_dir}")
+    print(f"  - {payload_zip.name} ({size_payload:,} bytes, sha256: {hash_payload[:16]}...)")
+    print(f"  - {desktop_zip.name} ({size_desktop:,} bytes, sha256: {hash_desktop[:16]}...)")
+    print(f"  - {manifest_path.name}")
+    print(f"  - {checksums_path.name}")
 
 
 def main() -> None:
