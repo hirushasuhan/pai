@@ -2192,7 +2192,7 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.5.0-beta.3"
+PAI_CURRENT_VERSION = "1.5.0-beta.4"
 try:
     _curr_dir = Path(__file__).resolve().parent
     _v_candidates = [
@@ -2586,14 +2586,18 @@ class PAIUpdateManager:
                 "speed_mbps": 18.5,
                 "error_message": None,
                 "target_version": target_version,
+                "staged_path": None,
+                "manifest_path": None,
+                "signature_path": None,
+                "expected_sha256": None,
                 "is_simulated": is_simulated,
             })
 
         def _worker():
             try:
                 self._active_pkg_path = None
-                if is_simulated or not download_url or not download_url.startswith("http"):
-                    # Realistic simulated download stepping with pause & cancel support
+                if is_simulated or not download_url:
+                    # Explicit developer Test Flow simulation (no real archive)
                     steps = 35
                     step_delay = 0.09
                     s = 0
@@ -2624,12 +2628,73 @@ class PAIUpdateManager:
                     with self.lock:
                         self.download_state["status"] = "ready"
                         self.download_state["staged_path"] = f"%LOCALAPPDATA%\\Programs\\PAI\\releases\\v{target_version}"
-                    append_log(f"[Updater] Update package v{target_version} verified and staged.")
+                    append_log(f"[Updater] Simulated update package v{target_version} staged.")
                 else:
-                    # Real network stream download with resilient pause, cancel, and fallbacks
+                    # Validate download URL cleanly before fetching
+                    parsed_dl = urllib.parse.urlparse(download_url)
+                    if parsed_dl.scheme.lower() not in ("https", "http"):
+                        raise ValueError(f"Unsupported update URL scheme: {parsed_dl.scheme}")
+                    try:
+                        try:
+                            from research.net_guard import validate_url as _ng_validate_url
+                        except ImportError:
+                            from net_guard import validate_url as _ng_validate_url
+                        if parsed_dl.hostname not in ("127.0.0.1", "localhost", "::1"):
+                            _ng_validate_url(download_url)
+                    except Exception as url_err:
+                        raise ValueError(f"Blocked unsafe update URL: {url_err}") from url_err
+
+                    # Real network stream download with resilient pause, cancel, and SHA-256 verification
                     temp_dir = tempfile.mkdtemp(prefix="pai_update_")
                     pkg_path = os.path.join(temp_dir, f"payload-{target_version}.zip")
+                    manifest_local_path = None
+                    sig_local_path = None
+                    expected_sha256 = None
+                    expected_size = None
                     self._active_pkg_path = pkg_path
+
+                    # Fetch optional manifest.json and manifest.sig first for integrity verification
+                    if manifest_url and str(manifest_url).startswith(("https://", "http://")):
+                        m_req = urllib.request.Request(
+                            manifest_url,
+                            headers={"User-Agent": f"PAI-Studio-Updater/{self.current_version}", "Accept": "application/json"},
+                        )
+                        with urllib.request.urlopen(m_req, timeout=10.0) as m_resp:
+                            m_bytes = m_resp.read(1024 * 1024 + 1)
+                            if len(m_bytes) > 1024 * 1024:
+                                raise ValueError("Update manifest exceeds 1 MiB limit")
+                            manifest_local_path = os.path.join(temp_dir, "manifest.json")
+                            Path(manifest_local_path).write_bytes(m_bytes)
+                            m_doc = json.loads(m_bytes.decode("utf-8"))
+                            files_map = m_doc.get("files") if isinstance(m_doc, dict) else None
+                            if isinstance(files_map, dict):
+                                dl_basename = os.path.basename(parsed_dl.path)
+                                f_meta = files_map.get(dl_basename)
+                                if not isinstance(f_meta, dict):
+                                    # Fallback to matching payload/desktop zip entry in manifest
+                                    for k_name, v_meta in files_map.items():
+                                        if str(k_name).endswith(".zip") and isinstance(v_meta, dict):
+                                            f_meta = v_meta
+                                            break
+                                if isinstance(f_meta, dict):
+                                    expected_sha256 = str(f_meta.get("sha256", "")).lower().strip() or None
+                                    if isinstance(f_meta.get("size"), int) and f_meta["size"] > 0:
+                                        expected_size = int(f_meta["size"])
+
+                    if signature_url and str(signature_url).startswith(("https://", "http://")):
+                        try:
+                            s_req = urllib.request.Request(
+                                signature_url,
+                                headers={"User-Agent": f"PAI-Studio-Updater/{self.current_version}"},
+                            )
+                            with urllib.request.urlopen(s_req, timeout=10.0) as s_resp:
+                                s_bytes = s_resp.read(8192)
+                                if s_bytes:
+                                    sig_local_path = os.path.join(temp_dir, "manifest.sig")
+                                    Path(sig_local_path).write_bytes(s_bytes)
+                        except Exception as sig_err:
+                            append_log(f"[Updater] Could not fetch optional manifest.sig: {sig_err}")
+
                     req = urllib.request.Request(
                         download_url,
                         headers={
@@ -2638,7 +2703,12 @@ class PAIUpdateManager:
                         }
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=15.0) as resp, open(pkg_path, "wb") as out_f:
+                        import hashlib as _hashlib
+                        import zipfile as _zipfile
+                        max_zip_bytes = 250 * 1024 * 1024
+                        sha_h = _hashlib.sha256()
+
+                        with urllib.request.urlopen(req, timeout=20.0) as resp, open(pkg_path, "wb") as out_f:
                             content_len = resp.headers.get("Content-Length")
                             t_bytes = int(content_len) if content_len and content_len.isdigit() and int(content_len) > 0 else (total_b if total_b > 0 else 2300998)
                             with self.lock:
@@ -2648,7 +2718,6 @@ class PAIUpdateManager:
                             chunk_size = 64 * 1024
                             start_time = time.time()
                             while not self._cancel_flag.is_set():
-                                # Handle pause loop
                                 while not self._pause_event.is_set():
                                     if self._cancel_flag.is_set():
                                         break
@@ -2659,8 +2728,11 @@ class PAIUpdateManager:
                                 chunk = resp.read(chunk_size)
                                 if not chunk:
                                     break
-                                out_f.write(chunk)
                                 dl_so_far += len(chunk)
+                                if dl_so_far > max_zip_bytes:
+                                    raise ValueError("Update payload exceeds 250 MiB limit")
+                                out_f.write(chunk)
+                                sha_h.update(chunk)
                                 elapsed = max(0.01, time.time() - start_time)
                                 speed_mbps = round((dl_so_far * 8) / (elapsed * 1024 * 1024), 1)
                                 pct = min(99, int((dl_so_far / t_bytes) * 100)) if t_bytes > 0 else 50
@@ -2670,13 +2742,14 @@ class PAIUpdateManager:
                                         self.download_state["percentage"] = pct
                                         self.download_state["speed_mbps"] = speed_mbps
 
-                                # Smooth visual pacing so user sees progress chunks clearly
-                                time.sleep(0.04)
+                                time.sleep(0.02)
 
                         if self._cancel_flag.is_set():
                             if os.path.isfile(pkg_path):
-                                try: os.remove(pkg_path)
-                                except Exception: pass
+                                try:
+                                    os.remove(pkg_path)
+                                except Exception:
+                                    pass
                             with self.lock:
                                 self.download_state["status"] = "idle"
                                 self.download_state["percentage"] = 0
@@ -2687,14 +2760,28 @@ class PAIUpdateManager:
                             self.download_state["status"] = "verifying"
                             self.download_state["percentage"] = 100
 
-                        time.sleep(0.5)
+                        actual_sha256 = sha_h.hexdigest().lower()
+                        if expected_size is not None and dl_so_far != expected_size:
+                            raise ValueError(f"Size mismatch for update payload: expected {expected_size}B, got {dl_so_far}B")
+                        if expected_sha256 and not hmac.compare_digest(actual_sha256, expected_sha256):
+                            raise ValueError(f"SHA-256 digest mismatch for update payload ({actual_sha256[:12]} != {expected_sha256[:12]})")
+                        if not _zipfile.is_zipfile(pkg_path):
+                            raise ValueError("Downloaded update payload is not a valid zip archive")
 
                         with self.lock:
                             self.download_state["status"] = "ready"
                             self.download_state["staged_path"] = pkg_path
-                        append_log(f"[Updater] Real update package v{target_version} successfully downloaded and staged.")
+                            self.download_state["manifest_path"] = manifest_local_path
+                            self.download_state["signature_path"] = sig_local_path
+                            self.download_state["expected_sha256"] = actual_sha256
+                        append_log(f"[Updater] Update package v{target_version} downloaded & verified (sha256={actual_sha256[:12]}...).")
                     except Exception as net_err:
-                        append_log(f"[Updater] Upstream asset download failed: {net_err}")
+                        if os.path.isfile(pkg_path):
+                            try:
+                                os.remove(pkg_path)
+                            except Exception:
+                                pass
+                        append_log(f"[Updater] Upstream asset download/verification failed: {net_err}")
                         with self.lock:
                             self.download_state["status"] = "error"
                             self.download_state["error_message"] = f"Download failed: {net_err}"
@@ -2715,6 +2802,10 @@ class PAIUpdateManager:
                 return {"success": False, "error": "No verified update is ready to install."}
             target_v = self.download_state.get("target_version") or "1.3.0"
             staged_pkg = self.download_state.get("staged_path")
+            manifest_p = self.download_state.get("manifest_path")
+            sig_p = self.download_state.get("signature_path")
+            exp_sha = self.download_state.get("expected_sha256")
+            is_sim = bool(self.download_state.get("is_simulated", False))
 
         append_log(f"[Updater] Applying update to version {target_v}. Staging atomic swap.")
         try:
@@ -2727,6 +2818,11 @@ class PAIUpdateManager:
                     "target_version": target_v,
                     "timestamp": time.time(),
                     "staged_path": staged_pkg,
+                    "manifest_path": manifest_p,
+                    "signature_path": sig_p,
+                    "expected_sha256": exp_sha,
+                    "is_simulated": is_sim,
+                    "bridge_pid": os.getpid(),
                     "ready": True,
                 }, indent=2),
                 encoding="utf-8",
@@ -2746,6 +2842,7 @@ class PAIUpdateManager:
             append_log(f"[Updater] Launched background applicator for v{target_v}.")
         except Exception as exc:
             append_log(f"[Updater] Error launching update applicator: {exc}")
+            return {"success": False, "error": f"Failed to launch updater: {exc}"}
 
         return {
             "success": True,

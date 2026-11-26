@@ -201,6 +201,90 @@ class TestUpdaterSecurity(unittest.TestCase):
                 applied = check_and_apply_pending()
                 self.assertFalse(applied)
 
+    def test_apply_pending_update_ci_manifest_sha256_and_negative_controls(self):
+        import hashlib
+        import zipfile
+        from desktop.apply_pending_update import check_and_apply_pending
+
+        with tempfile.TemporaryDirectory() as td:
+            pai_dir = Path(td) / "Programs" / "PAI"
+            (pai_dir / "ui").mkdir(parents=True, exist_ok=True)
+            (pai_dir / "ui" / "VERSION").write_text("1.5.0-beta.1", encoding="utf-8")
+            (pai_dir / "VERSION").write_text("1.5.0-beta.1", encoding="utf-8")
+
+            good_zip = Path(td) / "pai-payload-1.5.0-beta.4-win-x64.zip"
+            with zipfile.ZipFile(good_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("ui/index.html", "<html>updated</html>")
+                zf.writestr("research/thought_graph.py", "# updated research module\n")
+                zf.writestr("bridge_server.py", 'PAI_CURRENT_VERSION = "1.5.0-beta.4"\n')
+
+            good_sha = hashlib.sha256(good_zip.read_bytes()).hexdigest()
+            manifest_path = Path(td) / "manifest.json"
+            manifest_path.write_text(json.dumps({
+                "format": 1,
+                "product": "pai-desktop",
+                "version": "1.5.0-beta.4",
+                "files": {
+                    good_zip.name: {"sha256": good_sha, "size": good_zip.stat().st_size}
+                },
+            }), encoding="utf-8")
+
+            # 1. Negative control: wrong SHA-256 rejected fail-closed
+            (pai_dir / "pending_update.json").write_text(json.dumps({
+                "target_version": "1.5.0-beta.4",
+                "staged_path": str(good_zip),
+                "manifest_path": str(manifest_path),
+                "expected_sha256": "0" * 64,
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"LOCALAPPDATA": td}):
+                self.assertFalse(check_and_apply_pending())
+            self.assertEqual((pai_dir / "VERSION").read_text(encoding="utf-8").strip(), "1.5.0-beta.1")
+
+            # 2. Negative control: strict PAI_REQUIRE_SIGNED_UPDATE=1 rejects unsigned zip
+            (pai_dir / "pending_update.json").write_text(json.dumps({
+                "target_version": "1.5.0-beta.4",
+                "staged_path": str(good_zip),
+                "manifest_path": str(manifest_path),
+                "expected_sha256": good_sha,
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"LOCALAPPDATA": td, "PAI_REQUIRE_SIGNED_UPDATE": "1"}):
+                self.assertFalse(check_and_apply_pending())
+
+            # 3. Negative control: zip with '..' traversal rejected fail-closed
+            evil_zip = Path(td) / "evil.zip"
+            with zipfile.ZipFile(evil_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("../escape.txt", "pwn")
+            evil_sha = hashlib.sha256(evil_zip.read_bytes()).hexdigest()
+            (pai_dir / "pending_update.json").write_text(json.dumps({
+                "target_version": "1.5.0-beta.4",
+                "staged_path": str(evil_zip),
+                "expected_sha256": evil_sha,
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"LOCALAPPDATA": td}):
+                self.assertFalse(check_and_apply_pending())
+
+            # 4. Positive control: valid CI archive + matching manifest SHA-256 installs & updates VERSION
+            (pai_dir / "pending_update.json").write_text(json.dumps({
+                "target_version": "1.5.0-beta.4",
+                "staged_path": str(good_zip),
+                "manifest_path": str(manifest_path),
+                "expected_sha256": good_sha,
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"LOCALAPPDATA": td}):
+                self.assertTrue(check_and_apply_pending())
+            self.assertEqual((pai_dir / "VERSION").read_text(encoding="utf-8").strip(), "1.5.0-beta.4")
+            self.assertEqual((pai_dir / "ui" / "VERSION").read_text(encoding="utf-8").strip(), "1.5.0-beta.4")
+            self.assertTrue((pai_dir / "research" / "thought_graph.py").is_file())
+
+            # 5. Negative control: downgrade rollback rejected fail-closed after install
+            (pai_dir / "pending_update.json").write_text(json.dumps({
+                "target_version": "1.5.0-beta.1",
+                "staged_path": str(good_zip),
+                "expected_sha256": good_sha,
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"LOCALAPPDATA": td}):
+                self.assertFalse(check_and_apply_pending())
+
 
 class TestUIAndCSPSecurity(unittest.TestCase):
     """FINDING-09: Tauri CSP and URL sanitization."""

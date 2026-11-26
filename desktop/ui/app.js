@@ -6908,7 +6908,7 @@ async function checkSoftwareUpdates(interactive = false) {
       lastCheckedLabel.textContent = `Last checked: ${data.last_checked || new Date().toLocaleTimeString()}`;
     }
 
-    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.5.0-beta.3";
+    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.5.0-beta.4";
     updateActiveVersionDisplay(activeVer);
 
     if (data.update_available) {
@@ -6967,7 +6967,7 @@ function openSoftwareUpdateModal() {
 
   const data = currentCachedUpdate || {};
   const targetVer = data.latest_version || data.target_version || "1.4.3";
-  const currVer = data.current_version || window.__pai_active_version || "1.5.0-beta.3";
+  const currVer = data.current_version || window.__pai_active_version || "1.5.0-beta.4";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 

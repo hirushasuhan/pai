@@ -119,6 +119,19 @@ def package_release(version: str, channel: str, output_dir: Path) -> None:
             (staging_dir / "bin").mkdir(parents=True, exist_ok=True)
             shutil.copy2(helper_exe, staging_dir / "bin" / bin_name)
 
+    # 5b. Copy Python engine modules (`research/`) and trust metadata (excluding tests/caches)
+    research_src = REPO_ROOT / "research"
+    if research_src.is_dir():
+        research_dst = staging_dir / "research"
+        research_dst.mkdir(parents=True, exist_ok=True)
+        for item in sorted(research_src.iterdir()):
+            if item.is_file() and (item.suffix == ".py" or item.name == "trust.json"):
+                shutil.copy2(item, research_dst / item.name)
+    const_src = REPO_ROOT / "docs" / "CONSTITUTION.md"
+    if const_src.is_file():
+        (staging_dir / "docs").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(const_src, staging_dir / "docs" / "CONSTITUTION.md")
+
     # 6. Create Zip Archives
     payload_zip = output_dir / f"pai-payload-{version}-win-x64.zip"
     desktop_zip = output_dir / f"pai-desktop-{version}-win-x64.zip"

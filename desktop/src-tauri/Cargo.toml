@@ -1,6 +1,6 @@
 [package]
 name = "pai-desktop"
-version = "1.5.0-beta.3"
+version = "1.5.0-beta.4"
 description = "Personal Agentic AI (PAI) Native Desktop Application in Rust"
 authors = ["Hirusha Suhan <hirushasuhan@outlook.com>"]
 edition = "2021"
