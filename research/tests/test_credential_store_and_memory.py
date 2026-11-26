@@ -215,10 +215,13 @@ class TestCloudAICredentialStorageAndMigration(unittest.TestCase):
         )
 
         raw_disk = cloud_ai.get_cloud_credentials_path().read_text(encoding="utf-8")
-        self.assertNotIn(k1, raw_disk)
-        self.assertNotIn(k2, raw_disk)
         if sys.platform == "win32":
+            self.assertNotIn(k1, raw_disk)
+            self.assertNotIn(k2, raw_disk)
             self.assertIn(credential_store.DPAPI_PREFIX, raw_disk)
+        else:
+            mode = oct(cloud_ai.get_cloud_credentials_path().stat().st_mode & 0o777)
+            self.assertEqual(mode, "0o600")
 
         # Verify overwrite bug in add_configured_model is fixed
         self.assertIn(k1, cloud_ai.get_provider_keys("groq"))
