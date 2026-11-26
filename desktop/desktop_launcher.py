@@ -41,14 +41,16 @@ if sys.stderr is None:
 
 # Apply pending update if staged before launching app
 try:
-    from research.apply_pending_update import check_and_apply_pending
-    check_and_apply_pending()
-except ImportError:
     try:
-        from apply_pending_update import check_and_apply_pending
-        check_and_apply_pending()
-    except Exception:
-        pass
+        from desktop.apply_pending_update import check_and_apply_pending
+    except ImportError:
+        try:
+            from apply_pending_update import check_and_apply_pending
+        except ImportError:
+            from research.apply_pending_update import check_and_apply_pending
+    check_and_apply_pending()
+except Exception:
+    pass
 
 BRIDGE_URL = "http://127.0.0.1:8765"
 
@@ -58,7 +60,7 @@ def kill_stale_port_8765() -> None:
     if sys.platform == "win32":
         try:
             flags = 0x08000000  # CREATE_NO_WINDOW
-            out = subprocess.check_output("netstat -ano -p tcp", shell=True, creationflags=flags, text=True)
+            out = subprocess.check_output(["netstat", "-ano", "-p", "tcp"], creationflags=flags, text=True)
             pids = set()
             for line in out.splitlines():
                 parts = line.strip().split()
@@ -70,7 +72,7 @@ def kill_stale_port_8765() -> None:
                     except ValueError:
                         pass
             for pid in pids:
-                subprocess.run(f"taskkill /F /PID {pid}", shell=True, creationflags=flags, capture_output=True)
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], creationflags=flags, capture_output=True)
             time.sleep(0.3)
         except Exception:
             pass
@@ -102,32 +104,25 @@ def is_bridge_server_running(timeout: float = 0.8) -> bool:
         return False
 
 
-def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer]]:
-    """Start bridge server if not already active. Returns (ok, server_instance)."""
-    if is_bridge_server_running():
-        return True, None
-
-    # Clear any stale bridge server before binding
-    kill_stale_port_8765()
-
+def start_bridge_server() -> Tuple[bool, Optional[ThreadingHTTPServer], int, str]:
+    """Start bridge server if not already active. Returns (ok, server_instance, port, token)."""
     try:
         try:
-            from research.desktop.bridge_server import HOST, PORT, PAIBridgeHandler
+            from desktop.bridge_server import HOST, PAIBridgeHandler, PAI_BRIDGE_TOKEN
         except ImportError:
-            from desktop.bridge_server import HOST, PORT, PAIBridgeHandler
+            from bridge_server import HOST, PAIBridgeHandler, PAI_BRIDGE_TOKEN
 
-        server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
+        # Bind ephemeral port on loopback
+        server = ThreadingHTTPServer((HOST, 0), PAIBridgeHandler)
+        bound_port = server.server_address[1]
         t = threading.Thread(target=server.serve_forever, daemon=True)
         t.start()
+        time.sleep(0.2)
+        return True, server, bound_port, PAI_BRIDGE_TOKEN
+    except Exception as exc:
+        print(f"[WARN] Failed to start ephemeral bridge: {exc}", file=sys.stderr)
 
-        for _ in range(30):
-            time.sleep(0.1)
-            if is_bridge_server_running():
-                return True, server
-    except Exception:
-        pass
-
-    return is_bridge_server_running(), None
+    return False, None, 8765, ""
 
 
 def find_native_desktop_executable() -> Optional[str]:
@@ -171,9 +166,12 @@ def find_browser_app_executable() -> Optional[str]:
 
 def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
     """Launch PAI Studio exclusively in native desktop application mode."""
-    ok_server, server_instance = start_bridge_server()
+    ok_server, server_instance, actual_port, token = start_bridge_server()
     if not ok_server:
-        return False, "Could not start local desktop bridge server on 127.0.0.1:8765."
+        return False, "Could not start local desktop bridge server."
+
+    bridge_url = f"http://127.0.0.1:{actual_port}"
+    app_url = f"{bridge_url}/#token={token}" if token else bridge_url
 
     flags = 0
     if sys.platform == "win32":
@@ -221,7 +219,7 @@ def launch_desktop_app(wait_for_exit: bool = False) -> Tuple[bool, str]:
     # Standalone Application Window arguments (No browser tabs, no URL bar, no browser controls)
     app_args = [
         browser_exe,
-        f"--app={BRIDGE_URL}",
+        f"--app={app_url}",
         f"--user-data-dir={profile_dir}",
         "--window-size=1280,840",
         "--window-position=center",

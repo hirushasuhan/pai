@@ -8,11 +8,221 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+try:
+    from research import ingest
+    from research.capabilities import (
+        Grant,
+        PermissionDenied,
+        Risk,
+        Tool,
+        ToolBroker,
+        ToolRequest,
+    )
+except ModuleNotFoundError:
+    import ingest
+    from capabilities import (
+        Grant,
+        PermissionDenied,
+        Risk,
+        Tool,
+        ToolBroker,
+        ToolRequest,
+    )
+
+
+SAFE_MCP_ENV_ALLOWLIST: Tuple[str, ...] = (
+    "PATH",
+    "SystemRoot",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+)
+
+_BLOCKED_ENV_KEY_RE = re.compile(
+    r"^(?:AWS_.*|PAI_(?:BRIDGE_TOKEN|HMAC_KEY|SESSION_NONCE)|"
+    r".*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|CREDENTIAL).*)$",
+    re.IGNORECASE | re.ASCII,
+)
+
+_SHELL_INTERPRETERS = frozenset({
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "wscript",
+    "wscript.exe",
+    "cscript",
+    "cscript.exe",
+})
+
+_SHELL_META_TOKENS = frozenset({"&&", "||", ";", "|"})
+
+_PACKAGE_RUNNERS = frozenset({
+    "npx",
+    "npx.cmd",
+    "npx.exe",
+    "pnpx",
+    "pnpx.cmd",
+    "pnpx.exe",
+    "bunx",
+    "bunx.exe",
+})
+
+_PINNED_NPM_SPEC_RE = re.compile(
+    r"^(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+@[0-9]+(?:\.[0-9]+)*(?:-[A-Za-z0-9._-]+)?$"
+)
+
+
+def make_mcp_broker(
+    confirm: Optional[Callable[[ToolRequest], bool]] = None,
+    allow_register: bool = True,
+    allow_connect: bool = True,
+    allow_call_tool: bool = True,
+    max_calls: Optional[int] = None,
+    expires: Optional[float] = None,
+) -> ToolBroker:
+    """Constructs a ToolBroker configured with Risk.DESTRUCTIVE MCP governance tools."""
+    tools = [
+        Tool("mcp_register", Risk.DESTRUCTIVE, lambda name="", transport="", command="": True),
+        Tool("mcp_connect", Risk.DESTRUCTIVE, lambda command=(): True),
+        Tool("mcp_call_tool", Risk.DESTRUCTIVE, lambda server="", tool="", arguments=None: True),
+    ]
+    grants: List[Grant] = []
+    if allow_register:
+        grants.append(Grant("mcp_register", max_calls=max_calls, expires=expires))
+    if allow_connect:
+        grants.append(Grant("mcp_connect", max_calls=max_calls, expires=expires))
+    if allow_call_tool:
+        grants.append(Grant("mcp_call_tool", max_calls=max_calls, expires=expires))
+    return ToolBroker(tools=tools, grants=grants, confirm=confirm)
+
+
+def build_safe_mcp_env(
+    env: Optional[Dict[str, str]] = None,
+    extra_allowlist: Sequence[str] = (),
+) -> Dict[str, str]:
+    """Builds a scrubbed child environment copying only safe allowlisted host variables."""
+    allowed_keys: List[str] = list(SAFE_MCP_ENV_ALLOWLIST)
+    for extra in extra_allowlist:
+        if not isinstance(extra, str) or not extra or "=" in extra or any(c in extra for c in ("\x00", "\r", "\n")):
+            raise ValueError("Invalid extra_allowlist environment key")
+        if _BLOCKED_ENV_KEY_RE.match(extra):
+            raise ValueError(f"Blocked secret key in extra_allowlist: {extra}")
+        allowed_keys.append(extra)
+
+    safe_env: Dict[str, str] = {}
+    if os.name == "nt":
+        allowed_lower = {k.lower() for k in allowed_keys}
+        for k, v in os.environ.items():
+            if k.lower() in allowed_lower and not _BLOCKED_ENV_KEY_RE.match(k):
+                safe_env[k] = v
+    else:
+        allowed_set = set(allowed_keys)
+        for k in allowed_set:
+            if k in os.environ and not _BLOCKED_ENV_KEY_RE.match(k):
+                safe_env[k] = os.environ[k]
+
+    if env is not None:
+        if not isinstance(env, dict):
+            raise ValueError("env must be a dictionary")
+        for k, v in env.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                raise ValueError("MCP environment keys and values must be strings")
+            if not k or "=" in k or any(c in k for c in ("\x00", "\r", "\n")) or any(c in v for c in ("\x00", "\r", "\n")):
+                raise ValueError(f"Invalid MCP environment variable key/value for '{k}'")
+            if _BLOCKED_ENV_KEY_RE.match(k):
+                raise ValueError(f"Blocked secret environment variable for MCP child process: {k}")
+            if ingest.scan_secret_content(v) is not None or ingest.scan_secret_content(f"{k}={v}", file_path=".env") is not None:
+                raise ValueError(f"Blocked secret value in MCP environment variable: {k}")
+            if os.name == "nt":
+                for existing_k in [ek for ek in safe_env if ek.lower() == k.lower()]:
+                    del safe_env[existing_k]
+            safe_env[k] = v
+    return safe_env
+
+
+def _extract_runner_package_spec(args: Sequence[str]) -> Optional[str]:
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            return arg
+        if arg in ("-p", "--package"):
+            skip_next = True
+            continue
+        if arg.startswith("--package="):
+            return arg.split("=", 1)[1]
+        if arg.startswith("-"):
+            continue
+        return arg
+    return None
+
+
+def validate_mcp_command(command: Sequence[str], allow_unpinned: bool = False) -> List[str]:
+    """Validates an MCP server command list, rejecting shells, meta-tokens, and unpinned npx -y."""
+    if isinstance(command, (str, bytes)) or not isinstance(command, Sequence) or len(command) == 0:
+        raise ValueError("MCP command must be a non-empty sequence of strings")
+
+    validated: List[str] = []
+    for arg in command:
+        if not isinstance(arg, str) or not arg or any(c in arg for c in ("\x00", "\r", "\n")):
+            raise ValueError("MCP command arguments must be non-empty NUL/newline-free strings")
+        if arg in _SHELL_META_TOKENS:
+            raise ValueError(f"Shell meta-token '{arg}' is not allowed in MCP command")
+        validated.append(arg)
+
+    exe_base = os.path.basename(validated[0]).lower()
+    if exe_base in _SHELL_INTERPRETERS:
+        raise ValueError(f"Shell interpreter '{exe_base}' is not allowed as an MCP command")
+
+    if exe_base in _PACKAGE_RUNNERS:
+        has_auto_yes = any(
+            arg in ("-y", "--yes")
+            or arg.startswith("--yes=")
+            or (arg.startswith("-") and not arg.startswith("--") and "y" in arg[1:])
+            for arg in validated[1:]
+        )
+        pkg_spec = _extract_runner_package_spec(validated[1:])
+        is_pinned = bool(pkg_spec and _PINNED_NPM_SPEC_RE.match(pkg_spec))
+        if (has_auto_yes or not is_pinned) and not allow_unpinned:
+            raise ValueError("Unpinned or auto-installing package runner MCP command requires explicit confirmation")
+
+    return validated
+
+
+def parse_mcp_command_string(cmd_str: str, allow_unpinned: bool = False) -> List[str]:
+    """Splits and validates a command string for MCP server configuration."""
+    if not isinstance(cmd_str, str) or not cmd_str.strip() or any(c in cmd_str for c in ("\x00", "\r", "\n")):
+        raise ValueError("MCP command string must be a non-empty NUL/newline-free string")
+    raw_tokens = shlex.split(cmd_str, posix=(os.name != "nt"))
+    if os.name == "nt":
+        tokens = [
+            tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ('"', "'") else tok
+            for tok in raw_tokens
+        ]
+    else:
+        tokens = raw_tokens
+    return validate_mcp_command(tokens, allow_unpinned=allow_unpinned)
 
 
 @dataclass
@@ -44,27 +254,57 @@ class StdioMCPTransport(MCPTransport):
     Subprocess STDIO transport for MCP servers.
     Communicates via newline-delimited JSON-RPC 2.0 over stdin/stdout.
     """
-    def __init__(self, command: List[str], env: Optional[Dict[str, str]] = None):
-        self.command = command
+    def __init__(
+        self,
+        command: Sequence[str],
+        env: Optional[Dict[str, str]] = None,
+        broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
+        tainted: bool = False,
+        allow_unpinned: bool = False,
+        require_confirmation: bool = False,
+    ):
+        validated_cmd = validate_mcp_command(command, allow_unpinned=allow_unpinned)
+        scrubbed_env = build_safe_mcp_env(env)
+
+        if allow_unpinned and broker is None and confirm is None:
+            raise PermissionDenied("allow_unpinned requires broker or confirm channel")
+        if broker is not None:
+            broker.invoke("mcp_connect", {"command": list(validated_cmd)}, tainted=bool(tainted))
+        elif confirm is not None:
+            req = ToolRequest(
+                "mcp_connect",
+                Risk.DESTRUCTIVE,
+                json.dumps(validated_cmd)[:200],
+                bool(tainted),
+                "spawning external MCP stdio process",
+            )
+            try:
+                approved = bool(confirm(req))
+            except Exception as exc:
+                raise PermissionDenied(f"MCP stdio launch confirmation failed: {exc}") from exc
+            if not approved:
+                raise PermissionDenied("MCP stdio launch declined by confirmation")
+        elif require_confirmation or tainted:
+            raise PermissionDenied("MCP stdio launch requires ToolBroker or confirmation")
+
+        self.command = validated_cmd
         self._proc: Optional[subprocess.Popen] = None
         self._req_id = 0
         self._lock = threading.Lock()
-        merged_env = os.environ.copy()
-        if env:
-            merged_env.update(env)
         try:
             self._proc = subprocess.Popen(
-                command,
+                validated_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
-                env=merged_env,
+                env=scrubbed_env,
             )
         except Exception as e:
-            raise ConnectionError(f"Failed to start MCP server process '{command}': {e}")
+            raise ConnectionError(f"Failed to start MCP server process '{validated_cmd}': {e}")
 
     def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._proc or self._proc.poll() is not None:
@@ -96,6 +336,12 @@ class StdioMCPTransport(MCPTransport):
 
     def close(self) -> None:
         if self._proc:
+            for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
             try:
                 self._proc.terminate()
                 self._proc.wait(timeout=2)
@@ -155,8 +401,20 @@ class MCPClient:
             tool_list.append(tool_def)
         return tool_list
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> MCPToolResult:
+    def call_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        broker: Optional[ToolBroker] = None,
+        tainted: bool = False,
+    ) -> MCPToolResult:
         """Executes a tool on the MCP server with given JSON arguments."""
+        if broker is not None:
+            broker.invoke(
+                "mcp_call_tool",
+                {"server": self.name, "tool": tool_name, "arguments": arguments},
+                tainted=bool(tainted),
+            )
         if not self.is_initialized:
             self.initialize()
         params = {
@@ -179,8 +437,99 @@ class MCPRegistry:
     _servers: Dict[str, MCPClient] = {}
 
     @classmethod
-    def register_server(cls, name: str, client: MCPClient) -> None:
-        cls._servers[name] = client
+    def register_server(
+        cls,
+        name: str,
+        client: MCPClient,
+        broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
+        tainted: bool = False,
+        require_confirmation: bool = True,
+    ) -> None:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("MCP server name must be a non-empty string")
+        clean_name = name.strip()
+        if broker is not None:
+            broker.invoke(
+                "mcp_register",
+                {"name": clean_name, "transport": type(client.transport).__name__},
+                tainted=bool(tainted),
+            )
+        elif confirm is not None:
+            req = ToolRequest(
+                "mcp_register",
+                Risk.DESTRUCTIVE,
+                clean_name,
+                bool(tainted),
+                "registering external MCP server",
+            )
+            try:
+                approved = bool(confirm(req))
+            except Exception as exc:
+                raise PermissionDenied(f"MCP server registration confirmation failed: {exc}") from exc
+            if not approved:
+                raise PermissionDenied("MCP server registration declined by confirmation")
+        elif require_confirmation:
+            raise PermissionDenied("MCP server registration requires ToolBroker or explicit confirmation")
+        cls._servers[clean_name] = client
+
+    @classmethod
+    def connect_stdio(
+        cls,
+        name: str,
+        command: Sequence[str],
+        env: Optional[Dict[str, str]] = None,
+        broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
+        tainted: bool = False,
+        allow_unpinned: bool = False,
+    ) -> MCPClient:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("MCP server name must be a non-empty string")
+        if broker is None and confirm is None:
+            raise PermissionDenied("MCP stdio registration requires ToolBroker or explicit confirmation")
+        transport = StdioMCPTransport(
+            command=command,
+            env=env,
+            broker=broker,
+            confirm=confirm,
+            tainted=tainted,
+            allow_unpinned=allow_unpinned,
+            require_confirmation=True,
+        )
+        client = MCPClient(name=name.strip(), transport=transport)
+        try:
+            cls.register_server(
+                name=name.strip(),
+                client=client,
+                broker=broker,
+                confirm=confirm,
+                tainted=tainted,
+                require_confirmation=True,
+            )
+        except Exception:
+            client.close()
+            raise
+        return client
+
+    @classmethod
+    def unregister_server(cls, name: str) -> Optional[MCPClient]:
+        client = cls._servers.pop(name, None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        return client
+
+    @classmethod
+    def clear(cls) -> None:
+        for client in list(cls._servers.values()):
+            try:
+                client.close()
+            except Exception:
+                pass
+        cls._servers.clear()
 
     @classmethod
     def get_server(cls, name: str) -> Optional[MCPClient]:

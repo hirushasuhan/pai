@@ -7,8 +7,10 @@ Also manages in-flight concurrency leases and escalating cooldown ladders upon 4
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -16,8 +18,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from credential_store import harden_secret_file, write_secret_file
+except ModuleNotFoundError:
+    from research.credential_store import harden_secret_file, write_secret_file
+
 COOLDOWN_LADDER_SECONDS = [30.0, 60.0, 300.0, 900.0, 1800.0]
 MAX_LEASE_AGE_SECONDS = 120.0
+_HEX16_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _get_quota_store_path() -> Path:
@@ -52,27 +60,47 @@ class QuotaLedger:
     def _hash_key(self, key: str) -> str:
         if not key:
             return "anonymous"
-        if len(key) <= 8:
-            return key
-        return f"{key[:4]}...{key[-4:]}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
     def _get_bucket(self, provider: str, key: str) -> str:
         return f"{provider.lower()}::{self._hash_key(key)}"
+
+    @staticmethod
+    def _is_valid_bucket(bucket: str) -> bool:
+        if not isinstance(bucket, str) or "::" not in bucket:
+            return False
+        _, suffix = bucket.split("::", 1)
+        return suffix == "anonymous" or bool(_HEX16_RE.match(suffix))
 
     def _load_state(self) -> None:
         p = _get_quota_store_path()
         if not p.is_file():
             return
+        harden_secret_file(p)
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                self._usage = data.get("usage", {})
+                raw_usage = data.get("usage", {})
                 raw_cool = data.get("cooldowns", {})
+                pruned = False
+                if isinstance(raw_usage, dict):
+                    self._usage = {
+                        k: v for k, v in raw_usage.items()
+                        if self._is_valid_bucket(k) and isinstance(v, dict)
+                    }
+                    if len(self._usage) != len(raw_usage):
+                        pruned = True
                 now = time.time()
-                # Restore only non-expired cooldowns
-                for k, v in raw_cool.items():
-                    if isinstance(v, dict) and v.get("cooldown_until", 0) > now:
-                        self._cooldowns[k] = v
+                # Restore only non-expired cooldowns with hashed buckets
+                if isinstance(raw_cool, dict):
+                    for k, v in raw_cool.items():
+                        if not self._is_valid_bucket(k):
+                            pruned = True
+                            continue
+                        if isinstance(v, dict) and v.get("cooldown_until", 0) > now:
+                            self._cooldowns[k] = v
+                if pruned:
+                    self._save_state()
         except Exception:
             pass
 
@@ -86,7 +114,7 @@ class QuotaLedger:
                 "cooldowns": self._cooldowns,
                 "last_saved": time.time(),
             }
-            p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            write_secret_file(p, json.dumps(payload, indent=2))
         except Exception:
             pass
 

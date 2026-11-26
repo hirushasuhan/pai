@@ -40,7 +40,10 @@ def create_shortcuts() -> bool:
         target_args = ""
     else:
         target_path = str(pythonw.resolve())
-        target_args = "-m research.desktop_launcher"
+        if (app_dir / "desktop" / "desktop_launcher.py").is_file():
+            target_args = "-m desktop.desktop_launcher"
+        else:
+            target_args = "-m research.desktop_launcher"
 
     vbs_code = f'''
 Set oWS = WScript.CreateObject("WScript.Shell")

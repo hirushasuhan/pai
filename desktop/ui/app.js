@@ -1,9 +1,82 @@
 /**
  * PAI Studio Desktop UI Client Application.
- * Communicates with local loopback bridge server on http://127.0.0.1:8765.
+ * Communicates with local loopback bridge server on dynamic loopback port with token auth.
  */
 
-const API_BASE = "http://127.0.0.1:8765";
+let API_BASE = "http://127.0.0.1:8765";
+let PAI_BRIDGE_TOKEN = "";
+
+// Wrap window.fetch to inject X-PAI-Token and rewrite API_BASE if bound port changes
+const _originalFetch = window.fetch;
+window.fetch = async function(resource, init = {}) {
+  let url = resource;
+  if (typeof resource === "string") {
+    if (resource.startsWith("http://127.0.0.1:8765")) {
+      url = resource.replace("http://127.0.0.1:8765", API_BASE);
+    }
+  } else if (resource instanceof Request) {
+    let reqUrl = resource.url;
+    if (reqUrl.startsWith("http://127.0.0.1:8765")) {
+      reqUrl = reqUrl.replace("http://127.0.0.1:8765", API_BASE);
+      resource = new Request(reqUrl, resource);
+    }
+  }
+  init = init || {};
+  init.headers = init.headers || {};
+  if (PAI_BRIDGE_TOKEN) {
+    if (init.headers instanceof Headers) {
+      if (!init.headers.has("X-PAI-Token")) {
+        init.headers.set("X-PAI-Token", PAI_BRIDGE_TOKEN);
+      }
+    } else if (Array.isArray(init.headers)) {
+      if (!init.headers.some(([k]) => k.toLowerCase() === "x-pai-token")) {
+        init.headers.push(["X-PAI-Token", PAI_BRIDGE_TOKEN]);
+      }
+    } else {
+      if (!init.headers["X-PAI-Token"] && !init.headers["x-pai-token"]) {
+        init.headers["X-PAI-Token"] = PAI_BRIDGE_TOKEN;
+      }
+    }
+  }
+  return _originalFetch.call(this, url, init);
+};
+
+// Sanitizes external URLs before inserting into anchor href attributes (FINDING-09)
+function sanitizeUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "#";
+  const trimmed = rawUrl.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("javascript:") || lower.startsWith("vbscript:") || lower.startsWith("data:")) {
+    return "#";
+  }
+  if (/^(https?:|mailto:|file:|\/|\.\/|#)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return "#";
+}
+
+async function initBridgeConfig() {
+  // 1. Try URL hash (used by browser app mode: #token=...&port=...)
+  try {
+    const hash = window.location.hash;
+    if (hash && hash.length > 1) {
+      const params = new URLSearchParams(hash.replace(/^#/, ""));
+      const hashToken = params.get("token");
+      const hashPort = params.get("port");
+      if (hashToken) PAI_BRIDGE_TOKEN = hashToken;
+      if (hashPort) API_BASE = `http://127.0.0.1:${hashPort}`;
+    }
+  } catch (_) {}
+
+  // 2. Try Tauri IPC command get_bridge_config
+  try {
+    const cfg = await invokeTauri("get_bridge_config");
+    if (cfg && typeof cfg === "object") {
+      if (cfg.port) API_BASE = `http://127.0.0.1:${cfg.port}`;
+      if (cfg.token) PAI_BRIDGE_TOKEN = cfg.token;
+    }
+  } catch (_) {}
+}
 
 // State
 let currentTab = "chat";
@@ -179,7 +252,8 @@ const preflightActionText = document.getElementById("preflight-action-text");
 const preflightActionButtons = document.getElementById("preflight-action-buttons");
 
 // Initial Setup
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  await initBridgeConfig();
   setupDesktopTitlebar();
   applyStoredSettings();
   setupNavigation();
@@ -378,19 +452,46 @@ function setupNavigation() {
     }
   });
 
+  const offlineConfirmModal = document.getElementById("offline-confirm-modal");
+  const btnCancelOfflineModal = document.getElementById("btn-cancel-offline-modal");
+  const btnCloseOfflineModal = document.getElementById("btn-close-offline-modal");
+  const btnConfirmOfflineModal = document.getElementById("btn-confirm-offline-modal");
+
+  if (btnCancelOfflineModal) {
+    btnCancelOfflineModal.addEventListener("click", () => {
+      if (offlineConfirmModal) offlineConfirmModal.classList.add("hidden");
+      if (toggleInternet) toggleInternet.checked = true;
+    });
+  }
+  if (btnCloseOfflineModal) {
+    btnCloseOfflineModal.addEventListener("click", () => {
+      if (offlineConfirmModal) offlineConfirmModal.classList.add("hidden");
+      if (toggleInternet) toggleInternet.checked = true;
+    });
+  }
+  if (btnConfirmOfflineModal) {
+    btnConfirmOfflineModal.addEventListener("click", async () => {
+      if (offlineConfirmModal) offlineConfirmModal.classList.add("hidden");
+      if (toggleInternet) toggleInternet.checked = false;
+      await applyInternetState(false);
+    });
+  }
+
   toggleInternet.addEventListener("change", async (e) => {
     const val = e.target.checked;
-    try {
-      await fetch(`${API_BASE}/api/settings/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feature: "internet", value: val }),
-      });
-      showToast(`Real-Time Internet grounding ${val ? "enabled" : "disabled"}`, "info");
-      loadSkills();
-    } catch (err) {
-      console.error("Internet toggle error:", err);
+    if (!val) {
+      // User is attempting to turn OFF internet: prompt confirmation modal first
+      e.preventDefault();
+      toggleInternet.checked = true; // keep checked visually until confirmed
+      if (offlineConfirmModal) {
+        offlineConfirmModal.classList.remove("hidden");
+      } else {
+        await applyInternetState(false);
+      }
+      return;
     }
+    // Re-enabling internet
+    await applyInternetState(true);
   });
 
   const savedFc = localStorage.getItem("pai_factcheck_enabled");
@@ -400,6 +501,12 @@ function setupNavigation() {
 
   toggleFactcheck.addEventListener("change", async (e) => {
     const val = e.target.checked;
+    if (val && toggleInternet && !toggleInternet.checked) {
+      e.preventDefault();
+      toggleFactcheck.checked = false;
+      showToast("Live fact-checking requires internet access, which is currently disabled.", "warning", "Offline Mode");
+      return;
+    }
     localStorage.setItem("pai_factcheck_enabled", val ? "true" : "false");
     try {
       await fetch(`${API_BASE}/api/settings/toggle`, {
@@ -413,6 +520,114 @@ function setupNavigation() {
       console.error("Factcheck toggle error:", err);
     }
   });
+}
+
+async function applyInternetState(val) {
+  try {
+    const res = await fetch(`${API_BASE}/api/settings/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feature: "internet", value: val }),
+    });
+    const data = await res.json();
+    const isNowOnline = data.internet_enabled !== undefined ? Boolean(data.internet_enabled) : Boolean(val);
+    if (toggleInternet) toggleInternet.checked = isNowOnline;
+
+    updateInternetUIState(isNowOnline, data.active_model);
+
+    if (isNowOnline) {
+      showToast("Real-Time Internet grounding and cloud models enabled.", "info", "Internet Online");
+    } else {
+      showToast("Complete Offline Air-Gap active. Cloud APIs and web services disabled.", "warning", "Air-Gap Offline");
+      if (data.switched_to_local && data.active_model) {
+        showToast(`Switched active model to local "${data.active_model}" for offline operation.`, "info", "Local Model Active");
+      }
+    }
+    if (typeof loadSkills === "function") loadSkills();
+  } catch (err) {
+    console.error("Internet toggle error:", err);
+    showToast(`Failed to update internet settings: ${err.message}`, "error");
+  }
+}
+
+function updateInternetUIState(isOnline, switchedModel) {
+  // 1. Factcheck toggle
+  if (toggleFactcheck) {
+    if (!isOnline) {
+      toggleFactcheck.checked = false;
+      toggleFactcheck.disabled = true;
+      const lbl = toggleFactcheck.closest("label");
+      if (lbl) {
+        lbl.style.opacity = "0.5";
+        lbl.title = "Live Fact-Checking engine is disabled while offline (Internet disconnected)";
+      }
+    } else {
+      toggleFactcheck.disabled = false;
+      const lbl = toggleFactcheck.closest("label");
+      if (lbl) {
+        lbl.style.opacity = "1";
+        lbl.title = "Toggle real-time fact-checking & citation verification";
+      }
+    }
+  }
+
+  // 2. Web search panel inputs
+  const toolSearchQuery = document.getElementById("tool-search-query");
+  const btnRunSearch = document.getElementById("btn-run-search");
+  const searchResultBox = document.getElementById("search-result-box");
+  const searchStatus = document.getElementById("search-status-tag");
+
+  if (toolSearchQuery) {
+    if (!isOnline) {
+      toolSearchQuery.disabled = true;
+      toolSearchQuery.placeholder = "Offline Air-Gap Mode: Web Search is disabled (Internet Disconnected).";
+    } else {
+      toolSearchQuery.disabled = false;
+      toolSearchQuery.placeholder = "e.g. President of Sri Lanka, Latest AI model releases, Python 3.14 features...";
+    }
+  }
+  if (btnRunSearch) {
+    btnRunSearch.disabled = !isOnline;
+    btnRunSearch.style.opacity = isOnline ? "1" : "0.5";
+  }
+  if (searchStatus) {
+    searchStatus.textContent = isOnline ? "Ready" : "Offline Air-Gap";
+  }
+  if (searchResultBox) {
+    if (!isOnline) {
+      searchResultBox.innerHTML = `
+        <div class="offline-warning-banner" style="padding:16px; border:1px solid rgba(239,68,68,0.25); border-radius:8px; background:rgba(239,68,68,0.06); color:#fca5a5;">
+          <strong style="color:#ef4444;">🛡️ Complete Offline Air-Gap Mode Active:</strong>
+          <p style="margin: 6px 0 0; font-size: 13px; color: #cbd5e1;">Live web search, Wikipedia queries, and external intelligence sources are strictly cut off while offline. Re-enable Internet in the top bar to restore web search.</p>
+        </div>
+      `;
+    } else if (searchResultBox.innerHTML && searchResultBox.innerHTML.includes("Complete Offline Air-Gap Mode Active")) {
+      searchResultBox.textContent = "Enter a search query above or click a suggested topic to explore live internet data.";
+    }
+  }
+
+  // 3. Update Model dropdown and switch away from cloud models if offline
+  if (switchedModel) {
+    activeModel = switchedModel;
+  } else if (!isOnline) {
+    const cloudProviders = window.__cloudProviders || [];
+    const allCloudModels = [];
+    cloudProviders.forEach(p => (p.models || []).forEach(m => allCloudModels.push(m)));
+    (window.__configuredCloudModels || []).forEach(cm => allCloudModels.push(cm.model_name));
+
+    if (allCloudModels.includes(activeModel)) {
+      const local = (availableModels || []).find(m => m.name && !allCloudModels.includes(m.name));
+      if (local) {
+        activeModel = local.name;
+      } else {
+        activeModel = "auto";
+      }
+    }
+  }
+
+  if (typeof populateModelSelectors === "function" && Array.isArray(availableModels)) {
+    populateModelSelectors(availableModels);
+  }
 }
 
 function switchTab(tab) {
@@ -2005,7 +2220,7 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
     html += `
       <div class="grounding-badge-list">
         <span class="grounding-label">${SVG_ICONS.globe} Web Citations:</span>
-        ${grounding.map(g => `<a href="${escapeHtml(g.url)}" target="_blank" class="grounding-pill">${escapeHtml(g.title || g.url)}</a>`).join("")}
+        ${grounding.map(g => `<a href="${escapeHtml(sanitizeUrl(g.url))}" target="_blank" rel="noopener noreferrer" class="grounding-pill">${escapeHtml(g.title || g.url)}</a>`).join("")}
       </div>
     `;
   }
@@ -2045,7 +2260,7 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
                 : `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:middle;margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`);
             const confPct = Math.round((c.confidence || 0) * 100);
             const citeLinks = (c.citations || []).map(cite => 
-              `<a href="${escapeHtml(cite.url)}" target="_blank" class="cite-link" title="${escapeHtml(cite.url)}">${escapeHtml(cite.title || cite.url)}</a>`
+              `<a href="${escapeHtml(sanitizeUrl(cite.url))}" target="_blank" rel="noopener noreferrer" class="cite-link" title="${escapeHtml(cite.url)}">${escapeHtml(cite.title || cite.url)}</a>`
             ).join(" ");
             return `
               <div class="claim-item">
@@ -4257,6 +4472,17 @@ function updateTriggerLabel(labelText) {
 
 function selectCustomModel(modelValue) {
   if (!headerModelSelect) return;
+  const isOffline = (toggleInternet && !toggleInternet.checked);
+  if (isOffline) {
+    const cloudProviders = window.__cloudProviders || [];
+    const allCloudModels = [];
+    cloudProviders.forEach(p => (p.models || []).forEach(m => allCloudModels.push(m)));
+    (window.__configuredCloudModels || []).forEach(cm => allCloudModels.push(cm.model_name));
+    if (allCloudModels.includes(modelValue)) {
+      showToast("Cloud models are disabled while Offline Air-Gap Mode is active.", "warning", "Offline Mode");
+      return;
+    }
+  }
   headerModelSelect.value = modelValue;
   activeModel = modelValue;
   headerModelSelect.dispatchEvent(new Event("change"));
@@ -4265,7 +4491,20 @@ function selectCustomModel(modelValue) {
 }
 
 function populateModelSelectors(models) {
-  const currentVal = activeModel || (headerModelSelect ? headerModelSelect.value : "auto");
+  const isOffline = (toggleInternet && !toggleInternet.checked);
+  let currentVal = activeModel || (headerModelSelect ? headerModelSelect.value : "auto");
+  if (isOffline) {
+    const cloudProviders = window.__cloudProviders || [];
+    const allCloudModels = [];
+    cloudProviders.forEach(p => (p.models || []).forEach(m => allCloudModels.push(m)));
+    (window.__configuredCloudModels || []).forEach(cm => allCloudModels.push(cm.model_name));
+    if (allCloudModels.includes(currentVal)) {
+      const local = (models || []).find(m => m.name && !allCloudModels.includes(m.name));
+      currentVal = local ? local.name : "auto";
+      activeModel = currentVal;
+    }
+  }
+
   if (!headerModelSelect) return;
   headerModelSelect.innerHTML = "";
   let hasSelected = false;
@@ -4320,15 +4559,20 @@ function populateModelSelectors(models) {
     if (hasKeys && modelsList.length > 0) {
       const grpProv = document.createElement("optgroup");
       const provTitle = prov.name || prov.id.toUpperCase();
-      grpProv.label = `${provTitle} (Cloud)`;
+      grpProv.label = `${provTitle} (Cloud${isOffline ? ' - Offline' : ''})`;
 
       let subItemsHtml = "";
       modelsList.forEach((mName) => {
         const opt = document.createElement("option");
         opt.value = mName;
         const badge = getModelCategoryBadge(mName);
-        opt.textContent = `${mName} (${badge.label} Cloud)`;
-        const isAct = (mName === currentVal && !hasSelected);
+        if (isOffline) {
+          opt.disabled = true;
+          opt.textContent = `${mName} (${badge.label} Cloud - Offline)`;
+        } else {
+          opt.textContent = `${mName} (${badge.label} Cloud)`;
+        }
+        const isAct = (mName === currentVal && !hasSelected && !isOffline);
         if (isAct) {
           opt.selected = true;
           activeModel = mName;
@@ -4338,10 +4582,10 @@ function populateModelSelectors(models) {
         grpProv.appendChild(opt);
 
         subItemsHtml += `
-          <div class="cmd-option ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(mName)}">
+          <div class="cmd-option ${isOffline ? 'is-offline-disabled' : ''} ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(mName)}" ${isOffline ? 'style="opacity: 0.4; pointer-events: none;" title="Offline Mode: Cloud model disabled"' : ''}>
             <div class="cmd-opt-main">
               <span class="cmd-opt-name">${escapeHtml(mName)}</span>
-              <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}</span>
+              <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}${isOffline ? ' (Offline)' : ''}</span>
             </div>
             ${isAct ? '<svg class="cmd-check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
           </div>
@@ -4351,7 +4595,7 @@ function populateModelSelectors(models) {
 
       const provHasActiveModel = modelsList.includes(currentVal);
       cloudHtml += `
-        <div class="cmd-provider-item ${provHasActiveModel ? 'has-active-child' : ''}" data-provider-id="${escapeHtml(prov.id)}">
+        <div class="cmd-provider-item ${provHasActiveModel ? 'has-active-child' : ''}" data-provider-id="${escapeHtml(prov.id)}" ${isOffline ? 'style="opacity: 0.55;"' : ''}>
           <div class="cmd-provider-row">
             <div class="cmd-provider-left">
               <span class="cmd-provider-bullet"></span>
@@ -4364,7 +4608,7 @@ function populateModelSelectors(models) {
           <div class="cmd-submenu">
             <div class="cmd-submenu-header">
               <span>${escapeHtml(provTitle)} Models</span>
-              <span class="cmd-active-key-dot" title="Active Key Connected">● Connected</span>
+              <span class="cmd-active-key-dot" title="${isOffline ? 'Offline - Disconnected' : 'Active Key Connected'}">${isOffline ? '● Offline (Disabled)' : '● Connected'}</span>
             </div>
             <div class="cmd-submenu-list">
               ${subItemsHtml}
@@ -4379,14 +4623,19 @@ function populateModelSelectors(models) {
   const cloudList = window.__configuredCloudModels || [];
   if (cloudList.length > 0) {
     const grpCloud = document.createElement("optgroup");
-    grpCloud.label = "Custom Cloud Endpoints";
+    grpCloud.label = `Custom Cloud Endpoints${isOffline ? ' (Offline)' : ''}`;
     let customSubHtml = "";
     cloudList.forEach((cm) => {
       const opt = document.createElement("option");
       opt.value = cm.model_name;
       const badge = cm.model_type === "image" ? { label: "Image", cssClass: "pro" } : getModelCategoryBadge(cm.model_name);
-      opt.textContent = `${cm.model_name} (${badge.label})`;
-      const isAct = (cm.model_name === currentVal && !hasSelected);
+      if (isOffline) {
+        opt.disabled = true;
+        opt.textContent = `${cm.model_name} (${badge.label} - Offline)`;
+      } else {
+        opt.textContent = `${cm.model_name} (${badge.label})`;
+      }
+      const isAct = (cm.model_name === currentVal && !hasSelected && !isOffline);
       if (isAct) {
         opt.selected = true;
         activeModel = cm.model_name;
@@ -4396,10 +4645,10 @@ function populateModelSelectors(models) {
       grpCloud.appendChild(opt);
 
       customSubHtml += `
-        <div class="cmd-option ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(cm.model_name)}">
+        <div class="cmd-option ${isOffline ? 'is-offline-disabled' : ''} ${isAct ? 'is-active' : ''}" data-value="${escapeHtml(cm.model_name)}" ${isOffline ? 'style="opacity: 0.4; pointer-events: none;" title="Offline Mode: Custom endpoint disabled"' : ''}>
           <div class="cmd-opt-main">
             <span class="cmd-opt-name">${escapeHtml(cm.model_name)}</span>
-            <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}</span>
+            <span class="cmd-tier-pill ${badge.cssClass}">${badge.label}${isOffline ? ' (Offline)' : ''}</span>
           </div>
           ${isAct ? '<svg class="cmd-check-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
         </div>
@@ -4408,7 +4657,7 @@ function populateModelSelectors(models) {
     headerModelSelect.appendChild(grpCloud);
 
     cloudHtml += `
-      <div class="cmd-provider-item" data-provider-id="custom">
+      <div class="cmd-provider-item" data-provider-id="custom" ${isOffline ? 'style="opacity: 0.55;"' : ''}>
         <div class="cmd-provider-row">
           <div class="cmd-provider-left">
             <span class="cmd-provider-bullet custom"></span>
@@ -4420,6 +4669,7 @@ function populateModelSelectors(models) {
         <div class="cmd-submenu">
           <div class="cmd-submenu-header">
             <span>Custom Cloud Endpoints</span>
+            <span class="cmd-active-key-dot" title="${isOffline ? 'Offline - Disconnected' : 'Connected'}">${isOffline ? '● Offline (Disabled)' : '● Connected'}</span>
           </div>
           <div class="cmd-submenu-list">
             ${customSubHtml}
@@ -4514,6 +4764,10 @@ function populateModelSelectors(models) {
     menuEl.querySelectorAll(".cmd-option").forEach((optEl) => {
       optEl.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (optEl.classList.contains("is-offline-disabled")) {
+          showToast("Cloud model is disabled in complete Offline Air-Gap mode. Enable Internet to use this model.", "warning", "Offline Mode");
+          return;
+        }
         const val = optEl.getAttribute("data-value");
         if (val) {
           selectCustomModel(val);
@@ -5674,6 +5928,10 @@ function setupWebSearch() {
   if (!btnRunSearch || !toolSearchQuery) return;
 
   executeWebSearch = async function(query) {
+    if (toggleInternet && !toggleInternet.checked) {
+      showToast("Cannot search web: Offline Air-Gap Mode is active. Turn on Internet in the top bar to enable search.", "warning", "Offline Mode");
+      return;
+    }
     const q = (query !== undefined ? query : toolSearchQuery.value).trim();
     if (!q) return;
     toolSearchQuery.value = q;
@@ -5691,7 +5949,7 @@ function setupWebSearch() {
           <div class="search-finding-card">
             <div class="search-finding-title">${i + 1}. ${escapeHtml(r.title || "Web Result")}</div>
             <div class="search-finding-snippet">${escapeHtml(r.snippet || r.body || "")}</div>
-            ${r.url ? `<div class="search-finding-source"><span>Source:</span> <a href="${escapeHtml(r.url)}" target="_blank">${escapeHtml(r.url)}</a></div>` : ""}
+            ${r.url ? `<div class="search-finding-source"><span>Source:</span> <a href="${escapeHtml(sanitizeUrl(r.url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.url)}</a></div>` : ""}
           </div>
         `).join("");
       } else if (data.message) {
@@ -6214,6 +6472,13 @@ async function checkServerHealth() {
     if (data.version) {
       updateActiveVersionDisplay(data.version);
     }
+    if (data.internet_enabled !== undefined) {
+      const isOnline = Boolean(data.internet_enabled);
+      if (toggleInternet && toggleInternet.checked !== isOnline) {
+        toggleInternet.checked = isOnline;
+        updateInternetUIState(isOnline, data.active_model);
+      }
+    }
   } catch (err) {
     serverStatusDot.className = "status-dot offline";
     serverStatusText.textContent = "Offline";
@@ -6421,6 +6686,17 @@ async function checkSoftwareUpdates(interactive = false) {
   const selectChannel = document.getElementById("setting-update-channel");
   const channel = selectChannel ? selectChannel.value : "stable";
 
+  if (toggleInternet && !toggleInternet.checked) {
+    if (textCheckUpdate) textCheckUpdate.textContent = "Check for Updates";
+    if (iconCheck) iconCheck.classList.remove("spin");
+    if (statusTitle) statusTitle.textContent = "Offline Air-Gap Active";
+    if (dotStatus) dotStatus.className = "status-indicator-dot offline";
+    if (interactive) {
+      showToast("Cannot check for updates: Complete Offline Air-Gap Mode is active. Turn on Internet in top bar.", "warning", "Offline Mode");
+    }
+    return;
+  }
+
   if (textCheckUpdate) textCheckUpdate.textContent = "Checking...";
   if (iconCheck) iconCheck.classList.add("spin");
   if (statusTitle) statusTitle.textContent = "Checking GitHub Releases...";
@@ -6433,7 +6709,7 @@ async function checkSoftwareUpdates(interactive = false) {
       lastCheckedLabel.textContent = `Last checked: ${data.last_checked || new Date().toLocaleTimeString()}`;
     }
 
-    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.4.2";
+    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.5.0-beta.1";
     updateActiveVersionDisplay(activeVer);
 
     if (data.update_available) {
@@ -6492,7 +6768,7 @@ function openSoftwareUpdateModal() {
 
   const data = currentCachedUpdate || {};
   const targetVer = data.latest_version || data.target_version || "1.4.3";
-  const currVer = data.current_version || window.__pai_active_version || "1.4.2";
+  const currVer = data.current_version || window.__pai_active_version || "1.5.0-beta.1";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 
@@ -7070,6 +7346,14 @@ function copyCodeBlock(btn) {
   if (!text) return;
   copyToClipboard(text, btn);
 }
+
+// Delegated click handler for copy buttons under CSP
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".btn-copy-code");
+  if (btn) {
+    copyCodeBlock(btn);
+  }
+});
 
 function regeneratePrompt(promptToRetry) {
   const p = promptToRetry || lastSentPrompt;

@@ -3872,10 +3872,16 @@ def cmd_cloud(args) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if raw_args and raw_args[0].lower() in ("desktop", "studio", "gui", "ui"):
+        repo_root = str(Path(__file__).resolve().parent.parent)
+        if (Path(repo_root) / "desktop").is_dir() and repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
         try:
-            from desktop_launcher import launch_desktop_app
+            from desktop.desktop_launcher import launch_desktop_app
         except ImportError:
-            from research.desktop_launcher import launch_desktop_app
+            try:
+                from desktop_launcher import launch_desktop_app
+            except ImportError:
+                from research.desktop_launcher import launch_desktop_app
         ok, msg = launch_desktop_app()
         print(msg)
         return 0 if ok else 1

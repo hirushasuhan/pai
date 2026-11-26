@@ -153,6 +153,16 @@ On every runner initialization, PAI conducts a **live behavioural canary self-te
   3. `SetConsoleMode`: Enables `ENABLE_VIRTUAL_TERMINAL_PROCESSING` (0x0004) during interactive shell execution and restores the original console mode flags upon shell exit.
 - **AST Attribute Enforcement**: Enforced by `research/tests/test_ctypes_allowlist.py`, which verifies via AST inspection that `shell.py` accesses no other `ctypes` or `kernel32` attributes. Blanket or general-purpose `ctypes` access remains strictly prohibited.
 
+## Addendum (2026-11-25): Windows DPAPI Credential Storage Allow-List Exception (FINDING-11)
+- **Approved Module**: `research/credential_store.py`.
+- **Architectural Scope**: Required on Windows (`sys.platform == "win32"`) to encrypt stored cloud AI API keys at rest in `~/.pai/cloud_ai.json` using the current user's Windows DPAPI key without requiring external native dependencies (`keyring`/`pywin32`) in PAI's stdlib-first Python core. On POSIX hosts where Windows DPAPI is unavailable, `credential_store.py` enforces atomic `0o600` file creation and permission hardening (`harden_secret_file`, `write_secret_file`) without claiming OS-keyring encryption.
+- **Strictly Limited API Surface**: `credential_store.py` is permitted to import only `ctypes` and `from ctypes import wintypes`, and to reference ONLY:
+  1. `crypt32`: `CryptProtectData`, `CryptUnprotectData` (with `CRYPTPROTECT_UI_FORBIDDEN = 0x01`).
+  2. `kernel32`: `LocalFree` (to release DPAPI-allocated `DATA_BLOB.pbData` buffers).
+  3. `ctypes`: `WinDLL`, `Structure`, `POINTER`, `byref`, `cast`, `memset`, `get_last_error`.
+  4. `wintypes`: `DWORD`, `PBYTE`, `BYTE`, `BOOL`, `LPCWSTR`, `LPWSTR`, `LPVOID`, `HLOCAL`.
+- **AST Attribute Enforcement**: Enforced by `research/tests/test_ctypes_allowlist.py::TestCtypesAllowlist.test_credential_store_ctypes_usage_restricted_to_approved_dpapi_apis`. Any other `ctypes`, `crypt32`, `kernel32`, or `wintypes` symbol fails the repository test gate.
+
 ## Consequences & Residual Risks
 - **Containment Statement**: All listed vectors **must be contained; acceptance requires passing tests on both Windows and Linux**.
 - Residual risks:

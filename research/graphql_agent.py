@@ -13,6 +13,59 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
+
+try:
+    from net_guard import UrlRejected, validate_url
+except ModuleNotFoundError:
+    from research.net_guard import UrlRejected, validate_url
+
+_SENSITIVE_REDIRECT_HEADERS = {"authorization", "cookie", "x-goog-api-key", "x-api-key"}
+
+
+class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
+    """Validates every redirect target against net_guard and strips auth on cross-origin hops."""
+
+    max_redirections = 3
+
+    def __init__(self, allow_private: bool = False) -> None:
+        self.allow_private = bool(allow_private)
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_url(newurl, allow_private=self.allow_private)
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None:
+            orig_origin = (urlsplit(req.full_url).scheme.lower(), urlsplit(req.full_url).netloc.lower())
+            next_origin = (urlsplit(newurl).scheme.lower(), urlsplit(newurl).netloc.lower())
+            if orig_origin != next_origin:
+                for hdr_name, _ in list(new_req.header_items()):
+                    if hdr_name.lower() in _SENSITIVE_REDIRECT_HEADERS:
+                        new_req.remove_header(hdr_name)
+        return new_req
+
+
+def _read_bounded(resp: Any, max_bytes: int) -> Tuple[bytes, bool]:
+    """Read up to max_bytes from a response, compatible with zero-arg test mocks."""
+    try:
+        raw = resp.read(max_bytes + 1)
+    except TypeError:
+        raw = resp.read()
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", errors="replace")
+    elif not isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw)
+    truncated = len(raw) > max_bytes
+    return bytes(raw[:max_bytes]), truncated
+
+
+def _guarded_urlopen(req_or_url: Any, timeout: float = 15.0, allow_private: bool = False) -> Any:
+    """Validate URL via net_guard before opening, preserving mocked urllib.request.urlopen."""
+    target_url = req_or_url.full_url if isinstance(req_or_url, urllib.request.Request) else str(req_or_url)
+    validate_url(target_url, allow_private=allow_private)
+    if getattr(urllib.request.urlopen, "__module__", None) != "urllib.request":
+        return urllib.request.urlopen(req_or_url, timeout=timeout)
+    opener = urllib.request.build_opener(_GuardedRedirect(allow_private=allow_private))
+    return opener.open(req_or_url, timeout=timeout)
 
 
 INTROSPECTION_QUERY = """
@@ -61,28 +114,46 @@ class GraphQLClient:
     """
     Client for interacting with local or remote GraphQL services and Apollo Supergraphs.
     """
-    def __init__(self, endpoint: str = "http://127.0.0.1:4000/graphql", default_headers: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        endpoint: str = "http://127.0.0.1:4000/graphql",
+        default_headers: Optional[Dict[str, str]] = None,
+        allow_private: bool = False,
+    ):
         self.endpoint = endpoint
         self.headers = default_headers or {"Content-Type": "application/json"}
+        self.allow_private = bool(allow_private)
 
-    def execute(self, query: str, variables: Optional[Dict[str, Any]] = None, timeout: float = 15.0) -> Dict[str, Any]:
+    def execute(
+        self,
+        query: str,
+        variables: Optional[Dict[str, Any]] = None,
+        timeout: float = 15.0,
+        max_bytes: int = 4 * 1024 * 1024,
+    ) -> Dict[str, Any]:
         """Executes a GraphQL operation against the target endpoint."""
         val_ok, err = self.validate_query(query)
         if not val_ok:
             return {"errors": [{"message": f"Client validation failed: {err}"}]}
 
-        payload = {"query": query}
+        payload: Dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(self.endpoint, data=data, headers=self.headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw)
+            validate_url(self.endpoint, allow_private=self.allow_private)
+            req = urllib.request.Request(self.endpoint, data=data, headers=self.headers, method="POST")
+            with _guarded_urlopen(req, timeout=timeout, allow_private=self.allow_private) as resp:
+                raw_bytes, truncated = _read_bounded(resp, max_bytes)
+                if truncated:
+                    return {"errors": [{"message": f"Response exceeded maximum size limit ({max_bytes} bytes)"}]}
+                return json.loads(raw_bytes.decode("utf-8"))
+        except UrlRejected as ue:
+            return {"errors": [{"message": f"URL rejected by outbound policy: {ue}"}]}
         except urllib.error.HTTPError as he:
-            err_body = he.read().decode("utf-8", errors="replace")
+            err_bytes, _ = _read_bounded(he, 256 * 1024)
+            err_body = err_bytes.decode("utf-8", errors="replace")
             try:
                 return json.loads(err_body)
             except Exception:

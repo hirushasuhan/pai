@@ -11,6 +11,7 @@ Approved production modules:
 3. secure_buffer.py       (C-runtime memset memory zeroization)
 4. sandbox_win32.py       (Win32 AppContainer & Job Object restricted runner)
 5. shell.py               (Win32 console mode query and Virtual Terminal Processing enablement/restoration per Finding EY, ADR-014)
+6. credential_store.py    (Win32 DPAPI CryptProtectData/CryptUnprotectData + LocalFree per FINDING-11, ADR-011)
 """
 
 import ast
@@ -25,6 +26,7 @@ APPROVED_CTYPES_MODULES = {
     "secure_buffer.py",
     "sandbox_win32.py",
     "shell.py",
+    "credential_store.py",
 }
 
 
@@ -107,6 +109,60 @@ class TestCtypesAllowlist(unittest.TestCase):
             [],
             f"Unauthorized ctypes/kernel32 attribute usage detected in shell.py: {unauthorized}. "
             f"shell.py is restricted exclusively to {sorted(list(ALLOWED_KERNEL32_FUNCS))} per ADR-011 and ADR-014."
+        )
+
+    def test_credential_store_ctypes_usage_restricted_to_approved_dpapi_apis(self):
+        """
+        FINDING-11: Ensures credential_store.py imports only ctypes and wintypes, and
+        references NO crypt32, kernel32, ctypes, or wintypes attributes outside the
+        approved DPAPI allow-list.
+        """
+        cred_path = os.path.join(ROOT_DIR, "credential_store.py")
+        self.assertTrue(os.path.isfile(cred_path), "credential_store.py must exist in research root")
+
+        with open(cred_path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename="credential_store.py")
+
+        ALLOWED_CRYPT32_FUNCS = {"CryptProtectData", "CryptUnprotectData"}
+        ALLOWED_KERNEL32_FUNCS = {"LocalFree"}
+        ALLOWED_CTYPES_ATTRS = {
+            "WinDLL", "Structure", "POINTER", "byref", "cast", "memset", "get_last_error"
+        }
+        ALLOWED_WINTYPES_ATTRS = {
+            "DWORD", "PBYTE", "BYTE", "BOOL", "LPCWSTR", "LPWSTR", "LPVOID", "HLOCAL"
+        }
+
+        unauthorized = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "ctypes" or alias.name.startswith("ctypes."):
+                        if alias.name != "ctypes":
+                            unauthorized.append(f"import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "ctypes" or (node.module and node.module.startswith("ctypes.")):
+                    if node.module != "ctypes" or [a.name for a in node.names] != ["wintypes"]:
+                        unauthorized.append(f"from {node.module} import {[a.name for a in node.names]}")
+            elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                target = node.value.id
+                if target in ("crypt32", "_crypt32"):
+                    if node.attr not in ALLOWED_CRYPT32_FUNCS:
+                        unauthorized.append(f"{target}.{node.attr}")
+                elif target in ("kernel32", "_kernel32"):
+                    if node.attr not in ALLOWED_KERNEL32_FUNCS:
+                        unauthorized.append(f"{target}.{node.attr}")
+                elif target == "ctypes":
+                    if node.attr not in ALLOWED_CTYPES_ATTRS:
+                        unauthorized.append(f"ctypes.{node.attr}")
+                elif target == "wintypes":
+                    if node.attr not in ALLOWED_WINTYPES_ATTRS:
+                        unauthorized.append(f"wintypes.{node.attr}")
+
+        self.assertEqual(
+            unauthorized,
+            [],
+            f"Unauthorized ctypes/DPAPI usage detected in credential_store.py: {unauthorized}. "
+            f"Allowed crypt32={sorted(ALLOWED_CRYPT32_FUNCS)}, kernel32={sorted(ALLOWED_KERNEL32_FUNCS)} per ADR-011."
         )
 
 

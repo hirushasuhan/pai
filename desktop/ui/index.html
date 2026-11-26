@@ -12,9 +12,7 @@
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/pai-logo-512.png" />
   <link rel="stylesheet" href="style.css?v=20261114" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- FINDING-09: Removed external Google Fonts links; using system font stack in CSS -->
 </head>
 <body class="dark-theme theme-pai-cyber font-jetbrains">
   <!-- Native Integrated Desktop Titlebar (Dark & Light Mode Responsive) -->
@@ -306,7 +304,7 @@
                   <span class="msg-author">Personal Agentic AI Assistant</span>
                   <span class="msg-time">Just now</span>
                   <div class="msg-actions">
-                    <button type="button" class="btn-msg-action btn-copy-msg" onclick="copyToClipboard(this.closest('.message').querySelector('.msg-body').innerText, this)" title="Copy message">
+                    <button type="button" class="btn-msg-action btn-copy-msg" data-action="copy-msg" title="Copy message">
                       <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                       <span>Copy</span>
                     </button>
@@ -1015,7 +1013,7 @@
                 </svg>
                 <span>Software Updates & Release Channel</span>
               </h3>
-              <span class="badge badge-info" id="badge-current-version">v1.4.2 (Installed)</span>
+              <span class="badge badge-info" id="badge-current-version">v1.5.0-beta.1 (Installed)</span>
             </div>
 
             <p class="field-hint mb-3" style="font-size: 12px; color: var(--text-dim);">
@@ -1050,7 +1048,7 @@
                 <div class="status-left flex-center-gap">
                   <span class="status-indicator-dot online" id="dot-update-status"></span>
                   <div>
-                    <strong id="update-status-title">PAI Studio is Up to Date (v1.4.2)</strong>
+                    <strong id="update-status-title">PAI Studio is Up to Date (v1.5.0-beta.1)</strong>
                     <div class="text-xs text-muted" id="update-last-checked-time">Last checked: Not checked yet</div>
                   </div>
                 </div>
@@ -1938,6 +1936,59 @@
     </div>
   </div>
 
+  <!-- Offline Air-Gap Mode Confirmation Modal -->
+  <div id="offline-confirm-modal" class="modal-backdrop hidden">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header flex-between">
+        <h3 class="modal-title flex-center-gap text-warning">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" stroke="#ef4444" stroke-width="2.5"></line>
+          </svg>
+          <span>Enable Complete Offline Air-Gap?</span>
+        </h3>
+        <button type="button" class="btn-close-modal" id="btn-close-offline-modal" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm mb-3">
+          Turning off internet access will completely isolate PAI Studio from all external networks and enforce strict local air-gap security.
+        </p>
+        <div class="offline-service-list mb-3" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px;">
+          <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #f59e0b;">The following network services will be disabled:</div>
+          <ul style="list-style: none; padding-left: 0; margin: 0; font-size: 13px; display: flex; flex-direction: column; gap: 6px;">
+            <li style="display: flex; align-items: flex-start; gap: 8px;">
+              <span style="color: #ef4444;">🚫</span>
+              <span><strong>3rd-Party Cloud AI APIs:</strong> OpenAI, Anthropic, Gemini, Groq, Cerebras, DeepSeek, OpenRouter &amp; Model Fusion.</span>
+            </li>
+            <li style="display: flex; align-items: flex-start; gap: 8px;">
+              <span style="color: #ef4444;">🚫</span>
+              <span><strong>Real-Time Web Knowledge:</strong> Wikipedia queries, live web search &amp; DuckDuckGo news intelligence.</span>
+            </li>
+            <li style="display: flex; align-items: flex-start; gap: 8px;">
+              <span style="color: #ef4444;">🚫</span>
+              <span><strong>Live Fact-Checking Engine:</strong> Web citation and factual claim cross-referencing.</span>
+            </li>
+            <li style="display: flex; align-items: flex-start; gap: 8px;">
+              <span style="color: #ef4444;">🚫</span>
+              <span><strong>External Network Services:</strong> Live weather forecasts, external GraphQL &amp; automated update checks.</span>
+            </li>
+          </ul>
+        </div>
+        <div class="offline-notice-box" style="background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; padding: 10px 12px; border-radius: 4px; font-size: 12px; color: #93c5fd;">
+          💡 <strong>Automatic Local Fallback:</strong> If an active cloud model is currently selected, PAI Studio will automatically switch to your local installed Ollama model for private offline execution.
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-offline-modal">Keep Online</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-offline-modal">Confirm &amp; Go Offline</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Interactive Software Update Modal Dialog -->
   <div id="update-modal" class="modal-backdrop hidden">
     <div class="modal-card update-modal-card">
@@ -1961,12 +2012,12 @@
         <div class="update-version-row flex-between mb-3">
           <div class="version-pill current">
             <span class="label">Current Version:</span>
-            <strong id="modal-curr-ver">v1.4.2</strong>
+            <strong id="modal-curr-ver">v1.5.0-beta.1</strong>
           </div>
           <div class="version-arrow">&rarr;</div>
           <div class="version-pill target">
             <span class="label">New Version:</span>
-            <strong id="modal-target-ver">v1.4.2</strong>
+            <strong id="modal-target-ver">v1.5.0-beta.1</strong>
           </div>
         </div>
 

@@ -5,7 +5,7 @@ Orchestrates Google Antigravity IDE and headless `agy` CLI agent execution:
   - Automatically provisions project workspaces under `~/Documents/GitHub/pai_projects/`.
   - Injects structured task blueprints (`AGY_TASK.md`) and milestones.
   - Launches the visual Antigravity IDE GUI for live monitoring.
-  - Steers `agy` non-interactively with `--dangerously-skip-permissions`.
+  - Steers `agy` within the provisioned workspace with ToolBroker confirmation gating.
   - Runs continuous closed-loop verification across turns until the goal is achieved.
 """
 
@@ -19,8 +19,103 @@ import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+try:
+    from research import ingest
+    from research.capabilities import (
+        Grant,
+        PermissionDenied,
+        Risk,
+        Tool,
+        ToolBroker,
+        ToolRequest,
+    )
+except ModuleNotFoundError:
+    import ingest
+    from capabilities import (
+        Grant,
+        PermissionDenied,
+        Risk,
+        Tool,
+        ToolBroker,
+        ToolRequest,
+    )
+
+
+def make_antigravity_broker(
+    base_dir: Path,
+    confirm: Optional[Callable[[ToolRequest], bool]] = None,
+    max_calls: Optional[int] = None,
+    expires: Optional[float] = None,
+) -> ToolBroker:
+    """Constructs a scoped ToolBroker governing Antigravity execution with Risk.DESTRUCTIVE."""
+    root_real = os.path.realpath(os.path.abspath(str(base_dir)))
+    tool = Tool(
+        "antigravity_run",
+        Risk.DESTRUCTIVE,
+        lambda prompt="", base_dir="": True,
+        path_args=("base_dir",),
+    )
+    grant = Grant(
+        "antigravity_run",
+        roots=(root_real,),
+        expires=expires,
+        max_calls=max_calls,
+    )
+    return ToolBroker(tools=[tool], grants=[grant], confirm=confirm)
+
+
+def _is_contained_regular_file(path: Path, canonical_root: Path) -> bool:
+    """Returns True only if `path` is a non-symlink regular file contained inside `canonical_root`."""
+    try:
+        root_real = Path(os.path.realpath(os.path.abspath(str(canonical_root))))
+        p_str = str(path)
+        if not os.path.lexists(p_str):
+            return False
+        if path.is_symlink() or ingest._is_symlink_or_reparse(p_str):
+            return False
+        if ingest.has_ads_colon(p_str) or ingest.is_reserved_device_name(path.name):
+            return False
+        try:
+            rel = path.relative_to(canonical_root)
+            cur = canonical_root
+            for part in rel.parts[:-1]:
+                if part in ("", ".", ".."):
+                    return False
+                cur = cur / part
+                if os.path.lexists(str(cur)) and ingest._is_symlink_or_reparse(str(cur)):
+                    return False
+        except ValueError:
+            pass
+        resolved = Path(os.path.realpath(os.path.abspath(p_str)))
+        if not resolved.is_relative_to(root_real) or resolved == root_real:
+            return False
+        if ingest._is_symlink_or_reparse(str(resolved)):
+            return False
+        return resolved.is_file()
+    except Exception:
+        return False
+
+
+def _is_safe_relative_asset_ref(ref: str) -> bool:
+    """Validates a local HTML src/href reference before joining with project_dir."""
+    if not ref or any(ord(c) < 32 or ord(c) == 127 for c in ref):
+        return False
+    clean = ref.split("?", 1)[0].split("#", 1)[0].strip()
+    if not clean or "\\" in clean or clean.startswith("/"):
+        return False
+    if ingest.has_ads_colon(clean):
+        return False
+    if Path(clean).is_absolute() or PureWindowsPath(clean).is_absolute():
+        return False
+    if len(clean) >= 2 and clean[1] == ":":
+        return False
+    parts = clean.split("/")
+    if any(part in ("..", "") for part in parts):
+        return False
+    return True
 
 
 def _emit(stream: Any, msg: str) -> None:
@@ -79,10 +174,15 @@ def create_project_workspace(task_name: str, base_dir: Optional[Path] = None) ->
     root = base_dir or Path(
         os.environ.get("PAI_PROJECTS_DIR", str(Path.home() / "Documents" / "GitHub" / "pai_projects"))
     )
+    if os.path.lexists(str(root)) and ingest._is_symlink_or_reparse(str(root)):
+        raise PermissionDenied("Workspace base_dir cannot be a symlink or reparse point")
+    root_real = Path(os.path.realpath(os.path.abspath(str(root))))
     slug = slugify_task_name(task_name)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    project_dir = root / f"{slug}_{timestamp}"
+    project_dir = root_real / f"{slug}_{timestamp}"
     project_dir.mkdir(parents=True, exist_ok=True)
+    if ingest._is_symlink_or_reparse(str(project_dir)) or not Path(os.path.realpath(str(project_dir))).is_relative_to(root_real):
+        raise PermissionDenied("Provisioned workspace failed canonical containment check")
 
     blueprint = (
         f"# Project: {slug.replace('_', ' ').title()}\n\n"
@@ -96,7 +196,10 @@ def create_project_workspace(task_name: str, base_dir: Optional[Path] = None) ->
         "2. No unresolved syntax or execution errors.\n"
         "3. Verified runnable in browser or terminal.\n"
     )
-    (project_dir / "AGY_TASK.md").write_text(blueprint, encoding="utf-8")
+    task_file = project_dir / "AGY_TASK.md"
+    if os.path.lexists(str(task_file)) and ingest._is_symlink_or_reparse(str(task_file)):
+        raise PermissionDenied("AGY_TASK.md cannot be a symlink or reparse point")
+    task_file.write_text(blueprint, encoding="utf-8")
     return project_dir
 
 
@@ -125,12 +228,31 @@ def audit_workspace_files(project_dir: Path) -> Dict[str, Any]:
     missing_references: List[str] = []
     stub_files: List[str] = []
 
+    if (
+        project_dir is None
+        or not os.path.lexists(str(project_dir))
+        or ingest._is_symlink_or_reparse(str(project_dir))
+        or not project_dir.is_dir()
+    ):
+        return {
+            "files": files,
+            "total_files": 0,
+            "total_bytes": 0,
+            "syntax_errors": syntax_errors,
+            "missing_references": missing_references,
+            "stub_files": stub_files,
+            "has_script_logic": False,
+            "has_style_sheet": False,
+        }
+
+    canonical_root = Path(os.path.realpath(os.path.abspath(str(project_dir))))
+
     for p in project_dir.rglob("*"):
         if (
-            p.is_file()
-            and not p.name.startswith((".", "AGY_TASK.md"))
+            not p.name.startswith((".", "AGY_TASK.md"))
             and "__pycache__" not in p.parts
             and not p.name.endswith((".pyc", ".pyo"))
+            and _is_contained_regular_file(p, canonical_root)
         ):
             try:
                 rel = str(p.relative_to(project_dir)).replace("\\", "/")
@@ -169,15 +291,19 @@ def audit_workspace_files(project_dir: Path) -> Dict[str, Any]:
     entry_html = project_dir / "index.html"
     has_script_logic = False
     has_style_sheet = False
-    if entry_html.is_file():
+    if _is_contained_regular_file(entry_html, canonical_root):
         try:
             html_text = entry_html.read_text(encoding="utf-8", errors="replace")
             # Extract script src
             for m in re.finditer(r'<script\b[^>]*\bsrc=["\']([^"\']+)["\']', html_text, re.IGNORECASE):
                 src = m.group(1).strip()
                 if not src.startswith(("http://", "https://", "//", "data:")):
-                    target_file = project_dir / src
-                    if not target_file.is_file() or target_file.stat().st_size == 0:
+                    clean_src = src.split("?", 1)[0].split("#", 1)[0].strip()
+                    if not _is_safe_relative_asset_ref(src):
+                        missing_references.append(src)
+                        continue
+                    target_file = canonical_root.joinpath(*clean_src.split("/"))
+                    if not _is_contained_regular_file(target_file, canonical_root) or target_file.stat().st_size == 0:
                         missing_references.append(src)
                     else:
                         has_script_logic = True
@@ -186,8 +312,12 @@ def audit_workspace_files(project_dir: Path) -> Dict[str, Any]:
             for m in re.finditer(r'<link\b[^>]*\bhref=["\']([^"\']+)["\']', html_text, re.IGNORECASE):
                 href = m.group(1).strip()
                 if not href.startswith(("http://", "https://", "//", "data:")):
-                    target_file = project_dir / href
-                    if not target_file.is_file() or target_file.stat().st_size == 0:
+                    clean_href = href.split("?", 1)[0].split("#", 1)[0].strip()
+                    if not _is_safe_relative_asset_ref(href):
+                        missing_references.append(href)
+                        continue
+                    target_file = canonical_root.joinpath(*clean_href.split("/"))
+                    if not _is_contained_regular_file(target_file, canonical_root) or target_file.stat().st_size == 0:
                         missing_references.append(href)
                     else:
                         has_style_sheet = True
@@ -222,17 +352,51 @@ def run_antigravity_continuous_task(
     open_browser: bool = True,
     executor: Optional[Callable[[List[str]], int]] = None,
     base_dir: Optional[Path] = None,
+    broker: Optional[ToolBroker] = None,
+    confirm: Optional[Callable[[ToolRequest], bool]] = None,
+    tainted: bool = False,
+    require_broker: bool = False,
 ) -> Tuple[bool, str]:
     """Autonomously drive Antigravity IDE and `agy` agent until task completion."""
     raw = (prompt or "").strip()
     if not raw:
         return False, "Prompt cannot be empty for Antigravity autonomous development."
 
+    raw_base = base_dir or Path(
+        os.environ.get("PAI_PROJECTS_DIR", str(Path.home() / "Documents" / "GitHub" / "pai_projects"))
+    )
+    if os.path.lexists(str(raw_base)) and ingest._is_symlink_or_reparse(str(raw_base)):
+        raise PermissionDenied("Workspace base_dir cannot be a symlink or reparse point")
+    resolved_base = Path(os.path.realpath(os.path.abspath(str(raw_base))))
+
+    if broker is not None:
+        broker.invoke(
+            "antigravity_run",
+            {"prompt": raw, "base_dir": str(resolved_base)},
+            tainted=bool(tainted),
+        )
+    elif confirm is not None:
+        req = ToolRequest(
+            "antigravity_run",
+            Risk.DESTRUCTIVE,
+            raw[:200],
+            bool(tainted),
+            "autonomous Antigravity execution requires human confirmation",
+        )
+        try:
+            approved = bool(confirm(req))
+        except Exception as exc:
+            raise PermissionDenied(f"Antigravity confirmation failed: {exc}") from exc
+        if not approved:
+            raise PermissionDenied("Antigravity execution declined by confirmation")
+    elif require_broker or tainted:
+        raise PermissionDenied("Antigravity execution requires ToolBroker or human confirmation when governed or tainted")
+
     _emit(stream, "🚀 Initializing Antigravity Autonomous Bridge...")
     agy_exe, ide_exe = find_antigravity_binaries()
 
     # Step 1: Provision Workspace
-    project_dir = create_project_workspace(raw, base_dir=base_dir)
+    project_dir = create_project_workspace(raw, base_dir=resolved_base)
     _emit(stream, f"📁 Scaffolding workspace: {project_dir}")
 
     # Step 2: Open IDE for live visual inspection if requested
@@ -276,7 +440,7 @@ def run_antigravity_continuous_task(
 
     while turn <= turn_limit:
         _emit(stream, f"\n[Turn {turn}/{turn_limit}] Steering Antigravity agent...")
-        cmd = [agy_exe, "--add-dir", str(project_dir), "--dangerously-skip-permissions"]
+        cmd = [agy_exe, "--add-dir", str(project_dir)]
         if turn > 1:
             cmd.extend(["-c", "-p", current_prompt])
         else:
@@ -380,8 +544,9 @@ def run_antigravity_continuous_task(
 
     # Optional: Automatically open index.html in browser so user immediately sees the running project
     if success and open_browser:
+        canonical_project = Path(os.path.realpath(os.path.abspath(str(project_dir))))
         entry_html = project_dir / "index.html"
-        if entry_html.is_file():
+        if _is_contained_regular_file(entry_html, canonical_project):
             try:
                 import webbrowser
                 webbrowser.open(entry_html.resolve().as_uri(), new=2)

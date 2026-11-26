@@ -6,8 +6,11 @@ from pathlib import Path
 
 def update_pai_installation():
     repo_root = Path(__file__).resolve().parent.parent
-    local_app_data = Path(os.environ.get("LOCALAPPDATA", ""))
-    target_pai = local_app_data / "Programs" / "PAI"
+    local_app_raw = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local_app_raw:
+        print("[ERROR] LOCALAPPDATA is not set.")
+        return False
+    target_pai = Path(local_app_raw) / "Programs" / "PAI"
     
     if not target_pai.is_dir():
         print(f"[ERROR] Target directory not found: {target_pai}")
@@ -57,13 +60,11 @@ def update_pai_installation():
         except Exception as e:
             print(f"[WARN] Could not copy {repo_desktop_exe}: {e}")
 
-    # 2. Update UI files across all required locations
+    # 2. Update UI files across canonical locations
     ui_src = repo_root / "desktop" / "ui"
     ui_destinations = [
-        target_pai,                                    # root
-        target_pai / "desktop",                        # desktop/
-        target_pai / "desktop" / "ui",                 # desktop/ui/
-        target_pai / "research" / "desktop",           # research/desktop/
+        target_pai / "ui",                             # flat ui/
+        target_pai / "desktop" / "ui",                 # canonical desktop/ui/
     ]
 
     for dest in ui_destinations:
@@ -74,35 +75,35 @@ def update_pai_installation():
                 dest_f = dest / fname
                 shutil.copy2(src_f, dest_f)
                 print(f"[OK] Synced UI {fname} -> {dest_f}")
+        ui_assets = ui_src / "assets"
+        if ui_assets.is_dir():
+            shutil.copytree(ui_assets, dest / "assets", dirs_exist_ok=True)
+            shutil.copytree(ui_assets, target_pai / "assets", dirs_exist_ok=True)
 
     # 2.1 Sync VERSION file across targets
-    v_src = repo_root / "desktop" / "VERSION"
+    v_src = ui_src / "VERSION"
     if v_src.is_file():
-        for dest in [target_pai, target_pai / "desktop", target_pai / "research" / "desktop"]:
+        for dest in [target_pai, target_pai / "ui", target_pai / "desktop" / "ui"]:
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(v_src, dest / "VERSION")
             print(f"[OK] Synced VERSION -> {dest / 'VERSION'}")
 
-    # 3. Update backend python files across all possible import locations
+    # 3. Update backend python files across canonical locations
     backend_files = [
         ("desktop/bridge_server.py", target_pai / "bridge_server.py"),
         ("desktop/bridge_server.py", target_pai / "desktop" / "bridge_server.py"),
-        ("desktop/bridge_server.py", target_pai / "desktop" / "ui" / "bridge_server.py"),
-        ("desktop/bridge_server.py", target_pai / "research" / "bridge_server.py"),
-        ("desktop/bridge_server.py", target_pai / "research" / "desktop" / "bridge_server.py"),
         ("desktop/desktop_launcher.py", target_pai / "desktop_launcher.py"),
         ("desktop/desktop_launcher.py", target_pai / "desktop" / "desktop_launcher.py"),
-        ("desktop/desktop_launcher.py", target_pai / "research" / "desktop_launcher.py"),
-        ("desktop/desktop_launcher.py", target_pai / "research" / "desktop" / "desktop_launcher.py"),
-        ("research/apply_pending_update.py", target_pai / "apply_pending_update.py"),
-        ("research/apply_pending_update.py", target_pai / "desktop" / "apply_pending_update.py"),
-        ("research/apply_pending_update.py", target_pai / "research" / "apply_pending_update.py"),
-        ("research/apply_pending_update.py", target_pai / "research" / "desktop" / "apply_pending_update.py"),
+        ("desktop/apply_pending_update.py", target_pai / "apply_pending_update.py"),
+        ("desktop/apply_pending_update.py", target_pai / "desktop" / "apply_pending_update.py"),
+        ("desktop/bin/pai_folder_picker.exe", target_pai / "bin" / "pai_folder_picker.exe"),
+        ("desktop/bin/pai_folder_picker.exe", target_pai / "desktop" / "bin" / "pai_folder_picker.exe"),
     ]
 
-    # Also sync core research modules
+    # Also sync core research modules (do not let research/ shims overwrite canonical root files)
     for py_file in (repo_root / "research").glob("*.py"):
-        backend_files.append((f"research/{py_file.name}", target_pai / py_file.name))
+        if py_file.name not in {"desktop_launcher.py", "apply_pending_update.py"}:
+            backend_files.append((f"research/{py_file.name}", target_pai / py_file.name))
         backend_files.append((f"research/{py_file.name}", target_pai / "research" / py_file.name))
 
     for src_rel, dest_path in backend_files:

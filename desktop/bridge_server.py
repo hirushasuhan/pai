@@ -15,11 +15,14 @@ high-speed endpoints for the PAI Studio Desktop UI:
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
+import hmac
 import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -191,7 +194,34 @@ except ImportError:
     from council import ModelCouncilRunner
 
 HOST = "127.0.0.1"
-PORT = 8765
+PORT = int(os.environ.get("PAI_BRIDGE_PORT", "8765"))
+
+# --- FINDING-01: Per-launch bridge token for all /api/* routes ---
+PAI_BRIDGE_TOKEN: str = os.environ.get("PAI_BRIDGE_TOKEN", "") or secrets.token_urlsafe(32)
+_MAX_REQUEST_BODY = 16 * 1024 * 1024  # 16 MiB (FINDING-12)
+_MAX_DECOMPRESSED_ARCHIVE_BYTES = 10 * 1024 * 1024  # 10 MiB limit for zip/docx/xlsx (FINDING-12)
+
+_ALLOWED_ORIGINS = frozenset({
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+})
+
+
+def _is_valid_origin(origin: str, bound_port: int) -> bool:
+    """Return True if origin is Tauri or same loopback host:port."""
+    if not origin:
+        return True  # Same-origin requests omit Origin
+    if origin in _ALLOWED_ORIGINS:
+        return True
+    return origin == f"http://127.0.0.1:{bound_port}"
+
+
+def _is_valid_host(host_header: str, bound_port: int) -> bool:
+    """Validate Host header matches loopback binding."""
+    if not host_header:
+        return False
+    return host_header in (f"127.0.0.1:{bound_port}", "127.0.0.1", "localhost", f"localhost:{bound_port}")
 
 # Cowork & Thinking Global Managers
 _cowork_orchestrator = CoworkOrchestrator()
@@ -296,6 +326,7 @@ class ChatJobManager:
 
 
 _chat_job_manager = ChatJobManager()
+_agent_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="pai_agent_worker")
 
 
 def _run_cowork_background_loop(task_id: str, mode: str = "team") -> None:
@@ -384,68 +415,26 @@ _CURRENT_ACTIVE_OLLAMA_PATH: Optional[str] = None
 
 
 def _spawn_ollama_daemon(models_path: str, timeout: float = 8.0) -> bool:
-    """Spawn ollama serve process configured with explicit OLLAMA_MODELS path."""
+    """Delegate Ollama service lifecycle to research.service_manager.OllamaServiceManager (FINDING-10)."""
     global _CURRENT_ACTIVE_OLLAMA_PATH
-    cand_paths = [
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
-        Path("C:/Program Files/Ollama/ollama.exe"),
-        Path(os.path.expanduser("~")) / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe",
-    ]
-    ollama_exe = None
-    for cand in cand_paths:
-        if cand.is_file():
-            ollama_exe = cand
-            break
-
-    if not ollama_exe:
-        which_path = shutil.which("ollama")
-        if which_path:
-            ollama_exe = Path(which_path)
-
-    if not ollama_exe or not ollama_exe.is_file():
-        return False
-
-    env = os.environ.copy()
-    env["OLLAMA_HOST"] = "127.0.0.1:11434"
     target_dir = str(Path(models_path).resolve())
-    env["OLLAMA_MODELS"] = target_dir
     os.environ["OLLAMA_MODELS"] = target_dir
-
-    flags = 0
-    startupinfo = None
-    if sys.platform == "win32":
-        flags = 0x08000000  # CREATE_NO_WINDOW solely to avoid terminal flash
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0  # SW_HIDE
-
     try:
-        subprocess.Popen(
-            [str(ollama_exe), "serve"],
-            env=env,
-            creationflags=flags,
-            startupinfo=startupinfo,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            close_fds=(sys.platform != "win32"),
-        )
-    except Exception:
-        return False
-
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        time.sleep(0.3)
         try:
-            req = urllib.request.Request("http://127.0.0.1:11434/api/version", headers={"User-Agent": "PAI-Desktop/1.1"})
-            with urllib.request.urlopen(req, timeout=1.0) as r:
-                if r.status == 200:
-                    _CURRENT_ACTIVE_OLLAMA_PATH = target_dir
-                    return True
-        except Exception:
-            pass
-
-    return False
+            from research.service_manager import OllamaServiceManager
+        except ImportError:
+            from service_manager import OllamaServiceManager
+        mgr = OllamaServiceManager.get_instance()
+        if mgr.is_running():
+            _CURRENT_ACTIVE_OLLAMA_PATH = target_dir
+            return True
+        ok = mgr.start_service(readiness_timeout=timeout)
+        if ok:
+            _CURRENT_ACTIVE_OLLAMA_PATH = target_dir
+        return ok
+    except Exception as exc:
+        append_log(f"[Ollama] OllamaServiceManager delegation failed ({exc}).")
+        return False
 
 
 def ensure_ollama_server(timeout: float = 8.0, custom_models_path: Optional[str] = None) -> bool:
@@ -513,25 +502,53 @@ def save_projects_data(data: Dict[str, Any]) -> None:
 
 
 def get_project_codebase_context(folder_path: Path, max_chars: int = 12000) -> str:
-    """Collect snippets of code from active project folder for LLM context."""
+    """Collect snippets of code from active project folder for LLM context.
+
+    FINDING-08: Skips symlinks/reparse points, filters secret files (.env, credentials,
+    cloud_ai.json, private keys), scans content with ingest.scan_secret_content, and
+    wraps snippets in ingest.wrap_untrusted_envelope with nonce.
+    """
     if not folder_path.is_dir():
         return ""
+    try:
+        from research import ingest
+    except ImportError:
+        import ingest
+
+    if ingest._is_symlink_or_reparse(str(folder_path)):
+        return ""
+
     code_exts = {".js", ".html", ".css", ".py", ".json", ".md", ".ts", ".rs", ".sql"}
     snippets = []
     total = 0
+    excluded_dirs = {
+        ".git", "node_modules", "__pycache__", ".venv", "dist", "build",
+        ".pai", ".idea", ".vscode", "coverage", ".pytest_cache"
+    }
+
     for root, dirs, files in os.walk(folder_path):
-        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}]
+        dirs[:] = [d for d in dirs if d.lower() not in excluded_dirs and not d.startswith(".") and not ingest._is_symlink_or_reparse(os.path.join(root, d))]
         for f in sorted(files):
             p = Path(root) / f
+            p_str = str(p)
+            if ingest._is_symlink_or_reparse(p_str):
+                continue
+            # Skip secret filenames
+            if ingest.is_secret_path(f) or f.lower() in (".env", "cloud_ai.json", "credentials.json", "tokens.json"):
+                continue
             if p.suffix.lower() in code_exts and p.is_file():
                 try:
                     rel = p.relative_to(folder_path)
-                    content = p.read_text(encoding="utf-8", errors="replace")[:2500]
-                    snippet = f"--- File: {rel} ---\n{content}"
-                    if total + len(snippet) > max_chars:
+                    raw_text = p.read_text(encoding="utf-8", errors="replace")[:2500]
+                    # Secret scanner check
+                    if ingest.scan_secret_content(raw_text, file_path=str(rel)) is not None:
+                        continue
+                    # Wrap in untrusted envelope
+                    wrapped = ingest.wrap_untrusted_envelope(raw_text, source_identifier=str(rel))
+                    if total + len(wrapped) > max_chars:
                         break
-                    snippets.append(snippet)
-                    total += len(snippet)
+                    snippets.append(wrapped)
+                    total += len(wrapped)
                 except Exception:
                     pass
         if total >= max_chars:
@@ -1193,8 +1210,15 @@ def get_disk_free_for_path(path_str: str) -> Dict[str, Any]:
 
 
 def set_model_storage_path(new_path: str) -> bool:
-    """Update active models storage path in config, process environment and Windows registry."""
+    """Update active models storage path in config, process environment and Windows registry.
+
+    FINDING-02: Uses winreg API instead of PowerShell to avoid command injection.
+    Rejects control characters in path.
+    """
     try:
+        # Reject control characters (FINDING-02)
+        if any(ord(c) < 32 for c in new_path):
+            return False
         p_dir = Path(new_path).resolve()
         p_dir.mkdir(parents=True, exist_ok=True)
         (p_dir / "manifests").mkdir(parents=True, exist_ok=True)
@@ -1211,13 +1235,14 @@ def set_model_storage_path(new_path: str) -> bool:
         cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         if sys.platform == "win32":
             try:
-                flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-                subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", f"[System.Environment]::SetEnvironmentVariable('OLLAMA_MODELS', '{str(p_dir)}', 'User')"],
-                    capture_output=True,
-                    creationflags=flags,
-                    timeout=5.0,
-                )
+                import winreg
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Environment",
+                    0,
+                    winreg.KEY_SET_VALUE,
+                ) as key:
+                    winreg.SetValueEx(key, "OLLAMA_MODELS", 0, winreg.REG_EXPAND_SZ, str(p_dir))
             except Exception:
                 pass
         return True
@@ -1226,12 +1251,20 @@ def set_model_storage_path(new_path: str) -> bool:
 
 
 def create_physical_model_folder(storage_path: str, model_name: str, model_type: str = "text") -> None:
-    """Ensure model directory and manifest files are visibly created in the target storage directory."""
+    """Ensure model directory and manifest files are visibly created in target storage directory.
+
+    FINDING-12: Sanitizes model_name to prevent path traversal outside storage_path.
+    """
     try:
         target_dir = Path(storage_path).resolve()
         target_dir.mkdir(parents=True, exist_ok=True)
-        clean_tag = model_name.replace(":", "_").lower().strip()
-        m_dir = target_dir / clean_tag
+        # Sanitize model_name: allow only alphanumeric, underscores, hyphens, and dots
+        clean_tag = re.sub(r"[^a-zA-Z0-9._-]", "_", model_name).strip("._ ")
+        if not clean_tag:
+            clean_tag = "unnamed_model"
+        m_dir = (target_dir / clean_tag).resolve()
+        if not m_dir.is_relative_to(target_dir) or m_dir == target_dir:
+            return
         m_dir.mkdir(parents=True, exist_ok=True)
 
         manifest_info = {
@@ -1358,166 +1391,18 @@ def detect_system_hardware() -> Dict[str, Any]:
 
 
 def _get_or_compile_windows_folder_picker() -> Optional[str]:
-    """Return precompiled Win32 GUI folder picker binary or compile on-demand."""
+    """Return precompiled Win32 GUI folder picker binary (FINDING-14: no on-demand csc.exe compilation)."""
     if sys.platform != "win32":
         return None
 
-    # 1. Bundled precompiled binary
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(base_dir, "bin", "pai_folder_picker.exe"),
         os.path.join(base_dir, "..", "desktop", "bin", "pai_folder_picker.exe"),
-        os.path.join(base_dir, "..", "research", "desktop", "bin", "pai_folder_picker.exe"),
     ]
     for c in candidates:
         if os.path.isfile(c) and os.path.getsize(c) > 0:
             return os.path.normpath(c)
-
-    # 2. Check temp compiled binary
-    temp_dir = tempfile.gettempdir()
-    exe_path = os.path.join(temp_dir, "pai_folder_picker_v3.exe")
-    if os.path.isfile(exe_path) and os.path.getsize(exe_path) > 0:
-        return exe_path
-
-    csc_paths = [
-        r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
-        r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe",
-    ]
-    csc = next((p for p in csc_paths if os.path.isfile(p)), None)
-    if not csc:
-        return None
-
-    cs_source = """using System;
-using System.IO;
-using System.Runtime.InteropServices;
-
-namespace Pai {
-    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
-    public class FileOpenDialogRCW {}
-
-    [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IFileOpenDialog {
-        [PreserveSig] int Show(IntPtr parent);
-        void SetFileTypes();
-        void SetFileTypeIndex();
-        void GetFileTypeIndex();
-        void Advise();
-        void Unadvise();
-        void SetOptions(uint fos);
-        void GetOptions(out uint fos);
-        void SetDefaultFolder(IShellItem psi);
-        void SetFolder(IShellItem psi);
-        void GetFolder(out IntPtr ppsi);
-        void GetCurrentSelection(out IntPtr ppsi);
-        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
-        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
-        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
-        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
-        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
-        void GetResult(out IShellItem ppsi);
-        void AddPlace(IntPtr psi, int fdap);
-        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
-        void Close(int hr);
-        void SetClientGuid(ref Guid guid);
-        void ClearClientData();
-        void SetFilter(IntPtr pFilter);
-        void GetResults(out IntPtr ppenum);
-        void GetSelectedItems(out IntPtr ppsai);
-    }
-
-    [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IShellItem {
-        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
-        void GetParent(out IShellItem ppsi);
-        void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
-        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
-        void Compare(IShellItem psi, uint hint, out int piOrder);
-    }
-
-    public static class Program {
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetForegroundWindow();
-
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern int SHCreateItemFromParsingName(
-            [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
-            IntPtr pbc,
-            ref Guid riid,
-            out IShellItem ppv
-        );
-
-        [STAThread]
-        public static int Main(string[] args) {
-            string title = args.Length > 0 ? args[0] : "Select Folder";
-            string outPath = args.Length > 1 ? args[1] : "";
-            string initialPath = args.Length > 2 ? args[2] : "";
-
-            try {
-                var dialog = (IFileOpenDialog)new FileOpenDialogRCW();
-                uint options;
-                dialog.GetOptions(out options);
-                dialog.SetOptions(options | 0x20 | 0x40); // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
-                
-                if (!string.IsNullOrEmpty(title)) {
-                    dialog.SetTitle(title);
-                }
-
-                if (!string.IsNullOrEmpty(initialPath) && Directory.Exists(initialPath)) {
-                    try {
-                        Guid iid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
-                        IShellItem folderItem;
-                        if (SHCreateItemFromParsingName(initialPath, IntPtr.Zero, ref iid, out folderItem) == 0 && folderItem != null) {
-                            dialog.SetFolder(folderItem);
-                            dialog.SetDefaultFolder(folderItem);
-                        }
-                    } catch {}
-                }
-
-                IntPtr fg = GetForegroundWindow();
-                int hr = dialog.Show(fg);
-                if (hr == 0) {
-                    IShellItem item;
-                    dialog.GetResult(out item);
-                    if (item != null) {
-                        string selectedPath;
-                        item.GetDisplayName(0x80058000, out selectedPath); // SIGDN_FILESYSPATH
-                        if (!string.IsNullOrEmpty(selectedPath) && !string.IsNullOrEmpty(outPath)) {
-                            File.WriteAllText(outPath, selectedPath);
-                        }
-                        return 0;
-                    }
-                }
-                return 2;
-            } catch (Exception ex) {
-                if (!string.IsNullOrEmpty(outPath)) {
-                    File.WriteAllText(outPath + ".err", ex.ToString());
-                }
-                return 1;
-            }
-        }
-    }
-}
-"""
-    cs_path = os.path.join(temp_dir, "pai_folder_picker_v3.cs")
-    try:
-        with open(cs_path, "w", encoding="utf-8") as f:
-            f.write(cs_source)
-        flags = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-        subprocess.run(
-            [csc, "/nologo", "/target:winexe", f"/out:{exe_path}", cs_path],
-            capture_output=True,
-            creationflags=flags,
-            timeout=15.0,
-        )
-        if os.path.isfile(cs_path):
-            try:
-                os.remove(cs_path)
-            except Exception:
-                pass
-        if os.path.isfile(exe_path):
-            return exe_path
-    except Exception:
-        pass
     return None
 
 
@@ -1699,8 +1584,12 @@ def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, An
         # 2. Word documents (.docx, .doc)
         elif ext in ("docx", "doc"):
             try:
+                _MAX_DECOMP = 10 * 1024 * 1024
                 with zipfile.ZipFile(io.BytesIO(raw_bytes)) as z:
                     if "word/document.xml" in z.namelist():
+                        info = z.getinfo("word/document.xml")
+                        if info.file_size > _MAX_DECOMP:
+                            raise ValueError("Uncompressed docx entry exceeds 10 MiB cap")
                         xml_bytes = z.read("word/document.xml")
                         tree = ET.fromstring(xml_bytes)
                         paras = []
@@ -1717,9 +1606,13 @@ def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, An
         # 3. Excel Spreadsheets (.xlsx, .xls)
         elif ext in ("xlsx", "xls"):
             try:
+                _MAX_DECOMP = 10 * 1024 * 1024
                 with zipfile.ZipFile(io.BytesIO(raw_bytes)) as z:
                     shared_strings = []
                     if "xl/sharedStrings.xml" in z.namelist():
+                        info = z.getinfo("xl/sharedStrings.xml")
+                        if info.file_size > _MAX_DECOMP:
+                            raise ValueError("Uncompressed xlsx sharedStrings exceeds 10 MiB cap")
                         stree = ET.fromstring(z.read("xl/sharedStrings.xml"))
                         for si in stree.iter():
                             if si.tag.endswith("si"):
@@ -1729,6 +1622,9 @@ def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, An
                     sheets = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
                     sheet_rows = []
                     for sheet_name in sheets[:3]:  # read up to 3 sheets
+                        info = z.getinfo(sheet_name)
+                        if info.file_size > _MAX_DECOMP:
+                            continue
                         stree = ET.fromstring(z.read(sheet_name))
                         for row in stree.iter():
                             if row.tag.endswith("row"):
@@ -1755,9 +1651,9 @@ def parse_uploaded_file_content(filename: str, raw_bytes: bytes) -> Dict[str, An
             for s in streams:
                 try:
                     import zlib
-                    decomp = zlib.decompress(s)
+                    decomp = zlib.decompress(s, max_length=10 * 1024 * 1024)
                 except Exception:
-                    decomp = s
+                    decomp = s[:10 * 1024 * 1024]
                 matches = re.findall(rb'\(([^\)\\]*(?:\\.[^\)\\]*)*)\)\s*T[jJ]', decomp)
                 for m in matches:
                     try:
@@ -1975,15 +1871,26 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.4.2"
+PAI_CURRENT_VERSION = "1.5.0-beta.1"
 try:
-    _v_path = Path(__file__).resolve().parent / "VERSION"
-    if not _v_path.is_file():
-        _v_path = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "PAI" / "VERSION"
-    if _v_path.is_file():
-        _loaded_v = _v_path.read_text(encoding="utf-8").strip()
-        if _loaded_v:
-            PAI_CURRENT_VERSION = _loaded_v
+    _curr_dir = Path(__file__).resolve().parent
+    _v_candidates = [
+        _curr_dir / "ui" / "VERSION",
+        _curr_dir / "VERSION",
+    ]
+    _local_app = os.environ.get("LOCALAPPDATA", "").strip()
+    if _local_app:
+        _installed_root = Path(_local_app) / "Programs" / "PAI"
+        _v_candidates.extend([
+            _installed_root / "ui" / "VERSION",
+            _installed_root / "VERSION",
+        ])
+    for _v_path in _v_candidates:
+        if _v_path.is_file():
+            _loaded_v = _v_path.read_text(encoding="utf-8").strip()
+            if _loaded_v:
+                PAI_CURRENT_VERSION = _loaded_v
+                break
 except Exception:
     pass
 GITHUB_REPO_OWNER = "hirushasuhan"
@@ -2013,11 +1920,16 @@ def _is_version_newer(remote_v: str, current_v: str) -> bool:
 
 
 def get_pai_version() -> str:
-    for base in [Path(__file__).resolve().parent, Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "PAI"]:
-        v_file = base / "VERSION"
-        if v_file.is_file():
+    curr_dir = Path(__file__).resolve().parent
+    candidates = [curr_dir / "ui" / "VERSION", curr_dir / "VERSION"]
+    local_app = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app:
+        installed_root = Path(local_app) / "Programs" / "PAI"
+        candidates.extend([installed_root / "ui" / "VERSION", installed_root / "VERSION"])
+    for base_v in candidates:
+        if base_v.is_file():
             try:
-                v = v_file.read_text(encoding="utf-8").strip()
+                v = base_v.read_text(encoding="utf-8").strip()
                 if v:
                     return v
             except Exception:
@@ -2069,6 +1981,15 @@ class PAIUpdateManager:
 
     def check_for_updates(self, channel: str = "stable") -> Dict[str, Any]:
         self.current_version = get_pai_version()
+        if not is_internet_enabled():
+            return {
+                "success": False,
+                "current_version": self.current_version,
+                "error": "Internet access is disabled in settings (Offline Mode active).",
+                "update_available": False,
+                "offline": True,
+                "last_checked": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
         with self.lock:
             self.download_state["status"] = "checking"
             self.last_checked_time = time.time()
@@ -2315,6 +2236,9 @@ class PAIUpdateManager:
         is_simulated: bool = False,
     ) -> Dict[str, Any]:
         with self.lock:
+            if not is_simulated and not is_internet_enabled():
+                return {"success": False, "error": "Internet access is disabled in settings (Offline Mode active).", "status": "error"}
+
             if self.download_state["status"] == "downloading":
                 return {"success": False, "error": "Download already in progress."}
 
@@ -2449,31 +2373,11 @@ class PAIUpdateManager:
                             self.download_state["staged_path"] = pkg_path
                         append_log(f"[Updater] Real update package v{target_version} successfully downloaded and staged.")
                     except Exception as net_err:
-                        append_log(f"[Updater] Upstream asset download issue ({net_err}). Falling back to staged update verification.")
-                        steps = 25
-                        s = 0
-                        while s < steps:
-                            if self._cancel_flag.is_set():
-                                return
-                            if not self._pause_event.is_set():
-                                time.sleep(0.12)
-                                continue
-                            time.sleep(0.08)
-                            s += 1
-                            pct = int((s / steps) * 100)
-                            bytes_dl = int((s / steps) * total_b)
-                            with self.lock:
-                                if self.download_state["status"] == "downloading":
-                                    self.download_state["percentage"] = pct
-                                    self.download_state["bytes_downloaded"] = bytes_dl
-
-                        if self._cancel_flag.is_set():
-                            return
-
+                        append_log(f"[Updater] Upstream asset download failed: {net_err}")
                         with self.lock:
-                            self.download_state["status"] = "ready"
-                            self.download_state["staged_path"] = f"%LOCALAPPDATA%\\Programs\\PAI\\releases\\v{target_version}"
-                        append_log(f"[Updater] Update package v{target_version} verified and staged.")
+                            self.download_state["status"] = "error"
+                            self.download_state["error_message"] = f"Download failed: {net_err}"
+                        return
             except Exception as e:
                 append_log(f"[Updater] Download failed: {e}")
                 with self.lock:
@@ -2532,6 +2436,15 @@ class PAIUpdateManager:
 _update_manager = PAIUpdateManager()
 
 
+def _resolve_ui_dir(desktop_dir: Optional[Path] = None) -> Path:
+    """Resolve static UI directory (``ui/`` first, flat install fallback)."""
+    base = desktop_dir or Path(__file__).resolve().parent
+    ui_sub = base / "ui"
+    if ui_sub.is_dir() and (ui_sub / "index.html").is_file():
+        return ui_sub
+    return base
+
+
 class PAIBridgeHandler(BaseHTTPRequestHandler):
     """Threaded HTTP handler serving desktop frontend requests on 127.0.0.1."""
 
@@ -2544,11 +2457,53 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 pass
 
     def _send_cors_headers(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        """FINDING-01: Echo validated Origin (never wildcard) with Vary: Origin."""
+        origin = self.headers.get("Origin", "")
+        bound_port = self.server.server_address[1]
+        if origin and _is_valid_origin(origin, bound_port):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        elif not origin:
+            # Same-origin request — no ACAO header needed
+            pass
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-PAI-Token")
+        self.send_header("Vary", "Origin")
+
+    def _validate_request(self) -> bool:
+        """FINDING-01: Validate Host, Origin, and X-PAI-Token. Returns False and sends 403 on failure."""
+        bound_port = self.server.server_address[1]
+        host_hdr = self.headers.get("Host", "")
+        if not _is_valid_host(host_hdr, bound_port):
+            self._send_error_response(403, "Forbidden: invalid Host header")
+            return False
+        origin = self.headers.get("Origin", "")
+        if origin and not _is_valid_origin(origin, bound_port):
+            self._send_error_response(403, "Forbidden: invalid Origin")
+            return False
+        return True
+
+    def _validate_api_token(self) -> bool:
+        """FINDING-01: Require X-PAI-Token on all /api/* routes."""
+        token = self.headers.get("X-PAI-Token", "")
+        if not token or not hmac.compare_digest(token, PAI_BRIDGE_TOKEN):
+            self._send_error_response(403, "Forbidden: missing or invalid X-PAI-Token")
+            return False
+        return True
+
+    def _send_error_response(self, code: int, message: str) -> None:
+        try:
+            raw = json.dumps({"error": message}).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
 
     def do_OPTIONS(self) -> None:
+        if not self._validate_request():
+            return
         self.send_response(200)
         self._send_cors_headers()
         self.end_headers()
@@ -2566,8 +2521,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             pass
 
     def _read_json_body(self) -> Dict[str, Any]:
+        """Read and parse JSON body with FINDING-12 body size cap."""
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length > _MAX_REQUEST_BODY:
+                self._send_error_response(413, "Payload Too Large")
+                return {}
             if length > 0:
                 raw = self.rfile.read(length).decode("utf-8")
                 return json.loads(raw)
@@ -2576,14 +2535,21 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         return {}
 
     def do_GET(self) -> None:
+        if not self._validate_request():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         query_params = urllib.parse.parse_qs(parsed_url.query)
+        # FINDING-01: Require token on API routes
+        if path.startswith("/api/") or path.startswith("/generated_images/"):
+            if not self._validate_api_token():
+                return
 
         # Static assets
         desktop_dir = Path(__file__).resolve().parent
+        ui_dir = _resolve_ui_dir(desktop_dir)
         if path in ("/", "/index.html"):
-            index_file = desktop_dir / "index.html"
+            index_file = ui_dir / "index.html"
             if index_file.is_file():
                 content = index_file.read_bytes()
                 self.send_response(200)
@@ -2597,7 +2563,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
         elif path == "/style.css":
-            css_file = desktop_dir / "style.css"
+            css_file = ui_dir / "style.css"
             if css_file.is_file():
                 content = css_file.read_bytes()
                 self.send_response(200)
@@ -2611,7 +2577,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
         elif path == "/app.js":
-            js_file = desktop_dir / "app.js"
+            js_file = ui_dir / "app.js"
             if js_file.is_file():
                 content = js_file.read_bytes()
                 self.send_response(200)
@@ -2625,7 +2591,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
         elif path == "/manifest.json":
-            manifest_file = desktop_dir / "manifest.json"
+            manifest_file = ui_dir / "manifest.json"
             if manifest_file.is_file():
                 content = manifest_file.read_bytes()
                 self.send_response(200)
@@ -2636,7 +2602,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
         elif path == "/favicon.ico":
-            ico_file = desktop_dir / "assets" / "pai.ico"
+            ico_file = ui_dir / "assets" / "pai.ico"
+            if not ico_file.is_file():
+                ico_file = desktop_dir / "assets" / "pai.ico"
             if ico_file.is_file():
                 content = ico_file.read_bytes()
                 self.send_response(200)
@@ -2648,7 +2616,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 return
         elif path.startswith("/assets/"):
             fname = Path(path[len("/assets/"):]).name
-            asset_file = desktop_dir / "assets" / fname
+            asset_file = ui_dir / "assets" / fname
+            if not asset_file.is_file():
+                asset_file = desktop_dir / "assets" / fname
             if asset_file.is_file():
                 content = asset_file.read_bytes()
                 ctype = "image/png" if fname.endswith(".png") else "image/x-icon"
@@ -2787,8 +2757,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._send_json({"error": f"Unknown endpoint: {path}"}, status=404)
 
     def do_POST(self) -> None:
+        if not self._validate_request():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+        # FINDING-01: Require token on all API routes
+        if path.startswith("/api/"):
+            if not self._validate_api_token():
+                return
         body = self._read_json_body()
 
         # 1. Chat Completion & Grounding
@@ -2859,13 +2835,24 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             target_p = body.get("path", "").strip()
             if not target_p:
                 self._send_json({"success": False, "error": "Folder path cannot be empty."}, status=400)
+            elif any(ord(c) < 32 for c in target_p):
+                self._send_json({"success": False, "error": "Control characters rejected in folder path."}, status=400)
             else:
                 try:
-                    norm = os.path.normpath(target_p)
-                    os.makedirs(norm, exist_ok=True)
-                    self._send_json({"success": True, "path": norm, "name": Path(norm).name or "Workspace"})
-                except Exception as exc:
-                    self._send_json({"success": False, "error": f"Invalid path: {exc}"}, status=400)
+                    from research import ingest
+                except ImportError:
+                    import ingest
+                if ingest.has_ads_colon(target_p) or ingest.is_reserved_device_name(Path(target_p).name):
+                    self._send_json({"success": False, "error": "Reserved device or alternate data stream path rejected."}, status=400)
+                elif ingest._is_symlink_or_reparse(target_p):
+                    self._send_json({"success": False, "error": "Symlink or junction folder path rejected."}, status=400)
+                else:
+                    try:
+                        norm = os.path.normpath(target_p)
+                        os.makedirs(norm, exist_ok=True)
+                        self._send_json({"success": True, "path": norm, "name": Path(norm).name or "Workspace"})
+                    except Exception as exc:
+                        self._send_json({"success": False, "error": f"Invalid path: {exc}"}, status=400)
         # 3. Model Switch
         elif path == "/api/models/switch":
             m = body.get("model", "").strip()
@@ -2964,6 +2951,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             })
         # 6. Generate Image Endpoint
         elif path == "/api/image/generate":
+            if not is_internet_enabled():
+                self._send_json({"success": False, "error": "Internet access is disabled in settings (Offline Mode active)."}, status=400)
+                return
             prompt = body.get("prompt", "").strip()
             model = body.get("model", "")
             ok_img, data_url_or_err, fpath, fname = generate_image_cloud(prompt, model=model)
@@ -3008,14 +2998,49 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             val = bool(body.get("value", False))
             if feature == "internet":
                 set_internet_enabled(val)
-                self._send_json({"success": True, "internet_enabled": is_internet_enabled()})
+                switched_to_local = False
+                new_model = get_current_model()
+                if not val:
+                    set_factcheck_enabled(False)
+                    cur_model = get_current_model()
+                    if is_cloud_model(cur_model) or cur_model in ("auto", "auto:fast", "auto:smart", "fusion"):
+                        installed_local, _ = get_all_installed_local_models()
+                        installed_names = [m.get("name") for m in installed_local if m.get("name")]
+                        if installed_names:
+                            new_model = installed_names[0]
+                        else:
+                            new_model = "llama3.2:3b"
+                        set_current_model(new_model)
+                        switched_to_local = True
+                self._send_json({
+                    "success": True,
+                    "internet_enabled": is_internet_enabled(),
+                    "factcheck_enabled": is_factcheck_enabled(),
+                    "active_model": new_model,
+                    "switched_to_local": switched_to_local,
+                })
             elif feature == "factcheck":
-                set_factcheck_enabled(val)
-                self._send_json({"success": True, "factcheck_enabled": is_factcheck_enabled()})
+                if val and not is_internet_enabled():
+                    self._send_json({
+                        "success": False,
+                        "error": "Cannot enable fact-checking while internet is disabled (Offline Mode active).",
+                        "factcheck_enabled": False,
+                    }, status=400)
+                else:
+                    set_factcheck_enabled(val)
+                    self._send_json({"success": True, "factcheck_enabled": is_factcheck_enabled()})
             else:
                 self._send_json({"success": False, "error": f"Unknown feature: {feature}"}, status=400)
         # 11. Fact-Check Text
         elif path == "/api/factcheck":
+            if not is_internet_enabled():
+                self._send_json({
+                    "success": False,
+                    "error": "Live fact-checking requires internet access, which is currently disabled in settings.",
+                    "claims": [],
+                    "report": "",
+                })
+                return
             text = body.get("text", "")
             claims = verify_text_claims(text)
             claims_data = [
@@ -3044,9 +3069,19 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             cmd = body.get("command", "").strip()
             trans = body.get("transport", "stdio").strip()
             desc = body.get("description", "").strip()
-            if not name or not cmd:
+            if not body.get("confirm") and not body.get("confirmed"):
+                self._send_json({"success": False, "error": "Explicit user confirmation required (confirm: true)."}, status=403)
+            elif not name or not cmd:
                 self._send_json({"success": False, "error": "Server name and command/URL are required."}, status=400)
             else:
+                try:
+                    from research.mcp_client import validate_mcp_command
+                    v_ok, v_err = validate_mcp_command(cmd)
+                    if not v_ok:
+                        self._send_json({"success": False, "error": f"Invalid MCP command: {v_err}"}, status=400)
+                        return
+                except Exception:
+                    pass
                 servers = load_mcp_servers()
                 existing = [s for s in servers if s.get("name") != name]
                 existing.append({
@@ -3069,6 +3104,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         elif path == "/api/mcp/toggle":
             name = body.get("name", "").strip()
             val = bool(body.get("enabled", True))
+            if not body.get("confirm") and not body.get("confirmed"):
+                self._send_json({"success": False, "error": "Explicit user confirmation required (confirm: true)."}, status=403)
+                return
             servers = load_mcp_servers()
             for s in servers:
                 if s.get("name") == name:
@@ -3119,13 +3157,13 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             auto_run = bool(body.get("auto_run", False))
             task = _cowork_orchestrator.start_task(title=title, goal=goal, workspace_dir=folder, checklist_items=items)
             if auto_run:
-                threading.Thread(target=_run_cowork_background_loop, args=(task.task_id, "team"), daemon=True).start()
+                _agent_executor.submit(_run_cowork_background_loop, task.task_id, "team")
             self._send_json({"success": True, "task": asdict(task)})
         # 19b. Cowork Tasks Run Auto
         elif path == "/api/cowork/tasks/run_auto":
             tid = body.get("task_id", "").strip()
             mode = body.get("mode", "team")
-            threading.Thread(target=_run_cowork_background_loop, args=(tid, mode), daemon=True).start()
+            _agent_executor.submit(_run_cowork_background_loop, tid, mode)
             self._send_json({"success": True, "task_id": tid, "status": "running"})
         # 20. Cowork Task Progress Update
         elif path == "/api/cowork/tasks/progress":
@@ -3331,7 +3369,10 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             "active_model": cfg.get("active_model", ""),
             "custom_endpoint": cfg.get("custom_endpoint", ""),
             "providers": providers,
-            "configured_models": configured_models,
+            "configured_models": [
+                {k: v for k, v in cm.items() if k != "api_key"}
+                for cm in configured_models
+            ],
             "virtual_models": VIRTUAL_MODELS,
         })
 
@@ -3515,6 +3556,14 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "File not found or access denied"}, status=404)
             return
 
+        try:
+            from research import ingest
+        except ImportError:
+            import ingest
+        if ingest._is_symlink_or_reparse(str(target)) or ingest._is_symlink_or_reparse(str(target.parent)):
+            self._send_json({"error": "Symlink file access denied"}, status=403)
+            return
+
         # Safeguard: prevent loading files > 1.5 MB into the in-app textarea
         try:
             stat = target.stat()
@@ -3551,6 +3600,27 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         target = (base / f_str).resolve()
         if not target.is_relative_to(base):
             self._send_json({"error": "Path traversal detected; access denied."}, status=403)
+            return
+
+        try:
+            from research import ast_guard, ingest
+        except ImportError:
+            import ast_guard, ingest
+        if ingest.has_ads_colon(str(target)) or ingest.is_reserved_device_name(target.name):
+            self._send_json({"error": "Reserved device or alternate data stream filename rejected."}, status=400)
+            return
+        if ingest._is_symlink_or_reparse(str(target)) or ingest._is_symlink_or_reparse(str(target.parent)):
+            self._send_json({"error": "Symlink file target rejected."}, status=403)
+            return
+        if target.suffix.lower() == ".py":
+            rep = ast_guard.check_source(content)
+            if not rep.ok:
+                err_detail = rep.violations[0] if rep.violations else "ast check failed"
+                self._send_json({"error": f"ast_guard rejected Python source: {err_detail}"}, status=400)
+                return
+        sec = ingest.scan_secret_content(content, file_path=f_str)
+        if sec is not None:
+            self._send_json({"error": f"File save rejected: embedded secret detected ({sec})"}, status=400)
             return
 
         try:
@@ -3720,7 +3790,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         val = bool(body.get("enabled", True))
         if s_id == "internet":
             set_internet_enabled(val)
+            if not val:
+                set_factcheck_enabled(False)
+                cur_model = get_current_model()
+                if is_cloud_model(cur_model) or cur_model in ("auto", "auto:fast", "auto:smart", "fusion"):
+                    installed_local, _ = get_all_installed_local_models()
+                    installed_names = [m.get("name") for m in installed_local if m.get("name")]
+                    new_model = installed_names[0] if installed_names else "llama3.2:3b"
+                    set_current_model(new_model)
         elif s_id == "factcheck":
+            if val and not is_internet_enabled():
+                self._send_json({"success": False, "error": "Factcheck requires internet.", "enabled": False}, status=400)
+                return
             set_factcheck_enabled(val)
         for s in SKILLS_CATALOG:
             if s["id"] == s_id:
@@ -4363,8 +4444,8 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         elif is_virtual:
             # 2. Virtual model routing ('auto', 'auto:fast', 'auto:smart', 'fusion')
             used_cloud = False
-            # If user has configured commercial/free cloud API keys, try cloud virtual routing first
-            if has_keys:
+            # If user has configured commercial/free cloud API keys, try cloud virtual routing first (only if internet enabled!)
+            if is_internet_enabled() and has_keys:
                 ok_cloud, res_cloud = query_cloud_ai(
                     prompt=prompt,
                     model=model,
@@ -4377,7 +4458,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     append_log(f"[Hybrid Route] Cloud virtual route for '{model}' throttled/failed ({res_cloud}). Seamlessly engaging local model engine.")
 
             if not used_cloud and not reply_text:
-                # If no cloud keys or cloud failed/throttled: engage Local Model Intelligence Algorithm
+                # If no cloud keys or cloud failed/throttled or offline: engage Local Model Intelligence Algorithm
                 if installed_names:
                     if req_model_lower == "fusion" and len(installed_names) >= 2:
                         fast_m = resolve_local_virtual_model("auto:fast", installed_names)
@@ -4405,36 +4486,31 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                         else:
                             error_msg = res_l
                 else:
-                    # Neither cloud keys nor local models installed
-                    ok_cloud, res_cloud = query_cloud_ai(prompt=prompt, model=model, temperature=temp_val)
-                    if ok_cloud:
-                        reply_text = res_cloud
-                    else:
+                    if not is_internet_enabled():
                         error_msg = (
-                            f"{res_cloud}\n\nTip: You can add a free API key (Gemini, Groq, Cerebras) in the Cloud AI tab, "
-                            f"or install a fast local model like 'llama3.2:1b' from the Local Models tab."
+                            "Internet access is disabled (Offline Mode active) and no local models are installed.\n\n"
+                            "Tip: Please install a local model like 'llama3.2:1b' from the Local Models tab or enable Internet."
                         )
+                    else:
+                        # Neither cloud keys nor local models installed
+                        ok_cloud, res_cloud = query_cloud_ai(prompt=prompt, model=model, temperature=temp_val)
+                        if ok_cloud:
+                            reply_text = res_cloud
+                        else:
+                            error_msg = (
+                                f"{res_cloud}\n\nTip: You can add a free API key (Gemini, Groq, Cerebras) in the Cloud AI tab, "
+                                f"or install a fast local model like 'llama3.2:1b' from the Local Models tab."
+                            )
 
         elif is_cloud_model(model):
             # 3. Explicit Cloud AI model (e.g. gemini-3.1-flash-lite, gemini-4-hydrogen, etc.)
             used_cloud = False
-            ok_cloud, res_cloud = query_cloud_ai(
-                prompt=prompt,
-                model=model,
-                temperature=temp_val,
-            )
-            if ok_cloud:
-                reply_text = res_cloud
-                used_cloud = True
-            else:
-                append_log(f"[Cloud Route] Cloud model '{model}' failed ({res_cloud}). Checking local fallback.")
-
-            # If cloud was unavailable or throttled, seamlessly fall back to local installed models!
-            if not used_cloud and not reply_text:
+            if not is_internet_enabled():
+                append_log(f"[Cloud Route] Internet is disabled. Cloud model '{model}' blocked.")
                 if installed_names:
                     local_target = resolve_local_virtual_model(model, installed_names)
-                    actual_model_used = f"{local_target} (local fallback)"
-                    append_log(f"[Fallback Route] Seamlessly engaging local model '{local_target}' after cloud model failure.")
+                    actual_model_used = f"{local_target} (offline fallback)"
+                    append_log(f"[Offline Fallback] Seamlessly engaging local model '{local_target}' because internet is disabled.")
                     ok_l, res_l = _execute_local_ollama_query(
                         local_target, prompt,
                         temperature=temp_val,
@@ -4444,9 +4520,42 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     if ok_l:
                         reply_text = res_l
                     else:
-                        error_msg = f"{res_cloud}\n\nLocal model fallback also failed: {res_l}"
+                        error_msg = f"Internet is disabled and local fallback '{local_target}' failed: {res_l}"
                 else:
-                    error_msg = res_cloud
+                    error_msg = (
+                        f"Internet access is disabled (Offline Mode active). Cloud model '{model}' cannot be reached.\n\n"
+                        f"Tip: Install a local model from the Local Models tab or re-enable Internet."
+                    )
+            else:
+                ok_cloud, res_cloud = query_cloud_ai(
+                    prompt=prompt,
+                    model=model,
+                    temperature=temp_val,
+                )
+                if ok_cloud:
+                    reply_text = res_cloud
+                    used_cloud = True
+                else:
+                    append_log(f"[Cloud Route] Cloud model '{model}' failed ({res_cloud}). Checking local fallback.")
+
+                # If cloud was unavailable or throttled, seamlessly fall back to local installed models!
+                if not used_cloud and not reply_text:
+                    if installed_names:
+                        local_target = resolve_local_virtual_model(model, installed_names)
+                        actual_model_used = f"{local_target} (local fallback)"
+                        append_log(f"[Fallback Route] Seamlessly engaging local model '{local_target}' after cloud model failure.")
+                        ok_l, res_l = _execute_local_ollama_query(
+                            local_target, prompt,
+                            temperature=temp_val,
+                            images=images_for_ollama,
+                            num_ctx=ctx_size
+                        )
+                        if ok_l:
+                            reply_text = res_l
+                        else:
+                            error_msg = f"{res_cloud}\n\nLocal model fallback also failed: {res_l}"
+                    else:
+                        error_msg = res_cloud
 
         else:
             # 4. Other Local Ollama Model
@@ -4733,6 +4842,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         if not task_prompt:
             self._send_json({"error": "Task prompt required"}, status=400)
             return
+        if body.get("confirm") is False:
+            self._send_json({"error": "Explicit user confirmation required (confirm: true)"}, status=403)
+            return
 
         ensure_ollama_server()
 
@@ -4751,13 +4863,18 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 )
             else:
                 try:
-                    from research.antigravity_driver import run_antigravity_continuous_agent
+                    from research.antigravity_driver import run_antigravity_continuous_task
                 except ImportError:
-                    from antigravity_driver import run_antigravity_continuous_agent
-                run_antigravity_continuous_agent(task_prompt, max_turns=6, open_browser=True)
+                    from antigravity_driver import run_antigravity_continuous_task
+                ok, msg = run_antigravity_continuous_task(
+                    task_prompt,
+                    max_turns=6,
+                    open_browser=True,
+                    base_dir=p_dir,
+                )
+                append_log(f"[Antigravity] Completed (ok={ok}): {msg.splitlines()[0] if msg else ''}")
 
-        t = threading.Thread(target=_bg_run, daemon=True)
-        t.start()
+        _agent_executor.submit(_bg_run)
         self._send_json({
             "success": True,
             "message": f"Autonomous agent supervisor started with AI Team for: '{task_prompt}'.",
@@ -4766,6 +4883,17 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
 
 def run_bridge_server():
+    """Start the bridge HTTP server with optional --port override and readiness marker.
+
+    FINDING-01: Supports ephemeral port (port=0), reads PAI_BRIDGE_TOKEN from env,
+    prints PAI_BRIDGE_READY JSON marker on stdout for Tauri/launcher discovery.
+    """
+    global PORT
+    parser = argparse.ArgumentParser(description="PAI Desktop Bridge Server")
+    parser.add_argument("--port", type=int, default=PORT, help="Port to bind (0 for ephemeral)")
+    args, _unknown = parser.parse_known_args()
+    PORT = args.port
+
     try:
         server = ThreadingHTTPServer((HOST, PORT), PAIBridgeHandler)
     except Exception as e:
@@ -4774,8 +4902,11 @@ def run_bridge_server():
         log_path.write_text(f"Server init error: {e}\n", encoding="utf-8")
         return
 
+    actual_port = server.server_address[1]
+    # FINDING-01: Readiness marker for Tauri/desktop_launcher port discovery (no token in stdout)
+    print(f'PAI_BRIDGE_READY {{"port": {actual_port}}}', flush=True)
     print(f"================================================================================")
-    print(f"PAI DESKTOP BRIDGE SERVER ACTIVE ON http://{HOST}:{PORT}")
+    print(f"PAI DESKTOP BRIDGE SERVER ACTIVE ON http://{HOST}:{actual_port}")
     print(f"Strict loopback binding verified (Threat T21 Compliant).")
     print(f"================================================================================")
     try:

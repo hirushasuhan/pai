@@ -4116,10 +4116,16 @@ def run_interactive_shell(
                 continue
             elif action == "launch_desktop":
                 try:
+                    repo_root = str(Path(__file__).resolve().parent.parent)
+                    if (Path(repo_root) / "desktop").is_dir() and repo_root not in sys.path:
+                        sys.path.insert(0, repo_root)
                     try:
-                        from research.desktop_launcher import launch_desktop_app
+                        from desktop.desktop_launcher import launch_desktop_app
                     except ImportError:
-                        from desktop_launcher import launch_desktop_app
+                        try:
+                            from desktop_launcher import launch_desktop_app
+                        except ImportError:
+                            from research.desktop_launcher import launch_desktop_app
                     ok_launch, msg_launch = launch_desktop_app()
                     output_fn(colorize(f"🚀 {msg_launch}", GREEN if ok_launch else RED, color_enabled))
                 except Exception as exc:

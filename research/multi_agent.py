@@ -21,8 +21,190 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from pathlib import Path, PureWindowsPath
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+try:
+    from research import ast_guard, ingest, net_guard
+    from research.capabilities import (
+        Grant,
+        PermissionDenied,
+        Risk,
+        Tool,
+        ToolBroker,
+        ToolRequest,
+    )
+except ModuleNotFoundError:
+    import ast_guard
+    import ingest
+    import net_guard
+    from capabilities import (
+        Grant,
+        PermissionDenied,
+        Risk,
+        Tool,
+        ToolBroker,
+        ToolRequest,
+    )
+
+
+SYNC_TOOL_NAME = "sync_project_file"
+_MAX_DISCOVERY_BYTES = 1_048_576
+_UNTRUSTED_MARKER_RE = re.compile(r"---\s*UNTRUSTED DATA BEGIN(?:\s*\[[^\]]+\])?\s*---")
+
+
+def _contains_untrusted_marker(text: Optional[str]) -> bool:
+    if not text:
+        return False
+    return ingest.UNTRUSTED_BEGIN_MARKER in text or bool(_UNTRUSTED_MARKER_RE.search(text))
+
+
+def make_project_sync_broker(
+    project_dir: Path,
+    confirm: Optional[Callable[[ToolRequest], bool]] = None,
+    max_calls: Optional[int] = None,
+    expires: Optional[float] = None,
+) -> ToolBroker:
+    """Constructs a scoped ToolBroker granting Risk.WRITE syncs inside `project_dir`."""
+    root_real = os.path.realpath(os.path.abspath(str(project_dir)))
+    tool = Tool(
+        SYNC_TOOL_NAME,
+        Risk.WRITE,
+        lambda dest_path, fname="", byte_len=0: True,
+        path_args=("dest_path",),
+    )
+    grant = Grant(
+        SYNC_TOOL_NAME,
+        roots=(root_real,),
+        expires=expires,
+        max_calls=max_calls,
+    )
+    return ToolBroker(tools=[tool], grants=[grant], confirm=confirm)
+
+
+def _atomic_write_text(target_path: Path, text: str) -> None:
+    """Atomically writes UTF-8 text to `target_path`, rejecting symlink/reparse targets."""
+    target_str = str(target_path)
+    parent_str = str(target_path.parent)
+    if ingest._is_symlink_or_reparse(parent_str):
+        raise ValueError(f"Refusing to write inside symlink/reparse directory: {parent_str}")
+    if ingest._is_symlink_or_reparse(target_str):
+        raise ValueError(f"Refusing to overwrite symlink/reparse target: {target_str}")
+    if os.path.lexists(target_str) and target_path.is_dir():
+        raise ValueError(f"Refusing to overwrite directory: {target_str}")
+
+    tmp_name = f".{target_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    tmp_path = target_path.parent / tmp_name
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = None
+    try:
+        fd = os.open(str(tmp_path), flags, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            fd = None
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.path.lexists(target_str) and ingest._is_symlink_or_reparse(target_str):
+            raise ValueError(f"Refusing to replace symlink/reparse target: {target_str}")
+        os.replace(str(tmp_path), target_str)
+    except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            if os.path.lexists(str(tmp_path)):
+                os.unlink(str(tmp_path))
+        except OSError:
+            pass
+        raise
+
+
+def _validate_workspace_dir(project_dir: Optional[Path]) -> Tuple[bool, Optional[Path], str]:
+    """Validates that `project_dir` exists, is a directory, and is not a symlink/reparse point."""
+    if project_dir is None:
+        return False, None, "active_project_dir is None"
+    raw_str = str(project_dir)
+    if not raw_str or not os.path.lexists(raw_str):
+        return False, None, "active_project_dir does not exist"
+    if ingest._is_symlink_or_reparse(raw_str):
+        return False, None, "active_project_dir cannot be a symlink or reparse point"
+    if not Path(raw_str).is_dir():
+        return False, None, "active_project_dir is not a directory"
+    base_resolved = Path(os.path.realpath(os.path.abspath(raw_str)))
+    if ingest.has_ads_colon(str(base_resolved)):
+        return False, None, "active_project_dir contains an ADS colon"
+    if not base_resolved.is_dir():
+        return False, None, "resolved active_project_dir is not a directory"
+    return True, base_resolved, ""
+
+
+def _validate_relative_sync_path(fname: str) -> Tuple[bool, List[str], str]:
+    """Validates a relative filename for project sync before any filesystem resolution."""
+    if not isinstance(fname, str) or not fname or not fname.strip():
+        return False, [], "empty or non-string filename"
+    if fname != fname.strip():
+        return False, [], "filename contains leading or trailing whitespace"
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in fname):
+        return False, [], "filename contains control or NUL characters"
+    if ingest._is_invalid_filename(fname):
+        return False, [], "filename contains invalid UTF-8 characters"
+    if ingest.has_ads_colon(fname):
+        return False, [], "filename contains NTFS ADS colon"
+    if fname.startswith(("/", "\\")):
+        return False, [], "absolute or root-anchored path is not allowed"
+    if len(fname) >= 2 and fname[1] == ":":
+        return False, [], "Windows drive-prefixed path is not allowed"
+    if Path(fname).is_absolute() or PureWindowsPath(fname).is_absolute():
+        return False, [], "absolute path is not allowed"
+
+    rel_parts = fname.replace("\\", "/").split("/")
+    if not rel_parts or any(part in ("", ".", "..") for part in rel_parts):
+        return False, [], "path traversal or empty path segment is not allowed"
+    for part in rel_parts:
+        if ingest.is_reserved_device_name(part):
+            return False, [], f"reserved device name '{part}' is not allowed"
+    for parent_part in rel_parts[:-1]:
+        if ingest.is_junk_dir(parent_part) or parent_part.lower() in ingest.DEFAULT_SENSITIVE_DIRS:
+            return False, [], f"restricted directory segment '{parent_part}' is not allowed"
+    if ingest.is_secret_file(fname):
+        return False, [], "secret/credential filename is not allowed"
+    if fname.lower().endswith((".bak", ".candidate")):
+        return False, [], "direct write to .bak or .candidate file is not allowed"
+    return True, rel_parts, ""
+
+
+def _is_safe_readable_workspace_file(fpath: Path, base_resolved: Path) -> bool:
+    """Checks canonical containment, symlink/reparse, device/ADS, and secret-file rules."""
+    f_str = str(fpath)
+    if not os.path.lexists(f_str) or ingest._is_symlink_or_reparse(f_str):
+        return False
+    try:
+        rel_lexical = fpath.relative_to(base_resolved)
+    except ValueError:
+        try:
+            rel_lexical = Path(os.path.abspath(f_str)).relative_to(base_resolved)
+        except ValueError:
+            return False
+    cur = base_resolved
+    for seg in rel_lexical.parts[:-1]:
+        cur = cur / seg
+        if ingest._is_symlink_or_reparse(str(cur)):
+            return False
+    if not fpath.is_file():
+        return False
+    resolved = Path(os.path.realpath(os.path.abspath(f_str)))
+    if not resolved.is_relative_to(base_resolved) or resolved == base_resolved:
+        return False
+    rel_posix = resolved.relative_to(base_resolved).as_posix()
+    if ingest.has_ads_colon(f_str) or ingest.has_ads_colon(rel_posix):
+        return False
+    if ingest.is_reserved_device_name(fpath.name):
+        return False
+    if ingest.is_secret_file(rel_posix) or ingest.is_secret_file(fpath.name):
+        return False
+    return True
 
 
 @dataclass
@@ -40,9 +222,17 @@ class AgentMessage:
 def discover_available_models(base_url: str = "http://127.0.0.1:11434") -> List[str]:
     """Queries loopback Ollama server for currently installed models."""
     try:
-        req = urllib.request.Request(f"{base_url}/api/tags")
+        net_guard.validate_url(base_url, allow_private=True)
+        target = base_url.rstrip("/") + "/api/tags"
+        req = urllib.request.Request(target)
         with urllib.request.urlopen(req, timeout=2.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            try:
+                raw = resp.read(_MAX_DISCOVERY_BYTES + 1)
+            except TypeError:
+                raw = resp.read()
+            if len(raw) > _MAX_DISCOVERY_BYTES:
+                return []
+            data = json.loads(raw.decode("utf-8"))
             return [str(m.get("name")) for m in data.get("models", []) if m.get("name")]
     except Exception:
         return []
@@ -377,11 +567,17 @@ class MultiAgentTeam:
         executor: Optional[Callable[[List[str]], int]] = None,
         output_fn: Optional[Callable[[str], None]] = None,
         color_enabled: bool = False,
+        broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
+        tainted: bool = False,
     ):
         self.registry = TeamRoleModelRegistry(model_override=model_name)
         self.executor = executor
         self.output_fn = self._make_safe_output(output_fn)
         self.color_enabled = color_enabled
+        self.broker = broker
+        self.confirm = confirm
+        self.tainted = bool(tainted)
         self.conversation_log: List[AgentMessage] = []
         self._msg_counter = 0
         self._service_offline = False
@@ -551,31 +747,43 @@ class MultiAgentTeam:
         max_chars_per_file: int = 12000,
         max_total_chars: int = 25000,
     ) -> str:
-        """Extracts existing text source files from the active project to guide PM and developers."""
-        if not project_dir or not project_dir.is_dir():
+        """Extracts existing text source files from the active project with containment and secret filtering."""
+        ok_dir, base_resolved, _ = _validate_workspace_dir(project_dir)
+        if not ok_dir or base_resolved is None:
             return ""
         snippets = []
         total_len = 0
         priority_files = ["script.js", "index.html", "style.css", "main.py", "app.py", "README.md"]
-        ordered_files = []
+        ordered_files: List[Path] = []
         for name in priority_files:
-            cand = project_dir / name
-            if cand.is_file():
+            cand = base_resolved / name
+            if _is_safe_readable_workspace_file(cand, base_resolved):
                 ordered_files.append(cand)
         try:
-            for cand in sorted(project_dir.iterdir()):
-                if cand.is_file() and cand not in ordered_files and not cand.name.endswith(".bak") and not cand.name.startswith("."):
+            for cand in sorted(base_resolved.iterdir()):
+                if (
+                    cand not in ordered_files
+                    and not cand.name.endswith((".bak", ".candidate"))
+                    and not cand.name.startswith(".")
+                    and _is_safe_readable_workspace_file(cand, base_resolved)
+                ):
                     ordered_files.append(cand)
         except Exception:
             pass
 
-        skip_exts = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".bin", ".zip", ".tar", ".gz", ".mp3", ".wav"}
+        skip_exts = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".bin", ".zip", ".tar", ".gz", ".mp3", ".wav", ".bak", ".candidate"}
+        run_nonce = ingest.generate_envelope_nonce()
         for f in ordered_files:
             if f.suffix.lower() in skip_exts:
                 continue
             try:
-                content = f.read_text(encoding="utf-8", errors="replace").strip()
+                raw_bytes = f.read_bytes()
+                if b"\x00" in raw_bytes:
+                    continue
+                content = ingest.sanitize_text_content(raw_bytes).strip()
                 if not content:
+                    continue
+                if ingest.scan_secret_content(content, file_path=f.name) is not None:
                     continue
                 if len(content) > max_chars_per_file:
                     content = content[:max_chars_per_file] + "\n... [truncated for context budget] ..."
@@ -584,16 +792,26 @@ class MultiAgentTeam:
                     lang_tag = "javascript"
                 elif lang_tag == "py":
                     lang_tag = "python"
-                snippet = f"[File: {f.name} ({f.stat().st_size:,} bytes)]\n```{lang_tag}\n{content}\n```"
-                if total_len + len(snippet) > max_total_chars:
+                raw_snippet = f"[File: {f.name} ({len(raw_bytes):,} bytes)]\n```{lang_tag}\n{content}\n```"
+                wrapped = ingest.wrap_untrusted_envelope(
+                    raw_snippet,
+                    header=f"Project File: {f.name}",
+                    nonce=run_nonce,
+                )
+                if total_len + len(wrapped) > max_total_chars:
                     break
-                snippets.append(snippet)
-                total_len += len(snippet)
+                snippets.append(wrapped)
+                total_len += len(wrapped)
             except Exception:
                 pass
         if not snippets:
             return ""
         return "\n--- Active Project Codebase ---\n" + "\n\n".join(snippets)
+
+    def _reject_sync(self, fname: str, reason: str) -> Tuple[bool, str]:
+        err = f"  ❌ [Rejected write for '{fname}': {reason}]"
+        self.output_fn(err)
+        return False, err
 
     def _safe_sync_file(
         self,
@@ -601,31 +819,94 @@ class MultiAgentTeam:
         fname: str,
         body: str,
         verdict_pass: bool = True,
+        broker: Optional[ToolBroker] = None,
+        tainted: Optional[bool] = None,
     ) -> Tuple[bool, str]:
-        """Safely writes or updates a file in project_dir with backup and size-guard protection."""
-        dest = active_project_dir / fname
+        """Safely writes or updates a file in project_dir with containment, AST, secret, and ToolBroker guards."""
+        ok_dir, base_resolved, dir_err = _validate_workspace_dir(active_project_dir)
+        if not ok_dir or base_resolved is None:
+            return self._reject_sync(str(fname), dir_err)
+
+        ok_path, rel_parts, path_err = _validate_relative_sync_path(fname)
+        if not ok_path:
+            return self._reject_sync(str(fname), path_err)
+
+        candidate_dest = base_resolved.joinpath(*rel_parts)
+        bak_path = candidate_dest.with_suffix(candidate_dest.suffix + ".bak")
+        cand_path = candidate_dest.with_suffix(candidate_dest.suffix + ".candidate")
+
+        cur = base_resolved
+        for seg in rel_parts[:-1]:
+            cur = cur / seg
+            cur_str = str(cur)
+            if os.path.lexists(cur_str):
+                if ingest._is_symlink_or_reparse(cur_str):
+                    return self._reject_sync(fname, f"parent '{seg}' is a symlink or reparse point")
+                if not cur.is_dir():
+                    return self._reject_sync(fname, f"parent '{seg}' is not a directory")
+
+        for target_p in (candidate_dest, bak_path, cand_path):
+            p_str = str(target_p)
+            raw_target_str = str(active_project_dir.joinpath(*rel_parts[:-1], target_p.name)) if active_project_dir else p_str
+            if ingest._is_symlink_or_reparse(p_str) or ingest._is_symlink_or_reparse(raw_target_str):
+                return self._reject_sync(fname, f"target '{target_p.name}' is a symlink or reparse point")
+            p_real = Path(os.path.realpath(os.path.abspath(p_str)))
+            if not p_real.is_relative_to(base_resolved) or p_real == base_resolved:
+                return self._reject_sync(fname, "target path resolves outside active_project_dir")
+            if os.path.lexists(p_str) and target_p.is_dir():
+                return self._reject_sync(fname, f"target '{target_p.name}' is a directory")
+
+        dest_resolved = Path(os.path.realpath(os.path.abspath(str(candidate_dest))))
+
+        if not isinstance(body, str) or "\x00" in body:
+            return self._reject_sync(fname, "content must be a NUL-free string")
+
+        if candidate_dest.suffix.lower() == ".py":
+            rep = ast_guard.check_source(body)
+            if not rep.ok:
+                details = "; ".join(str(v) for v in rep.violations[:3])
+                return self._reject_sync(fname, f"ast_guard rejected Python source ({details})")
+
+        secret_hit = ingest.scan_secret_content(body, file_path=fname)
+        if secret_hit is not None:
+            return self._reject_sync(fname, f"embedded secret detected ({secret_hit})")
+
+        effective_broker = broker or self.broker or make_project_sync_broker(base_resolved, confirm=self.confirm)
+        effective_tainted = self.tainted if tainted is None else bool(tainted)
         try:
+            effective_broker.invoke(
+                SYNC_TOOL_NAME,
+                {"dest_path": str(dest_resolved), "fname": fname, "byte_len": len(body)},
+                tainted=effective_tainted,
+            )
+        except PermissionDenied as exc:
+            return self._reject_sync(fname, f"denied by ToolBroker ({exc})")
+
+        try:
+            candidate_dest.parent.mkdir(parents=True, exist_ok=True)
+            parent_str = str(candidate_dest.parent)
+            if ingest._is_symlink_or_reparse(parent_str) or not Path(os.path.realpath(parent_str)).is_relative_to(base_resolved):
+                return self._reject_sync(fname, "destination parent failed post-mkdir containment check")
+
             # Safeguard: Never overwrite a substantial file (>3KB) with a tiny stub (<800B) if audit failed or stub is degenerate
-            is_substantial = dest.is_file() and dest.stat().st_size > 3000
+            is_substantial = candidate_dest.is_file() and candidate_dest.stat().st_size > 3000
             is_tiny_stub = len(body) < 800
-            if is_substantial and is_tiny_stub and (not verdict_pass or dest.stat().st_size > len(body) * 5):
-                cand_f = dest.with_suffix(dest.suffix + ".candidate")
-                cand_f.write_text(body, encoding="utf-8")
+            if is_substantial and is_tiny_stub and (not verdict_pass or candidate_dest.stat().st_size > len(body) * 5):
+                _atomic_write_text(cand_path, body)
                 msg = (
-                    f"  ⚠️ [Preserved {dest.name} ({dest.stat().st_size:,} bytes) against tiny stub overwrite "
-                    f"({len(body)} bytes). Saved candidate to {cand_f.name}]"
+                    f"  ⚠️ [Preserved {candidate_dest.name} ({candidate_dest.stat().st_size:,} bytes) against tiny stub overwrite "
+                    f"({len(body)} bytes). Saved candidate to {cand_path.name}]"
                 )
                 self.output_fn(msg)
                 return False, msg
 
-            if dest.is_file():
-                bak = dest.with_suffix(dest.suffix + ".bak")
-                bak.write_text(dest.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
-            dest.write_text(body, encoding="utf-8")
-            self.output_fn(f"  ✅ [Synchronized {dest.name}] ({len(body):,} bytes)")
-            return True, f"Synchronized {dest.name}"
+            if candidate_dest.is_file():
+                _atomic_write_text(bak_path, candidate_dest.read_text(encoding="utf-8", errors="replace"))
+            _atomic_write_text(candidate_dest, body)
+            self.output_fn(f"  ✅ [Synchronized {candidate_dest.name}] ({len(body):,} bytes)")
+            return True, f"Synchronized {candidate_dest.name}"
         except Exception as e:
-            err = f"  ❌ [Failed to write {dest.name}: {e}]"
+            err = f"  ❌ [Failed to write {candidate_dest.name}: {e}]"
             self.output_fn(err)
             return False, err
 
@@ -659,24 +940,38 @@ class MultiAgentTeam:
         scanned_files: List[str] = []
         relevant_code_snippets: List[str] = []
 
-        if project_dir and project_dir.is_dir():
+        ok_dir, base_resolved, _ = _validate_workspace_dir(project_dir)
+        if ok_dir and base_resolved is not None:
             keywords = [k.strip() for k in re.split(r"\s+", query) if len(k.strip()) > 2]
             skip_exts = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".bin", ".zip", ".tar", ".gz", ".mp3", ".wav", ".bak", ".candidate"}
 
-            for root, dirs, files in os.walk(project_dir):
-                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__", "target", "dist", "build")]
+            for root, dirs, files in os.walk(base_resolved, followlinks=False):
+                dirs[:] = [
+                    d for d in dirs
+                    if not d.startswith(".")
+                    and not ingest.is_junk_dir(d)
+                    and d.lower() not in ingest.DEFAULT_SENSITIVE_DIRS
+                    and not ingest._is_symlink_or_reparse(os.path.join(root, d))
+                ]
                 for fname in sorted(files):
                     if any(fname.endswith(ext) for ext in skip_exts) or fname.startswith("."):
                         continue
                     fpath = Path(root) / fname
+                    if not _is_safe_readable_workspace_file(fpath, base_resolved):
+                        continue
                     try:
-                        rel_path = fpath.relative_to(project_dir).as_posix()
+                        rel_path = fpath.relative_to(base_resolved).as_posix()
                     except ValueError:
                         rel_path = fpath.name
-                    scanned_files.append(rel_path)
                     try:
-                        lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
-                        for idx, line in enumerate(lines, 1):
+                        raw_bytes = fpath.read_bytes()
+                        if b"\x00" in raw_bytes:
+                            continue
+                        clean_text = ingest.sanitize_text_content(raw_bytes)
+                        if ingest.scan_secret_content(clean_text, file_path=rel_path) is not None:
+                            continue
+                        scanned_files.append(rel_path)
+                        for idx, line in enumerate(clean_text.splitlines(), 1):
                             line_str = line.strip()
                             if not line_str:
                                 continue
@@ -701,12 +996,13 @@ class MultiAgentTeam:
         )
 
         citation_summary = "\n".join(relevant_code_snippets[:max_matches]) if relevant_code_snippets else "No direct string matches found in scanned files."
+        wrapped_citations = ingest.wrap_untrusted_envelope(citation_summary, header="Workspace Code Citations")
         scanned_summary = ", ".join(scanned_files[:20]) if scanned_files else "No local files"
 
         exp_prompt = (
             f"Query: {query}\n"
             f"Scanned Files ({len(scanned_files)}): {scanned_summary}\n\n"
-            f"Matching Code Citations:\n{citation_summary}\n"
+            f"Matching Code Citations:\n{wrapped_citations}\n"
         )
 
         exp_out = self._call_agent_persona(
@@ -806,6 +1102,7 @@ class MultiAgentTeam:
         bug_description: str,
         project_dir: Optional[Path] = None,
         test_cmd: Optional[str] = None,
+        tainted: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Cursor Cloud Agents 'subagent-debug' 5-stage scientific runtime debugging loop:
@@ -822,7 +1119,13 @@ class MultiAgentTeam:
             "fix": "",
             "clean_up_performed": True,
             "code_updates": {},
+            "sync_errors": {},
         }
+        effective_tainted = (
+            self.tainted or _contains_untrusted_marker(bug_description)
+            if tainted is None
+            else bool(tainted)
+        )
         self.log_and_display_message(
             sender="project_manager",
             recipient="debugger",
@@ -882,17 +1185,26 @@ class MultiAgentTeam:
         results["fix"] = cleaned_fix
 
         # If project_dir is provided and code blocks exist in fix, safely synchronize
-        if project_dir and project_dir.is_dir() and cleaned_fix:
+        ok_proj, _, _ = _validate_workspace_dir(project_dir)
+        if ok_proj and project_dir is not None and cleaned_fix:
             pattern = re.compile(
-                r"(?:###\s*(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)|####\s*\d+\.\s*([a-zA-Z0-9_\-\.]+))?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
+                r"(?:###\s*(?:File:?\s*)?`?([a-zA-Z0-9_\-\./\\:]+)`?|####\s*\d+\.\s*`?([a-zA-Z0-9_\-\./\\:]+)`?)?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
             )
             for m in pattern.finditer(cleaned_fix):
                 fname = m.group(1) or m.group(2)
                 body = m.group(4).strip()
                 if fname and len(body) > 30:
-                    ok_sync, _ = self._safe_sync_file(project_dir, fname, body, verdict_pass=False)
+                    ok_sync, sync_msg = self._safe_sync_file(
+                        project_dir,
+                        fname,
+                        body,
+                        verdict_pass=False,
+                        tainted=effective_tainted,
+                    )
                     if ok_sync:
-                        results["code_updates"][fname] = len(body)
+                        results["code_updates"][fname] = body
+                    else:
+                        results["sync_errors"][fname] = sync_msg
 
         if not self._service_offline:
             self.log_and_display_message(
@@ -933,6 +1245,7 @@ class MultiAgentTeam:
             "graphql_context": "",
             "specialist_assets": "",
             "code_updates": {},
+            "sync_errors": {},
             "qa_verdict": "",
             "explorer_findings": "",
             "citations": [],
@@ -941,6 +1254,8 @@ class MultiAgentTeam:
         }
         self._service_offline = False
         self._last_error = ""
+        graphql_tainted = False
+        effective_tainted = self.tainted or _contains_untrusted_marker(task_prompt)
 
         if self.executor is None:
             try:
@@ -968,9 +1283,15 @@ class MultiAgentTeam:
         codebase_ctx = self._collect_codebase_context(active_project_dir) if active_project_dir else ""
 
         # ------------------------------------------------------------- 0. Explorer (Codebase Scout)
+        ok_active_dir, base_resolved, _ = _validate_workspace_dir(active_project_dir)
         has_existing_files = (
-            any(f.is_file() for f in active_project_dir.iterdir() if not f.name.startswith("."))
-            if active_project_dir and active_project_dir.is_dir()
+            any(
+                not f.name.startswith(".")
+                and not f.name.endswith((".bak", ".candidate"))
+                and _is_safe_readable_workspace_file(f, base_resolved)
+                for f in base_resolved.iterdir()
+            )
+            if ok_active_dir and base_resolved is not None
             else False
         )
         explorer_findings = ""
@@ -1022,7 +1343,15 @@ class MultiAgentTeam:
             ep = graphql_endpoint or os.environ.get("PAI_GRAPHQL_ENDPOINT", "http://127.0.0.1:4000/graphql")
             client = GraphQLClient(endpoint=ep)
             sparse_sdl = client.get_sparse_schema_summary()
-            results["graphql_context"] = sparse_sdl
+            if sparse_sdl and not sparse_sdl.startswith("# Schema introspection failed:"):
+                graphql_tainted = True
+                effective_tainted = True
+                results["graphql_context"] = ingest.wrap_untrusted_envelope(
+                    sparse_sdl,
+                    header="GraphQL Schema Context",
+                )
+            else:
+                results["graphql_context"] = sparse_sdl
 
         # ------------------------------------------------------------- 3. Specialist Developer (Assets & Shaders)
         self.log_and_display_message(
@@ -1088,9 +1417,15 @@ class MultiAgentTeam:
             coder_context += f"Critical Files: {', '.join(results['critical_files'])}\n\n"
         if results.get("citations"):
             coder_context += f"Code Citations:\n" + "\n".join(results["citations"][:10]) + "\n\n"
-        if active_project_dir and active_project_dir.is_dir():
-            existing = [f.name for f in active_project_dir.iterdir() if f.is_file() and not f.name.endswith(".bak")]
-            coder_context += f"Active Project Dir: {active_project_dir}\nExisting Files: {', '.join(existing)}\n"
+        if ok_active_dir and base_resolved is not None:
+            existing = [
+                f.name
+                for f in sorted(base_resolved.iterdir())
+                if not f.name.endswith((".bak", ".candidate"))
+                and not f.name.startswith(".")
+                and _is_safe_readable_workspace_file(f, base_resolved)
+            ]
+            coder_context += f"Active Project Dir: {base_resolved}\nExisting Files: {', '.join(existing)}\n"
             if codebase_ctx:
                 coder_context += f"\n{codebase_ctx}\n"
 
@@ -1169,15 +1504,18 @@ class MultiAgentTeam:
                 debug_res = self.run_debug_workflow(
                     bug_description=f"QA Audit flagged: {qa_out[:300]}",
                     project_dir=active_project_dir,
+                    tainted=effective_tainted,
                 )
                 results["debug_report"] = debug_res
                 if debug_res.get("code_updates"):
                     results["code_updates"].update(debug_res["code_updates"])
+                if debug_res.get("sync_errors"):
+                    results["sync_errors"].update(debug_res["sync_errors"])
 
         # ------------------------------------------------------------- 7. Project Manager Disk Sync
-        if active_project_dir and active_project_dir.is_dir() and code_out:
+        if ok_active_dir and active_project_dir is not None and code_out:
             pattern = re.compile(
-                r"(?:###\s*(?:File:?\s*)?([a-zA-Z0-9_\-\.]+)|####\s*\d+\.\s*([a-zA-Z0-9_\-\.]+))?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
+                r"(?:###\s*(?:File:?\s*)?`?([a-zA-Z0-9_\-\./\\:]+)`?|####\s*\d+\.\s*`?([a-zA-Z0-9_\-\./\\:]+)`?)?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
             )
             matches = list(pattern.finditer(code_out))
             for m in matches:
@@ -1195,9 +1533,17 @@ class MultiAgentTeam:
                         fname = "main.py"
 
                 if fname and len(body) > 30:
-                    ok_sync, _ = self._safe_sync_file(active_project_dir, fname, body, verdict_pass=verdict_pass)
+                    ok_sync, sync_msg = self._safe_sync_file(
+                        active_project_dir,
+                        fname,
+                        body,
+                        verdict_pass=verdict_pass,
+                        tainted=effective_tainted,
+                    )
                     if ok_sync:
-                        results["code_updates"][fname] = len(body)
+                        results["code_updates"][fname] = body
+                    else:
+                        results["sync_errors"][fname] = sync_msg
 
         self.log_and_display_message(
             sender="project_manager",

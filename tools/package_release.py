@@ -91,28 +91,32 @@ def package_release(version: str, channel: str, output_dir: Path) -> None:
         core_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(core_bin, core_dir / "pai-core.exe")
 
-    # 3. Copy UI directory
+    # 3. Copy canonical UI directory
     ui_src = REPO_ROOT / "desktop" / "ui"
-    if ui_src.is_dir():
-        shutil.copytree(ui_src, staging_dir / "ui", dirs_exist_ok=True)
-    else:
-        # Fallback to desktop root html/css/js
-        (staging_dir / "ui").mkdir(parents=True, exist_ok=True)
-        for f in ["index.html", "app.js", "style.css", "manifest.json"]:
-            src_f = REPO_ROOT / "desktop" / f
-            if src_f.is_file():
-                shutil.copy2(src_f, staging_dir / "ui" / f)
+    if not ui_src.is_dir():
+        raise FileNotFoundError(f"Canonical UI directory not found: {ui_src}")
+    shutil.copytree(ui_src, staging_dir / "ui", dirs_exist_ok=True)
+    ui_version = ui_src / "VERSION"
+    if ui_version.is_file():
+        shutil.copy2(ui_version, staging_dir / "VERSION")
 
-    # 4. Copy Assets directory
-    assets_src = REPO_ROOT / "desktop" / "assets"
+    # 4. Copy Assets directory (prefer ui/assets, fallback to desktop/assets)
+    assets_src = ui_src / "assets"
+    if not assets_src.is_dir():
+        assets_src = REPO_ROOT / "desktop" / "assets"
     if assets_src.is_dir():
         shutil.copytree(assets_src, staging_dir / "assets", dirs_exist_ok=True)
 
     # 5. Copy bridge_server.py & root files
-    for fname in ["bridge_server.py", "manifest.json", "launch_desktop.bat", "desktop_launcher.py"]:
+    for fname in ["bridge_server.py", "apply_pending_update.py", "launch_desktop.bat", "desktop_launcher.py"]:
         src_f = REPO_ROOT / "desktop" / fname
         if src_f.is_file():
             shutil.copy2(src_f, staging_dir / fname)
+
+    picker_exe = REPO_ROOT / "desktop" / "bin" / "pai_folder_picker.exe"
+    if picker_exe.is_file():
+        (staging_dir / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(picker_exe, staging_dir / "bin" / "pai_folder_picker.exe")
 
     # 6. Create Zip Archives
     payload_zip = output_dir / f"pai-payload-{version}-win-x64.zip"

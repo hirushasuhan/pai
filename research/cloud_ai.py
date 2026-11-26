@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import copy
+import ipaddress
 import json
 import os
 import re
@@ -34,14 +36,155 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
+    from credential_store import (
+        CredentialStoreError,
+        harden_secret_file,
+        is_dpapi_protected,
+        protect_secret,
+        unprotect_secret,
+        write_secret_file,
+    )
+    from net_guard import UrlRejected, validate_url
     from quota_engine import QuotaLedger
 except ImportError:
+    from research.credential_store import (
+        CredentialStoreError,
+        harden_secret_file,
+        is_dpapi_protected,
+        protect_secret,
+        unprotect_secret,
+        write_secret_file,
+    )
+    from research.net_guard import UrlRejected, validate_url
     from research.quota_engine import QuotaLedger
 
+try:
+    from internet_service import is_internet_enabled
+except ImportError:
+    try:
+        from research.internet_service import is_internet_enabled
+    except ImportError:
+        def is_internet_enabled() -> bool:
+            flag = os.environ.get("PAI_INTERNET_ENABLED", "1").strip().lower()
+            return flag not in ("0", "false", "no", "off")
+
 USER_AGENT = "PersonalAgenticAI/1.2 (Universal Cloud LLM Pool; Windows x64)"
+_SENSITIVE_REDIRECT_HEADERS = {"authorization", "cookie", "x-goog-api-key", "x-api-key"}
+_IPV4_THIS_HOST_NET = ipaddress.ip_network("0.0.0.0/8")
+
+
+class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
+    """Validates redirect targets with net_guard and strips credentials cross-origin."""
+
+    max_redirections = 3
+
+    def __init__(self, allow_private: bool = False) -> None:
+        self.allow_private = bool(allow_private)
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_url(newurl, allow_private=self.allow_private)
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None:
+            orig_origin = (urlsplit(req.full_url).scheme.lower(), urlsplit(req.full_url).netloc.lower())
+            next_origin = (urlsplit(newurl).scheme.lower(), urlsplit(newurl).netloc.lower())
+            if orig_origin != next_origin:
+                for hdr_name, _ in list(new_req.header_items()):
+                    if hdr_name.lower() in _SENSITIVE_REDIRECT_HEADERS:
+                        new_req.remove_header(hdr_name)
+        return new_req
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Disallows HTTP redirects completely."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise UrlRejected("HTTP redirects are not permitted on this endpoint")
+
+
+def _read_bounded(resp: Any, max_bytes: int) -> Tuple[bytes, bool]:
+    """Read up to max_bytes from resp while supporting zero-arg test mocks."""
+    try:
+        raw = resp.read(max_bytes + 1)
+    except TypeError:
+        raw = resp.read()
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", errors="replace")
+    elif not isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw)
+    truncated = len(raw) > max_bytes
+    return bytes(raw[:max_bytes]), truncated
+
+
+def _guarded_urlopen(
+    req_or_url: Any,
+    timeout: float = 45.0,
+    allow_private: bool = False,
+    allow_redirects: bool = True,
+    redirect_allow_private: Optional[bool] = None,
+) -> Any:
+    """Validate URL via net_guard before opening, preserving mocked urllib.request.urlopen."""
+    target_url = req_or_url.full_url if isinstance(req_or_url, urllib.request.Request) else str(req_or_url)
+    validate_url(target_url, allow_private=allow_private)
+    if getattr(urllib.request.urlopen, "__module__", None) != "urllib.request":
+        return urllib.request.urlopen(req_or_url, timeout=timeout)
+    handler = (
+        _GuardedRedirect(allow_private=allow_private if redirect_allow_private is None else redirect_allow_private)
+        if allow_redirects
+        else _NoRedirect()
+    )
+    opener = urllib.request.build_opener(handler)
+    return opener.open(req_or_url, timeout=timeout)
+
+
+def _is_gemini_endpoint(endpoint: str) -> bool:
+    return (urlsplit(endpoint or "").hostname or "").lower() == "generativelanguage.googleapis.com"
+
+
+def _is_openai_image_endpoint(endpoint: str) -> bool:
+    parsed = urlsplit(endpoint or "")
+    host = (parsed.hostname or "").lower()
+    return (
+        host == "openai.com"
+        or host.endswith(".openai.com")
+        or parsed.path.rstrip("/").endswith("/images/generations")
+    )
+
+
+def _is_unconditionally_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        return _is_unconditionally_blocked_ip(ip.ipv4_mapped)
+    if ip.is_link_local or ip.is_unspecified:
+        return True
+    if ip.version == 4 and ip in _IPV4_THIS_HOST_NET:
+        return True
+    return False
+
+
+def _validate_cloud_endpoint_url(url: str, allow_private: bool = False) -> str:
+    """Validate a cloud or vetted local Ollama endpoint URL against SSRF rules."""
+    clean = (url or "").strip()
+    if not clean:
+        raise UrlRejected("empty URL")
+
+    parts, raw_ips = validate_url(clean, allow_private=True)
+    resolved_ips = [ipaddress.ip_address(ip_str) for ip_str in raw_ips]
+    for ip in resolved_ips:
+        if _is_unconditionally_blocked_ip(ip):
+            raise UrlRejected(f"address {ip} is blocked by outbound policy")
+
+    port = parts.port if parts.port is not None else (443 if parts.scheme.lower() == "https" else 80)
+    is_local_ollama = all(ip.is_loopback for ip in resolved_ips) and port == 11434
+
+    if not is_local_ollama and not allow_private:
+        validate_url(clean, allow_private=False)
+        if parts.scheme.lower() != "https":
+            raise UrlRejected("remote cloud endpoints must use https://")
+
+    return clean
 
 CLOUD_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "gemini": {
@@ -230,8 +373,21 @@ def get_cloud_credentials_path() -> Path:
     return base / "cloud_ai.json"
 
 
+def _unprotect_stored_secret(raw_val: str, context: str) -> Tuple[Optional[str], bool]:
+    """Decrypt a stored credential; returns (plaintext_or_None, needs_migration)."""
+    s = str(raw_val or "").strip()
+    if not s:
+        return "", False
+    needs_migration = sys.platform == "win32" and not is_dpapi_protected(s)
+    try:
+        return unprotect_secret(s), needs_migration
+    except CredentialStoreError as exc:
+        print(f"[cloud_ai] Warning: unable to decrypt stored credential ({context}): {exc}", file=sys.stderr)
+        return None, False
+
+
 def load_cloud_config() -> Dict[str, Any]:
-    """Load cloud AI provider configuration, multi-key pools, and settings."""
+    """Load cloud AI provider configuration, decrypting keys and migrating legacy plaintext."""
     p = get_cloud_credentials_path()
     default_cfg: Dict[str, Any] = {
         "active_provider": "",
@@ -243,6 +399,7 @@ def load_cloud_config() -> Dict[str, Any]:
     }
     if not p.is_file():
         return default_cfg
+    harden_secret_file(p)
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -251,18 +408,117 @@ def load_cloud_config() -> Dict[str, Any]:
             data["configured_models"] = []
         if "keys" not in data or not isinstance(data["keys"], dict):
             data["keys"] = {}
+
+        needs_migration = False
+        decrypted_keys: Dict[str, Any] = {}
+        for prov, val in data["keys"].items():
+            if isinstance(val, list):
+                items: List[str] = []
+                for idx, entry in enumerate(val):
+                    if not entry or not str(entry).strip():
+                        continue
+                    plain, mig = _unprotect_stored_secret(str(entry), f"keys.{prov}[{idx}]")
+                    needs_migration = needs_migration or mig
+                    if plain:
+                        items.append(plain)
+                decrypted_keys[prov] = items
+            elif isinstance(val, str):
+                if not val.strip():
+                    decrypted_keys[prov] = ""
+                else:
+                    plain, mig = _unprotect_stored_secret(val, f"keys.{prov}")
+                    needs_migration = needs_migration or mig
+                    if plain:
+                        decrypted_keys[prov] = plain
+        data["keys"] = decrypted_keys
+
+        for idx, cm in enumerate(data["configured_models"]):
+            if not isinstance(cm, dict):
+                continue
+            raw_k = cm.get("api_key")
+            if raw_k and str(raw_k).strip():
+                plain, mig = _unprotect_stored_secret(str(raw_k), f"configured_models[{idx}]")
+                needs_migration = needs_migration or mig
+                cm["api_key"] = plain if plain is not None else ""
+
+        if needs_migration:
+            save_cloud_config(data)
         return data
     except Exception:
         return default_cfg
 
 
 def save_cloud_config(cfg: Dict[str, Any]) -> None:
-    """Persist cloud AI provider configuration and keys."""
+    """Persist cloud AI provider configuration with DPAPI/0o600 secret protection."""
     p = get_cloud_credentials_path()
     try:
-        p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        out_cfg = copy.deepcopy(cfg)
+        keys = out_cfg.get("keys")
+        if isinstance(keys, dict):
+            protected_keys: Dict[str, Any] = {}
+            for prov, val in keys.items():
+                if isinstance(val, list):
+                    protected_keys[prov] = [
+                        v if (not v or is_dpapi_protected(str(v))) else protect_secret(str(v).strip())
+                        for v in val
+                        if str(v).strip()
+                    ]
+                elif isinstance(val, str):
+                    clean_v = val.strip()
+                    if not clean_v:
+                        protected_keys[prov] = ""
+                    elif is_dpapi_protected(clean_v):
+                        protected_keys[prov] = clean_v
+                    else:
+                        protected_keys[prov] = protect_secret(clean_v)
+                else:
+                    protected_keys[prov] = val
+            out_cfg["keys"] = protected_keys
+
+        configured = out_cfg.get("configured_models")
+        if isinstance(configured, list):
+            for cm in configured:
+                if isinstance(cm, dict) and cm.get("api_key"):
+                    raw_k = str(cm["api_key"]).strip()
+                    if raw_k and not is_dpapi_protected(raw_k):
+                        cm["api_key"] = protect_secret(raw_k)
+
+        write_secret_file(p, json.dumps(out_cfg, indent=2))
     except Exception:
         pass
+
+
+def _mask_secret_preview(val: str) -> str:
+    clean = str(val or "").strip()
+    if not clean:
+        return ""
+    if len(clean) > 10:
+        return f"{clean[:6]}...{clean[-4:]}"
+    return "***"
+
+
+def mask_cloud_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a deep copy of cloud config with raw API keys masked or stripped."""
+    masked = copy.deepcopy(cfg)
+    raw_keys = masked.get("keys")
+    if isinstance(raw_keys, dict):
+        new_keys: Dict[str, Any] = {}
+        for prov, val in raw_keys.items():
+            if isinstance(val, list):
+                new_keys[prov] = [_mask_secret_preview(str(v)) for v in val if str(v).strip()]
+            elif isinstance(val, str):
+                new_keys[prov] = _mask_secret_preview(val)
+            else:
+                new_keys[prov] = val
+        masked["keys"] = new_keys
+
+    configured = masked.get("configured_models")
+    if isinstance(configured, list):
+        for cm in configured:
+            if isinstance(cm, dict):
+                raw_k = str(cm.pop("api_key", "") or "").strip()
+                cm["has_key"] = bool(raw_k)
+    return masked
 
 
 def get_provider_keys(provider: str) -> List[str]:
@@ -377,10 +633,11 @@ def remove_provider_key(provider: str, key: str) -> bool:
     return False
 
 
-def set_custom_endpoint(url: str) -> None:
-    """Set custom OpenAI-compatible endpoint URL."""
+def set_custom_endpoint(url: str, allow_private: bool = False) -> None:
+    """Set custom OpenAI-compatible endpoint URL after SSRF/scheme validation."""
+    validated = _validate_cloud_endpoint_url(url, allow_private=allow_private)
     cfg = load_cloud_config()
-    cfg["custom_endpoint"] = url.strip()
+    cfg["custom_endpoint"] = validated
     save_cloud_config(cfg)
 
 
@@ -396,10 +653,11 @@ def add_configured_model(
     api_key: str,
     model_type: str = "chat",
     provider: str = "custom",
+    allow_private: bool = False,
 ) -> Dict[str, Any]:
     """Add or update a custom external cloud/image model."""
     m_name = (model_name or "").strip()
-    p_url = (provider_url or "").strip()
+    p_url = _validate_cloud_endpoint_url(provider_url, allow_private=allow_private)
     key = (api_key or "").strip()
     m_type = "image" if "image" in model_type.lower() or any(x in m_name.lower() for x in ("imagen", "dall-e", "sd", "flux", "diffusion")) else "chat"
     prov = (provider or "custom").strip().lower()
@@ -423,8 +681,19 @@ def add_configured_model(
 
     cfg["configured_models"] = configured
     keys = cfg.get("keys", {})
+    if not isinstance(keys, dict):
+        keys = {}
     if prov and key:
-        add_provider_key(prov, key)
+        existing_keys = keys.get(prov, [])
+        if isinstance(existing_keys, str):
+            existing_keys = [existing_keys] if existing_keys else []
+        elif not isinstance(existing_keys, list):
+            existing_keys = []
+        if key not in existing_keys:
+            existing_keys.append(key)
+        keys[prov] = existing_keys
+        if not cfg.get("active_provider"):
+            cfg["active_provider"] = prov
     cfg["keys"] = keys
 
     if not cfg.get("active_model"):
@@ -696,6 +965,9 @@ def generate_image_cloud(
     api_key: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """Generate image using Gemini Imagen, OpenAI DALL-E, or local high-res fallback."""
+    if not is_internet_enabled():
+        return False, "Internet access is disabled in settings (Offline Mode active).", None, None
+
     prompt_clean = prompt.strip()
     if not prompt_clean:
         return False, "Prompt cannot be empty for image generation.", None, None
@@ -725,9 +997,10 @@ def generate_image_cloud(
     out_file = images_dir / filename
 
     # 1. Try Gemini Imagen
-    if key and endpoint and "generativelanguage.googleapis.com" in endpoint:
+    if key and endpoint and _is_gemini_endpoint(endpoint):
         try:
-            target_url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:predict?key={urllib.parse.quote_plus(key)}"
+            safe_model = urllib.parse.quote(target_model, safe="")
+            target_url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:predict"
             payload = {
                 "instances": [{"prompt": prompt_clean}],
                 "parameters": {"sampleCount": 1, "aspectRatio": "1:1", "outputMimeType": "image/png"},
@@ -735,25 +1008,32 @@ def generate_image_cloud(
             req = urllib.request.Request(
                 target_url,
                 data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT,
+                    "x-goog-api-key": key,
+                },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=60.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                preds = data.get("predictions", [])
-                if preds and "bytesBase64Encoded" in preds[0]:
-                    b64_data = preds[0]["bytesBase64Encoded"]
-                    img_bytes = base64.b64decode(b64_data)
-                    out_file.write_bytes(img_bytes)
-                    data_uri = f"data:image/png;base64,{b64_data}"
-                    return True, data_uri, str(out_file), filename
+            with _guarded_urlopen(req, timeout=60.0, allow_private=False) as resp:
+                raw_resp, truncated = _read_bounded(resp, 16 * 1024 * 1024)
+                if not truncated:
+                    data = json.loads(raw_resp.decode("utf-8"))
+                    preds = data.get("predictions", [])
+                    if preds and "bytesBase64Encoded" in preds[0]:
+                        b64_data = preds[0]["bytesBase64Encoded"]
+                        img_bytes = base64.b64decode(b64_data)
+                        out_file.write_bytes(img_bytes)
+                        data_uri = f"data:image/png;base64,{b64_data}"
+                        return True, data_uri, str(out_file), filename
         except Exception:
             pass
 
     # 2. Try OpenAI DALL-E
-    if key and endpoint and ("openai.com" in endpoint or endpoint.endswith("/images/generations")):
+    if key and endpoint and _is_openai_image_endpoint(endpoint):
         try:
             target_url = endpoint if endpoint.endswith("/images/generations") else f"{endpoint.rstrip('/')}/images/generations"
+            target_url = _validate_cloud_endpoint_url(target_url, allow_private=False)
             payload = {
                 "model": target_model if "dall-e" in target_model else "dall-e-3",
                 "prompt": prompt_clean,
@@ -767,8 +1047,11 @@ def generate_image_cloud(
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}", "User-Agent": USER_AGENT},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=60.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            with _guarded_urlopen(req, timeout=60.0, allow_private=False) as resp:
+                raw_resp, truncated = _read_bounded(resp, 16 * 1024 * 1024)
+                if truncated:
+                    raise ValueError("Image API response exceeded size limit")
+                data = json.loads(raw_resp.decode("utf-8"))
                 items = data.get("data", [])
                 if items:
                     first = items[0]
@@ -779,9 +1062,11 @@ def generate_image_cloud(
                         data_uri = f"data:image/png;base64,{b64_data}"
                         return True, data_uri, str(out_file), filename
                     elif "url" in first:
-                        img_url = first["url"]
-                        with urllib.request.urlopen(img_url, timeout=30.0) as img_resp:
-                            img_bytes = img_resp.read()
+                        img_url = str(first["url"]).strip()
+                        with _guarded_urlopen(img_url, timeout=30.0, allow_private=False) as img_resp:
+                            img_bytes, img_truncated = _read_bounded(img_resp, 16 * 1024 * 1024)
+                            if img_truncated:
+                                raise ValueError("Downloaded image exceeded size limit")
                             out_file.write_bytes(img_bytes)
                             b64_data = base64.b64encode(img_bytes).decode("ascii")
                             data_uri = f"data:image/png;base64,{b64_data}"
@@ -794,8 +1079,11 @@ def generate_image_cloud(
         try:
             sd_payload = json.dumps({"prompt": prompt_clean, "steps": 20, "width": 512, "height": 512}).encode("utf-8")
             sd_req = urllib.request.Request(local_ep, data=sd_payload, headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(sd_req, timeout=8.0) as sd_resp:
-                sd_data = json.loads(sd_resp.read().decode("utf-8"))
+            with _guarded_urlopen(sd_req, timeout=8.0, allow_private=True, allow_redirects=False) as sd_resp:
+                raw_sd, sd_truncated = _read_bounded(sd_resp, 16 * 1024 * 1024)
+                if sd_truncated:
+                    continue
+                sd_data = json.loads(raw_sd.decode("utf-8"))
                 if "images" in sd_data and sd_data["images"]:
                     b64_data = sd_data["images"][0]
                     img_bytes = base64.b64decode(b64_data)
@@ -941,12 +1229,19 @@ def _execute_single_cloud_request(
     model = candidate["model"]
     key = candidate.get("key") or ""
     endpoint = candidate.get("endpoint") or ""
+    allow_private = bool(candidate.get("allow_private", False))
 
     if not endpoint:
         return False, f"Missing endpoint for provider '{prov}'", 400
 
-    if not endpoint.endswith("/chat/completions") and "generativelanguage.googleapis.com" not in endpoint:
+    is_gemini = _is_gemini_endpoint(endpoint)
+    if not endpoint.endswith("/chat/completions") and not is_gemini:
         endpoint = endpoint.rstrip("/") + "/chat/completions"
+
+    try:
+        target_url = _validate_cloud_endpoint_url(endpoint, allow_private=allow_private)
+    except UrlRejected as exc:
+        return False, f"URL rejected by outbound policy: {exc}", 400
 
     payload = {
         "model": model,
@@ -964,10 +1259,8 @@ def _execute_single_cloud_request(
     }
     if key and key != "zero-key-open":
         req_headers["Authorization"] = f"Bearer {key}"
-
-    target_url = endpoint
-    if "generativelanguage.googleapis.com" in endpoint and key:
-        target_url = f"{endpoint}?key={urllib.parse.quote_plus(key)}"
+        if is_gemini:
+            req_headers["x-goog-api-key"] = key
 
     req = urllib.request.Request(
         target_url,
@@ -977,9 +1270,16 @@ def _execute_single_cloud_request(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw_res = resp.read().decode("utf-8")
-            data = json.loads(raw_res)
+        with _guarded_urlopen(
+            req,
+            timeout=timeout,
+            allow_private=allow_private,
+            redirect_allow_private=False,
+        ) as resp:
+            raw_bytes, truncated = _read_bounded(resp, 4 * 1024 * 1024)
+            if truncated:
+                return False, "Provider response exceeded maximum size limit.", 502
+            data = json.loads(raw_bytes.decode("utf-8"))
             choices = data.get("choices", [])
             if choices:
                 first = choices[0]
@@ -988,10 +1288,13 @@ def _execute_single_cloud_request(
                 if content:
                     return True, content, 200
             return False, "Provider returned empty choices array.", 200
+    except UrlRejected as exc:
+        return False, f"URL rejected by outbound policy: {exc}", 400
     except urllib.error.HTTPError as exc:
         err_body = ""
         try:
-            err_body = exc.read().decode("utf-8", errors="replace")
+            err_bytes, _ = _read_bounded(exc, 64 * 1024)
+            err_body = err_bytes.decode("utf-8", errors="replace")
         except Exception:
             pass
         return False, f"HTTP {exc.code}: {err_body[:300] or exc.reason}", exc.code
@@ -1009,6 +1312,9 @@ def run_model_fusion(
     timeout: float = 45.0,
 ) -> Tuple[bool, str]:
     """Execute multi-model fusion: concurrently query 2-3 free models and synthesize with a judge model."""
+    if not is_internet_enabled():
+        return False, "Internet access is disabled in settings (Offline Mode active)."
+
     candidates = _resolve_candidate_chain("auto")
     unique_provs: Dict[str, Dict[str, Any]] = {}
     for c in candidates:
@@ -1073,6 +1379,9 @@ def query_cloud_ai(
     timeout: float = 45.0,
 ) -> Tuple[bool, str]:
     """Execute a chat completion with 4D quota management, in-flight leases, and automatic failover."""
+    if not is_internet_enabled():
+        return False, "Internet access is disabled in settings (Offline Mode active)."
+
     target_model = model or get_active_cloud_model() or "auto"
 
     # Virtual 'fusion' model delegation
@@ -1132,6 +1441,9 @@ def query_cloud_ai(
 
 def test_provider_connection(provider: str, key: Optional[str] = None) -> Tuple[bool, str, float]:
     """Test ping a cloud provider to verify connectivity, auth key, and latency."""
+    if not is_internet_enabled():
+        return False, "Internet access is disabled in settings (Offline Mode active).", 0.0
+
     prov = (provider or "").strip().lower()
     meta = CLOUD_PROVIDERS.get(prov, {})
     disp = meta.get("display_name", prov.title())
