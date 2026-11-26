@@ -113,10 +113,11 @@ def package_release(version: str, channel: str, output_dir: Path) -> None:
         if src_f.is_file():
             shutil.copy2(src_f, staging_dir / fname)
 
-    picker_exe = REPO_ROOT / "desktop" / "bin" / "pai_folder_picker.exe"
-    if picker_exe.is_file():
-        (staging_dir / "bin").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(picker_exe, staging_dir / "bin" / "pai_folder_picker.exe")
+    for bin_name in ("pai_folder_picker.exe", "pai_ui_agent.exe"):
+        helper_exe = REPO_ROOT / "desktop" / "bin" / bin_name
+        if helper_exe.is_file():
+            (staging_dir / "bin").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(helper_exe, staging_dir / "bin" / bin_name)
 
     # 6. Create Zip Archives
     payload_zip = output_dir / f"pai-payload-{version}-win-x64.zip"

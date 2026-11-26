@@ -31,7 +31,7 @@ class CoworkTask:
     title: str
     goal: str
     workspace_dir: str
-    status: str = "PENDING"  # PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
+    status: str = "PENDING"  # PENDING, RUNNING, PAUSED, STALLED_RECOVERING, COMPLETED, FAILED, CANCELLED
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     checklist: List[Dict[str, Any]] = field(default_factory=list)
@@ -39,6 +39,138 @@ class CoworkTask:
     transcript: List[Dict[str, Any]] = field(default_factory=list)
     result_summary: str = ""
     error_message: Optional[str] = None
+    mode: str = "team"  # team | deep | council
+    max_iterations: int = 12
+    current_iteration: int = 0
+    quality_score: float = 0.0
+    graph_path: Optional[str] = None
+    stall_count: int = 0
+    last_stall_reason: Optional[str] = None
+    checkpoint: Dict[str, Any] = field(default_factory=dict)
+    pause_requested: bool = False
+    cancel_requested: bool = False
+
+
+class StuckDetectorWatchdog:
+    """
+    Detects long-running Cowork / Swarm stalls and generates checkpointed recovery plans:
+    1. Repetition / Semantic Loop Stall (repeated identical or near-identical step outputs)
+    2. Heartbeat / Step Timeout Stall (no forward progress within step_timeout_sec)
+    3. Confidence Collapse (consecutive CRASH steps with confidence < 0.5)
+    """
+
+    def __init__(
+        self,
+        repetition_jaccard_threshold: float = 0.85,
+        max_identical_window: int = 2,
+        step_timeout_sec: float = 180.0,
+        max_low_conf_streak: int = 2,
+        max_recoveries: int = 3,
+    ) -> None:
+        self.repetition_jaccard_threshold = max(0.5, min(1.0, float(repetition_jaccard_threshold)))
+        self.max_identical_window = max(2, int(max_identical_window))
+        self.step_timeout_sec = max(1.0, float(step_timeout_sec))
+        self.max_low_conf_streak = max(1, int(max_low_conf_streak))
+        self.max_recoveries = max(1, int(max_recoveries))
+        self._recent_outputs: List[Tuple[Any, str, set[str]]] = []
+        self._low_conf_streak: int = 0
+        self._last_progress_ts: float = time.time()
+
+    @staticmethod
+    def _tokenize(text: str) -> set[str]:
+        return set(re.findall(r"[a-zA-Z0-9_]{3,}", (text or "").lower()))
+
+    @staticmethod
+    def _jaccard(a: set[str], b: set[str]) -> float:
+        if not a and not b:
+            return 1.0
+        if not a or not b:
+            return 0.0
+        return len(a & b) / len(a | b)
+
+    def reset_for_recovery(self, now: Optional[float] = None) -> None:
+        """Resets sliding loop & low-confidence streak counters right after a clean recovery branch."""
+        self._recent_outputs.clear()
+        self._low_conf_streak = 0
+        self._last_progress_ts = now if now is not None else time.time()
+
+    def check_heartbeat(self, now: Optional[float] = None) -> Tuple[bool, float]:
+        """Returns (is_timed_out, elapsed_seconds)."""
+        cur = now if now is not None else time.time()
+        elapsed = max(0.0, cur - self._last_progress_ts)
+        return elapsed > self.step_timeout_sec, round(elapsed, 3)
+
+    def record_progress(
+        self,
+        step_id: Any,
+        output_text: str,
+        confidence: float = 0.7,
+        now: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Evaluates step output, timing, and confidence to detect whether execution has stalled."""
+        cur_ts = now if now is not None else time.time()
+        timed_out, elapsed = self.check_heartbeat(now=cur_ts)
+
+        norm = re.sub(r"\s+", " ", (output_text or "").strip().lower())
+        tokens = self._tokenize(norm)
+
+        max_sim = 0.0
+        repeat_hits = 0
+        for _, prev_norm, prev_tokens in self._recent_outputs[-(self.max_identical_window * 2):]:
+            sim = 1.0 if (norm and norm == prev_norm) else self._jaccard(tokens, prev_tokens)
+            max_sim = max(max_sim, sim)
+            if sim >= self.repetition_jaccard_threshold:
+                repeat_hits += 1
+
+        self._recent_outputs.append((step_id, norm, tokens))
+        if float(confidence) < 0.5:
+            self._low_conf_streak += 1
+        else:
+            self._low_conf_streak = 0
+
+        stalled = False
+        code = "OK"
+        reason = ""
+
+        if repeat_hits >= (self.max_identical_window - 1) and len(norm) > 0:
+            stalled = True
+            code = "REPETITION_LOOP"
+            reason = (
+                f"Detected repetition loop on step {step_id}: output similarity {max_sim:.2f} "
+                f">= {self.repetition_jaccard_threshold:.2f} across recent attempts."
+            )
+        elif self._low_conf_streak >= self.max_low_conf_streak:
+            stalled = True
+            code = "CONFIDENCE_COLLAPSE"
+            reason = (
+                f"Detected confidence collapse on step {step_id}: {self._low_conf_streak} consecutive steps < 0.50."
+            )
+        elif timed_out:
+            stalled = True
+            code = "STEP_TIMEOUT"
+            reason = f"Step {step_id} exceeded heartbeat timeout ({elapsed:.1f}s > {self.step_timeout_sec:.1f}s)."
+
+        self._last_progress_ts = cur_ts
+        return {
+            "stalled": stalled,
+            "code": code,
+            "reason": reason,
+            "similarity": round(max_sim, 3),
+            "elapsed_sec": elapsed,
+            "low_conf_streak": self._low_conf_streak,
+        }
+
+    def build_recovery_directive(self, step_id: Any, stall_reason: str, prior_summary: str = "") -> str:
+        """Produces a targeted strategy-pivot prompt so resumed execution avoids the stalled loop."""
+        return (
+            f"[STUCK-RECOVERY CHECKPOINT RESUME @ Step {step_id}]\n"
+            f"Previous attempt was halted because: {stall_reason}\n"
+            f"Instructions for this recovery branch:\n"
+            f"1. Do NOT repeat the prior stalled approach.\n"
+            f"2. Decompose Step {step_id} into smaller concrete verification sub-actions.\n"
+            f"3. Emit explicit <confidence> and <verdict> tags based on verifiable outputs.\n"
+            + (f"Checkpoint summary: {prior_summary[:800]}\n" if prior_summary else "")
+        )
 
 
 @dataclass
@@ -137,17 +269,21 @@ class CoworkOrchestrator:
 
     def _load_tasks(self) -> Dict[str, CoworkTask]:
         tasks: Dict[str, CoworkTask] = {}
+        valid_fields = {f.name for f in CoworkTask.__dataclass_fields__.values()}
         for f in self.storage_dir.glob("task_*.json"):
             try:
-                d = json.loads(f.read_text(encoding="utf-8"))
-                tasks[d["task_id"]] = CoworkTask(**d)
+                raw = json.loads(f.read_text(encoding="utf-8"))
+                filtered = {k: v for k, v in raw.items() if k in valid_fields}
+                tasks[filtered["task_id"]] = CoworkTask(**filtered)
             except Exception:
                 pass
         return tasks
 
     def _save_task(self, task: CoworkTask) -> None:
         target = self.storage_dir / f"task_{task.task_id}.json"
-        target.write_text(json.dumps(asdict(task), indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp = self.storage_dir / f"task_{task.task_id}.json.tmp"
+        tmp.write_text(json.dumps(asdict(task), indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, target)
 
     def start_task(
         self,
@@ -155,6 +291,8 @@ class CoworkOrchestrator:
         goal: str,
         workspace_dir: Optional[str] = None,
         checklist_items: Optional[List[str]] = None,
+        mode: str = "team",
+        max_iterations: int = 12,
     ) -> CoworkTask:
         """Spawns a new Cowork task session."""
         tid = uuid.uuid4().hex[:10]
@@ -182,14 +320,191 @@ class CoworkOrchestrator:
                 {
                     "timestamp": time.time(),
                     "sender": "Dispatch",
-                    "content": f"Task session '{title}' dispatched to worker.",
+                    "content": f"Task session '{title}' dispatched to worker (mode={mode}).",
                 }
             ],
+            mode=mode,
+            max_iterations=max(1, int(max_iterations)),
         )
 
         self._tasks[tid] = task
         self._save_task(task)
         return task
+
+    def save_checkpoint(
+        self,
+        task_id: str,
+        step_index: int,
+        crash_state: Optional[Dict[str, Any]] = None,
+        graph_path: Optional[str] = None,
+        notes: str = "",
+    ) -> bool:
+        """Atomically persists exact step checkpoint and graph reference for seamless pause/stall resume."""
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+        task.updated_at = time.time()
+        task.current_iteration = max(int(step_index), task.current_iteration)
+        if graph_path:
+            task.graph_path = str(graph_path)
+        task.checkpoint = {
+            "step_index": int(step_index),
+            "saved_at": time.time(),
+            "notes": notes[:1000],
+            "crash_state": crash_state or {},
+        }
+        self._save_task(task)
+        return True
+
+    def mark_stalled_and_recover(
+        self,
+        task_id: str,
+        reason: str,
+        step_index: int,
+        branch_id: str,
+        max_recoveries: int = 3,
+    ) -> Dict[str, Any]:
+        """Records stall diagnosis on disk and either prepares an exact-step recovery branch or fails cleanly."""
+        task = self._tasks.get(task_id)
+        if not task:
+            return {"recovered": False, "status": "NOT_FOUND"}
+
+        task.stall_count += 1
+        task.last_stall_reason = reason
+        task.updated_at = time.time()
+
+        if task.stall_count > max_recoveries:
+            task.status = "FAILED"
+            task.error_message = f"Exceeded max stall recoveries ({max_recoveries}): {reason}"
+            task.transcript.append({
+                "timestamp": time.time(),
+                "sender": "Watchdog",
+                "content": f"HALTED after {task.stall_count} stalls. Reason: {reason}",
+            })
+            self._save_task(task)
+            return {"recovered": False, "status": task.status, "resume_step_index": step_index}
+
+        task.status = "STALLED_RECOVERING"
+        task.checkpoint = {
+            **(task.checkpoint or {}),
+            "step_index": int(step_index),
+            "recovery_branch": branch_id,
+            "stall_reason": reason,
+            "recovered_at": time.time(),
+        }
+        task.transcript.append({
+            "timestamp": time.time(),
+            "sender": "Watchdog",
+            "content": (
+                f"Stall detected (#{task.stall_count}) at step {step_index}: {reason}. "
+                f"Checkpointed and resuming on recovery branch '{branch_id}'."
+            ),
+        })
+        self._save_task(task)
+        return {
+            "recovered": True,
+            "status": task.status,
+            "stall_count": task.stall_count,
+            "resume_step_index": step_index,
+            "branch_id": branch_id,
+        }
+
+    def pause_task(self, task_id: str, reason: str = "Paused by user.") -> bool:
+        """Requests cooperative pause and transitions task to PAUSED while keeping checkpoint."""
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+        task.pause_requested = True
+        if task.status in ("RUNNING", "STALLED_RECOVERING", "PENDING"):
+            task.status = "PAUSED"
+        task.updated_at = time.time()
+        task.transcript.append({"timestamp": time.time(), "sender": "Coordinator", "content": reason})
+        self._save_task(task)
+        return True
+
+    def resume_task(self, task_id: str) -> Optional[CoworkTask]:
+        """Clears pause flag and returns task ready to resume from its saved checkpoint."""
+        task = self._tasks.get(task_id)
+        if not task or task.cancel_requested:
+            return None
+        task.pause_requested = False
+        task.status = "RUNNING"
+        task.updated_at = time.time()
+        resume_step = task.checkpoint.get("step_index", task.current_iteration)
+        task.transcript.append({
+            "timestamp": time.time(),
+            "sender": "Coordinator",
+            "content": f"Resuming execution from saved checkpoint step {resume_step}.",
+        })
+        self._save_task(task)
+        return task
+
+    def cancel_task(self, task_id: str, reason: str = "Cancelled by user.") -> bool:
+        """Marks a task cancelled cleanly without losing prior transcript or checkpoint."""
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+        task.cancel_requested = True
+        task.status = "CANCELLED"
+        task.updated_at = time.time()
+        task.error_message = reason
+        task.transcript.append({"timestamp": time.time(), "sender": "Coordinator", "content": reason})
+        self._save_task(task)
+        return True
+
+    def verify_task_quality(
+        self,
+        task_id: str,
+        min_quality: float = 0.6,
+        require_all_checklist: bool = True,
+    ) -> Tuple[bool, List[str]]:
+        """
+        Objective quality completion gate: verifies checklist completion, quality_score,
+        deliverable file validity (syntax parse for Python/JSON), and ThoughtGraph leaf closure.
+        """
+        task = self._tasks.get(task_id)
+        if not task:
+            return False, [f"Task {task_id} not found."]
+
+        issues: List[str] = []
+        if require_all_checklist:
+            pending = [it.get("id") for it in task.checklist if not it.get("completed")]
+            if pending:
+                issues.append(f"Checklist has incomplete items: {pending}")
+
+        if task.quality_score > 0.0 and task.quality_score < min_quality:
+            issues.append(f"Quality score {task.quality_score:.2f} is below required threshold {min_quality:.2f}")
+
+        for d in task.deliverables:
+            p_str = d.get("path", "")
+            if not p_str:
+                continue
+            p = Path(p_str)
+            if p.exists() and p.is_file() and p.suffix.lower() == ".py":
+                try:
+                    import ast
+                    ast.parse(p.read_text(encoding="utf-8"))
+                except SyntaxError as exc:
+                    issues.append(f"Python syntax error in deliverable {p.name}: {exc}")
+
+        if task.graph_path:
+            gp = Path(task.graph_path)
+            if gp.exists():
+                try:
+                    try:
+                        from research.reasoning_engine import RadialExplorer
+                        from research.thought_graph import ThoughtGraph
+                    except ImportError:
+                        from reasoning_engine import RadialExplorer
+                        from thought_graph import ThoughtGraph
+                    g = ThoughtGraph.load(gp)
+                    ok_g, _, rep = RadialExplorer.verify_zero_incomplete_leaves(g)
+                    if not ok_g:
+                        issues.append(rep)
+                except Exception as exc:
+                    issues.append(f"Failed ThoughtGraph verification: {exc}")
+
+        return len(issues) == 0, issues
 
     def update_task_progress(
         self,

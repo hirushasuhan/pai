@@ -91,6 +91,18 @@ jobs:
         run: |
           cargo build --release
 
+      - name: Build Desktop Win32 Helpers (Folder Picker & UIA Agent)
+        run: |
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (Test-Path $csc) {
+            if (Test-Path "desktop/bin/pai_folder_picker.cs") {
+              & $csc /nologo /target:winexe /out:desktop/bin/pai_folder_picker.exe /r:System.Windows.Forms.dll,System.Drawing.dll desktop/bin/pai_folder_picker.cs
+            }
+            if (Test-Path "desktop/bin/pai_ui_agent.cs") {
+              & $csc /nologo /target:exe /out:desktop/bin/pai_ui_agent.exe /r:UIAutomationClient.dll,UIAutomationTypes.dll,WindowsBase.dll,System.Drawing.dll,System.Windows.Forms.dll desktop/bin/pai_ui_agent.cs
+            }
+          }
+
       - name: Package Desktop Standalone & Payload
         run: |
           python tools/package_release.py --version "${{ steps.vars.outputs.VERSION }}" --channel "${{ steps.vars.outputs.CHANNEL }}" --output-dir dist

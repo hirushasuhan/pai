@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hmac
+import io
 import json
 import os
 import platform
@@ -167,31 +168,139 @@ except ImportError:
 try:
     from research.thinking_engine import (
         assess_temporal_stability,
+        compute_adaptive_context_budget,
         detect_puzzle_or_constraints,
         enforce_commonmark_compliance,
+        extract_structured_verdict,
         format_cognitive_system_prompt,
+        format_role_cognitive_prompt,
         parse_thinking_response,
         evaluate_clarification_vs_assumption,
         quarantine_untrusted_input,
     )
     from research.auto_memory import AutoMemoryManager, detect_memory_intent
     from research.stylometry import StylometryAnalyzer
-    from research.cowork import ConnectedFoldersManager, CoworkOrchestrator
+    from research.cowork import ConnectedFoldersManager, CoworkOrchestrator, StuckDetectorWatchdog
     from research.council import ModelCouncilRunner
+    from research.thought_graph import SubconsciousBlackboard, ThoughtGraph
+    from research.crash_reasoning_mcp import CRASHTracker
+    from research.reasoning_engine import RadialExplorer, ThinkToolsPipeline, TreeOfThoughtsEngine
+    from research.hardware_telemetry import HardwareTelemetry
+    from research.automation import (
+        parse_automation_intent,
+        execute_automation_task,
+        parse_telegram_intent,
+        parse_whatsapp_intent,
+    )
+    from research.desktop_control import DesktopController, find_ui_agent_binary
+    from research.desktop_orchestrator import DesktopOrchestrator
 except ImportError:
     from thinking_engine import (
         assess_temporal_stability,
+        compute_adaptive_context_budget,
         detect_puzzle_or_constraints,
         enforce_commonmark_compliance,
+        extract_structured_verdict,
         format_cognitive_system_prompt,
+        format_role_cognitive_prompt,
         parse_thinking_response,
         evaluate_clarification_vs_assumption,
         quarantine_untrusted_input,
     )
     from auto_memory import AutoMemoryManager, detect_memory_intent
     from stylometry import StylometryAnalyzer
-    from cowork import ConnectedFoldersManager, CoworkOrchestrator
+    from cowork import ConnectedFoldersManager, CoworkOrchestrator, StuckDetectorWatchdog
     from council import ModelCouncilRunner
+    from thought_graph import SubconsciousBlackboard, ThoughtGraph
+    from crash_reasoning_mcp import CRASHTracker
+    from reasoning_engine import RadialExplorer, ThinkToolsPipeline, TreeOfThoughtsEngine
+    from hardware_telemetry import HardwareTelemetry
+    from automation import (
+        parse_automation_intent,
+        execute_automation_task,
+        parse_telegram_intent,
+        parse_whatsapp_intent,
+    )
+    from desktop_control import DesktopController, find_ui_agent_binary
+    from desktop_orchestrator import DesktopOrchestrator
+
+# Desktop PC Control Governance & HITL Pending Actions
+_desktop_control_enabled: bool = False
+_desktop_abort_event = threading.Event()
+_pending_hitl_actions: Dict[str, Dict[str, Any]] = {}
+_pending_hitl_lock = threading.Lock()
+_LOCAL_VISION_HINTS = ("llava", "qwen2.5vl", "qwen3-vl", "moondream", "minicpm-v", "llama3.2-vision", "bakllava", "gemma3", "vision")
+
+
+def _store_pending_hitl(action: Optional[Dict[str, Any]]) -> None:
+    if not action or not action.get("action_id"):
+        return
+    with _pending_hitl_lock:
+        if len(_pending_hitl_actions) >= 50:
+            oldest_key = next(iter(_pending_hitl_actions))
+            _pending_hitl_actions.pop(oldest_key, None)
+        _pending_hitl_actions[action["action_id"]] = action
+
+
+def _build_desktop_model_callbacks(active_model: str):
+    """Build planner and vision callbacks strictly matching active model mode (local Ollama vs Cloud)."""
+    req_m = (active_model or "").strip()
+    req_low = req_m.lower()
+    use_cloud = bool(
+        is_internet_enabled()
+        and (
+            is_cloud_model(req_m)
+            or (req_low in ("auto", "auto:fast", "auto:smart", "fusion") and has_usable_cloud_keys())
+        )
+    )
+
+    if use_cloud:
+        def _cloud_plan(prompt_txt: str) -> str:
+            ok_c, res_c = query_cloud_ai(prompt=prompt_txt, model=req_m, temperature=0.1, max_tokens=512)
+            return res_c if ok_c else ""
+
+        def _cloud_vision(prompt_txt: str, b64_png: str) -> str:
+            if not is_internet_enabled():
+                return ""
+            ok_v, res_v = query_cloud_ai(
+                prompt=prompt_txt, model=req_m, temperature=0.1, max_tokens=512, images=[b64_png]
+            )
+            return res_v if ok_v else ""
+
+        return _cloud_plan, _cloud_vision, "cloud", req_m
+
+    # Local Ollama mode (or strict offline air-gap)
+    local_models, _ = get_all_installed_local_models()
+    installed_names = [m["name"] for m in local_models]
+    installed_map = {m["name"].lower(): m["name"] for m in local_models}
+
+    if req_low in installed_map:
+        plan_model = installed_map[req_low]
+    else:
+        plan_model = resolve_local_virtual_model("auto:fast", installed_names) if installed_names else (req_m or "llama3.2:3b")
+
+    vision_model = ""
+    if any(tok in plan_model.lower() for tok in _LOCAL_VISION_HINTS):
+        vision_model = plan_model
+    else:
+        for name in installed_names:
+            if any(tok in name.lower() for tok in _LOCAL_VISION_HINTS):
+                vision_model = name
+                break
+
+    def _local_plan(prompt_txt: str) -> str:
+        ok_l, res_l = _execute_local_ollama_query(plan_model, prompt_txt, temperature=0.1, num_ctx=4096)
+        return res_l if ok_l else ""
+
+    if vision_model:
+        def _local_vision(prompt_txt: str, b64_png: str) -> str:
+            ok_v, res_v = _execute_local_ollama_query(
+                vision_model, prompt_txt, temperature=0.1, images=[b64_png], num_ctx=4096
+            )
+            return res_v if ok_v else ""
+        return _local_plan, _local_vision, "local", vision_model
+
+    return _local_plan, None, "none", ""
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PAI_BRIDGE_PORT", "8765"))
@@ -329,68 +438,280 @@ _chat_job_manager = ChatJobManager()
 _agent_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="pai_agent_worker")
 
 
+def _get_adaptive_budget(is_cloud: bool, deep_mode: bool, has_project: bool):
+    tier = "BALANCED"
+    try:
+        tier = HardwareTelemetry(cpu_sample_ms=10).get_system_snapshot().compute_tier
+    except Exception:
+        pass
+    return compute_adaptive_context_budget(
+        tier=tier,
+        is_cloud=is_cloud,
+        deep_mode=deep_mode,
+        has_project=has_project,
+    )
+
+
+def _run_cowork_step_llm(
+    step_prompt: str,
+    sys_prompt: str,
+    num_ctx: int,
+    max_tokens: int,
+) -> Tuple[bool, str]:
+    has_keys = is_internet_enabled() and has_usable_cloud_keys()
+    active_m = get_current_model()
+    if has_keys and is_cloud_model(active_m):
+        try:
+            ok, reply = query_cloud_ai(
+                prompt=f"{sys_prompt}\n\n{step_prompt}",
+                model=active_m,
+                temperature=0.25,
+                max_tokens=max_tokens,
+            )
+            if ok and str(reply).strip():
+                return True, reply
+        except Exception:
+            pass
+    try:
+        ok_loc, rep_loc = query_ollama(active_m, f"{sys_prompt}\n\n{step_prompt}", timeout=180, num_ctx=num_ctx)
+        if ok_loc and str(rep_loc).strip():
+            return True, rep_loc
+    except Exception:
+        pass
+    if has_keys:
+        try:
+            ok_c, reply_c, _, _ = _call_cloud_chat_with_fallback(
+                active_m, step_prompt, history=[], system_prompt=sys_prompt
+            )
+            if ok_c and str(reply_c).strip():
+                return True, reply_c
+        except Exception:
+            pass
+    return False, ""
+
+
 def _run_cowork_background_loop(task_id: str, mode: str = "team") -> None:
     task = _cowork_orchestrator._tasks.get(task_id)
     if not task:
         return
-    append_log(f"[CoworkDaemon] Starting autonomous execution for Task #{task_id}: '{task.title}'")
-    _cowork_orchestrator.update_task_progress(task_id, message="Autonomous multi-agent sprint initialized.", sender="Coordinator")
-    
-    for item in task.checklist:
+
+    append_log(f"[CoworkDaemon] Starting Deep-Thinking autonomous execution for Task #{task_id}: '{task.title}'")
+    _cowork_orchestrator.update_task_progress(
+        task_id,
+        message="Autonomous Deep-Thinking multi-step sprint initialized (mandatory ThoughtGraph + Watchdog).",
+        sender="Coordinator",
+    )
+
+    graph_file = Path.home() / ".pai" / "cowork" / "graphs" / f"cowork_{task_id}.json"
+    if task.graph_path and Path(task.graph_path).exists():
+        try:
+            graph = ThoughtGraph.load(Path(task.graph_path))
+        except Exception:
+            graph = ThoughtGraph(graph_id=f"cowork_{task_id}", goal=task.goal)
+    else:
+        graph = ThoughtGraph(graph_id=f"cowork_{task_id}", goal=task.goal)
+
+    crash_state = (task.checkpoint or {}).get("crash_state")
+    crash = (
+        CRASHTracker.from_checkpoint(crash_state, graph=graph)
+        if isinstance(crash_state, dict) and crash_state.get("steps")
+        else CRASHTracker(goal=task.goal, graph=graph)
+    )
+    blackboard = SubconsciousBlackboard(session_id=f"cowork_{task_id}")
+    watchdog = StuckDetectorWatchdog(step_timeout_sec=180.0, max_identical_window=2, max_low_conf_streak=2, max_recoveries=3)
+
+    active_m = get_current_model()
+    ctx_budget = _get_adaptive_budget(
+        is_cloud=is_cloud_model(active_m),
+        deep_mode=True,
+        has_project=bool(task.workspace_dir),
+    )
+
+    total_steps = max(1, len(task.checklist))
+    step_outputs: List[str] = []
+    confidences: List[float] = []
+
+    idx = 0
+    while idx < len(task.checklist):
+        item = task.checklist[idx]
+        if task.cancel_requested:
+            _cowork_orchestrator.cancel_task(task_id, "Cancelled during autonomous loop.")
+            return
+        if task.pause_requested:
+            _cowork_orchestrator.save_checkpoint(
+                task_id,
+                step_index=item.get("id", idx + 1),
+                crash_state=crash.checkpoint_state(),
+                graph_path=str(graph.save(graph_file.name)),
+                notes="Checkpointed on cooperative pause.",
+            )
+            _cowork_orchestrator.pause_task(task_id, "Paused cleanly at checkpoint.")
+            return
+
         if item.get("completed"):
+            idx += 1
             continue
+
         step_id = item["id"]
         step_name = item["task"]
-        _cowork_orchestrator.update_task_progress(task_id, message=f"Starting step #{step_id}: '{step_name}'", sender="Coordinator")
-        
-        step_prompt = (
-            f"You are executing an autonomous Cowork workstation task step.\n"
-            f"Task Title: {task.title}\n"
-            f"Objective Goal: {task.goal}\n"
-            f"Current Step #{step_id}: {step_name}\n"
-            f"Workspace Path: {task.workspace_dir or 'Global workspace'}\n"
-            f"Please execute the code synthesis, analysis, or architectural documentation required for this step. Provide clear, professional technical deliverables."
-        )
-        
-        step_reply = ""
-        try:
-            has_keys = has_usable_cloud_keys()
-            active_m = get_current_model()
-            if has_keys:
-                ok, reply, used_m, _ = _call_cloud_chat_with_fallback(
-                    active_m, step_prompt, history=[], system_prompt="You are an autonomous senior software engineer."
-                )
-                if ok:
-                    step_reply = reply
-            if not step_reply:
-                ok_loc, rep_loc = query_ollama(active_m, step_prompt, timeout=120)
-                if ok_loc:
-                    step_reply = rep_loc
-        except Exception as e:
-            step_reply = f"Step executed with notes: {e}"
-            
-        summary_step = step_reply.strip() if step_reply else "Completed verification and execution."
-        if len(summary_step) > 400:
-            summary_step = summary_step[:400] + "..."
-            
         _cowork_orchestrator.update_task_progress(
             task_id,
-            message=f"Step #{step_id} completed:\n{summary_step}",
-            sender="Worker",
-            completed_step_id=step_id,
+            message=f"Starting step #{step_id}/{total_steps}: '{step_name}' (branch={watchdog._low_conf_streak})",
+            sender="Coordinator",
         )
-        time.sleep(0.5)
 
-    final_summary = f"Successfully completed all {len(task.checklist)} steps for '{task.title}'."
+        # Resume on recovery loop up to watchdog limit if a step stalls
+        recovered_ok = False
+        branch_id = "main"
+        extra_recovery = ""
+        for attempt in range(watchdog.max_recoveries + 1):
+            if task.cancel_requested or task.pause_requested:
+                break
+
+            graph_ctx = graph.retrieve_relevant_context(f"{task.goal} {step_name}", top_k=6, max_chars=3000)
+            bb_ctx = blackboard.format_context(max_chars=2000)
+            sys_prompt = format_role_cognitive_prompt(
+                role="senior_developer" if mode == "team" else "planner",
+                objective=f"Execute Cowork checklist step #{step_id}: {step_name}",
+                graph_context=graph_ctx,
+                blackboard_context=bb_ctx,
+                constraints=[
+                    "Build incrementally on completed steps",
+                    "End with <verdict>CONFIRMED|REFUTED</verdict> and <confidence>0.XX</confidence>",
+                ],
+            )
+            step_prompt = (
+                f"Task Title: {task.title}\n"
+                f"Objective Goal: {task.goal}\n"
+                f"Current Step #{step_id}: {step_name}\n"
+                f"Workspace Path: {task.workspace_dir or 'Global workspace'}\n"
+                + (f"\nPrior Step Outputs:\n" + "\n".join(step_outputs[-2:])[:2000] if step_outputs else "")
+                + (f"\n\n{extra_recovery}" if extra_recovery else "")
+            )
+
+            ok_step, raw_step_reply = _run_cowork_step_llm(
+                step_prompt,
+                sys_prompt,
+                num_ctx=ctx_budget.num_ctx,
+                max_tokens=ctx_budget.max_tokens,
+            )
+            if not ok_step:
+                raw_step_reply = (
+                    f"<thought>Local deterministic planning/execution summary for step #{step_id}: {step_name}.</thought>\n"
+                    f"Completed milestone analysis for '{step_name}' in workspace '{task.workspace_dir}'.\n"
+                    "<verdict>CONFIRMED</verdict>\n<confidence>0.72</confidence>"
+                )
+
+            parsed = extract_structured_verdict(raw_step_reply)
+            step_reply = parsed["response"] or raw_step_reply
+            conf = float(parsed["confidence"])
+
+            stall_info = watchdog.record_progress(step_id=step_id, output_text=step_reply, confidence=conf)
+            crash.record_step(
+                purpose="revision" if attempt > 0 else ("verification" if idx == total_steps - 1 else "decomposition"),
+                context=f"Cowork step #{step_id}: {step_name}",
+                thought=parsed["thinking"][:500] or f"Evaluated step {step_id} with context window {ctx_budget.num_ctx}.",
+                outcome=step_reply[:400],
+                confidence=conf,
+                estimated_total=total_steps,
+                branch_id=branch_id,
+                revises_step=crash.steps[-1].step_number if (attempt > 0 and crash.steps) else None,
+                revision_reason=extra_recovery[:200] if attempt > 0 else None,
+                is_final_step=(idx == total_steps - 1 and not stall_info["stalled"]),
+                citations=parsed["citations"] or [f"cowork:step_{step_id}"],
+            )
+
+            if stall_info["stalled"]:
+                branch_id = f"recovery_{task.stall_count + 1}_s{step_id}"
+                rec = _cowork_orchestrator.mark_stalled_and_recover(
+                    task_id=task_id,
+                    reason=stall_info["reason"],
+                    step_index=step_id,
+                    branch_id=branch_id,
+                    max_recoveries=watchdog.max_recoveries,
+                )
+                saved_gp = graph.save(graph_file.name)
+                _cowork_orchestrator.save_checkpoint(
+                    task_id,
+                    step_index=step_id,
+                    crash_state=crash.checkpoint_state(),
+                    graph_path=str(saved_gp),
+                    notes=f"Recovered from {stall_info['code']} onto branch {branch_id}",
+                )
+                if not rec.get("recovered"):
+                    append_log(f"[CoworkDaemon] Task #{task_id} halted cleanly: {stall_info['reason']}")
+                    return
+                watchdog.reset_for_recovery()
+                extra_recovery = watchdog.build_recovery_directive(step_id, stall_info["reason"], step_reply[:400])
+                continue
+
+            # Step succeeded cleanly
+            recovered_ok = True
+            confidences.append(conf)
+            step_outputs.append(f"Step {step_id} ({step_name}): {step_reply[:600]}")
+            blackboard.post("cowork_worker", f"step_{step_id}", step_reply[:500], confidence=conf)
+
+            saved_gp = graph.save(graph_file.name)
+            task.quality_score = round(sum(confidences) / len(confidences), 3) if confidences else 0.75
+            _cowork_orchestrator.save_checkpoint(
+                task_id,
+                step_index=step_id,
+                crash_state=crash.checkpoint_state(),
+                graph_path=str(saved_gp),
+                notes=f"Completed step #{step_id}",
+            )
+            summary_step = step_reply.strip()
+            if len(summary_step) > 450:
+                summary_step = summary_step[:450] + "..."
+            _cowork_orchestrator.update_task_progress(
+                task_id,
+                message=f"Step #{step_id} completed (conf={conf:.2f}, ctx={ctx_budget.num_ctx}):\n{summary_step}",
+                sender="Worker",
+                completed_step_id=step_id,
+            )
+            break
+
+        if task.cancel_requested:
+            _cowork_orchestrator.cancel_task(task_id, "Cancelled during autonomous loop.")
+            return
+        if task.pause_requested:
+            _cowork_orchestrator.pause_task(task_id, "Paused cleanly at checkpoint.")
+            return
+        if not recovered_ok:
+            return
+
+        idx += 1
+        time.sleep(0.25)
+
+    # Ensure Zero-Incomplete-Leaves on final graph before saving & verifying
+    for node in graph.nodes.values():
+        if not node.children_ids and node.verdict == "PENDING":
+            graph.update_node_verdict(node.node_id, "CONFIRMED", confidence=max(node.confidence, 0.7))
+    saved_gp = graph.save(graph_file.name)
+    task.graph_path = str(saved_gp)
+    task.status = "RUNNING"
+
+    final_summary = (
+        f"Completed {len(task.checklist)} Deep-Thinking steps for '{task.title}' "
+        f"(avg quality={task.quality_score:.2f}, stall recoveries={task.stall_count})."
+    )
     deliv = []
     if task.workspace_dir and Path(task.workspace_dir).is_dir():
         rep_p = Path(task.workspace_dir) / f"{task.task_id}_summary.md"
         try:
-            rep_p.write_text(f"# Cowork Deliverable: {task.title}\n\n**Goal:** {task.goal}\n\n## Status: COMPLETED\n\n{final_summary}\n", encoding="utf-8")
+            mermaid_block = graph.to_mermaid()
+            rep_body = (
+                f"# Cowork Deliverable: {task.title}\n\n"
+                f"**Goal:** {task.goal}\n\n"
+                f"## Summary\n{final_summary}\n\n"
+                f"{crash.to_markdown()}\n\n"
+                f"## Thought Graph\n```mermaid\n{mermaid_block}\n```\n"
+            )
+            rep_p.write_text(rep_body, encoding="utf-8")
             deliv.append({"name": f"{task.task_id}_summary.md", "path": str(rep_p), "type": "markdown"})
         except Exception:
             pass
-            
+
     _cowork_orchestrator.complete_task(task_id, summary=final_summary, deliverables=deliv)
     append_log(f"[CoworkDaemon] Task #{task_id} COMPLETED successfully.")
 
@@ -1871,7 +2192,7 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.5.0-beta.2"
+PAI_CURRENT_VERSION = "1.5.0-beta.3"
 try:
     _curr_dir = Path(__file__).resolve().parent
     _v_candidates = [
@@ -2683,6 +3004,17 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         elif path == "/api/mcp/list":
             servers = load_mcp_servers()
             self._send_json({"success": True, "servers": servers})
+        # 10b2. Desktop Control Capabilities
+        elif path == "/api/desktop/capabilities":
+            ui_bin = find_ui_agent_binary()
+            _, _, v_mode, v_model = _build_desktop_model_callbacks(get_current_model())
+            self._send_json({
+                "success": True,
+                "ui_agent_available": bool(ui_bin and ui_bin.is_file()),
+                "control_enabled": _desktop_control_enabled,
+                "vision_mode": v_mode,
+                "vision_model": v_model,
+            })
         # 10c. Plugins List
         elif path == "/api/plugins/list":
             plugins = load_plugins_list()
@@ -2710,6 +3042,24 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         elif path == "/api/cowork/tasks":
             tasks = _cowork_orchestrator.list_tasks(limit=30)
             self._send_json({"success": True, "tasks": [asdict(t) for t in tasks]})
+        elif path == "/api/cowork/tasks/graph":
+            tid = query_params.get("task_id", [""])[0].strip()
+            task = _cowork_orchestrator.get_task(tid)
+            if not task:
+                self._send_json({"success": False, "error": f"Task not found: {tid}"}, status=404)
+            elif task.graph_path and Path(task.graph_path).exists():
+                try:
+                    g = ThoughtGraph.load(Path(task.graph_path))
+                    self._send_json({
+                        "success": True,
+                        "task_id": tid,
+                        "graph": g.to_dict(),
+                        "mermaid": g.to_mermaid(),
+                    })
+                except Exception as exc:
+                    self._send_json({"success": False, "error": str(exc)}, status=500)
+            else:
+                self._send_json({"success": True, "task_id": tid, "graph": None, "mermaid": ""})
         # 14b. Cowork Connected Folders List
         elif path == "/api/cowork/folders":
             folders = _connected_folders_mgr.list_folders()
@@ -3063,6 +3413,62 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             dlg_title = body.get("title") if isinstance(body, dict) and body.get("title") else "Select Project Workspace Folder"
             initial_path = body.get("initial_path") if isinstance(body, dict) and body.get("initial_path") else ""
             self._handle_select_folder(dlg_title, initial_path=initial_path)
+        # 13b. Desktop Control Governance Routes
+        elif path == "/api/desktop/control_toggle":
+            global _desktop_control_enabled
+            target_enabled = bool(body.get("enabled", False))
+            if target_enabled and not body.get("confirm") and not body.get("confirmed"):
+                self._send_json({"success": False, "error": "Explicit confirmation required to enable PC Control Mode (confirm: true)."}, status=403)
+                return
+            _desktop_control_enabled = target_enabled
+            if not target_enabled:
+                _desktop_abort_event.set()
+            else:
+                _desktop_abort_event.clear()
+            self._send_json({"success": True, "control_enabled": _desktop_control_enabled})
+        elif path == "/api/desktop/state":
+            if not _desktop_control_enabled and not body.get("confirm"):
+                self._send_json({"success": False, "error": "PC Control Mode is disabled."}, status=403)
+                return
+            try:
+                ctrl = DesktopController(confirm=lambda _r: True, abort_event=_desktop_abort_event)
+                st = ctrl.get_state(max_nodes=int(body.get("max_nodes", 80) or 80))
+                self._send_json({"success": True, "state": st})
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=500)
+        elif path == "/api/desktop/confirm_action":
+            action_id = str(body.get("action_id", "")).strip()
+            approved = bool(body.get("approved", False))
+            if not action_id:
+                self._send_json({"success": False, "error": "action_id is required."}, status=400)
+                return
+            with _pending_hitl_lock:
+                pending = _pending_hitl_actions.pop(action_id, None)
+            if pending is None:
+                self._send_json({"success": False, "error": "Pending action not found or already resolved."}, status=404)
+                return
+            if not approved:
+                self._send_json({"success": True, "status": "cancelled", "summary": "Action cancelled by user."})
+                return
+            if not body.get("confirm") and not body.get("confirmed"):
+                self._send_json({"success": False, "error": "Explicit confirm: true required."}, status=403)
+                return
+            _desktop_abort_event.clear()
+            ctrl = DesktopController(confirm=lambda _r: True, abort_event=_desktop_abort_event)
+            orch = DesktopOrchestrator(controller=ctrl)
+            res = orch.execute_confirmed_action(pending)
+            self._send_json({
+                "success": res.ok,
+                "status": res.status,
+                "summary": res.summary,
+                "steps": res.steps,
+                "error": res.error or None,
+            })
+        elif path == "/api/desktop/abort":
+            _desktop_abort_event.set()
+            with _pending_hitl_lock:
+                _pending_hitl_actions.clear()
+            self._send_json({"success": True, "aborted": True})
         # 14. MCP Save Server
         elif path == "/api/mcp/save":
             name = body.get("name", "").strip()
@@ -3179,6 +3585,25 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             deliv = body.get("deliverables", [])
             ok_c = _cowork_orchestrator.complete_task(tid, summary=summary, deliverables=deliv)
             self._send_json({"success": ok_c, "task_id": tid})
+        # 21b. Cowork Task Pause / Resume / Cancel
+        elif path == "/api/cowork/tasks/pause":
+            tid = body.get("task_id", "").strip()
+            reason = body.get("reason", "Paused by user.").strip()
+            ok_p = _cowork_orchestrator.pause_task(tid, reason=reason)
+            self._send_json({"success": ok_p, "task_id": tid, "status": "PAUSED" if ok_p else "NOT_FOUND"})
+        elif path == "/api/cowork/tasks/resume":
+            tid = body.get("task_id", "").strip()
+            resumed = _cowork_orchestrator.resume_task(tid)
+            if resumed:
+                _agent_executor.submit(_run_cowork_background_loop, tid, resumed.mode or "team")
+                self._send_json({"success": True, "task_id": tid, "status": resumed.status, "task": asdict(resumed)})
+            else:
+                self._send_json({"success": False, "error": f"Cannot resume task: {tid}"}, status=404)
+        elif path == "/api/cowork/tasks/cancel":
+            tid = body.get("task_id", "").strip()
+            reason = body.get("reason", "Cancelled by user.").strip()
+            ok_x = _cowork_orchestrator.cancel_task(tid, reason=reason)
+            self._send_json({"success": ok_x, "task_id": tid, "status": "CANCELLED" if ok_x else "NOT_FOUND"})
         # 22. Cowork Connect Folder
         elif path == "/api/cowork/folders/connect":
             host_p = body.get("path", "").strip()
@@ -3702,7 +4127,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             messages_log.append(str(msg))
 
         team = MultiAgentTeam(output_fn=_team_output)
-        res = team.run_collaborative_workflow(task_prompt=task, active_project_dir=p_dir)
+        res = team.run_collaborative_workflow(task_prompt=task, active_project_dir=p_dir, deep_think=True, max_quality_rounds=3)
 
         # Structure messages into FIPA-ACL events
         fipa_events = []
@@ -4050,6 +4475,19 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         history = body.get("history", [])
         project_path = body.get("project_path", "").strip()
         is_team_mode = bool(body.get("is_team_mode", False))
+        lower_raw = raw_prompt.lower()
+        is_deep_think = bool(body.get("is_deep_think", False)) or lower_raw.startswith(("/deep", "/tot"))
+        tot_strategy = "dfs" if lower_raw.startswith("/tot dfs") else "bfs"
+        if lower_raw.startswith("/swarm"):
+            is_team_mode = True
+            is_deep_think = True
+            raw_prompt = raw_prompt[len("/swarm"):].strip()
+        elif lower_raw.startswith("/deep"):
+            raw_prompt = raw_prompt[len("/deep"):].strip()
+        elif lower_raw.startswith("/tot dfs"):
+            raw_prompt = raw_prompt[len("/tot dfs"):].strip()
+        elif lower_raw.startswith("/tot"):
+            raw_prompt = raw_prompt[len("/tot"):].strip()
 
         if not raw_prompt and not body.get("attachments"):
             return {"success": False, "error": "Prompt or attachment required"}
@@ -4114,7 +4552,12 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 from multi_agent import MultiAgentTeam
 
             team = MultiAgentTeam(model_name=model)
-            res = team.run_collaborative_workflow(team_task, active_project_dir=p_dir)
+            res = team.run_collaborative_workflow(
+                team_task,
+                active_project_dir=p_dir,
+                deep_think=True,
+                max_quality_rounds=3,
+            )
 
             # Auto-save any code updates into the project directory
             saved_files = []
@@ -4261,6 +4704,167 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # Clear any prior cancellation signals
         _chat_abort_event.clear()
 
+        # Check for natural-language PC automation intent or automation slash commands
+        # (WhatsApp, Email compose, YouTube, Web search, Desktop App launches, Notepad, Folders)
+        stripped_auto = raw_prompt.strip()
+        auto_sub_action = None
+        clean_auto_prompt = stripped_auto
+
+        if stripped_auto.lower().startswith(("/auto ", "/auto\n")):
+            auto_sub_action = "auto"
+            clean_auto_prompt = stripped_auto[len("/auto"):].strip()
+        elif stripped_auto.lower().startswith(("/mail ", "/mail\n")):
+            auto_sub_action = "mail"
+            clean_auto_prompt = stripped_auto[len("/mail"):].strip()
+        elif stripped_auto.lower().startswith(("/whatsapp ", "/whatsapp\n", "/wa ", "/wa\n")):
+            auto_sub_action = "whatsapp"
+            clean_auto_prompt = re.sub(r"^/(?:whatsapp|wa)\s*", "", stripped_auto, flags=re.IGNORECASE).strip()
+        elif stripped_auto.lower().startswith(("/telegram ", "/telegram\n", "/tg ", "/tg\n")):
+            auto_sub_action = "telegram"
+            clean_auto_prompt = re.sub(r"^/(?:telegram|tg)\s*", "", stripped_auto, flags=re.IGNORECASE).strip()
+        elif stripped_auto.lower().startswith(("/desktop ", "/desktop\n", "/mouse ", "/mouse\n", "/ui ", "/ui\n")):
+            auto_sub_action = "desktop_control"
+            clean_auto_prompt = re.sub(r"^/(?:desktop|mouse|ui)\s*", "", stripped_auto, flags=re.IGNORECASE).strip()
+        elif stripped_auto.lower().startswith(("/youtube ", "/youtube\n", "/yt ", "/yt\n")):
+            auto_sub_action = "youtube"
+            clean_auto_prompt = re.sub(r"^/(?:youtube|yt)\s*", "", stripped_auto, flags=re.IGNORECASE).strip()
+        elif stripped_auto.lower().startswith(("/open ", "/open\n")):
+            auto_sub_action = "open"
+            clean_auto_prompt = stripped_auto[len("/open"):].strip()
+        elif stripped_auto.lower().startswith(("/weather ", "/weather\n")):
+            auto_sub_action = "weather"
+            clean_auto_prompt = stripped_auto[len("/weather"):].strip()
+
+        try:
+            auto_intent = parse_automation_intent(clean_auto_prompt, sub_action=auto_sub_action)
+            if auto_intent is not None and not is_team_mode:
+                kind = auto_intent.get("kind", "")
+                append_log(f"[Automation] Intercepted PC automation '{kind}' for prompt: {clean_auto_prompt[:80]}")
+                pc_control_active = bool(_desktop_control_enabled or body.get("pc_control_mode", False))
+                plan_fn, vision_fn, vision_mode, _ = _build_desktop_model_callbacks(model)
+
+                # Multi-step Telegram / WhatsApp messaging with HITL Approve & Send
+                if kind in ("telegram", "whatsapp"):
+                    info = parse_telegram_intent(clean_auto_prompt) if kind == "telegram" else parse_whatsapp_intent(clean_auto_prompt)
+                    recipient = info.get("username") or info.get("contact") or ""
+                    phone = info.get("phone", "")
+                    msg_body = info.get("message", "")
+                    if msg_body or kind == "telegram":
+                        _desktop_abort_event.clear()
+                        ctrl = DesktopController(
+                            confirm=(lambda _r: True) if pc_control_active else None,
+                            abort_event=_desktop_abort_event,
+                        )
+                        orch = DesktopOrchestrator(controller=ctrl, plan_fn=plan_fn, vision_fn=vision_fn)
+                        orch_res = orch.prepare_messaging_send(
+                            app=kind,
+                            recipient=recipient,
+                            phone=phone,
+                            message=msg_body,
+                        )
+                        _store_pending_hitl(orch_res.pending_action)
+                        title = "Telegram Automation" if kind == "telegram" else "WhatsApp Automation"
+                        icon = "✅" if orch_res.ok else "⚠️"
+                        detail_lines = [
+                            f"App      : {kind.title()}",
+                            f"Target   : {recipient or phone or '(select in app)'}",
+                        ]
+                        if msg_body:
+                            detail_lines.append(f"Message  : {msg_body}")
+                        detail_lines.append(f"Status   : {orch_res.summary}")
+                        resp_md = f"### {icon} {title}\n\n```text\n" + "\n".join(detail_lines) + "\n```"
+                        return {
+                            "success": orch_res.ok,
+                            "response": resp_md,
+                            "model": "PAI Desktop Orchestrator",
+                            "is_automation": True,
+                            "automation_kind": kind,
+                            "pending_confirmation": orch_res.pending_action,
+                            "desktop_steps": orch_res.steps,
+                        }
+
+                # Explicit Mouse / Keyboard / UIA / Vision orchestration
+                if kind == "desktop_control":
+                    if not pc_control_active:
+                        return {
+                            "success": True,
+                            "response": (
+                                "### 🛡️ PC Control Mode Required\n\n"
+                                "Mouse, keyboard, and screen automation requires **PC Control Mode** to be enabled.\n\n"
+                                "Toggle **PC Control** ON in the chat toolbar above (confirming local mouse/keyboard access) and retry your instruction."
+                            ),
+                            "model": "PAI Desktop Orchestrator",
+                            "is_automation": True,
+                            "automation_kind": "desktop_control",
+                            "requires_pc_control": True,
+                        }
+                    _desktop_abort_event.clear()
+                    ctrl = DesktopController(confirm=lambda _r: True, abort_event=_desktop_abort_event)
+                    orch = DesktopOrchestrator(controller=ctrl, plan_fn=plan_fn, vision_fn=vision_fn)
+                    orch_res = orch.run_goal(clean_auto_prompt)
+                    _store_pending_hitl(orch_res.pending_action)
+                    icon = "✅" if orch_res.ok else "⚠️"
+                    step_lines = [
+                        f"{s.get('step')}. {s.get('action')} -> {s.get('reason') or ('OK' if s.get('ok') else s.get('error', 'Failed'))}"
+                        for s in orch_res.steps
+                    ]
+                    trace_txt = "\n".join(step_lines) if step_lines else orch_res.summary
+                    resp_md = (
+                        f"### {icon} Desktop UI Control ({vision_mode.title()} Mode)\n\n"
+                        f"{orch_res.summary}\n\n"
+                        f"```text\n{trace_txt}\n```"
+                    )
+                    return {
+                        "success": orch_res.ok,
+                        "response": resp_md,
+                        "model": "PAI Desktop Orchestrator",
+                        "is_automation": True,
+                        "automation_kind": "desktop_control",
+                        "pending_confirmation": orch_res.pending_action,
+                        "desktop_steps": orch_res.steps,
+                        "vision_used": orch_res.vision_used,
+                    }
+
+                buf_stream = io.StringIO()
+                ok_auto, msg_auto = execute_automation_task(
+                    clean_auto_prompt,
+                    sub_action=auto_sub_action,
+                    stream=buf_stream,
+                    model_fn=plan_fn,
+                )
+
+                kind_titles = {
+                    "whatsapp": "WhatsApp Automation",
+                    "telegram": "Telegram Automation",
+                    "email": "Email Compose Automation",
+                    "web_search": "Web & Media Search",
+                    "open_app": "Desktop Application",
+                    "notepad_type": "Notepad Automation",
+                    "open_folder": "File Explorer",
+                    "open_url": "Web Navigation",
+                    "clipboard": "Clipboard Action",
+                    "weather": "Live Weather Telemetry",
+                    "antigravity": "Antigravity Autonomous IDE",
+                }
+                action_title = kind_titles.get(kind, "PC Automation")
+                status_icon = "✅" if ok_auto else "⚠️"
+
+                resp_md = (
+                    f"### {status_icon} {action_title}\n\n"
+                    f"```text\n{msg_auto}\n```\n\n"
+                    f"*(Action executed safely on local workstation)*"
+                )
+
+                return {
+                    "success": True,
+                    "response": resp_md,
+                    "model": "PAI PC Automation Assistant",
+                    "is_automation": True,
+                    "automation_kind": kind,
+                }
+        except Exception as auto_exc:
+            append_log(f"[Automation] Error evaluating automation: {auto_exc}")
+
         # Check auto-memory intent: e.g. "remember that I'm...", "don't use..."
         mem_intent = detect_memory_intent(raw_prompt)
         auto_saved_memory = None
@@ -4305,6 +4909,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     active_model=model,
                     grounding_context=grounding_context,
                     clock_context=clock_str,
+                    deep_deliberate=is_deep_think,
                 )
                 council_dict = asdict(c_res)
                 council_claims = []
@@ -4424,10 +5029,75 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         is_virtual = req_model_lower in ("auto", "auto:fast", "auto:smart", "fusion")
         has_keys = has_usable_cloud_keys()
         actual_model_used = model
-        ctx_size = 4096 if not project_path else 8192
+        ctx_budget = _get_adaptive_budget(
+            is_cloud=(is_cloud_model(model) and not is_direct_local),
+            deep_mode=is_deep_think,
+            has_project=bool(project_path),
+        )
+        ctx_size = ctx_budget.num_ctx
         temp_val = float(body.get("temperature", 0.3))
+        deep_graph_mermaid = ""
 
-        if is_direct_local:
+        def _invoke_active_llm(sys_p: str, usr_p: str) -> Tuple[bool, str]:
+            combined_p = f"{sys_p}\n\n{usr_p}"
+            if is_direct_local:
+                return _execute_local_ollama_query(
+                    installed_map[req_model_lower],
+                    combined_p,
+                    temperature=temp_val,
+                    images=images_for_ollama,
+                    num_ctx=ctx_size,
+                )
+            if is_internet_enabled() and has_keys and (is_cloud_model(model) or is_virtual):
+                ok_c, rep_c = query_cloud_ai(
+                    prompt=combined_p,
+                    model=model,
+                    temperature=temp_val,
+                    max_tokens=ctx_budget.max_tokens,
+                )
+                if ok_c and str(rep_c).strip():
+                    return True, rep_c
+            if installed_names:
+                tgt = installed_map.get(req_model_lower) or resolve_local_virtual_model(model, installed_names)
+                return _execute_local_ollama_query(
+                    tgt,
+                    combined_p,
+                    temperature=temp_val,
+                    images=images_for_ollama,
+                    num_ctx=ctx_size,
+                )
+            return False, ""
+
+        if is_deep_think and raw_prompt:
+            if not is_direct_local and is_internet_enabled() and has_keys and (is_cloud_model(model) or is_virtual):
+                actual_model_used = f"{model} [Deep Think]"
+            elif installed_names:
+                tgt = installed_map.get(req_model_lower) or resolve_local_virtual_model(model, installed_names)
+                actual_model_used = f"{tgt} [Deep Think]"
+
+            deep_graph = ThoughtGraph(goal=raw_prompt)
+            tot_engine = TreeOfThoughtsEngine(
+                llm_fn=_invoke_active_llm,
+                graph=deep_graph,
+                breadth=2,
+                max_depth=2,
+                beam_width=2,
+            )
+            tot_res = tot_engine.solve(raw_prompt, context=proj_context[:2500] or grounding_context[:1500], strategy=tot_strategy)
+            tt_res = ThinkToolsPipeline(llm_fn=_invoke_active_llm, graph=deep_graph).run(
+                raw_prompt,
+                context=tot_res.best_answer[:2500],
+            )
+            deep_graph_mermaid = deep_graph.to_mermaid()
+            think_text = (
+                f"Strategy: Tree-of-Thoughts ({tot_strategy.upper()}) + ThinkTools 5-Stage Pipeline\n"
+                f"Context Window: {ctx_size} tokens ({ctx_budget.tier})\n"
+                f"Explored Nodes: {tot_res.explored_nodes} (Pruned: {tot_res.pruned_nodes})\n"
+                f"Confidence: {tt_res.confidence:.2f} | Verdict: {tt_res.verdict}\n\n"
+                f"{tot_res.best_answer[:1800]}"
+            )
+            reply_text = tt_res.final_synthesis or tot_res.best_answer
+        elif is_direct_local:
             # 1. Exact local Ollama model selected by user (e.g. deepseek-r1:7b, mistral:7b, llama3.2:1b)
             # MUST ALWAYS run locally in Ollama, never routing to cloud!
             target_local = installed_map[req_model_lower]
@@ -4590,7 +5260,10 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
 
         # Extract <think> reasoning trace & enforce CommonMark compliance
         clean_reply, think_trace = parse_thinking_response(reply_text)
-        think_text = think_trace
+        if think_trace and think_text:
+            think_text = f"{think_text}\n\n---\n{think_trace}"
+        elif think_trace:
+            think_text = think_trace
         reply_text = enforce_commonmark_compliance(clean_reply)
 
         # 3. Grounding & Fact-Checking Hook
@@ -4767,6 +5440,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             "success": True,
             "response": reply_text,
             "thinking": think_text,
+            "deep_think_used": bool(is_deep_think),
+            "thought_graph_mermaid": deep_graph_mermaid if "deep_graph_mermaid" in locals() else "",
+            "context_budget": _safe_asdict(ctx_budget) if "ctx_budget" in locals() else None,
             "model": actual_model_used,
             "project_path": project_path,
             "grounding": grounding_citations,

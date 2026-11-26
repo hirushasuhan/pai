@@ -1223,6 +1223,7 @@ def _execute_single_cloud_request(
     temperature: float = 0.3,
     max_tokens: int = 2048,
     timeout: float = 45.0,
+    images: Optional[List[str]] = None,
 ) -> Tuple[bool, str, int]:
     """Execute raw HTTP request against one candidate provider endpoint."""
     prov = candidate["provider"]
@@ -1243,11 +1244,23 @@ def _execute_single_cloud_request(
     except UrlRejected as exc:
         return False, f"URL rejected by outbound policy: {exc}", 400
 
+    user_content: Any = prompt
+    if images:
+        parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for img_b64 in images[:3]:
+            clean_b64 = (img_b64 or "").strip()
+            if not clean_b64:
+                continue
+            url_val = clean_b64 if clean_b64.startswith("data:") else f"data:image/png;base64,{clean_b64}"
+            parts.append({"type": "image_url", "image_url": {"url": url_val}})
+        if len(parts) > 1:
+            user_content = parts
+
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -1377,6 +1390,7 @@ def query_cloud_ai(
     temperature: float = 0.3,
     max_tokens: int = 2048,
     timeout: float = 45.0,
+    images: Optional[List[str]] = None,
 ) -> Tuple[bool, str]:
     """Execute a chat completion with 4D quota management, in-flight leases, and automatic failover."""
     if not is_internet_enabled():
@@ -1385,7 +1399,7 @@ def query_cloud_ai(
     target_model = model or get_active_cloud_model() or "auto"
 
     # Virtual 'fusion' model delegation
-    if target_model.lower() == "fusion":
+    if target_model.lower() == "fusion" and not images:
         return run_model_fusion(prompt, system_prompt, temperature, max_tokens, timeout)
 
     candidates = _resolve_candidate_chain(target_model, requested_prov=provider)
@@ -1418,6 +1432,7 @@ def query_cloud_ai(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout,
+                images=images,
             )
             if ok:
                 est_toks = len(prompt.split()) + len(resp_text.split())

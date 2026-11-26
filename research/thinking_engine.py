@@ -1,13 +1,14 @@
-"""PAI Cognitive Thinking Engine v2.
+"""PAI Cognitive Thinking Engine v3.
 
 Synthesizes best-in-class reasoning protocols, behavioral guardrails,
-and cognitive architectures inspired by Anthropic (Sonnet 3.7, Fable 5,
-Claude Code, Claude Cowork) and OpenAI (GPT-5 Thinking, Agent Mode):
+and cognitive architectures inspired by frontier systems (`system_prompts_leaks`),
+ReasonKit ThinkTools, Princeton Tree-of-Thoughts, and Raschka Inference Scaling:
   - 5-Stage Cognitive Reasoning Loop (Constraint Quoting, Temporal Stability,
     Digit-by-digit Calculation, CommonMark Formatting, Epistemic Humility).
+  - Adaptive Hardware-Bounded Context Budget (`compute_adaptive_context_budget`).
+  - Role-Specific Modular XML Cognitive Prompts (`architect`, `critic`, `verifier`, `deep_thinker`).
   - Proactive Search-First Arbiter for temporally unstable queries (>10% uncertainty).
   - Verbatim constraint quoting for riddles, logic puzzles, and multi-premise tasks.
-  - Strict CommonMark formatting compliance and oververbosity calibration (default: 3/10).
   - Bilingual fluency alignment (Sinhala, Singlish, English).
 """
 
@@ -18,6 +19,97 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+
+@dataclass
+class ContextBudget:
+    """Adaptive thinking & generation context window calibrated to hardware tier."""
+    tier: str               # COMPRESSED | BALANCED | HIGH | CLOUD
+    num_ctx: int            # Context window tokens
+    max_tokens: int         # Max output generation tokens
+    reasoning_depth: str    # standard | deep | exhaustive
+    rationale: str = ""
+
+
+def compute_adaptive_context_budget(
+    tier: Optional[str] = None,
+    is_cloud: bool = False,
+    deep_mode: bool = False,
+    has_project: bool = False,
+) -> ContextBudget:
+    """Computes safe expanded thinking context without overflowing local RAM/VRAM."""
+    resolved_tier = (tier or "").strip().upper()
+    if not resolved_tier:
+        try:
+            try:
+                from research.hardware_telemetry import HardwareTelemetry
+            except ModuleNotFoundError:
+                from hardware_telemetry import HardwareTelemetry
+            snap = HardwareTelemetry(cpu_sample_ms=10).get_system_snapshot()
+            resolved_tier = snap["budget"].compute_tier
+        except Exception:
+            resolved_tier = "BALANCED"
+
+    if is_cloud:
+        if deep_mode:
+            return ContextBudget(
+                tier="CLOUD",
+                num_ctx=65536,
+                max_tokens=8192,
+                reasoning_depth="exhaustive",
+                rationale="Cloud active + Deep/Team mode: expanded 64K context & 8K output window.",
+            )
+        return ContextBudget(
+            tier="CLOUD",
+            num_ctx=32768 if has_project else 16384,
+            max_tokens=4096,
+            reasoning_depth="standard",
+            rationale="Cloud active: expanded 16K-32K context window.",
+        )
+
+    if resolved_tier == "COMPRESSED":
+        # Safety clamp to protect constrained RAM/VRAM hosts from OOM
+        return ContextBudget(
+            tier="COMPRESSED",
+            num_ctx=4096,
+            max_tokens=1024,
+            reasoning_depth="standard",
+            rationale="COMPRESSED hardware tier: clamped to 4096 ctx to prevent OOM.",
+        )
+
+    if resolved_tier == "HIGH":
+        if deep_mode or has_project:
+            return ContextBudget(
+                tier="HIGH",
+                num_ctx=32768,
+                max_tokens=4096,
+                reasoning_depth="exhaustive" if deep_mode else "deep",
+                rationale="HIGH hardware tier + Deep/Project mode: expanded 32K local context.",
+            )
+        return ContextBudget(
+            tier="HIGH",
+            num_ctx=16384,
+            max_tokens=2048,
+            reasoning_depth="standard",
+            rationale="HIGH hardware tier: expanded 16K local context.",
+        )
+
+    # Default BALANCED tier
+    if deep_mode or has_project:
+        return ContextBudget(
+            tier="BALANCED",
+            num_ctx=16384,
+            max_tokens=3072,
+            reasoning_depth="deep" if deep_mode else "standard",
+            rationale="BALANCED hardware tier + Deep/Project mode: expanded 16K local context.",
+        )
+    return ContextBudget(
+        tier="BALANCED",
+        num_ctx=8192,
+        max_tokens=2048,
+        reasoning_depth="standard",
+        rationale="BALANCED hardware tier: 8K local context.",
+    )
 
 
 @dataclass
@@ -455,3 +547,79 @@ def enforce_commonmark_compliance(text: str) -> str:
     # Collapse any runs of 3+ newlines to max 2 newlines (standard markdown)
     joined = "\n".join(processed)
     return re.sub(r"\n{3,}", "\n\n", joined)
+
+
+_ROLE_DIRECTIVES: Dict[str, str] = {
+    "deep_thinker": (
+        "Prioritize depth, correctness, and completeness over speed. "
+        "Decompose into sub-problems, evaluate competing alternatives as a tree of branches, "
+        "critique weak assumptions before committing, and verify every claim against evidence."
+    ),
+    "architect": (
+        "Design modular, orthogonal interfaces (Clean Code / Pragmatic Programmer). "
+        "Specify exact file contracts, data flow, failure modes, and invariants before writing code."
+    ),
+    "critic": (
+        "Execute adversarial red-team inspection (BrutalHonesty / LaserLogic). "
+        "Identify logical fallacies, missing edge cases, race conditions, security flaws, and unsupported claims. "
+        "Every critique MUST cite specific evidence or line targets."
+    ),
+    "verifier": (
+        "Perform strict ProofGuard triangulation. Verify syntax, constraints, citations, and test assertions. "
+        "Never pass incomplete stubs, TODO placeholders, or unverified claims."
+    ),
+    "synthesizer": (
+        "Merge verified branch findings and consensus insights into a cohesive, crystal-clear final deliverable "
+        "honoring the user's original language (Sinhala, Singlish, or English)."
+    ),
+}
+
+
+def format_role_cognitive_prompt(
+    role: str,
+    objective: str,
+    graph_context: str = "",
+    blackboard_context: str = "",
+    constraints: Optional[List[str]] = None,
+) -> str:
+    """Assembles a modular XML cognitive prompt for specialized ThinkTools & Swarm roles."""
+    r_key = (role or "deep_thinker").strip().lower()
+    directive = _ROLE_DIRECTIVES.get(r_key, _ROLE_DIRECTIVES["deep_thinker"])
+    cons_block = ""
+    if constraints:
+        cons_block = "<constraints>\n" + "\n".join(f"- {c}" for c in constraints) + "\n</constraints>\n"
+    graph_block = f"<thought_graph_context>\n{graph_context.strip()}\n</thought_graph_context>\n" if graph_context else ""
+    bb_block = f"<subconscious_blackboard>\n{blackboard_context.strip()}\n</subconscious_blackboard>\n" if blackboard_context else ""
+
+    return (
+        f"<cognitive_role name=\"{r_key}\">\n"
+        f"<directive>{directive}</directive>\n"
+        f"{cons_block}{graph_block}{bb_block}"
+        f"<objective>\n{objective.strip()}\n</objective>\n"
+        f"</cognitive_role>"
+    )
+
+
+def extract_structured_verdict(raw_reply: str) -> Dict[str, Any]:
+    """Parses optional <confidence>, <verdict>, and <citations> annotations alongside <think>."""
+    clean_text, trace = parse_thinking_response(raw_reply or "")
+    conf = 0.75
+    m_conf = re.search(r"(?:<confidence>|CONFIDENCE\s*[:=])\s*([01](?:\.\d+)?)", raw_reply or "", re.IGNORECASE)
+    if m_conf:
+        try:
+            conf = max(0.0, min(1.0, float(m_conf.group(1))))
+        except ValueError:
+            pass
+    verdict = "PENDING"
+    m_ver = re.search(r"\b(?:VERDICT\s*[:=]\s*)?(CONFIRMED|REFUTED|PASS|REVISE|FAIL)\b", raw_reply or "", re.IGNORECASE)
+    if m_ver:
+        tok = m_ver.group(1).upper()
+        verdict = "CONFIRMED" if tok in ("CONFIRMED", "PASS") else "REFUTED"
+    cites = re.findall(r"\b[\w./\\-]+\.(?:py|js|ts|rs|html|css|md|json):\d+\b", raw_reply or "")
+    return {
+        "response": clean_text,
+        "thinking": trace,
+        "confidence": conf,
+        "verdict": verdict,
+        "citations": list(dict.fromkeys(cites)),
+    }

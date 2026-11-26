@@ -724,15 +724,28 @@ function updateChatPlaceholderForActiveModel() {
   if (m.includes("llava") || m.includes("moondream") || m.includes("vision")) {
     chatInput.placeholder = "Ask a question, or attach an image for visual inspection...";
   } else {
-    chatInput.placeholder = "Ask anything, run /image, /team, /help... (Enter to send, Shift+Enter for newline)";
+    chatInput.placeholder = "Ask anything, run /mail, /whatsapp, /youtube, /image, /team, /help... (Enter to send, Shift+Enter for newline)";
   }
 }
 
 const SLASH_COMMANDS = [
+  { cmd: "/auto", desc: "Automate PC tasks (web, apps, folders, clipboard)", cat: "Automation" },
+  { cmd: "/telegram", desc: "Open Telegram & stage message to @username or contact (with Approve & Send)", cat: "Automation" },
+  { cmd: "/tg", desc: "Short alias for /telegram messaging", cat: "Automation" },
+  { cmd: "/desktop", desc: "Control Windows mouse, keyboard, and UI elements safely", cat: "PC Control" },
+  { cmd: "/mouse", desc: "Execute mouse/click/scroll actions on screen", cat: "PC Control" },
+  { cmd: "/mail", desc: "Draft email & open Gmail/Outlook compose with Subject and Body", cat: "Automation" },
+  { cmd: "/whatsapp", desc: "Open WhatsApp & prepare message to contact or phone", cat: "Automation" },
+  { cmd: "/wa", desc: "Short alias for /whatsapp to message contacts quickly", cat: "Automation" },
+  { cmd: "/youtube", desc: "Search or play video and music on YouTube in browser", cat: "Media" },
+  { cmd: "/open", desc: "Launch safe desktop app (Chrome, Telegram, VS Code, Calc, Notepad, etc.)", cat: "Automation" },
   { cmd: "/internet on", desc: "Enable live real-time internet web access & RAG", cat: "Grounding" },
   { cmd: "/internet off", desc: "Disable internet access (strictly offline mode)", cat: "Grounding" },
   { cmd: "/factcheck on", desc: "Enable real-time fact-checking & audit engine", cat: "Auditing" },
   { cmd: "/factcheck off", desc: "Disable automated fact-checking", cat: "Auditing" },
+  { cmd: "/deep", desc: "Run Tree-of-Thoughts + ThinkTools 5-stage deep reasoning with expanded context", cat: "Reasoning" },
+  { cmd: "/tot", desc: "Explore BFS/DFS Tree-of-Thoughts branches (e.g. /tot dfs <goal>)", cat: "Reasoning" },
+  { cmd: "/swarm", desc: "Dispatch autonomous multi-agent engineering swarm with deep verification", cat: "Agents" },
   { cmd: "/council", desc: "Convene multi-model deliberation council across independent local models", cat: "Reasoning" },
   { cmd: "/team", desc: "Toggle autonomous 7-role AI engineering team", cat: "Agents" },
   { cmd: "/supervisor", desc: "Open Antigravity Autonomous Supervisor in AI Team", cat: "Agents" },
@@ -749,6 +762,67 @@ const SLASH_COMMANDS = [
   { cmd: "/help", desc: "Display all available commands and keyboard shortcuts", cat: "Help" },
 ];
 let activeSlashIndex = 0;
+
+function setupPcControlBar() {
+  const chkPc = document.getElementById("chk-pc-control-mode");
+  const btnAbort = document.getElementById("btn-pc-abort");
+  if (!chkPc) return;
+
+  // Sync initial status from bridge
+  fetch(`${API_BASE}/api/desktop/capabilities`)
+    .then((r) => r.json())
+    .then((d) => {
+      if (d && d.success) {
+        chkPc.checked = !!d.control_enabled;
+        if (btnAbort) btnAbort.classList.toggle("hidden", !d.control_enabled);
+      }
+    })
+    .catch(() => {});
+
+  chkPc.addEventListener("change", async () => {
+    const wantOn = chkPc.checked;
+    if (wantOn) {
+      const ok = window.confirm(
+        "Enable PC Control Mode?\n\nPAI will be allowed to inspect Windows UI elements and control mouse/keyboard on your desktop.\n\nSafety: Outbound Send actions always pause for Approve & Send, and moving your mouse to the top-left corner (0,0) triggers an immediate emergency stop."
+      );
+      if (!ok) {
+        chkPc.checked = false;
+        return;
+      }
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/desktop/control_toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: wantOn, confirm: wantOn }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        chkPc.checked = !!data.control_enabled;
+        if (btnAbort) btnAbort.classList.toggle("hidden", !data.control_enabled);
+        showToast(
+          data.control_enabled ? "PC Control Mode enabled (0,0 corner = Emergency Stop)" : "PC Control Mode disabled",
+          data.control_enabled ? "info" : "success"
+        );
+      } else {
+        chkPc.checked = !wantOn;
+        showToast(data.error || "Failed to toggle PC Control Mode", "error");
+      }
+    } catch (err) {
+      chkPc.checked = !wantOn;
+      showToast(`PC Control error: ${err.message}`, "error");
+    }
+  });
+
+  if (btnAbort) {
+    btnAbort.addEventListener("click", async () => {
+      try {
+        await fetch(`${API_BASE}/api/desktop/abort`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        showToast("Emergency Stop signal sent to PC Automation.", "warning");
+      } catch (_) {}
+    });
+  }
+}
 
 function setupSlashCommands() {
   if (!slashCommandsPopup || !slashCommandsList || !chatInput) return;
@@ -1273,6 +1347,7 @@ function renderChatHistorySidebar() {
 function setupChat() {
   initChatHistory();
   setupSlashCommands();
+  setupPcControlBar();
   updateChatPlaceholderForActiveModel();
   updateAttachmentCapabilities();
 
@@ -1655,8 +1730,13 @@ async function dispatchChatRequest(promptToSend, botMsgId, sentAttachments, user
   currentChatAbortController = new AbortController();
   setSendButtonState("generating");
 
+  const chkDeepThinkMode = document.getElementById("chk-deep-think-mode");
   const chkCouncilMode = document.getElementById("chk-chat-council-mode");
-  const isCouncil = (chkCouncilMode && chkCouncilMode.checked) || promptToSend.trim().toLowerCase().startsWith("/council");
+  const chkPcControlMode = document.getElementById("chk-pc-control-mode");
+  const trimmedLower = promptToSend.trim().toLowerCase();
+  const isDeepThink = (chkDeepThinkMode && chkDeepThinkMode.checked) || trimmedLower.startsWith("/deep") || trimmedLower.startsWith("/tot") || trimmedLower.startsWith("/swarm");
+  const isCouncil = (chkCouncilMode && chkCouncilMode.checked) || trimmedLower.startsWith("/council");
+  const isPcControl = !!(chkPcControlMode && chkPcControlMode.checked);
   const targetSessionId = activeSessionId;
 
   try {
@@ -1666,8 +1746,10 @@ async function dispatchChatRequest(promptToSend, botMsgId, sentAttachments, user
       history: chatHistory,
       session_id: targetSessionId,
       project_path: activeProjectPath,
-      is_team_mode: isTeam,
+      is_team_mode: isTeam || trimmedLower.startsWith("/swarm"),
+      is_deep_think: isDeepThink,
       is_council_mode: isCouncil,
+      pc_control_mode: isPcControl,
       attachments: sentAttachments,
     };
 
@@ -1725,7 +1807,16 @@ async function dispatchChatRequest(promptToSend, botMsgId, sentAttachments, user
           loadProjectFiles(activeProjectPath);
         }
       } else {
-        updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend, data.thinking, { auto_saved_memory: data.auto_saved_memory, council_result: data.council_result });
+        updateAssistantMessage(botMsgId, data.response, data.factcheck, data.grounding, promptToSend, data.thinking, {
+          auto_saved_memory: data.auto_saved_memory,
+          council_result: data.council_result,
+          pending_confirmation: data.pending_confirmation,
+          desktop_steps: data.desktop_steps,
+          requires_pc_control: data.requires_pc_control,
+          deep_think_used: data.deep_think_used,
+          thought_graph_mermaid: data.thought_graph_mermaid,
+          context_budget: data.context_budget,
+        });
       }
       chatHistory.push({ role: "user", content: promptToSend });
       chatHistory.push({ role: "assistant", content: data.response || `[Action Completed]` });
@@ -1873,7 +1964,16 @@ function pollChatJobUntilComplete(taskId) {
                   result.grounding,
                   jobInfo.promptToSend,
                   result.thinking,
-                  { auto_saved_memory: result.auto_saved_memory, council_result: result.council_result }
+                  {
+                    auto_saved_memory: result.auto_saved_memory,
+                    council_result: result.council_result,
+                    pending_confirmation: result.pending_confirmation,
+                    desktop_steps: result.desktop_steps,
+                    requires_pc_control: result.requires_pc_control,
+                    deep_think_used: result.deep_think_used,
+                    thought_graph_mermaid: result.thought_graph_mermaid,
+                    context_budget: result.context_budget,
+                  }
                 );
               }
             }
@@ -2155,6 +2255,23 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
 
   let html = formatMarkdown(text);
 
+  if (extra && extra.thought_graph_mermaid && extra.thought_graph_mermaid.trim()) {
+    const budgetInfo = extra.context_budget
+      ? ` · ctx ${extra.context_budget.num_ctx} (${extra.context_budget.tier || "BALANCED"})`
+      : "";
+    html = `
+      <details class="thinking-accordion deep-tree-accordion mb-2">
+        <summary class="thinking-summary">
+          <svg class="thinking-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.5"></circle><circle cx="6" cy="18" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><line x1="11" y1="7.3" x2="7" y2="15.7"></line><line x1="13" y1="7.3" x2="17" y2="15.7"></line></svg>
+          <span>Deep Thought Graph${escapeHtml(budgetInfo)}</span>
+        </summary>
+        <div class="thinking-body">
+          <pre>${escapeHtml(extra.thought_graph_mermaid.trim())}</pre>
+        </div>
+      </details>
+    ` + html;
+  }
+
   if (thinking && thinking.trim()) {
     html = `
       <details class="thinking-accordion mb-2">
@@ -2305,6 +2422,33 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
   }
 
   const promptForRetry = userPrompt || lastSentPrompt;
+  const pending = extra && extra.pending_confirmation;
+  if (pending && pending.action_id) {
+    html += `
+      <div class="hitl-confirm-card" data-action-id="${escapeHtml(pending.action_id)}">
+        <div class="hitl-confirm-header">
+          <span>Human-in-the-Loop Confirmation Required</span>
+          <span>${escapeHtml(pending.app || "Desktop Action")}</span>
+        </div>
+        <div class="hitl-confirm-desc">${escapeHtml(pending.step_description || "Review and approve before continuing.")}</div>
+        <div class="hitl-confirm-actions">
+          <button type="button" class="btn-hitl-approve">Approve &amp; Send</button>
+          <button type="button" class="btn-hitl-cancel">Cancel</button>
+        </div>
+        <div class="hitl-status-note"></div>
+      </div>
+    `;
+  } else if (extra && extra.requires_pc_control && promptForRetry) {
+    html += `
+      <div class="hitl-confirm-card">
+        <div class="hitl-confirm-desc">Enable PC Control Mode to allow UI inspection and mouse/keyboard execution for this request.</div>
+        <div class="hitl-confirm-actions">
+          <button type="button" class="btn-hitl-approve btn-enable-pc-control">Enable PC Control &amp; Retry</button>
+        </div>
+      </div>
+    `;
+  }
+
   html += `
     <div class="msg-footer-actions">
       <button type="button" class="btn-msg-action btn-copy-msg" title="Copy response to clipboard">
@@ -2321,6 +2465,61 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
   `;
 
   body.innerHTML = html;
+
+  const hitlCard = body.querySelector(".hitl-confirm-card[data-action-id]");
+  if (hitlCard) {
+    const actionId = hitlCard.getAttribute("data-action-id");
+    const btnApprove = hitlCard.querySelector(".btn-hitl-approve");
+    const btnCancel = hitlCard.querySelector(".btn-hitl-cancel");
+    const statusNote = hitlCard.querySelector(".hitl-status-note");
+
+    const submitDecision = async (approved) => {
+      if (btnApprove) btnApprove.disabled = true;
+      if (btnCancel) btnCancel.disabled = true;
+      if (statusNote) statusNote.textContent = approved ? "Executing approved action..." : "Cancelling...";
+      try {
+        const res = await fetch(`${API_BASE}/api/desktop/confirm_action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action_id: actionId, approved: approved, confirm: approved }),
+        });
+        const resp = await res.json();
+        if (statusNote) {
+          statusNote.textContent = resp.summary || (resp.success ? "Completed." : (resp.error || "Failed."));
+        }
+      } catch (err) {
+        if (statusNote) statusNote.textContent = `Error: ${err.message}`;
+      }
+    };
+    if (btnApprove) btnApprove.addEventListener("click", () => submitDecision(true));
+    if (btnCancel) btnCancel.addEventListener("click", () => submitDecision(false));
+  }
+
+  const btnEnablePc = body.querySelector(".btn-enable-pc-control");
+  if (btnEnablePc && promptForRetry) {
+    btnEnablePc.addEventListener("click", async () => {
+      btnEnablePc.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/desktop/control_toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true, confirm: true }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          const chkPc = document.getElementById("chk-pc-control-mode");
+          const btnAbort = document.getElementById("btn-pc-abort");
+          if (chkPc) chkPc.checked = true;
+          if (btnAbort) btnAbort.classList.remove("hidden");
+          regeneratePrompt(promptForRetry);
+        } else {
+          btnEnablePc.disabled = false;
+        }
+      } catch (_) {
+        btnEnablePc.disabled = false;
+      }
+    });
+  }
 
   const btnCopy = body.querySelector(".btn-copy-msg");
   if (btnCopy) {
@@ -6709,7 +6908,7 @@ async function checkSoftwareUpdates(interactive = false) {
       lastCheckedLabel.textContent = `Last checked: ${data.last_checked || new Date().toLocaleTimeString()}`;
     }
 
-    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.5.0-beta.2";
+    const activeVer = data.current_version || (data.update_available ? data.current_version : data.latest_version) || "1.5.0-beta.3";
     updateActiveVersionDisplay(activeVer);
 
     if (data.update_available) {
@@ -6768,7 +6967,7 @@ function openSoftwareUpdateModal() {
 
   const data = currentCachedUpdate || {};
   const targetVer = data.latest_version || data.target_version || "1.4.3";
-  const currVer = data.current_version || window.__pai_active_version || "1.5.0-beta.2";
+  const currVer = data.current_version || window.__pai_active_version || "1.5.0-beta.3";
   const relName = data.release_name || `Personal Agentic AI v${targetVer}`;
   const relNotes = data.release_notes || `### What's New in Personal Agentic AI v${targetVer}\n\n- Tauri 2.0 Native Auto-Updater & background atomic swap\n- Memory-safe stateless reasoning engine\n- ADR-005 Ed25519 cryptographic security verification\n- Real-time hardware telemetry and background download progress strip`;
 
@@ -8094,9 +8293,20 @@ async function loadCoworkData() {
     const data = await res.json();
     if (data.success && data.tasks && data.tasks.length > 0) {
       tasksTable.innerHTML = data.tasks.map(t => {
-        const statusClass = t.status === "COMPLETED" ? "status-completed" : "status-running";
+        const statusUpper = String(t.status || "PENDING").toUpperCase();
+        const statusClass = statusUpper === "COMPLETED"
+          ? "status-completed"
+          : (statusUpper === "PAUSED" ? "status-paused" : (statusUpper === "STALLED_RECOVERING" || statusUpper === "FAILED" || statusUpper === "CANCELLED" ? "status-stalled" : "status-running"));
         const completedCount = (t.checklist || []).filter(i => i.completed).length;
         const totalCount = (t.checklist || []).length;
+        const stallBadge = (t.stall_count && t.stall_count > 0)
+          ? `<span class="badge badge-subtle" title="${escapeHtml(t.last_stall_reason || '')}">Stall recoveries: ${t.stall_count}</span>`
+          : "";
+        const qualBadge = (t.quality_score && t.quality_score > 0)
+          ? `<span class="badge badge-subtle">Quality ${(t.quality_score * 100).toFixed(0)}%</span>`
+          : "";
+        const isActive = statusUpper === "RUNNING" || statusUpper === "STALLED_RECOVERING";
+        const isPaused = statusUpper === "PAUSED";
         return `
           <div class="cowork-task-row">
             <div>
@@ -8104,19 +8314,80 @@ async function loadCoworkData() {
                 <span class="cowork-task-status-badge ${statusClass}">${escapeHtml(t.status)}</span>
                 <strong>${escapeHtml(t.title)}</strong>
                 <span class="font-mono text-xs text-muted">#${escapeHtml(t.task_id)}</span>
+                ${stallBadge}
+                ${qualBadge}
               </div>
               <div class="text-xs text-muted">${escapeHtml(t.goal)}</div>
-              <div class="text-xs font-mono" style="margin-top:4px;">Checklist: ${completedCount}/${totalCount} completed</div>
+              <div class="text-xs font-mono" style="margin-top:4px;">Checklist: ${completedCount}/${totalCount} completed${t.last_stall_reason ? ` · Last stall: ${escapeHtml(t.last_stall_reason)}` : ""}</div>
             </div>
             <div class="flex-center-gap">
+              <button type="button" class="btn btn-secondary btn-xs btn-graph-task" data-id="${escapeHtml(t.task_id)}" title="View Deep Thought Graph">Graph</button>
               <button type="button" class="btn btn-secondary btn-xs btn-handoff-task" data-id="${escapeHtml(t.task_id)}" title="Generate Cursor-style author handoff artifact">Handoff</button>
-              ${t.status === "RUNNING" ? `
+              ${isActive ? `
+                <button type="button" class="btn btn-secondary btn-xs btn-pause-task" data-id="${escapeHtml(t.task_id)}">Pause</button>
+                <button type="button" class="btn btn-secondary btn-xs btn-cancel-task" data-id="${escapeHtml(t.task_id)}">Cancel</button>
                 <button type="button" class="btn btn-secondary btn-xs btn-complete-task" data-id="${escapeHtml(t.task_id)}">Mark Done</button>
-              ` : `<span class="text-xs text-muted">Finished</span>`}
+              ` : (isPaused ? `
+                <button type="button" class="btn btn-primary btn-xs btn-resume-task" data-id="${escapeHtml(t.task_id)}">Resume</button>
+                <button type="button" class="btn btn-secondary btn-xs btn-cancel-task" data-id="${escapeHtml(t.task_id)}">Cancel</button>
+              ` : `<span class="text-xs text-muted">${escapeHtml(statusUpper === "COMPLETED" ? "Finished" : t.status)}</span>`)}
             </div>
           </div>
         `;
       }).join("");
+
+      tasksTable.querySelectorAll(".btn-graph-task").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const tid = e.target.getAttribute("data-id");
+          try {
+            const res = await fetch(`http://127.0.0.1:8765/api/cowork/tasks/graph?task_id=${encodeURIComponent(tid)}`);
+            const gdata = await res.json();
+            if (gdata.success && gdata.mermaid) {
+              if (typeof alert !== "undefined") alert(`Thought Graph (#${tid}):\n\n${gdata.mermaid}`);
+            } else {
+              showToast(`No Thought Graph recorded yet for task #${tid}.`, "info", "Thought Graph");
+            }
+          } catch (err) {
+            showToast(`Error loading graph: ${err}`, "error", "Graph Error");
+          }
+        });
+      });
+
+      tasksTable.querySelectorAll(".btn-pause-task").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const tid = e.target.getAttribute("data-id");
+          await fetch("http://127.0.0.1:8765/api/cowork/tasks/pause", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: tid })
+          });
+          loadCoworkData();
+        });
+      });
+
+      tasksTable.querySelectorAll(".btn-resume-task").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const tid = e.target.getAttribute("data-id");
+          await fetch("http://127.0.0.1:8765/api/cowork/tasks/resume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: tid })
+          });
+          loadCoworkData();
+        });
+      });
+
+      tasksTable.querySelectorAll(".btn-cancel-task").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const tid = e.target.getAttribute("data-id");
+          await fetch("http://127.0.0.1:8765/api/cowork/tasks/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: tid })
+          });
+          loadCoworkData();
+        });
+      });
 
       tasksTable.querySelectorAll(".btn-handoff-task").forEach(btn => {
         btn.addEventListener("click", async (e) => {

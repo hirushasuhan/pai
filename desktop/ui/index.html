@@ -274,6 +274,14 @@
                     <span class="engine-badge-dot"></span>
                     <span class="engine-badge-text" id="chat-engine-badge-text">Engine: Auto</span>
                   </div>
+                  <label class="toggle-pill" id="label-deep-think-mode" title="Enable Deep Tree-of-Thoughts, ThinkTools 5-stage analysis, and expanded context window">
+                    <input type="checkbox" id="chk-deep-think-mode" />
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">
+                      <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.5"></circle><circle cx="6" cy="18" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><line x1="11" y1="7.3" x2="7" y2="15.7"></line><line x1="13" y1="7.3" x2="17" y2="15.7"></line></svg>
+                      <span>Deep Think</span>
+                    </span>
+                  </label>
                   <label class="toggle-pill" id="label-chat-council-mode" title="Convene multi-model deliberation council across independent local models for complex reasoning">
                     <input type="checkbox" id="chk-chat-council-mode" />
                     <span class="toggle-slider"></span>
@@ -282,6 +290,17 @@
                       <span>Model Council</span>
                     </span>
                   </label>
+                  <label class="toggle-pill" id="label-pc-control-mode" title="Allow PAI to inspect Windows UI elements and control mouse/keyboard (moves to top-left corner (0,0) for emergency abort)">
+                    <input type="checkbox" id="chk-pc-control-mode" />
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">
+                      <svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                      <span>PC Control</span>
+                    </span>
+                  </label>
+                  <button type="button" id="btn-pc-abort" class="btn-pc-abort hidden" title="Emergency Stop PC Automation">
+                    <span>Stop PC</span>
+                  </button>
                 </div>
               </div>
 
@@ -338,7 +357,7 @@
                 <textarea
                   id="chat-input"
                   class="chat-textarea"
-                  placeholder="Ask PAI or type an instruction (type / for commands, e.g. /internet, /team, /image, /mcp)..."
+                  placeholder="Ask PAI or type an instruction (e.g. /telegram, /mail, /whatsapp, /youtube, /desktop, /image)..."
                   rows="1"
                 ></textarea>
                 <button type="submit" id="btn-send" class="btn-send" title="Send message">

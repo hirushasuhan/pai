@@ -45,6 +45,7 @@ _WEB_SHORTCUTS: Dict[str, str] = {
     "outlook": "https://outlook.live.com/mail/",
     "docs": "https://docs.google.com/",
     "sheets": "https://sheets.google.com/",
+    "telegram": "https://web.telegram.org/",
 }
 
 # Strict allowlist of safe user-facing desktop applications (no shell=True).
@@ -64,6 +65,22 @@ _APP_ALLOWLIST: Dict[str, Tuple[str, List[str]]] = {
     "vs code": ("VS Code", ["code"]),
     "terminal": ("Windows Terminal", ["wt.exe"]),
     "powershell": ("PowerShell", ["powershell.exe"]),
+    "snipping tool": ("Snipping Tool", ["snippingtool.exe"]),
+    "chrome": ("Google Chrome", ["chrome.exe"]),
+    "google chrome": ("Google Chrome", ["chrome.exe"]),
+    "edge": ("Microsoft Edge", ["msedge.exe"]),
+    "microsoft edge": ("Microsoft Edge", ["msedge.exe"]),
+    "brave": ("Brave Browser", ["brave.exe"]),
+    "firefox": ("Mozilla Firefox", ["firefox.exe"]),
+    "spotify": ("Spotify", ["spotify.exe"]),
+    "discord": ("Discord", ["discord.exe"]),
+    "telegram": ("Telegram", ["telegram.exe"]),
+    "telegram desktop": ("Telegram", ["telegram.exe"]),
+    "word": ("Microsoft Word", ["winword.exe"]),
+    "excel": ("Microsoft Excel", ["excel.exe"]),
+    "powerpoint": ("Microsoft PowerPoint", ["powerpnt.exe"]),
+    "zoom": ("Zoom", ["zoom.exe"]),
+    "slack": ("Slack", ["slack.exe"]),
     "whatsapp": ("WhatsApp", ["explorer.exe", "whatsapp:"]),
     "whatsapp desktop": ("WhatsApp", ["explorer.exe", "whatsapp:"]),
     "antigravity": ("Antigravity IDE", ["C:\\Users\\hp\\AppData\\Local\\Programs\\Antigravity IDE\\Antigravity IDE.exe"]),
@@ -87,6 +104,13 @@ _CODE_OR_QUESTION_GUARD = (
     "how does ",
     "explain ",
     "define ",
+    "write a script",
+    "write code",
+    "write a python",
+    "create a script",
+    "generate code",
+    "python script",
+    "code to ",
     "index.html",
     "script.js",
     "style.css",
@@ -95,6 +119,19 @@ _CODE_OR_QUESTION_GUARD = (
     ".html",
     ".css",
     ".json",
+)
+
+_DANGEROUS_CMD_GUARD = (
+    "rm -rf",
+    "rmdir",
+    "del /",
+    "del *",
+    "/c del",
+    "-command remove-item",
+    "remove-item",
+    "format ",
+    "drop database",
+    "drop table",
 )
 
 
@@ -239,12 +276,26 @@ def parse_email_intent(prompt: str) -> Dict[str, str]:
     explicit_subject = subj_match.group(1).strip() if subj_match else ""
     explicit_body = body_match.group(1).strip() if body_match else ""
 
+    # Detect role recipient if no direct email address found
+    recipient_role = ""
+    if not to_addr:
+        m_role = re.search(
+            r"\b(?:to\s+(?:my\s+)?|ta\s+)(boss|manager|team|hr|teacher|doctor|client|colleague|[a-zA-Z0-9_-]{2,20})\b",
+            text,
+            re.IGNORECASE,
+        )
+        reserved_roles = ("mail", "email", "send", "write", "compose", "me", "tomorrow", "today", "leave", "office")
+        if m_role and m_role.group(1).lower() not in reserved_roles:
+            recipient_role = m_role.group(1).strip().title()
+
     # Clean conversational filler out of topic
     topic = text
     if email_match:
         topic = topic.replace(email_match.group(0), " ")
+    if recipient_role:
+        topic = re.sub(rf"\b(?:to\s+(?:my\s+)?)?{re.escape(recipient_role)}\b", " ", topic, flags=re.IGNORECASE)
     topic = re.sub(
-        r"\b(mail ekak|email ekak|e-mail|email|mail|danna|yawanna|send|write|compose|karanna|type|auto|browser|eke|open|wela|ta|to|kiyala|please|pls|mata|oni|one)\b",
+        r"\b(can you|could you|please|pls|mata|oni|one|open|my|mail\s*box|mailbox|mail ekak|email ekak|e-mail|email|mail|danna|yawanna|send|write|compose|karanna|type|auto|browser|eke|wela|ta|to|kiyala|and|a|an)\b",
         " ",
         topic,
         flags=re.IGNORECASE,
@@ -253,6 +304,7 @@ def parse_email_intent(prompt: str) -> Dict[str, str]:
 
     return {
         "to": to_addr,
+        "recipient_role": recipient_role,
         "provider": provider,
         "explicit_subject": explicit_subject,
         "explicit_body": explicit_body,
@@ -267,16 +319,31 @@ def _build_fallback_email(prompt: str, parsed: Dict[str, str]) -> Tuple[str, str
     explicit_body = parsed.get("explicit_body", "").strip()
     topic = parsed.get("topic", "").strip()
     to_addr = parsed.get("to", "").strip()
+    recipient_role = parsed.get("recipient_role", "").strip()
 
     if explicit_subj and explicit_body:
         return explicit_subj, explicit_body
 
-    recipient_name = "Team"
+    recipient_name = recipient_role or "Team"
     if to_addr and "@" in to_addr:
         local_part = to_addr.split("@", 1)[0]
         cleaned = re.sub(r"[._-]+", " ", local_part).strip()
         if cleaned:
             recipient_name = cleaned.title()
+
+    # Check for leave / out-of-office intent
+    topic_lower = topic.lower()
+    is_leave = any(w in topic_lower for w in ("leave", "niwadu", "vacation", "day off", "absent", "off tomorrow", "leave tomorrow"))
+    if is_leave:
+        subject = explicit_subj or "Leave Request - Tomorrow"
+        body = explicit_body or (
+            f"Hi {recipient_name},\n\n"
+            "I would like to formally request leave for tomorrow. "
+            "I will ensure all urgent matters are completed or handed over beforehand, and I will be reachable by phone in case of an emergency.\n\n"
+            "Thank you for your understanding.\n\n"
+            "Best regards,"
+        )
+        return subject, body
 
     if explicit_subj:
         subject = explicit_subj
@@ -344,6 +411,7 @@ def compose_email_with_model(
     parsed: Optional[Dict[str, str]] = None,
     stream: Any = None,
     executor: Optional[Callable[[List[str]], int]] = None,
+    model_fn: Optional[Callable[[str], str]] = None,
 ) -> Tuple[str, str, bool]:
     """Draft email subject and body using local AI when reachable, else fallback.
 
@@ -353,12 +421,8 @@ def compose_email_with_model(
     if info["explicit_subject"] and info["explicit_body"]:
         return info["explicit_subject"], info["explicit_body"], False
 
-    if executor is None:
-        subj, body = _build_fallback_email(prompt, info)
-        return subj, body, False
-
     clean_topic = info.get("topic") or prompt
-    recipient_hint = info.get("to") or "(unspecified)"
+    recipient_hint = info.get("to") or info.get("recipient_role") or "(unspecified)"
     ai_prompt = (
         "Write a concise, polite English email in under 100 words with NO repetition. "
         "Output ONLY two sections in this exact format and nothing else:\n"
@@ -368,27 +432,42 @@ def compose_email_with_model(
         f"Topic: {clean_topic}"
     )
 
-    prev_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
-    os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
-    buf_out = io.StringIO()
-    buf_err = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
-            rc = executor(["chat", "--", ai_prompt])
-        combined = buf_out.getvalue()
-        if rc == 0:
-            parsed_draft = _parse_ai_email_draft(combined)
-            if parsed_draft:
-                subj = info["explicit_subject"] or parsed_draft[0]
-                body = info["explicit_body"] or parsed_draft[1]
-                return subj, body, True
-    except Exception:
-        pass
-    finally:
-        if prev_failover is None:
-            os.environ.pop("PAI_DISABLE_CHAT_FAILOVER", None)
-        else:
-            os.environ["PAI_DISABLE_CHAT_FAILOVER"] = prev_failover
+    # 1. Direct model callable (used by desktop bridge server or in-process callers)
+    if model_fn is not None:
+        try:
+            raw_ai = model_fn(ai_prompt)
+            if raw_ai:
+                parsed_draft = _parse_ai_email_draft(raw_ai)
+                if parsed_draft:
+                    subj = info["explicit_subject"] or parsed_draft[0]
+                    body = info["explicit_body"] or parsed_draft[1]
+                    return subj, body, True
+        except Exception:
+            pass
+
+    # 2. CLI executor (used by shell.py)
+    if executor is not None:
+        prev_failover = os.environ.get("PAI_DISABLE_CHAT_FAILOVER")
+        os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
+        buf_out = io.StringIO()
+        buf_err = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+                rc = executor(["chat", "--", ai_prompt])
+            combined = buf_out.getvalue()
+            if rc == 0:
+                parsed_draft = _parse_ai_email_draft(combined)
+                if parsed_draft:
+                    subj = info["explicit_subject"] or parsed_draft[0]
+                    body = info["explicit_body"] or parsed_draft[1]
+                    return subj, body, True
+        except Exception:
+            pass
+        finally:
+            if prev_failover is None:
+                os.environ.pop("PAI_DISABLE_CHAT_FAILOVER", None)
+            else:
+                os.environ["PAI_DISABLE_CHAT_FAILOVER"] = prev_failover
 
     subj, body = _build_fallback_email(prompt, info)
     return subj, body, False
@@ -399,6 +478,7 @@ def open_email_compose(
     subject: str = "",
     body: str = "",
     provider: str = "gmail",
+    recipient_hint: str = "",
     stream: Any = None,
 ) -> Tuple[bool, str]:
     """Open the user's browser with a pre-filled email compose window."""
@@ -419,9 +499,10 @@ def open_email_compose(
             except Exception as exc:
                 return False, f"Could not launch browser compose window: {exc}"
 
+    target_display = to or (f"{recipient_hint} (fill in email address)" if recipient_hint else "(fill in recipient)")
     summary_lines = [
         f"Opened {provider.capitalize()} compose in browser:",
-        f"  To      : {to or '(fill in recipient)'}",
+        f"  To      : {target_display}",
         f"  Subject : {subject}",
         f"  Body    : {body.splitlines()[0][:80]}{'...' if len(body) > 80 else ''}",
     ]
@@ -433,15 +514,83 @@ def open_email_compose(
     return bool(opened), msg
 
 
+def _resolve_executable(cmd_args: List[str]) -> List[str]:
+    """Resolve executable path on Windows if bare binary name is not in PATH."""
+    if not cmd_args:
+        return cmd_args
+    exe = cmd_args[0]
+    if os.path.isabs(exe) or exe.lower() in ("explorer.exe", "wt.exe", "calc.exe", "notepad.exe", "mspaint.exe", "cmd.exe"):
+        return cmd_args
+    found = shutil.which(exe)
+    if found:
+        return [found] + cmd_args[1:]
+
+    prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    prog_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    app_data = os.environ.get("APPDATA", "")
+
+    candidates_map: Dict[str, List[str]] = {
+        "chrome.exe": [
+            os.path.join(prog_files, r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(prog_files_x86, r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(local_app_data, r"Google\Chrome\Application\chrome.exe"),
+        ],
+        "msedge.exe": [
+            os.path.join(prog_files_x86, r"Microsoft\Edge\Application\msedge.exe"),
+            os.path.join(prog_files, r"Microsoft\Edge\Application\msedge.exe"),
+        ],
+        "brave.exe": [
+            os.path.join(prog_files, r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+            os.path.join(local_app_data, r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+        ],
+        "firefox.exe": [
+            os.path.join(prog_files, r"Mozilla Firefox\firefox.exe"),
+            os.path.join(prog_files_x86, r"Mozilla Firefox\firefox.exe"),
+        ],
+        "code": [
+            os.path.join(local_app_data, r"Programs\Microsoft VS Code\Code.exe"),
+            os.path.join(prog_files, r"Microsoft VS Code\Code.exe"),
+        ],
+        "spotify.exe": [
+            os.path.join(app_data, r"Spotify\Spotify.exe"),
+        ],
+        "discord.exe": [
+            os.path.join(local_app_data, r"Discord\Update.exe"),
+        ],
+        "telegram.exe": [
+            os.path.join(app_data, r"Telegram Desktop\Telegram.exe"),
+            os.path.join(local_app_data, r"Telegram Desktop\Telegram.exe"),
+        ],
+        "winword.exe": [
+            os.path.join(prog_files, r"Microsoft Office\root\Office16\WINWORD.EXE"),
+            os.path.join(prog_files_x86, r"Microsoft Office\root\Office16\WINWORD.EXE"),
+        ],
+        "excel.exe": [
+            os.path.join(prog_files, r"Microsoft Office\root\Office16\EXCEL.EXE"),
+            os.path.join(prog_files_x86, r"Microsoft Office\root\Office16\EXCEL.EXE"),
+        ],
+        "powerpnt.exe": [
+            os.path.join(prog_files, r"Microsoft Office\root\Office16\POWERPNT.EXE"),
+            os.path.join(prog_files_x86, r"Microsoft Office\root\Office16\POWERPNT.EXE"),
+        ],
+    }
+    for cand in candidates_map.get(exe.lower(), []):
+        if cand and os.path.isfile(cand):
+            return [cand] + cmd_args[1:]
+    return cmd_args
+
+
 def _launch_app(app_key: str) -> Tuple[bool, str]:
     """Launch an allowlisted desktop app via subprocess (never shell=True)."""
     entry = _APP_ALLOWLIST.get(app_key)
     if not entry:
         return False, f"Application '{app_key}' is not in the safe automation allowlist."
     label, cmd = entry
+    resolved_cmd = _resolve_executable(cmd)
     try:
         subprocess.Popen(
-            cmd,
+            resolved_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -525,7 +674,7 @@ def _open_url(url: str, label: Optional[str] = None) -> Tuple[bool, str]:
 def _extract_search_query(text: str, site_kw: str) -> str:
     q = re.sub(rf"\b{re.escape(site_kw)}\b", " ", text, flags=re.IGNORECASE)
     q = re.sub(
-        r"\b(eke|in|on|search|find|lookup|open|karanna|balanna|play|watch|browser|mata|kiala)\b",
+        r"\b(can you|could you|please|pls|mata|kiala|kiyala|eke|in|on|for|search|find|lookup|open|karanna|balanna|ahanna|play|watch|dala|danna|denna|hoyanna|hoyala|browser)\b",
         " ",
         q,
         flags=re.IGNORECASE,
@@ -550,12 +699,27 @@ def _extract_weather_query(text: str) -> str:
     return "weather today"
 
 
-def parse_whatsapp_intent(prompt: str) -> Dict[str, str]:
-    """Parse WhatsApp recipient (contact name or phone) and message from text."""
+def _extract_messaging_fields(
+    prompt: str,
+    slash_pattern: str,
+    reserved_words: Tuple[str, ...],
+    filler_words: str,
+) -> Dict[str, str]:
+    """Shared parser for messaging apps (WhatsApp, Telegram): extracts phone, @handle, contact, message."""
     raw = (prompt or "").strip()
-    text = raw
-    # Strip leading slash commands like /wa or /whatsapp
-    text = re.sub(r"^/(?:whatsapp|wa)\b\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(slash_pattern, "", raw, flags=re.IGNORECASE).strip()
+
+    explicit_message = ""
+    quote_match = re.search(r'["\']([^"\']+)["\']', text)
+    if quote_match:
+        explicit_message = quote_match.group(1).strip()
+        text = text[:quote_match.start()] + " " + text[quote_match.end():]
+
+    username = ""
+    user_match = re.search(r"(?<!\S)@([A-Za-z0-9_]{3,32})\b", text)
+    if user_match:
+        username = user_match.group(1).strip()
+        text = text[:user_match.start()] + " " + text[user_match.end():]
 
     phone = ""
     phone_match = re.search(r"(\+?\d[\d -]{7,15}\d)", text)
@@ -564,33 +728,59 @@ def parse_whatsapp_intent(prompt: str) -> Dict[str, str]:
         text = text[:phone_match.start()] + " " + text[phone_match.end():]
 
     contact = ""
-    if not phone:
+    if not phone and not username:
         m_ta = re.search(r"\b([A-Za-z0-9_-]{2,25})\s+ta\b", text, flags=re.IGNORECASE)
         m_to = re.search(r"\bto\s+([A-Za-z0-9_-]{2,25})\b", text, flags=re.IGNORECASE)
-        reserved = ("whatsapp", "msg", "message", "mail", "email", "desktop", "web", "app")
-        if m_ta and m_ta.group(1).lower() not in reserved:
-            contact = m_ta.group(1).strip()
-            text = text[:m_ta.start()] + " " + text[m_ta.end():]
-        elif m_to and m_to.group(1).lower() not in reserved:
+        if m_to and m_to.group(1).lower() not in reserved_words:
             contact = m_to.group(1).strip()
             text = text[:m_to.start()] + " " + text[m_to.end():]
+        elif m_ta and m_ta.group(1).lower() not in reserved_words:
+            contact = m_ta.group(1).strip()
+            text = text[:m_ta.start()] + " " + text[m_ta.end():]
 
-    # Clean conversational filler out of message
-    msg = text
-    msg = re.sub(
-        r"\b(whatsapp|wa|message|msg|ekak|eke|open|karala|karanna|yawanna|danna|send|reply|kiyala|type|please|pls)\b",
-        " ",
-        msg,
-        flags=re.IGNORECASE,
-    )
-    msg = re.sub(r"\s+", " ", msg).strip(" ,.;:?!\"'")
+    if explicit_message:
+        msg = explicit_message
+    else:
+        m_saying = re.search(r"\b(?:saying|telling|that)\s+(.+)$", text, flags=re.IGNORECASE)
+        if m_saying:
+            msg = m_saying.group(1).strip()
+        else:
+            msg = re.sub(filler_words, " ", text, flags=re.IGNORECASE)
+            msg = re.sub(r"\s+", " ", msg).strip(" ,.;:?!\"'")
 
     return {
         "phone": phone,
+        "username": username,
         "contact": contact,
         "message": msg,
         "raw": raw,
     }
+
+
+def parse_whatsapp_intent(prompt: str) -> Dict[str, str]:
+    """Parse WhatsApp recipient (contact name or phone) and message from text."""
+    res = _extract_messaging_fields(
+        prompt,
+        slash_pattern=r"^/(?:whatsapp|wa)\b\s*",
+        reserved_words=("whatsapp", "msg", "message", "mail", "email", "desktop", "web", "app", "me", "chat", "send"),
+        filler_words=r"\b(can you|could you|please|pls|open|whatsapp|wa|and|send|a|message|msg|ekak|eke|karala|karanna|yawanna|danna|reply|kiyala|type|tell)\b",
+    )
+    return {
+        "phone": res["phone"],
+        "contact": res["contact"],
+        "message": res["message"],
+        "raw": res["raw"],
+    }
+
+
+def parse_telegram_intent(prompt: str) -> Dict[str, str]:
+    """Parse Telegram recipient (@username, contact name, or phone) and message from text."""
+    return _extract_messaging_fields(
+        prompt,
+        slash_pattern=r"^/(?:telegram|tg)\b\s*",
+        reserved_words=("telegram", "tg", "msg", "message", "mail", "email", "desktop", "web", "app", "me", "chat", "send"),
+        filler_words=r"\b(can you|could you|please|pls|open|telegram|tg|and|send|a|message|msg|ekak|eke|karala|karanna|yawanna|danna|reply|kiyala|type|tell)\b",
+    )
 
 
 def open_whatsapp(
@@ -701,6 +891,109 @@ def open_whatsapp(
     return bool(opened), msg
 
 
+def open_telegram(
+    contact: str = "",
+    username: str = "",
+    message: str = "",
+    trigger_ui_search: bool = True,
+    stream: Any = None,
+) -> Tuple[bool, str]:
+    """Open Telegram Desktop app (exe or tg: URI) or fallback to Telegram Web, staging contact/message."""
+    copied = copy_to_clipboard(message) if message else False
+
+    desktop_uri = "tg:"
+    if username and message:
+        enc = urllib.parse.quote(message)
+        desktop_uri = f"tg://resolve?domain={urllib.parse.quote(username)}&text={enc}"
+    elif username:
+        desktop_uri = f"tg://resolve?domain={urllib.parse.quote(username)}"
+    elif message:
+        enc = urllib.parse.quote(message)
+        desktop_uri = f"tg://msg?text={enc}"
+
+    web_url = f"https://t.me/{urllib.parse.quote(username)}" if username else "https://web.telegram.org/"
+
+    opened = False
+    used_desktop = False
+
+    # 1. Try installed Telegram Desktop executable first when no specific deep-link needed
+    resolved_exe = _resolve_executable(["telegram.exe"])
+    if resolved_exe and os.path.isabs(resolved_exe[0]) and os.path.isfile(resolved_exe[0]) and not username:
+        try:
+            subprocess.Popen(
+                resolved_exe,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+            opened = True
+            used_desktop = True
+        except Exception:
+            opened = False
+
+    # 2. Try tg:// URI scheme on Windows (works for both Desktop & Store installs)
+    if not opened and (sys.platform.startswith("win") or os.name == "nt"):
+        try:
+            os.startfile(desktop_uri)  # type: ignore[attr-defined]
+            opened = True
+            used_desktop = True
+        except Exception:
+            opened = False
+
+    # 3. Fallback to Telegram Web in browser
+    if not opened:
+        try:
+            opened = webbrowser.open(web_url, new=2)
+            if not opened and (sys.platform.startswith("win") or os.name == "nt"):
+                os.startfile(web_url)  # type: ignore[attr-defined]
+                opened = True
+        except Exception as exc:
+            return False, f"Failed to open Telegram: {exc}"
+
+    if opened and used_desktop and trigger_ui_search and contact and (sys.platform.startswith("win") or os.name == "nt"):
+        b64_contact = base64.b64encode(contact.encode("utf-8")).decode("ascii")
+        ps_find_contact = (
+            "$ws = New-Object -ComObject WScript.Shell; "
+            "for ($i = 0; $i -lt 12; $i++) { "
+            "Start-Sleep -Milliseconds 300; "
+            "$p = Get-Process -Name *Telegram* -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "$ok = $false; "
+            "if ($p) { $ok = $ws.AppActivate($p.Id) } "
+            "if (-not $ok) { $ok = $ws.AppActivate('Telegram') } "
+            "if ($ok) { "
+            "Start-Sleep -Milliseconds 250; "
+            "$ws.SendKeys('^k'); "
+            "Start-Sleep -Milliseconds 200; "
+            f"$name = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64_contact}')); "
+            "$ws.SendKeys($name); "
+            "break } "
+            "}"
+        )
+        try:
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_find_contact],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    dest_desc = "Telegram Desktop" if used_desktop else "Telegram Web in browser"
+    summary_lines = [f"Opened {dest_desc}:"]
+    if username:
+        summary_lines.append(f"  Username : @{username}")
+    if contact:
+        summary_lines.append(f"  Contact  : {contact}")
+    if message:
+        summary_lines.append(f"  Message  : {message[:80]}{'...' if len(message) > 80 else ''}")
+    if copied:
+        summary_lines.append("  Clipboard: Message copied to clipboard as backup.")
+    msg = "\n".join(summary_lines)
+    _emit(stream, msg)
+    return bool(opened), msg
+
+
 def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Detect whether a prompt should trigger computer/browser automation.
 
@@ -711,6 +1004,11 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
 
     if sub_action in ("antigravity", "agy"):
         return {"kind": "antigravity", "prompt": raw}
+
+    if sub_action in ("youtube", "yt"):
+        clean_y = re.sub(r"^/(?:youtube|yt)\b\s*", "", raw, flags=re.IGNORECASE).strip()
+        q = _extract_search_query(clean_y, "youtube")
+        return {"kind": "web_search", "engine": "youtube", "query": q or clean_y}
 
     if sub_action in ("web", "search"):
         clean_q = re.sub(r"^/(?:web|search)\b\s*", "", raw, flags=re.IGNORECASE).strip()
@@ -725,6 +1023,20 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
 
     if sub_action == "whatsapp":
         return {"kind": "whatsapp", "prompt": raw}
+
+    if sub_action in ("telegram", "tg"):
+        return {"kind": "telegram", "prompt": raw}
+
+    if sub_action in ("desktop", "desktop_control", "mouse", "ui"):
+        return {"kind": "desktop_control", "prompt": raw}
+
+    explicit_auto = sub_action == "auto"
+
+    # Guard against dangerous arbitrary shell execution or injection
+    if any(dang in lower for dang in _DANGEROUS_CMD_GUARD):
+        if explicit_auto:
+            return {"kind": "unsupported", "prompt": raw}
+        return None
 
     # Weather queries ("mata ada wether eka hoyala denna", "ada weather", "what is the weather today", "kalagune")
     weather_keywords = ("weather", "wether", "kaalaguna", "kalagune", "kaalagunayak")
@@ -744,8 +1056,6 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
         if not is_info_query:
             return {"kind": "antigravity", "prompt": raw}
 
-    explicit_auto = sub_action == "auto"
-
     if not explicit_auto:
         # Never hijack coding/file questions or explanations
         if any(guard in lower for guard in _CODE_OR_QUESTION_GUARD):
@@ -753,6 +1063,10 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
         # Do not hijack if user is explicitly referring to a local project file preview handled elsewhere
         if re.search(r"\b[\w./\\-]+\.(?:html?|css|js|py|md|txt|json)\b", lower):
             return None
+
+    # Telegram automation ("open telegram", "telegram eke Kasun ta Hello kiyala yawanna", "/tg @kasun Hi")
+    if any(k in lower for k in ("telegram", "/telegram")) or re.search(r"\btg\b", lower):
+        return {"kind": "telegram", "prompt": raw}
 
     # WhatsApp automation ("open whatsapp", "whatsapp eke Kasun ta Hello kiyala yawanna", "/wa 07123... Hi")
     if any(k in lower for k in ("whatsapp", "/whatsapp")) or re.search(r"\bwa\b", lower):
@@ -815,15 +1129,23 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
         if typed_text:
             return {"kind": "notepad_type", "text": typed_text}
 
-    # 4. Web searches (YouTube / Google)
-    if "youtube" in lower and any(k in lower for k in ("search", "play", "balanna", "hoyanna", "find")):
+    # 4. Web searches (YouTube / Google / Web)
+    is_yt_slash = lower.startswith(("/youtube", "/yt"))
+    is_yt = "youtube" in lower or re.search(r"\byt\b", lower)
+    if is_yt_slash or (is_yt and (explicit_auto or any(k in lower for k in ("search", "play", "balanna", "hoyanna", "find", "dala", "danna", "ahanna", "open", "sindu", "song", "video", "music", "load", "denna")))):
         q = _extract_search_query(raw, "youtube")
-        if q:
-            return {"kind": "web_search", "engine": "youtube", "query": q}
-    if "google" in lower and any(k in lower for k in ("search", "hoyanna", "find", "lookup")):
-        q = _extract_search_query(raw, "google")
-        if q:
-            return {"kind": "web_search", "engine": "google", "query": q}
+        if any(g == q.lower() for g in ("monawa hari", "something", "anything", "sinduwak", "song ekak")):
+            q = ""
+        return {"kind": "web_search", "engine": "youtube", "query": q}
+
+    is_google = "google" in lower or lower.startswith(("/google", "/search"))
+    is_web = ("web eke" in lower or "internet eke" in lower or lower.startswith("/web")) and any(k in lower for k in ("search", "hoyanna", "find", "lookup", "balanna", "karanna", "denna"))
+    if is_google or is_web:
+        clean_kw = "google" if is_google else ("web" if "web" in lower else "internet")
+        q = _extract_search_query(raw, clean_kw)
+        if any(g == q.lower() for g in ("monawa hari", "something", "anything", "search")):
+            q = ""
+        return {"kind": "web_search", "engine": "google", "query": q or "latest news"}
 
     # 5. Explicit URL opening
     url_m = _URL_RE.search(raw)
@@ -832,7 +1154,7 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
 
     # 6. Action verb required for implicit app/web/folder opens so normal questions never trigger
     has_open_action = explicit_auto or any(
-        k in lower for k in ("open ", "open karanna", "launch ", "start ", "aranna", "patanganna")
+        k in lower for k in ("open ", "open karanna", "launch ", "start ", "run ", "aranna", "arinna", "patanganna", "eka open")
     )
     if has_open_action:
         for folder_key in sorted(_FOLDER_MAP, key=len, reverse=True):
@@ -845,6 +1167,28 @@ def parse_automation_intent(prompt: str, sub_action: Optional[str] = None) -> Op
             if re.search(rf"\b{re.escape(site_key)}\b", lower):
                 return {"kind": "open_url", "url": site_url, "label": site_key.title()}
 
+    # 7. Explicit Desktop / Mouse / Keyboard / Screen UI Control
+    desktop_ui_phrases = (
+        "mouse eken",
+        "click the ",
+        "click on ",
+        "double click",
+        "right click",
+        "scroll down",
+        "scroll up",
+        "take a screenshot",
+        "take screenshot",
+        "screenshot ekak",
+        "screen eka balala",
+        "move mouse",
+        "move the mouse",
+        "focus window",
+        "press enter",
+        "press tab",
+    )
+    if any(p in lower for p in desktop_ui_phrases) or lower.startswith(("/desktop ", "/mouse ", "/ui ")):
+        return {"kind": "desktop_control", "prompt": raw}
+
     if explicit_auto:
         return {"kind": "unsupported", "prompt": raw}
     return None
@@ -855,6 +1199,7 @@ def execute_automation_task(
     sub_action: Optional[str] = None,
     stream: Any = sys.stdout,
     executor: Optional[Callable[[List[str]], int]] = None,
+    model_fn: Optional[Callable[[str], str]] = None,
 ) -> Tuple[bool, str]:
     """Execute a computer or browser automation instruction safely."""
     raw = (prompt or "").strip()
@@ -912,6 +1257,15 @@ def execute_automation_task(
             stream=stream,
         )
 
+    if kind == "telegram":
+        info = parse_telegram_intent(intent["prompt"])
+        return open_telegram(
+            contact=info["contact"],
+            username=info["username"],
+            message=info["message"],
+            stream=stream,
+        )
+
     if kind == "email":
         parsed = parse_email_intent(intent["prompt"])
         _emit(stream, "Drafting email and opening browser compose window...")
@@ -920,6 +1274,7 @@ def execute_automation_task(
             parsed=parsed,
             stream=stream,
             executor=executor,
+            model_fn=model_fn,
         )
         if used_ai:
             _emit(stream, "  (Subject & body drafted using local AI)")
@@ -930,19 +1285,30 @@ def execute_automation_task(
             subject=subject,
             body=body,
             provider=parsed["provider"],
+            recipient_hint=parsed.get("recipient_role", ""),
             stream=stream,
         )
 
     if kind == "web_search":
         engine = intent["engine"]
-        query = intent["query"]
-        encoded = urllib.parse.quote_plus(query)
+        query = intent["query"].strip()
+        encoded = urllib.parse.quote_plus(query) if query else ""
         if engine == "youtube":
-            url = f"https://www.youtube.com/results?search_query={encoded}"
-            ok, msg = _open_url(url, label=f"YouTube search '{query}'")
+            if encoded:
+                url = f"https://www.youtube.com/results?search_query={encoded}"
+                label = f"YouTube search '{query}'"
+            else:
+                url = "https://www.youtube.com/"
+                label = "YouTube"
+            ok, msg = _open_url(url, label=label)
         else:
-            url = f"https://www.google.com/search?q={encoded}"
-            ok, msg = _open_url(url, label=f"Google search '{query}'")
+            if encoded:
+                url = f"https://www.google.com/search?q={encoded}"
+                label = f"Google search '{query}'"
+            else:
+                url = "https://www.google.com/"
+                label = "Google"
+            ok, msg = _open_url(url, label=label)
         _emit(stream, msg)
         return ok, msg
 

@@ -36,6 +36,9 @@ class CouncilResult:
     synthesis: str
     formatted_markdown: str
     timestamp: float = field(default_factory=time.time)
+    confidence: float = 0.75
+    judge_used: bool = False
+    judge_scores: Dict[str, float] = field(default_factory=dict)
 
 
 COUNCIL_FRAMING_TEMPLATE = (
@@ -109,6 +112,8 @@ class ModelCouncilRunner:
         active_model: Optional[str] = None,
         grounding_context: Optional[str] = None,
         clock_context: Optional[str] = None,
+        deep_deliberate: bool = False,
+        judge_fn: Optional[Callable[[str, str], str]] = None,
     ) -> CouncilResult:
         """Runs the council deliberation across selected models."""
         target_models = models or self.get_default_models(active_model=active_model)
@@ -129,10 +134,17 @@ class ModelCouncilRunner:
         # Phase 1: Dispatch to council members with live grounding if available
         ground_section = f"\n\nVerified Real-Time Search Grounding:\n{grounding_context}\n" if grounding_context else ""
         clock_section = f"\nCurrent System Clock: {clock_context}\n" if clock_context else ""
+        deep_section = (
+            "\nDeep Deliberation Protocol: Decompose from first principles, evaluate failure modes, "
+            "and end with <verdict>CONFIRMED|REFUTED</verdict> and <confidence>0.XX</confidence>.\n"
+            if deep_deliberate
+            else ""
+        )
         council_prompt = (
             f"{COUNCIL_FRAMING_TEMPLATE.format(query=prompt.strip())}"
             f"{clock_section}"
             f"{ground_section}"
+            f"{deep_section}"
         )
         for model in target_models:
             try:
@@ -141,10 +153,21 @@ class ModelCouncilRunner:
             except Exception as e:
                 responses[model] = f"[Execution Error with {model}: {e}]"
 
-        # Phase 2: Compute Agreement, Disagreement, and Synthesis
-        agreements, disagreements, uniques = self._analyze_responses(prompt, responses)
-        synthesis = self._build_synthesis(prompt, responses, agreements, disagreements)
+        # Phase 2: Compute Agreement, Disagreement, and Synthesis (with optional Judge rubric)
+        judge_scores: Dict[str, float] = {}
+        judge_used = False
+        if judge_fn is not None and len(target_models) >= 2:
+            judge_scores, judge_used = self._run_pairwise_judge(prompt, responses, judge_fn)
+
+        agreements, disagreements, uniques = self._analyze_responses(prompt, responses, judge_scores=judge_scores)
+        synthesis = self._build_synthesis(prompt, responses, agreements, disagreements, judge_scores=judge_scores)
         formatted_md = self.format_markdown(prompt, target_models, agreements, disagreements, uniques, synthesis)
+
+        avg_conf = (
+            round(sum(judge_scores.values()) / len(judge_scores), 3)
+            if judge_scores
+            else round(0.68 + 0.06 * min(len(agreements), 3), 3)
+        )
 
         return CouncilResult(
             prompt=prompt,
@@ -155,12 +178,57 @@ class ModelCouncilRunner:
             unique_discoveries=uniques,
             synthesis=synthesis,
             formatted_markdown=formatted_md,
+            confidence=min(0.98, avg_conf),
+            judge_used=judge_used,
+            judge_scores=judge_scores,
         )
+
+    def _run_pairwise_judge(
+        self,
+        prompt: str,
+        responses: Dict[str, str],
+        judge_fn: Callable[[str, str], str],
+    ) -> Tuple[Dict[str, float], bool]:
+        """
+        LLM-as-a-Judge 1-5 rubric scoring with swapped presentation order to mitigate position bias.
+        """
+        models = list(responses.keys())
+        totals: Dict[str, List[float]] = {m: [] for m in models}
+        used = False
+        for i in range(len(models)):
+            for j in range(i + 1, len(models)):
+                ma, mb = models[i], models[j]
+                for order_name, first, second in (("forward", ma, mb), ("swapped", mb, ma)):
+                    j_prompt = (
+                        f"Evaluate both candidate answers to the user query on Relevance, Technical Accuracy, "
+                        f"Completeness, and Safety (each 1.0 to 5.0).\n"
+                        f"Reply strictly as SCORE_A=<num> SCORE_B=<num>.\n\n"
+                        f"Query: {prompt}\n\n"
+                        f"=== Candidate A ({order_name}) ===\n{responses[first][:2000]}\n\n"
+                        f"=== Candidate B ({order_name}) ===\n{responses[second][:2000]}\n"
+                    )
+                    try:
+                        out = judge_fn(first, j_prompt)
+                        ma_score = re.search(r"SCORE_A\s*=\s*([0-9]+(?:\.[0-9]+)?)", out, re.IGNORECASE)
+                        mb_score = re.search(r"SCORE_B\s*=\s*([0-9]+(?:\.[0-9]+)?)", out, re.IGNORECASE)
+                        if ma_score and mb_score:
+                            totals[first].append(max(0.0, min(1.0, float(ma_score.group(1)) / 5.0)))
+                            totals[second].append(max(0.0, min(1.0, float(mb_score.group(1)) / 5.0)))
+                            used = True
+                    except Exception:
+                        continue
+        scores = {
+            m: round(sum(vals) / len(vals), 3)
+            for m, vals in totals.items()
+            if vals
+        }
+        return scores, used
 
     def _analyze_responses(
         self,
         prompt: str,
         responses: Dict[str, str],
+        judge_scores: Optional[Dict[str, float]] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Extracts convergence, divergence, and unique findings from candidate replies."""
         models = list(responses.keys())
@@ -168,23 +236,24 @@ class ModelCouncilRunner:
         disagreements: List[Dict[str, Any]] = []
         uniques: List[Dict[str, Any]] = []
 
-        # Heuristic consensus analysis based on text extraction
-        # 1. Check common core recommendations / themes across models
         first_m, second_m = models[0], models[1]
         text_a = responses[first_m].lower()
         text_b = responses[second_m].lower()
 
-        # Shared concepts
-        common_words = set(re.findall(r"\b[a-zA-Z]{5,}\b", text_a)) & set(re.findall(r"\b[a-zA-Z]{5,}\b", text_b))
-        stopwords = {"about", "which", "would", "their", "there", "these", "other", "should", "could", "first"}
-        meaningful_shared = [w for w in common_words if w not in stopwords][:5]
+        stopwords = {
+            "about", "which", "would", "their", "there", "these", "other",
+            "should", "could", "first", "using", "based", "every", "where",
+        }
+        tokens_a = {w for w in re.findall(r"\b[a-zA-Z]{5,}\b", text_a) if w not in stopwords}
+        tokens_b = {w for w in re.findall(r"\b[a-zA-Z]{5,}\b", text_b) if w not in stopwords}
+        shared_terms = sorted(tokens_a & tokens_b)
+        jaccard = (len(shared_terms) / len(tokens_a | tokens_b)) if (tokens_a or tokens_b) else 0.0
 
-        # Synthesize 2-3 agreement items
-        if meaningful_shared:
+        if shared_terms:
             agreements.append({
-                "finding": f"Core convergence on key system concepts: {', '.join(meaningful_shared[:3])}",
+                "finding": f"Core convergence ({jaccard:.0%} concept overlap) on: {', '.join(shared_terms[:4])}",
                 "models": models,
-                "evidence": f"Both {first_m} and {second_m} emphasize these fundamentals as foundational.",
+                "evidence": f"Both {first_m} and {second_m} independently anchor on these key concepts.",
             })
         else:
             agreements.append({
@@ -215,8 +284,15 @@ class ModelCouncilRunner:
                 "evidence": "Neither model attempts external unauthorized outbound network calls.",
             })
 
+        if judge_scores:
+            ranked = sorted(judge_scores.items(), key=lambda kv: kv[1], reverse=True)
+            agreements.append({
+                "finding": f"Pairwise swapped-position judge leader: {ranked[0][0]} (score {ranked[0][1]:.2f})",
+                "models": [m for m, _ in ranked],
+                "evidence": "Evaluated with swapped A/B presentation to reduce positional bias.",
+            })
+
         # Divergence / Disagreements
-        # Detect differences in tone, tooling, or recommendations
         len_a = len(responses[first_m].split())
         len_b = len(responses[second_m].split())
         if abs(len_a - len_b) > 40:
@@ -229,13 +305,15 @@ class ModelCouncilRunner:
                 "why_differ": "Different base parameter scaling and instruction calibration.",
             })
 
+        unique_a = sorted(tokens_a - tokens_b)[:3]
+        unique_b = sorted(tokens_b - tokens_a)[:3]
         disagreements.append({
             "topic": "Architectural Emphasis & Priority",
             "stances": {
-                first_m: f"Prioritizes immediate implementation steps.",
-                second_m: f"Prioritizes safety boundaries and edge case handling.",
+                first_m: f"Emphasizes: {', '.join(unique_a) if unique_a else 'direct execution steps'}.",
+                second_m: f"Emphasizes: {', '.join(unique_b) if unique_b else 'safety boundaries and edge cases'}.",
             },
-            "why_differ": "Distinct training objectives (Code specialization vs General reasoning).",
+            "why_differ": "Distinct training objectives and reasoning decomposition.",
         })
 
         # Unique Discoveries
@@ -257,28 +335,36 @@ class ModelCouncilRunner:
         responses: Dict[str, str],
         agreements: List[Dict[str, Any]],
         disagreements: List[Dict[str, Any]],
+        judge_scores: Optional[Dict[str, float]] = None,
     ) -> str:
         """Synthesizes an authoritative model-forward prose analysis."""
         models = list(responses.keys())
         first_m, second_m = models[0], models[1]
+        if judge_scores:
+            ordered = sorted(models, key=lambda m: judge_scores.get(m, 0.0), reverse=True)
+            first_m, second_m = ordered[0], ordered[1]
 
-        # Extract top 120 words of clean text from each
         clean_a = re.sub(r"```[\s\S]*?```", "", responses[first_m]).strip()
         first_p_a = clean_a.split("\n\n")[0] if "\n\n" in clean_a else clean_a[:200]
 
         clean_b = re.sub(r"```[\s\S]*?```", "", responses[second_m]).strip()
         first_p_b = clean_b.split("\n\n")[0] if "\n\n" in clean_b else clean_b[:200]
 
+        judge_note = (
+            f" Swapped-order judge ranking: {', '.join(f'{m}={judge_scores[m]:.2f}' for m in models if m in judge_scores)}."
+            if judge_scores
+            else ""
+        )
+
         synthesis_prose = (
             f"The PAI Model Council evaluated '{prompt}' across {len(models)} independent models "
-            f"({', '.join(models)}).\n\n"
-            f"High-Confidence Convergence: Both {first_m} and {second_m} firmly agree on the core outcome. "
-            f"Specifically, {agreements[0]['finding']}. This cross-model convergence demonstrates high confidence, "
-            f"confirming that the underlying logic is invariant across distinct model architectures.\n\n"
+            f"({', '.join(models)}).{judge_note}\n\n"
+            f"High-Confidence Convergence: Both {first_m} and {second_m} converge on the core outcome. "
+            f"Specifically, {agreements[0]['finding']}.\n\n"
             f"Areas of Divergence: While {first_m} highlights {first_p_a[:120]}..., {second_m} frames the challenge around "
-            f"{first_p_b[:120]}... This difference reflects their differing specialized objectives.\n\n"
+            f"{first_p_b[:120]}...\n\n"
             f"Synthesized Recommendation: Adopt the shared consensus established in the convergence table. "
-            f"Rely on {first_m} for rapid tactical execution while incorporating {second_m}'s structural safeguards."
+            f"Prioritize {first_m}'s primary structure while incorporating {second_m}'s complementary safeguards."
         )
         return synthesis_prose
 

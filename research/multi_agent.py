@@ -11,6 +11,7 @@ Includes dynamic model assignment, inter-agent communication logging, and automa
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import json
@@ -20,6 +21,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -46,6 +48,25 @@ except ModuleNotFoundError:
         ToolBroker,
         ToolRequest,
     )
+
+try:
+    from research.thought_graph import SubconsciousBlackboard, ThoughtGraph
+    from research.crash_reasoning_mcp import CRASHTracker
+    from research.reasoning_engine import RadialExplorer
+    from research.thinking_engine import extract_structured_verdict, format_role_cognitive_prompt
+except ModuleNotFoundError:
+    try:
+        from thought_graph import SubconsciousBlackboard, ThoughtGraph
+        from crash_reasoning_mcp import CRASHTracker
+        from reasoning_engine import RadialExplorer
+        from thinking_engine import extract_structured_verdict, format_role_cognitive_prompt
+    except ImportError:  # pragma: no cover
+        SubconsciousBlackboard = None  # type: ignore
+        ThoughtGraph = None  # type: ignore
+        CRASHTracker = None  # type: ignore
+        RadialExplorer = None  # type: ignore
+        extract_structured_verdict = None  # type: ignore
+        format_role_cognitive_prompt = None  # type: ignore
 
 
 SYNC_TOOL_NAME = "sync_project_file"
@@ -1221,6 +1242,63 @@ class MultiAgentTeam:
             )
         return results
 
+    @staticmethod
+    def _classify_task_domain(task_prompt: str) -> str:
+        """Routes engineering tasks dynamically so domain specialists match the objective."""
+        low = (task_prompt or "").lower()
+        if any(k in low for k in ("cctv", "three.js", "threejs", "flir", "drone", "asphalt", "shader", "web audio", "webgl", "game", "playable", "canvas")):
+            return "game_simulation"
+        if any(k in low for k in ("security", "threat", "stride", "vuln", "exploit", "audit", "injection", "sandbox")):
+            return "security_audit"
+        if any(k in low for k in ("research", "analyze", "investigate", "compare", "benchmark", "architecture")):
+            return "research"
+        return "software_engineering"
+
+    @staticmethod
+    def _extract_code_blocks(text: str) -> List[Tuple[str, str]]:
+        """Extracts (filename, body) pairs from markdown fenced code blocks."""
+        pattern = re.compile(
+            r"(?:###\s*(?:File:?\s*)?`?([a-zA-Z0-9_\-\./\\:]+)`?|####\s*\d+\.\s*`?([a-zA-Z0-9_\-\./\\:]+)`?)?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
+        )
+        extracted: List[Tuple[str, str]] = []
+        for m in pattern.finditer(text or ""):
+            fname = m.group(1) or m.group(2)
+            lang = (m.group(3) or "").lower()
+            body = m.group(4).strip()
+            if not fname:
+                if lang in ("javascript", "js"):
+                    fname = "script.js"
+                elif lang in ("html", "htm"):
+                    fname = "index.html"
+                elif lang == "css":
+                    fname = "style.css"
+                elif lang in ("python", "py"):
+                    fname = "main.py"
+            if fname and len(body) > 30:
+                extracted.append((fname, body))
+        return extracted
+
+    @staticmethod
+    def _objective_verify_code_blocks(blocks: List[Tuple[str, str]]) -> Tuple[bool, List[str]]:
+        """Runs deterministic syntax/structural verification across generated code blocks."""
+        issues: List[str] = []
+        for fname, body in blocks:
+            ext = Path(fname).suffix.lower()
+            if ext == ".py":
+                try:
+                    ast.parse(body)
+                except SyntaxError as exc:
+                    issues.append(f"{fname}: Python SyntaxError line {exc.lineno}: {exc.msg}")
+            elif ext == ".json":
+                try:
+                    json.loads(body)
+                except json.JSONDecodeError as exc:
+                    issues.append(f"{fname}: Invalid JSON: {exc}")
+            elif ext in (".js", ".ts", ".css"):
+                if abs(body.count("{") - body.count("}")) > 2:
+                    issues.append(f"{fname}: Unbalanced curly braces ({{={body.count('{')}, }}={body.count('}')})")
+        return len(issues) == 0, issues
+
     def run_collaborative_workflow(
         self,
         task_prompt: str,
@@ -1228,19 +1306,27 @@ class MultiAgentTeam:
         include_graphql: bool = False,
         graphql_endpoint: Optional[str] = None,
         enable_auto_debug: bool = True,
+        deep_think: bool = True,
+        max_quality_rounds: int = 3,
+        topology: str = "sequential_pipeline",
     ) -> Dict[str, Any]:
         """
-        Executes an end-to-end multi-agent SDLC workflow:
-        1. Scout / Explorer: Read-only codebase reconnaissance & symbol citations
-        2. PM & Planner: Requirements decomposition & WBS plan (REQUEST -> Senior Dev)
-        3. Specialist Dev: Synthesizes procedural canvas textures & Web Audio SFX (INFORM -> Senior Dev)
-        4. Senior Dev: Generates complete project source files (INFORM -> QA Engineer)
-        5. QA Engineer: Audits code for syntax, controls, and playability (ACCEPT/INFORM -> PM)
-        6. Debugger (Self-Healing): Hypotheses testing & auto-repair if QA flags revisions
-        7. PM: Approves release & synchronizes verified files to disk.
+        Executes an end-to-end multi-agent SDLC & Deep Reasoning workflow:
+        0. Explorer: Read-only codebase reconnaissance & symbol citations
+        1. PM & Planner: Deep Tree/Chain decomposition & WBS plan (REQUEST -> Senior Dev)
+        2. Optional GraphQL Schema Discovery
+        3. Domain-Adaptive Specialist Dev: Procedural assets (game) OR Architecture/Security/Research specialization
+        4. Senior Dev: Complete implementation grounded in ThoughtGraph & SubconsciousBlackboard
+        5. QA Engineer + Objective Syntax/Structural Verification Gate
+        6. Multi-Round Self-Healing Debug & Refinement Loop (up to max_quality_rounds)
+        7. Zero-Incomplete-Leaves Gate & PM Atomic Disk Sync.
         """
+        domain = self._classify_task_domain(task_prompt)
         results: Dict[str, Any] = {
             "task": task_prompt,
+            "domain": domain,
+            "topology": topology,
+            "deep_think": bool(deep_think),
             "plan": "",
             "graphql_context": "",
             "specialist_assets": "",
@@ -1251,11 +1337,23 @@ class MultiAgentTeam:
             "citations": [],
             "critical_files": [],
             "debug_report": {},
+            "quality_rounds": 0,
+            "objective_checks": {"passed": True, "issues": []},
+            "thought_graph_id": "",
+            "crash_summary": {},
+            "blackboard_insights": [],
+            "zero_incomplete_leaves": True,
         }
         self._service_offline = False
         self._last_error = ""
         graphql_tainted = False
         effective_tainted = self.tainted or _contains_untrusted_marker(task_prompt)
+
+        graph = ThoughtGraph(goal=task_prompt) if (deep_think and ThoughtGraph is not None) else None
+        blackboard = SubconsciousBlackboard() if (deep_think and SubconsciousBlackboard is not None) else None
+        crash = CRASHTracker(goal=task_prompt, graph=graph) if (deep_think and CRASHTracker is not None) else None
+        if graph is not None:
+            results["thought_graph_id"] = graph.graph_id
 
         if self.executor is None:
             try:
@@ -1304,6 +1402,18 @@ class MultiAgentTeam:
                 self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
                 results["error"] = self._last_error
                 return results
+            if blackboard is not None and explorer_findings:
+                blackboard.post("explorer", "codebase_recon", explorer_findings[:600], confidence=0.8, citations=results["citations"][:5])
+            if crash is not None:
+                crash.record_step(
+                    purpose="analysis",
+                    context=f"Workspace recon across {len(results['citations'])} citation(s)",
+                    thought="Mapped workspace structure and critical symbols before planning.",
+                    outcome=(explorer_findings[:220] or "Workspace reconnaissance complete."),
+                    confidence=0.8,
+                    estimated_total=6,
+                    citations=results["citations"][:4],
+                )
 
         # ------------------------------------------------------------- 1. Project Manager & Planner (Planning)
         self.log_and_display_message(
@@ -1327,6 +1437,18 @@ class MultiAgentTeam:
             return results
         if plan_out:
             self.output_fn(f"\n📋 [WBS Execution Plan by PM & Planner]\n{plan_out}\n")
+        if blackboard is not None and plan_out:
+            blackboard.post("project_manager", "wbs_plan", plan_out[:700], confidence=0.82)
+        if crash is not None:
+            crash.record_step(
+                purpose="decomposition",
+                context=f"Domain={domain}, CriticalFiles={len(results['critical_files'])}",
+                thought="Decomposed goal into sequenced milestones and verification checks.",
+                outcome=(plan_out[:240] or "WBS plan prepared."),
+                confidence=0.82 if plan_out else 0.55,
+                estimated_total=6,
+                citations=results["critical_files"][:4] or ["wbs:plan"],
+            )
 
         # ------------------------------------------------------------- 2. Optional GraphQL Discovery
         if include_graphql or any(k in task_prompt.lower() for k in ("graphql", "schema", "api", "query", "mutation")):
@@ -1353,28 +1475,69 @@ class MultiAgentTeam:
             else:
                 results["graphql_context"] = sparse_sdl
 
-        # ------------------------------------------------------------- 3. Specialist Developer (Assets & Shaders)
+        # ------------------------------------------------------------- 3. Domain-Adaptive Specialist Developer
+        if domain == "game_simulation":
+            spec_preview = "Generate procedural canvas asphalt textures, CCTV CRT scanlines, and Web Audio API synthesizer"
+            spec_role = "Graphics, Textures & Audio Specialist"
+            specialist_instructions = (
+                "Synthesize procedural assets:\n"
+                "1. createProceduralAsphaltTexture() via HTML5 Canvas (dark asphalt, noise, road markings).\n"
+                "2. TacticalAudio class via Web Audio API (playCannon, playMissileLaunch, playExplosion, playBeep).\n"
+                "3. Monochromatic CCTV scanline and vignette overlay styles.\n"
+                "Provide clean, self-contained JavaScript code."
+            )
+        elif domain == "security_audit":
+            spec_preview = "Analyze trust boundaries, injection vectors, and STRIDE failure modes"
+            spec_role = "Security Architecture & Adversarial Auditor"
+            specialist_instructions = (
+                "Conduct a deep security and resilience design analysis:\n"
+                "1. Enumerate trust boundaries, untrusted input surfaces, and failure modes.\n"
+                "2. Recommend minimal fail-closed guards and negative-control test cases.\n"
+                "End with <verdict>CONFIRMED|REFUTED</verdict> and <confidence>0.XX</confidence>."
+            )
+        elif domain == "research":
+            spec_preview = "Synthesize deep technical trade-offs, edge cases, and verification criteria"
+            spec_role = "Principal Systems Researcher"
+            specialist_instructions = (
+                "Analyze architectural trade-offs from first principles:\n"
+                "1. Compare competing implementation designs across correctness, latency, and complexity.\n"
+                "2. Surface hidden risks and verifiable acceptance criteria.\n"
+                "End with <verdict>CONFIRMED|REFUTED</verdict> and <confidence>0.XX</confidence>."
+            )
+        else:
+            spec_preview = "Design clean interfaces, edge-case guards, and modular helper structures"
+            spec_role = "Systems Architecture & Module Specialist"
+            specialist_instructions = (
+                "Produce concise technical design specifications for the target implementation:\n"
+                "1. Specify small, single-purpose helpers, data contracts, and boundary validation.\n"
+                "2. Highlight critical edge cases and error-recovery invariants.\n"
+                "Provide focused specifications or helper snippets."
+            )
+
+        if deep_think and format_role_cognitive_prompt is not None and blackboard is not None:
+            specialist_instructions = (
+                format_role_cognitive_prompt(
+                    role="architect",
+                    objective=specialist_instructions,
+                    graph_context=graph.retrieve_relevant_context(task_prompt, top_k=5, max_chars=2500) if graph else "",
+                    blackboard_context=blackboard.format_context(max_chars=1800),
+                )
+            )
+
         self.log_and_display_message(
             sender="senior_developer",
             recipient="specialist_developer",
             performative="REQUEST",
-            content_preview="Generate procedural canvas asphalt textures, CCTV CRT scanlines, and Web Audio API synthesizer",
+            content_preview=spec_preview,
         )
 
-        specialist_instructions = (
-            "Synthesize procedural assets:\n"
-            "1. createProceduralAsphaltTexture() via HTML5 Canvas (dark asphalt, noise, road markings).\n"
-            "2. TacticalAudio class via Web Audio API (playCannon, playMissileLaunch, playExplosion, playBeep).\n"
-            "3. Monochromatic CCTV scanline and vignette overlay styles.\n"
-            "Provide clean, self-contained JavaScript code."
-        )
         spec_prompt = f"Task: {task_prompt}\nPlan: {plan_out}"
         if codebase_ctx:
             spec_prompt += f"\n\nExisting Codebase:\n{codebase_ctx[:4000]}"
 
         specialist_out = self._call_agent_persona(
             role="specialist_developer",
-            system_role="Graphics, Textures & Audio Specialist",
+            system_role=spec_role,
             instructions=specialist_instructions,
             user_prompt=spec_prompt,
             timeout=180.0,
@@ -1386,11 +1549,23 @@ class MultiAgentTeam:
             return results
 
         if specialist_out:
+            spec_parsed = extract_structured_verdict(specialist_out) if extract_structured_verdict else {"confidence": 0.78}
+            if blackboard is not None:
+                blackboard.post("specialist_developer", f"{domain}_spec", specialist_out[:700], confidence=spec_parsed.get("confidence", 0.78))
+            if crash is not None:
+                crash.record_step(
+                    purpose="hypothesis",
+                    context=f"Specialist ({domain})",
+                    thought="Formulated domain-specific design constraints and assets.",
+                    outcome=specialist_out[:240],
+                    confidence=spec_parsed.get("confidence", 0.78),
+                    estimated_total=6,
+                )
             self.log_and_display_message(
                 sender="specialist_developer",
                 recipient="senior_developer",
                 performative="INFORM",
-                content_preview=f"Delivered procedural textures and Web Audio synthesizer components ({len(specialist_out):,} chars)",
+                content_preview=f"Delivered {domain} specifications and components ({len(specialist_out):,} chars)",
             )
         else:
             self.log_and_display_message(
@@ -1405,7 +1580,7 @@ class MultiAgentTeam:
             sender="project_manager",
             recipient="senior_developer",
             performative="REQUEST",
-            content_preview="Synthesize complete, runnable source files (script.js, index.html, style.css) based on assets and plan",
+            content_preview="Synthesize complete, runnable source files based on plan, deep reasoning context, and specialist specs",
         )
 
         coder_context = (
@@ -1413,16 +1588,20 @@ class MultiAgentTeam:
             f"Plan:\n{plan_out}\n\n"
             f"Specialist Assets:\n{specialist_out[:1200]}...\n\n"
         )
+        if blackboard is not None:
+            bb_txt = blackboard.format_context(max_chars=2200)
+            if bb_txt:
+                coder_context += f"{bb_txt}\n\n"
         if results.get("critical_files"):
             coder_context += f"Critical Files: {', '.join(results['critical_files'])}\n\n"
         if results.get("citations"):
-            coder_context += f"Code Citations:\n" + "\n".join(results["citations"][:10]) + "\n\n"
+            coder_context += "Code Citations:\n" + "\n".join(results["citations"][:10]) + "\n\n"
         if ok_active_dir and base_resolved is not None:
             existing = [
                 f.name
                 for f in sorted(base_resolved.iterdir())
-                if not f.name.endswith((".bak", ".candidate"))
-                and not f.name.startswith(".")
+                if not f.name.startswith(".")
+                and not f.name.endswith((".bak", ".candidate"))
                 and _is_safe_readable_workspace_file(f, base_resolved)
             ]
             coder_context += f"Active Project Dir: {base_resolved}\nExisting Files: {', '.join(existing)}\n"
@@ -1431,9 +1610,13 @@ class MultiAgentTeam:
 
         coder_instructions = (
             "Write the complete, runnable code to fulfill the project.\n"
-            "If multiple files are required (e.g. script.js, index.html, style.css), format each with markdown code blocks:\n"
+            "If multiple files are required (e.g. script.js, index.html, style.css, or Python modules), format each with markdown code blocks:\n"
             "### File: filename.ext\n```language\n...complete code...\n```\n"
-            "Ensure the game is 100% playable, all event listeners are registered, and user controls respond immediately."
+            + (
+                "Ensure the game is playable, all event listeners are registered, and user controls respond immediately."
+                if domain == "game_simulation"
+                else "Ensure clean modular structure, explicit error handling, and verifiable logic."
+            )
         )
         code_out = self._call_agent_persona(
             role="senior_developer",
@@ -1458,97 +1641,159 @@ class MultiAgentTeam:
             results["error"] = err_detail
             return results
 
-        # ------------------------------------------------------------- 5. QA Engineer (Verification)
-        self.log_and_display_message(
-            sender="senior_developer",
-            recipient="qa_engineer",
-            performative="INFORM",
-            content_preview="Deliver candidate code for verification against playability, syntax, and controls",
-        )
+        # ------------------------------------------------------------- 5 & 6. Multi-Round Objective Verify + QA + Self-Healing Debug
+        rounds_cap = max(1, min(5, int(max_quality_rounds)))
+        qa_out = ""
+        verdict_pass = False
+        code_blocks = self._extract_code_blocks(code_out)
+        obj_ok, obj_issues = self._objective_verify_code_blocks(code_blocks)
+        results["objective_checks"] = {"passed": obj_ok, "issues": obj_issues}
 
-        qa_instructions = (
-            "Perform comprehensive code review and automated quality assurance:\n"
-            "1. Syntax and structure check (unclosed braces, undefined functions, missing DOM IDs).\n"
-            "2. Playability audit: Verify mouse aiming, raycasting, weapon controls, and entity collision.\n"
-            "3. State your verdict clearly: 'VERDICT: PASS' or 'VERDICT: REVISE' with details in 2-3 sentences."
-        )
-        qa_prompt = f"Task: {task_prompt}\nCandidate Code Summary:\n{code_out[:1500]}..."
-        if codebase_ctx:
-            qa_prompt += f"\n\nBaseline Codebase:\n{codebase_ctx[:2000]}"
+        for round_idx in range(1, rounds_cap + 1):
+            results["quality_rounds"] = round_idx
+            self.log_and_display_message(
+                sender="senior_developer",
+                recipient="qa_engineer",
+                performative="INFORM",
+                content_preview=f"Round {round_idx}: Deliver candidate artifacts ({len(code_blocks)} block(s)) for QA & objective audit",
+            )
 
-        qa_out = self._call_agent_persona(
-            role="qa_engineer",
-            system_role="Lead QA Engineer & Code Auditor",
-            instructions=qa_instructions,
-            user_prompt=qa_prompt,
-            timeout=180.0,
-        )
-        results["qa_verdict"] = qa_out
-        if self._service_offline:
-            self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
-            results["error"] = self._last_error
-            return results
-        verdict_pass = bool(code_out.strip()) and "pass" in qa_out.lower()
+            qa_focus = (
+                "2. Playability audit: Verify mouse aiming, raycasting, weapon controls, and entity collision.\n"
+                if domain == "game_simulation"
+                else "2. Architectural & edge-case audit: Verify error handling, security boundaries, and acceptance criteria.\n"
+            )
+            qa_instructions = (
+                "Perform comprehensive code review and automated quality assurance:\n"
+                "1. Syntax and structure check (unclosed braces, undefined functions, missing IDs/imports).\n"
+                + qa_focus
+                + "3. State your verdict clearly: 'VERDICT: PASS' or 'VERDICT: REVISE' with details in 2-3 sentences."
+            )
+            qa_prompt = f"Task: {task_prompt}\nCandidate Code Summary:\n{code_out[:1800]}"
+            if not obj_ok:
+                qa_prompt += "\n\nObjective Syntax Issues Detected:\n- " + "\n- ".join(obj_issues)
+            if codebase_ctx:
+                qa_prompt += f"\n\nBaseline Codebase:\n{codebase_ctx[:2000]}"
 
-        self.log_and_display_message(
-            sender="qa_engineer",
-            recipient="project_manager",
-            performative="ACCEPT" if verdict_pass else "REJECT",
-            content_preview=f"Audit verdict: {'PASS - Code is playable and verified' if verdict_pass else 'REVISE - Minor notes detected'}",
-        )
+            qa_out = self._call_agent_persona(
+                role="qa_engineer",
+                system_role="Lead QA Engineer & Code Auditor",
+                instructions=qa_instructions,
+                user_prompt=qa_prompt,
+                timeout=180.0,
+            )
+            results["qa_verdict"] = qa_out
+            if self._service_offline:
+                self.output_fn(f"\n❌ [Team Aborted] {self._last_error}")
+                results["error"] = self._last_error
+                return results
 
-        # ------------------------------------------------------------- 6. Self-Healing Debugger
-        if not verdict_pass and enable_auto_debug and not self._service_offline:
-            if any(term in qa_out.lower() for term in ("revise", "fail", "error", "missing", "broken", "syntax")):
-                self.output_fn("\n🐛 [QA Issue Detected - Engaging Autonomous Debug Specialist]")
-                debug_res = self.run_debug_workflow(
-                    bug_description=f"QA Audit flagged: {qa_out[:300]}",
-                    project_dir=active_project_dir,
-                    tainted=effective_tainted,
+            qa_wants_pass = "pass" in qa_out.lower() and "revise" not in qa_out.lower()
+            verdict_pass = bool(code_out.strip()) and qa_wants_pass and obj_ok
+
+            if crash is not None:
+                crash.record_step(
+                    purpose="verification" if round_idx == 1 else "revision",
+                    context=f"QA Round {round_idx}/{rounds_cap}",
+                    thought=f"Objective check passed={obj_ok}; QA verdict={'PASS' if verdict_pass else 'REVISE'}.",
+                    outcome=(qa_out[:240] or "QA evaluation recorded."),
+                    confidence=0.88 if verdict_pass else 0.45,
+                    estimated_total=6,
+                    revises_step=(crash.steps[-1].step_number if round_idx > 1 and crash.steps else None),
+                    revision_reason="Address QA / syntax issues" if round_idx > 1 else None,
                 )
-                results["debug_report"] = debug_res
-                if debug_res.get("code_updates"):
-                    results["code_updates"].update(debug_res["code_updates"])
-                if debug_res.get("sync_errors"):
-                    results["sync_errors"].update(debug_res["sync_errors"])
+
+            self.log_and_display_message(
+                sender="qa_engineer",
+                recipient="project_manager",
+                performative="ACCEPT" if verdict_pass else "REJECT",
+                content_preview=f"Round {round_idx} audit verdict: {'PASS - Verified' if verdict_pass else 'REVISE - Issues detected'}",
+            )
+
+            if verdict_pass:
+                break
+
+            should_debug = (not obj_ok) or any(
+                term in qa_out.lower() for term in ("revise", "fail", "error", "missing", "broken", "syntax")
+            )
+            if not enable_auto_debug or not should_debug or self._service_offline or round_idx >= rounds_cap:
+                if enable_auto_debug and should_debug and not self._service_offline:
+                    self.output_fn("\n🐛 [QA Issue Detected - Engaging Autonomous Debug Specialist]")
+                    debug_res = self.run_debug_workflow(
+                        bug_description=f"QA/Objective Audit flagged: {('; '.join(obj_issues) + ' | ') if obj_issues else ''}{qa_out[:300]}",
+                        project_dir=active_project_dir,
+                        tainted=effective_tainted,
+                    )
+                    results["debug_report"] = debug_res
+                    if debug_res.get("code_updates"):
+                        results["code_updates"].update(debug_res["code_updates"])
+                    if debug_res.get("sync_errors"):
+                        results["sync_errors"].update(debug_res["sync_errors"])
+                break
+
+            # Run autonomous debug cycle and re-evaluate in next quality round only if fix produced new code
+            self.output_fn(f"\n🐛 [Round {round_idx} QA/Objective Issue - Engaging Autonomous Debug Specialist]")
+            debug_res = self.run_debug_workflow(
+                bug_description=f"Round {round_idx} Audit flagged: {('; '.join(obj_issues) + ' | ') if obj_issues else ''}{qa_out[:300]}",
+                project_dir=active_project_dir,
+                tainted=effective_tainted,
+            )
+            results["debug_report"] = debug_res
+            if debug_res.get("code_updates"):
+                results["code_updates"].update(debug_res["code_updates"])
+            if debug_res.get("sync_errors"):
+                results["sync_errors"].update(debug_res["sync_errors"])
+
+            fix_text = str(debug_res.get("fix", "")).strip()
+            if not fix_text or fix_text == code_out:
+                break
+            fix_blocks = self._extract_code_blocks(fix_text)
+            if not fix_blocks or fix_blocks == code_blocks:
+                break
+            code_out = fix_text
+            code_blocks = fix_blocks
+            obj_ok, obj_issues = self._objective_verify_code_blocks(code_blocks)
+            results["objective_checks"] = {"passed": obj_ok, "issues": obj_issues}
+
+        if crash is not None:
+            crash.record_step(
+                purpose="synthesis",
+                context="Final workflow sign-off",
+                thought="Compiled all agent outputs, QA rounds, and disk synchronization plan.",
+                outcome=f"Completed in {results['quality_rounds']} quality round(s); verdict_pass={verdict_pass}.",
+                confidence=0.9 if verdict_pass else 0.7,
+                estimated_total=6,
+                is_final_step=True,
+                citations=results["critical_files"][:4] or ["synthesis:final"],
+            )
+            results["crash_summary"] = crash.get_summary()
+
+        if blackboard is not None:
+            results["blackboard_insights"] = blackboard.query(limit=12)
+
+        if graph is not None and RadialExplorer is not None:
+            ok_leaves, _, _ = RadialExplorer.verify_zero_incomplete_leaves(graph)
+            results["zero_incomplete_leaves"] = ok_leaves
 
         # ------------------------------------------------------------- 7. Project Manager Disk Sync
         if ok_active_dir and active_project_dir is not None and code_out:
-            pattern = re.compile(
-                r"(?:###\s*(?:File:?\s*)?`?([a-zA-Z0-9_\-\./\\:]+)`?|####\s*\d+\.\s*`?([a-zA-Z0-9_\-\./\\:]+)`?)?\s*```([a-zA-Z0-9_\-]+)?\r?\n([\s\S]*?)(?:```|\Z)"
-            )
-            matches = list(pattern.finditer(code_out))
-            for m in matches:
-                fname = m.group(1) or m.group(2)
-                lang = (m.group(3) or "").lower()
-                body = m.group(4).strip()
-                if not fname:
-                    if lang in ("javascript", "js"):
-                        fname = "script.js"
-                    elif lang in ("html", "htm"):
-                        fname = "index.html"
-                    elif lang == "css":
-                        fname = "style.css"
-                    elif lang in ("python", "py"):
-                        fname = "main.py"
-
-                if fname and len(body) > 30:
-                    ok_sync, sync_msg = self._safe_sync_file(
-                        active_project_dir,
-                        fname,
-                        body,
-                        verdict_pass=verdict_pass,
-                        tainted=effective_tainted,
-                    )
-                    if ok_sync:
-                        results["code_updates"][fname] = body
-                    else:
-                        results["sync_errors"][fname] = sync_msg
+            for fname, body in code_blocks:
+                ok_sync, sync_msg = self._safe_sync_file(
+                    active_project_dir,
+                    fname,
+                    body,
+                    verdict_pass=verdict_pass,
+                    tainted=effective_tainted,
+                )
+                if ok_sync:
+                    results["code_updates"][fname] = body
+                else:
+                    results["sync_errors"][fname] = sync_msg
 
         self.log_and_display_message(
             sender="project_manager",
             recipient="user",
             performative="INFORM",
-            content_preview="Sprint release approved and deployed. Active project files ready for browser execution.",
+            content_preview="Sprint release approved and deployed. Active project files ready for execution.",
         )
         return results
