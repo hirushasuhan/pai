@@ -1013,7 +1013,7 @@
                 </svg>
                 <span>Software Updates & Release Channel</span>
               </h3>
-              <span class="badge badge-info" id="badge-current-version">v1.5.0-beta.1 (Installed)</span>
+              <span class="badge badge-info" id="badge-current-version">v1.5.0-beta.2 (Installed)</span>
             </div>
 
             <p class="field-hint mb-3" style="font-size: 12px; color: var(--text-dim);">
@@ -1048,7 +1048,7 @@
                 <div class="status-left flex-center-gap">
                   <span class="status-indicator-dot online" id="dot-update-status"></span>
                   <div>
-                    <strong id="update-status-title">PAI Studio is Up to Date (v1.5.0-beta.1)</strong>
+                    <strong id="update-status-title">PAI Studio is Up to Date (v1.5.0-beta.2)</strong>
                     <div class="text-xs text-muted" id="update-last-checked-time">Last checked: Not checked yet</div>
                   </div>
                 </div>
@@ -1957,29 +1957,32 @@
         <p class="text-sm mb-3">
           Turning off internet access will completely isolate PAI Studio from all external networks and enforce strict local air-gap security.
         </p>
-        <div class="offline-service-list mb-3" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px;">
-          <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #f59e0b;">The following network services will be disabled:</div>
-          <ul style="list-style: none; padding-left: 0; margin: 0; font-size: 13px; display: flex; flex-direction: column; gap: 6px;">
-            <li style="display: flex; align-items: flex-start; gap: 8px;">
+        <div class="offline-service-list mb-3">
+          <div class="offline-service-list-title">The following network services will be disabled:</div>
+          <ul class="offline-service-items">
+            <li class="offline-service-item">
               <span style="color: #ef4444;">🚫</span>
               <span><strong>3rd-Party Cloud AI APIs:</strong> OpenAI, Anthropic, Gemini, Groq, Cerebras, DeepSeek, OpenRouter &amp; Model Fusion.</span>
             </li>
-            <li style="display: flex; align-items: flex-start; gap: 8px;">
+            <li class="offline-service-item">
               <span style="color: #ef4444;">🚫</span>
               <span><strong>Real-Time Web Knowledge:</strong> Wikipedia queries, live web search &amp; DuckDuckGo news intelligence.</span>
             </li>
-            <li style="display: flex; align-items: flex-start; gap: 8px;">
+            <li class="offline-service-item">
               <span style="color: #ef4444;">🚫</span>
               <span><strong>Live Fact-Checking Engine:</strong> Web citation and factual claim cross-referencing.</span>
             </li>
-            <li style="display: flex; align-items: flex-start; gap: 8px;">
+            <li class="offline-service-item">
               <span style="color: #ef4444;">🚫</span>
               <span><strong>External Network Services:</strong> Live weather forecasts, external GraphQL &amp; automated update checks.</span>
             </li>
           </ul>
         </div>
-        <div class="offline-notice-box" style="background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; padding: 10px 12px; border-radius: 4px; font-size: 12px; color: #93c5fd;">
-          💡 <strong>Automatic Local Fallback:</strong> If an active cloud model is currently selected, PAI Studio will automatically switch to your local installed Ollama model for private offline execution.
+        <div class="offline-notice-box">
+          <span class="notice-icon">💡</span>
+          <div>
+            <strong>Automatic Local Fallback:</strong> If an active cloud model is currently selected, PAI Studio will automatically switch to your local installed Ollama model for private offline execution.
+          </div>
         </div>
       </div>
       <div class="modal-footer flex-between">
@@ -2012,12 +2015,12 @@
         <div class="update-version-row flex-between mb-3">
           <div class="version-pill current">
             <span class="label">Current Version:</span>
-            <strong id="modal-curr-ver">v1.5.0-beta.1</strong>
+            <strong id="modal-curr-ver">v1.5.0-beta.2</strong>
           </div>
           <div class="version-arrow">&rarr;</div>
           <div class="version-pill target">
             <span class="label">New Version:</span>
-            <strong id="modal-target-ver">v1.5.0-beta.1</strong>
+            <strong id="modal-target-ver">v1.5.0-beta.2</strong>
           </div>
         </div>
 

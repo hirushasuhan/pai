@@ -1871,7 +1871,7 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.5.0-beta.1"
+PAI_CURRENT_VERSION = "1.5.0-beta.2"
 try:
     _curr_dir = Path(__file__).resolve().parent
     _v_candidates = [
