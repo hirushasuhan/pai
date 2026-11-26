@@ -93,13 +93,17 @@ jobs:
 
       - name: Build Desktop Win32 Helpers (Folder Picker & UIA Agent)
         run: |
-          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          $fw = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
+          $csc = "$fw\csc.exe"
+          $wpf = "$fw\WPF"
           if (Test-Path $csc) {
-            if (Test-Path "desktop/bin/pai_folder_picker.cs") {
-              & $csc /nologo /target:winexe /out:desktop/bin/pai_folder_picker.exe /r:System.Windows.Forms.dll,System.Drawing.dll desktop/bin/pai_folder_picker.cs
+            if (Test-Path "desktop\bin\pai_folder_picker.cs") {
+              & $csc /nologo /target:winexe /out:desktop\bin\pai_folder_picker.exe /r:System.Windows.Forms.dll,System.Drawing.dll desktop\bin\pai_folder_picker.cs
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
-            if (Test-Path "desktop/bin/pai_ui_agent.cs") {
-              & $csc /nologo /target:exe /out:desktop/bin/pai_ui_agent.exe /r:UIAutomationClient.dll,UIAutomationTypes.dll,WindowsBase.dll,System.Drawing.dll,System.Windows.Forms.dll desktop/bin/pai_ui_agent.cs
+            if (Test-Path "desktop\bin\pai_ui_agent.cs") {
+              & $csc /nologo /target:exe /lib:$wpf /out:desktop\bin\pai_ui_agent.exe /r:UIAutomationClient.dll,UIAutomationTypes.dll,WindowsBase.dll,System.Drawing.dll,System.Windows.Forms.dll desktop\bin\pai_ui_agent.cs
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
           }
 
