@@ -57,7 +57,10 @@ class TestPCAutomation(unittest.TestCase):
     def test_whatsapp_execution(self) -> None:
         """Asserts open_whatsapp copies message to clipboard and launches WhatsApp."""
         with patch.object(auto_mod, "copy_to_clipboard", return_value=True) as mock_clip, \
-             patch.object(auto_mod.webbrowser, "open", return_value=True) as mock_web:
+             patch.object(auto_mod.webbrowser, "open", return_value=True), \
+             patch.object(auto_mod.os, "startfile", create=True), \
+             patch.object(auto_mod.subprocess, "run"), \
+             patch.object(auto_mod.subprocess, "Popen"):
             ok, msg = auto_mod.open_whatsapp(
                 contact="chanaka",
                 message="moko karanne?",
@@ -220,7 +223,10 @@ class TestPCAutomation(unittest.TestCase):
         handler = MagicMock(spec=PAIBridgeHandler)
 
         with patch.object(auto_mod.webbrowser, "open", return_value=True), \
-             patch.object(auto_mod, "copy_to_clipboard", return_value=True):
+             patch.object(auto_mod, "copy_to_clipboard", return_value=True), \
+             patch.object(auto_mod.os, "startfile", create=True), \
+             patch.object(auto_mod.subprocess, "run"), \
+             patch.object(auto_mod.subprocess, "Popen"):
             # Test WhatsApp via bridge
             res_wa = PAIBridgeHandler._execute_chat_pipeline_sync(
                 handler,

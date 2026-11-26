@@ -867,11 +867,14 @@ def open_whatsapp(
             "}"
         )
         try:
+            win_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_find_contact],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=win_flags,
             )
         except Exception:
             pass
@@ -920,11 +923,14 @@ def open_telegram(
     resolved_exe = _resolve_executable(["telegram.exe"])
     if resolved_exe and os.path.isabs(resolved_exe[0]) and os.path.isfile(resolved_exe[0]) and not username:
         try:
+            win_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(
                 resolved_exe,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=win_flags,
             )
             opened = True
             used_desktop = True
@@ -970,11 +976,14 @@ def open_telegram(
             "}"
         )
         try:
+            win_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_find_contact],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=win_flags,
             )
         except Exception:
             pass

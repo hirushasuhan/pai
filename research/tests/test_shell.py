@@ -3056,7 +3056,10 @@ console.log('Playable Verified');
         self.assertEqual(parsed_num["message"], "On my way")
 
         with patch.object(auto_mod, "copy_to_clipboard", return_value=True) as mock_wa_clip, \
-             patch.object(auto_mod.webbrowser, "open", return_value=True):
+             patch.object(auto_mod.webbrowser, "open", return_value=True), \
+             patch.object(auto_mod.os, "startfile", create=True), \
+             patch.object(auto_mod.subprocess, "run"), \
+             patch.object(auto_mod.subprocess, "Popen"):
             ok_wa, msg_wa = auto_mod.execute_automation_task(
                 "whatsapp eke Kasun ta Hello kiyala yawanna",
                 stream=io.StringIO(),
