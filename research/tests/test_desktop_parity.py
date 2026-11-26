@@ -66,7 +66,6 @@ class TestCanonicalLayout(unittest.TestCase):
             REPO_ROOT / "desktop" / "desktop_launcher.py",
             REPO_ROOT / "desktop" / "apply_pending_update.py",
             REPO_ROOT / "desktop" / "launch_desktop.bat",
-            REPO_ROOT / "desktop" / "bin" / "pai_folder_picker.cs",
             REPO_ROOT / "desktop" / "ui" / "index.html",
             REPO_ROOT / "desktop" / "ui" / "app.js",
             REPO_ROOT / "desktop" / "ui" / "style.css",

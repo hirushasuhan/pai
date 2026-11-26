@@ -29,7 +29,8 @@ target/
 *.so
 *.dylib
 build/
-bin/
+/bin/
+!desktop/bin/
 
 # IDE / Editor
 .vscode/
