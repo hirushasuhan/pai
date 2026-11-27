@@ -164,14 +164,20 @@ def survey_disk_free(target_path: Optional[str | Path] = None) -> Tuple[int, int
         return 50 * 1024 * 1024 * 1024, 250 * 1024 * 1024 * 1024, "C:"
 
 
+def _win_no_window_flags() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
+
+
 def probe_nvidia_smi_vram() -> float:
     """Attempts nvidia-smi query to get true dedicated VRAM in MiB."""
     try:
         proc = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=_win_no_window_flags(),
         )
         if proc.returncode == 0 and proc.stdout.strip():
             return float(proc.stdout.strip().splitlines()[0].strip())
@@ -192,11 +198,19 @@ def survey_gpu_windows() -> Tuple[Optional[str], float, Optional[str], List[Dict
     cmd = [
         "powershell",
         "-NoProfile",
+        "-NonInteractive",
         "-Command",
         "Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion | ConvertTo-Json -Compress",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=_win_no_window_flags(),
+        )
         if proc.returncode == 0 and proc.stdout.strip():
             raw = json.loads(proc.stdout)
             controllers = raw if isinstance(raw, list) else [raw]
@@ -258,11 +272,19 @@ def survey_cpu_windows() -> Tuple[int, int, str]:
     cmd = [
         "powershell",
         "-NoProfile",
+        "-NonInteractive",
         "-Command",
         "Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | ConvertTo-Json -Compress",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=_win_no_window_flags(),
+        )
         if proc.returncode == 0 and proc.stdout.strip():
             raw = json.loads(proc.stdout)
             proc_info = raw[0] if isinstance(raw, list) else raw
@@ -288,11 +310,19 @@ def survey_npu_windows() -> Tuple[bool, Optional[str]]:
     cmd = [
         "powershell",
         "-NoProfile",
+        "-NonInteractive",
         "-Command",
         "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'NPU|XDNA|Neural|AI Boost' } | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=_win_no_window_flags(),
+        )
         if proc.returncode == 0 and proc.stdout.strip():
             raw = json.loads(proc.stdout)
             names = raw if isinstance(raw, list) else [raw]
@@ -912,9 +942,17 @@ def verify_authenticode_publisher(
     ps_path = Path(sys_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     ps_bin = str(ps_path) if ps_path.is_file() else "powershell"
 
-    cmd = [ps_bin, "-NoProfile", "-Command", ps_code]
+    cmd = [ps_bin, "-NoProfile", "-NonInteractive", "-Command", ps_code]
     try:
-        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=_win_no_window_flags(),
+        )
         if proc.returncode == 0:
             return True
         err_msg = proc.stderr.strip() or proc.stdout.strip()

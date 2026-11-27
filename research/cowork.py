@@ -73,6 +73,7 @@ class StuckDetectorWatchdog:
         self.max_low_conf_streak = max(1, int(max_low_conf_streak))
         self.max_recoveries = max(1, int(max_recoveries))
         self._recent_outputs: List[Tuple[Any, str, set[str]]] = []
+        self._recent_tool_failures: Dict[str, int] = {}
         self._low_conf_streak: int = 0
         self._last_progress_ts: float = time.time()
 
@@ -91,8 +92,22 @@ class StuckDetectorWatchdog:
     def reset_for_recovery(self, now: Optional[float] = None) -> None:
         """Resets sliding loop & low-confidence streak counters right after a clean recovery branch."""
         self._recent_outputs.clear()
+        self._recent_tool_failures.clear()
         self._low_conf_streak = 0
         self._last_progress_ts = now if now is not None else time.time()
+
+    def record_tool_failure(self, server: str, tool_name: str, args_summary: str = "") -> Dict[str, Any]:
+        """Detects repeated failing MCP tool invocations (same server/tool/args >= 2 failures)."""
+        sig = f"{server}:{tool_name}:{(args_summary or '')[:120]}"
+        cnt = self._recent_tool_failures.get(sig, 0) + 1
+        self._recent_tool_failures[sig] = cnt
+        stalled = cnt >= 2
+        reason = (
+            f"Repeated failing MCP tool call '{server}:{tool_name}' ({cnt} failures); pivot strategy or request user input."
+            if stalled
+            else ""
+        )
+        return {"stalled": stalled, "code": "MCP_TOOL_LOOP" if stalled else "OK", "reason": reason, "failures": cnt}
 
     def check_heartbeat(self, now: Optional[float] = None) -> Tuple[bool, float]:
         """Returns (is_timed_out, elapsed_seconds)."""

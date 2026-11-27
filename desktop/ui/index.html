@@ -195,6 +195,11 @@
 
           <!-- Header Utilities & Theme Mode Toggle -->
           <div class="header-utils-box">
+            <!-- Pre-Inference Memory Optimizer Pill -->
+            <button type="button" id="header-memory-pill" class="header-memory-pill" title="Check RAM / VRAM & optimize memory before running 27B or FLUX models">
+              <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+              <span id="header-memory-text">RAM --</span>
+            </button>
             <!-- Background Downloading Pill -->
             <button type="button" id="header-downloading-pill" class="header-downloading-pill hidden" title="Click to view live model download progress">
               <span class="pulse-indicator"></span>
@@ -349,6 +354,12 @@
               <!-- Attachments Tray for docs, txt, pdf, excel, md -->
               <div id="chat-attachments-tray" class="chat-attachments-tray hidden"></div>
 
+              <!-- Image Generation Mode Reminder Banner (shown when an image model is active) -->
+              <div id="image-mode-banner" class="image-mode-banner hidden" role="status">
+                <span id="image-mode-banner-text">Image Generation Model Active — Describe a picture to generate, or switch back to a chat model for Q&amp;A.</span>
+                <button type="button" id="btn-switch-chat-model" class="btn-switch-chat-model">Switch to Chat Model</button>
+              </div>
+
               <form id="chat-form" class="chat-form">
                 <button type="button" id="btn-attach-file" class="btn-attach-file" title="Attach documents, spreadsheets, PDFs, or code files (.doc, .docx, .txt, .pdf, .xls, .xlsx, .csv, .md)">
                   <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
@@ -501,20 +512,25 @@
             <div class="flex-between mb-3">
               <h3 class="card-title flex-center-gap mb-0">
                 <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
-                <span>Model Context Protocol (MCP) Servers</span>
+                <span>Model Context Protocol (MCP) Servers & Registry</span>
               </h3>
-              <span class="active-badge" id="mcp-servers-count">0 Connected</span>
+              <div class="flex-center-gap">
+                <button type="button" id="btn-mcp-firewall-log" class="btn btn-secondary btn-xs">Tool Firewall Log</button>
+                <span class="active-badge" id="mcp-servers-count">0 Connected</span>
+              </div>
             </div>
-            <p class="text-muted mb-3">Connect local command-line or SSE-based MCP tool servers into PAI's sandboxed Capability Broker.</p>
+            <p class="text-muted mb-3">Connect local STDIO or Streamable HTTP/SSE MCP servers with GitHub Toolsets, Read-Only/Lockdown guardrails, and DPAPI Vault credentials.</p>
 
-            <!-- Quick 1-Click MCP Presets -->
+            <!-- Quick 1-Click MCP Registry Presets -->
             <div class="mcp-preset-pills">
-              <span class="preset-pill-label">1-Click Presets:</span>
+              <span class="preset-pill-label">Registry Presets:</span>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="github">GitHub Official</button>
               <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="filesystem">Filesystem</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="git">Git Inspector</button>
               <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="fetch">Web Fetch</button>
               <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="memory">Memory Graph</button>
               <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sqlite">SQLite</button>
-              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sse">Remote SSE</button>
+              <button type="button" class="preset-pill-btn btn-mcp-preset" data-preset="sse">Remote HTTP/SSE</button>
             </div>
 
             <!-- Add MCP Server Form -->
@@ -522,28 +538,50 @@
               <div class="form-row-grid">
                 <div class="form-group">
                   <label class="form-label">Server Name</label>
-                  <input type="text" id="mcp-name-input" class="form-input" placeholder="e.g. filesystem-tools, sqlite-db" required />
+                  <input type="text" id="mcp-name-input" class="form-input" placeholder="e.g. github-mcp, filesystem-tools" required />
                 </div>
                 <div class="form-group">
                   <label class="form-label">Transport</label>
                   <select id="mcp-transport-select" class="form-input">
                     <option value="stdio">STDIO (Local Subprocess)</option>
-                    <option value="sse">SSE (HTTP / Remote Stream)</option>
+                    <option value="sse">Streamable HTTP / SSE (Remote)</option>
                   </select>
                 </div>
               </div>
               <div class="form-group mb-2">
                 <label class="form-label">Execution Command / Endpoint URL</label>
-                <input type="text" id="mcp-cmd-input" class="form-input font-mono-target" placeholder="e.g. npx -y @modelcontextprotocol/server-filesystem ./ or http://localhost:8000/sse" required />
+                <input type="text" id="mcp-cmd-input" class="form-input font-mono-target" placeholder="e.g. github-mcp-server stdio or https://api.githubcopilot.com/mcp/" required />
               </div>
-              <div class="form-group mb-3">
+              <div class="form-row-grid mb-2">
+                <div class="form-group">
+                  <label class="form-label">Toolsets (Optional, comma-separated)</label>
+                  <input type="text" id="mcp-toolsets-input" class="form-input font-mono-target" placeholder="e.g. repos,issues,pull_requests" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">DPAPI Vault Token (Optional, encrypted at rest)</label>
+                  <input type="password" id="mcp-secret-input" class="form-input" placeholder="Token/PAT stored encrypted (never in mcp_servers.json)" />
+                </div>
+              </div>
+              <div class="form-group mb-2">
                 <label class="form-label">Description (Optional)</label>
                 <input type="text" id="mcp-desc-input" class="form-input" placeholder="e.g. Local workspace sandboxed file inspection" />
               </div>
-              <button type="submit" class="btn btn-primary btn-sm flex-center-gap">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                <span>Connect MCP Server</span>
-              </button>
+              <div class="flex-between mb-3">
+                <div class="flex-center-gap">
+                  <label class="flex-center-gap text-muted" style="font-size: 12px; cursor: pointer;">
+                    <input type="checkbox" id="mcp-readonly-check" />
+                    <span>Read-Only Mode</span>
+                  </label>
+                  <label class="flex-center-gap text-muted" style="font-size: 12px; cursor: pointer;">
+                    <input type="checkbox" id="mcp-lockdown-check" checked />
+                    <span>Lockdown Guard (Taint HITL)</span>
+                  </label>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm flex-center-gap">
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                  <span>Save & Connect MCP Server</span>
+                </button>
+              </div>
             </form>
 
             <div class="mcp-servers-grid" id="mcp-servers-grid">
@@ -556,10 +594,10 @@
             <div class="flex-between mb-3">
               <h3 class="card-title flex-center-gap mb-0">
                 <svg class="title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                <span>Installed Plugins & Cognitive Skills</span>
+                <span>Installed Plugins, SKILL.md Bundles & Trust Scanner</span>
               </h3>
             </div>
-            <p class="text-muted mb-3">Toggle core cognitive skills or install custom agent plugins to augment PAI's capabilities.</p>
+            <p class="text-muted mb-3">Every plugin and SKILL.md bundle is scanned by PluginScanner (Trust Score 0-100) before active skill context injection.</p>
 
             <!-- Quick Custom Plugin Presets -->
             <div class="mcp-preset-pills">
@@ -582,13 +620,17 @@
                   <input type="text" id="plugin-cat-input" class="form-input" placeholder="e.g. Web Development" />
                 </div>
               </div>
-              <div class="form-group mb-3">
-                <label class="form-label">Instructions / Capability Description</label>
+              <div class="form-group mb-2">
+                <label class="form-label">Capability Description</label>
                 <input type="text" id="plugin-desc-input" class="form-input" placeholder="e.g. Generates React and Tailwind components with unit tests" required />
+              </div>
+              <div class="form-group mb-3">
+                <label class="form-label">SKILL.md Behavioral Instructions (Optional, injected safely on match)</label>
+                <textarea id="plugin-skill-input" class="form-input" rows="2" placeholder="e.g. Always include strict TypeScript types and Vitest unit specs."></textarea>
               </div>
               <button type="submit" class="btn btn-secondary btn-sm flex-center-gap">
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                <span>Add Plugin</span>
+                <span>Scan & Install Plugin</span>
               </button>
             </form>
 
@@ -613,6 +655,9 @@
             </div>
             <div class="model-storage-actions">
               <span class="storage-free-badge" id="storage-free-display">-- GB Free</span>
+              <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-models-optimize-ram" title="Unload idle engines & optimize RAM/VRAM before running 27B/FLUX">
+                <span>Optimize RAM / VRAM</span>
+              </button>
               <button type="button" class="btn btn-secondary btn-sm flex-center-gap" id="btn-change-model-path" title="Select custom folder or drive to save models">
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                 <span>Change Storage Folder</span>
@@ -1584,7 +1629,7 @@
         <div class="form-group mb-3">
           <label class="form-label" for="install-modal-path-input">Save Destination Directory (Model Storage):</label>
           <div class="input-with-action">
-            <input type="text" id="install-modal-path-input" class="input-text font-mono-target" placeholder="C:\Users\hp\.ollama\models" required />
+            <input type="text" id="install-modal-path-input" class="input-text font-mono-target" placeholder="Default model storage directory" required />
             <button type="button" class="btn btn-secondary flex-center-gap" id="btn-browse-install-path" title="Browse target folder with native Windows dialog">
               <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -1696,6 +1741,7 @@
         <span class="floating-download-bytes font-mono text-xs text-muted" id="floating-dl-bytes">0 MB / 0 MB</span>
         <div class="floating-buttons flex-center-gap">
           <button type="button" class="btn-floating-action btn-floating-pause" id="btn-floating-pause" title="Pause / Resume download">
+            <svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
             <span id="btn-floating-pause-text">Pause</span>
           </button>
           <button type="button" class="btn-floating-action btn-floating-open" id="btn-floating-open" title="Open download popup modal">
@@ -2097,6 +2143,60 @@
             <span>Restart & Apply Update</span>
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unified Styled PAI Studio Dialog Modal (Confirm / Prompt / Viewer) -->
+  <div id="pai-dialog-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pai-dialog-title">
+    <div class="modal-card pai-dialog-card" style="max-width: 560px;">
+      <div class="modal-header flex-between">
+        <div class="flex-center-gap">
+          <span class="pai-dialog-badge hidden" id="pai-dialog-badge">Notice</span>
+          <h3 class="modal-title" id="pai-dialog-title" style="margin: 0;">Confirm Action</h3>
+        </div>
+        <button type="button" class="btn-close-modal" id="pai-dialog-close" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body pai-dialog-body">
+        <p id="pai-dialog-message" class="pai-dialog-message"></p>
+        <div id="pai-dialog-safety" class="pai-dialog-safety hidden"></div>
+        <pre id="pai-dialog-code" class="pai-dialog-code hidden"></pre>
+        <div id="pai-dialog-input-wrap" class="form-group hidden" style="margin-top: 12px; margin-bottom: 0;">
+          <input type="text" id="pai-dialog-input" class="input-text" placeholder="" autocomplete="off" />
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary btn-sm hidden" id="pai-dialog-copy">Copy Content</button>
+        <div class="flex-center-gap" style="margin-left: auto;">
+          <button type="button" class="btn btn-secondary" id="pai-dialog-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="pai-dialog-confirm">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Memory Optimizer Modal -->
+  <div id="memory-optimizer-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="mem-opt-title">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header flex-between">
+        <h3 class="modal-title" id="mem-opt-title" style="margin: 0;">Pre-Inference RAM &amp; VRAM Optimizer</h3>
+        <button type="button" class="btn-close-modal" id="btn-close-mem-opt" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="mem-opt-metrics" class="preflight-status-list mb-3"></div>
+        <div id="mem-opt-advisory" class="storage-hint-ok mb-3" style="font-size: 0.85rem;">Checking live memory &amp; resident AI engines...</div>
+        <div id="mem-opt-apps-wrap" class="hidden">
+          <div class="text-xs text-muted mb-1" style="font-weight: 600;">Top External Memory Apps (Close unused tabs/apps if needed):</div>
+          <div id="mem-opt-apps-list" class="text-xs font-mono" style="padding: 8px 10px; border-radius: 8px; background: rgba(148,163,184,0.1);"></div>
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-secondary" id="btn-cancel-mem-opt">Close</button>
+        <button type="button" class="btn btn-primary" id="btn-run-mem-opt">Optimize &amp; Free Memory Now</button>
       </div>
     </div>
   </div>

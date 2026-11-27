@@ -74,6 +74,56 @@ _MAX_DISCOVERY_BYTES = 1_048_576
 _UNTRUSTED_MARKER_RE = re.compile(r"---\s*UNTRUSTED DATA BEGIN(?:\s*\[[^\]]+\])?\s*---")
 
 
+AGENT_CAPABILITY_CARDS: Dict[str, Dict[str, Any]] = {
+    "project_manager": {
+        "role": "project_manager",
+        "max_risk": Risk.READ,
+        "mcp_read_only": True,
+        "allowed_toolsets": ("context", "repos", "issues", "pull_requests", "knowledge_graph"),
+        "description": "Plans sprints, decomposes tasks, inspects issues/PRs read-only.",
+    },
+    "specialist_developer": {
+        "role": "specialist_developer",
+        "max_risk": Risk.WRITE,
+        "mcp_read_only": False,
+        "allowed_toolsets": ("files", "git", "repos", "reasoning"),
+        "description": "Implements scoped deliverables inside workspace_dir.",
+    },
+    "senior_developer": {
+        "role": "senior_developer",
+        "max_risk": Risk.WRITE,
+        "mcp_read_only": False,
+        "allowed_toolsets": ("files", "git", "repos", "reasoning"),
+        "description": "Core architecture synthesis and workspace-contained file writes.",
+    },
+    "qa_engineer": {
+        "role": "qa_engineer",
+        "max_risk": Risk.READ,
+        "mcp_read_only": True,
+        "allowed_toolsets": ("files", "git", "code_security", "actions"),
+        "description": "Isolated verification & static audit; strictly read-only MCP boundary.",
+    },
+}
+
+
+def get_role_agent_card(role: str) -> Dict[str, Any]:
+    """Returns least-privilege Agent Card capability policy for a multi-agent role."""
+    key = (role or "").strip().lower()
+    return dict(AGENT_CAPABILITY_CARDS.get(key, AGENT_CAPABILITY_CARDS["qa_engineer"]))
+
+
+def make_role_mcp_broker(
+    role: str,
+    confirm: Optional[Callable[[ToolRequest], bool]] = None,
+    max_calls: Optional[int] = 25,
+) -> ToolBroker:
+    """Constructs a role-scoped ToolBroker enforcing least-privilege MCP access."""
+    card = get_role_agent_card(role)
+    tools = [Tool("mcp_call_tool", card["max_risk"], lambda server="", tool="", arguments=None: True)]
+    grants = [Grant("mcp_call_tool", max_calls=max_calls)]
+    return ToolBroker(tools=tools, grants=grants, confirm=confirm)
+
+
 def _contains_untrusted_marker(text: Optional[str]) -> bool:
     if not text:
         return False
@@ -241,9 +291,25 @@ class AgentMessage:
 
 
 def discover_available_models(base_url: str = "http://127.0.0.1:11434") -> List[str]:
-    """Queries loopback Ollama server for currently installed models."""
+    """Queries loopback Ollama server and local llama.cpp GGUF catalog for installed models."""
     try:
         net_guard.validate_url(base_url, allow_private=True)
+    except Exception:
+        return []
+    discovered: List[str] = []
+    try:
+        try:
+            from research.local_sidecars import SidecarRuntimeManager, find_llama_server_binary
+        except ModuleNotFoundError:
+            from local_sidecars import SidecarRuntimeManager, find_llama_server_binary
+        sc = SidecarRuntimeManager()
+        if sc.is_llama_server_running(timeout=0.3) or find_llama_server_binary() is not None:
+            for gm in sc.list_installed_gguf_models():
+                if gm.get("name"):
+                    discovered.append(str(gm["name"]))
+    except Exception:
+        pass
+    try:
         target = base_url.rstrip("/") + "/api/tags"
         req = urllib.request.Request(target)
         with urllib.request.urlopen(req, timeout=2.5) as resp:
@@ -252,11 +318,14 @@ def discover_available_models(base_url: str = "http://127.0.0.1:11434") -> List[
             except TypeError:
                 raw = resp.read()
             if len(raw) > _MAX_DISCOVERY_BYTES:
-                return []
+                return discovered
             data = json.loads(raw.decode("utf-8"))
-            return [str(m.get("name")) for m in data.get("models", []) if m.get("name")]
+            for m in data.get("models", []):
+                if m.get("name") and str(m.get("name")) not in discovered:
+                    discovered.append(str(m.get("name")))
+            return discovered
     except Exception:
-        return []
+        return discovered
 
 
 class TeamRoleModelRegistry:
@@ -265,11 +334,11 @@ class TeamRoleModelRegistry:
     ROLE_PREFERENCES: Dict[str, List[str]] = {
         "project_manager": ["llama3.2:3b", "qwen3.5:4b", "llama3.2:1b"],
         "explorer": ["qwen2.5-coder:1.5b", "llama3.2:1b", "qwen3.5:4b"],
-        "planner": ["llama3.2:3b", "qwen3.5:4b", "qwen2.5-coder:7b"],
-        "senior_developer": ["qwen2.5-coder:7b", "qwen2.5-coder:1.5b", "qwen3.5:4b"],
+        "planner": ["ternary-bonsai-2.5-27b-q2_0", "llama3.2:3b", "qwen3.5:4b", "qwen2.5-coder:7b"],
+        "senior_developer": ["ternary-bonsai-2.5-27b-q2_0", "ternary-bonsai-2.5-27b-ptq1_0", "qwen2.5-coder:7b", "qwen2.5-coder:1.5b", "qwen3.5:4b"],
         "specialist_developer": ["qwen2.5-coder:1.5b", "qwen3.5:4b", "llama3.2:3b"],
         "qa_engineer": ["qwen3.5:4b", "llama3.2:1b", "llama3.2:3b"],
-        "debugger": ["qwen2.5-coder:7b", "qwen3.5:4b", "qwen2.5-coder:1.5b"],
+        "debugger": ["ternary-bonsai-2.5-27b-q2_0", "qwen2.5-coder:7b", "qwen3.5:4b", "qwen2.5-coder:1.5b"],
     }
 
     ROLE_TITLES: Dict[str, str] = {
@@ -713,6 +782,32 @@ class MultiAgentTeam:
         os.environ["PAI_DISABLE_CHAT_FAILOVER"] = "1"
         try:
             for attempt_model in candidate_queue:
+                if self.executor is None and ("ternary-bonsai" in attempt_model.lower() or attempt_model.lower().endswith(".gguf")):
+                    try:
+                        try:
+                            from research.local_sidecars import SidecarRuntimeManager
+                        except ModuleNotFoundError:
+                            from local_sidecars import SidecarRuntimeManager
+                        sc = SidecarRuntimeManager()
+                        ok_sc, sc_out = sc.query_llama_cpp(
+                            persona_prompt,
+                            model_name=attempt_model,
+                            timeout=min(timeout, 240.0),
+                        )
+                        if ok_sc and sc_out and len(sc_out.strip()) > 20:
+                            return sc_out.strip()
+                        err_text = sc_out or "Ternary Bonsai sidecar unavailable"
+                    except Exception as exc:
+                        err_text = str(exc)
+                    err_note = self._extract_concise_error(err_text)
+                    if err_note:
+                        self._last_error = err_note
+                        self.output_fn(f"  ⚠️ [Sidecar Failover] Role '{role}' on '{attempt_model}' unavailable ({err_note}). Falling back...")
+                    if len(candidate_queue) > 1 and attempt_model != candidate_queue[-1]:
+                        next_model = candidate_queue[candidate_queue.index(attempt_model) + 1]
+                        self.registry.role_models[role] = next_model
+                    continue
+
                 exec_argv = ["chat", "--model", attempt_model, "--model-timeout", str(timeout)]
                 if "gemma" in attempt_model.lower():
                     exec_argv.append("--gemma4-opt-in")

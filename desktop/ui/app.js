@@ -269,6 +269,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupWebSearch();
   setupSettings();
   setupUpdateSystem();
+  setupMemoryOptimizer();
   setupDesktopContextMenu();
   checkStartupPreflight();
 
@@ -718,13 +719,46 @@ function updateAttachmentCapabilities() {
   }
 }
 
+function isImageModelName(modelName) {
+  const m = String(modelName || "").toLowerCase();
+  return /imagen|dall-e|flux|z-image|sdxl|sd-turbo|stable-diffusion|pollinations/.test(m);
+}
+
+function switchToBestChatModel() {
+  if (!headerModelSelect) return;
+  const opts = Array.from(headerModelSelect.options);
+  const preferred = opts.find((o) => o.value && !isImageModelName(o.value) && !o.value.startsWith("auto") && o.value !== "fusion")
+    || opts.find((o) => o.value === "auto" || o.value === "auto:smart")
+    || opts.find((o) => o.value && !isImageModelName(o.value));
+  if (preferred) {
+    headerModelSelect.value = preferred.value;
+    headerModelSelect.dispatchEvent(new Event("change"));
+  }
+}
+
 function updateChatPlaceholderForActiveModel() {
   if (!chatInput) return;
   const m = (activeModel || "").toLowerCase();
-  if (m.includes("llava") || m.includes("moondream") || m.includes("vision")) {
-    chatInput.placeholder = "Ask a question, or attach an image for visual inspection...";
+  const imgBanner = document.getElementById("image-mode-banner");
+  const imgBannerTxt = document.getElementById("image-mode-banner-text");
+  const btnSwitchChat = document.getElementById("btn-switch-chat-model");
+  if (isImageModelName(m)) {
+    chatInput.placeholder = `Image Mode (${activeModel}): Describe the image you want to create (e.g. 'sunset beach 8k'), or switch Model for text Q&A...`;
+    if (imgBanner && imgBannerTxt) {
+      imgBannerTxt.textContent = `Image Model Active (${activeModel}) — Only generates images. For text/code Q&A, switch to a Chat model.`;
+      imgBanner.classList.remove("hidden");
+    }
+    if (btnSwitchChat && !btnSwitchChat._wired) {
+      btnSwitchChat._wired = true;
+      btnSwitchChat.addEventListener("click", switchToBestChatModel);
+    }
   } else {
-    chatInput.placeholder = "Ask anything, run /mail, /whatsapp, /youtube, /image, /team, /help... (Enter to send, Shift+Enter for newline)";
+    if (imgBanner) imgBanner.classList.add("hidden");
+    if (m.includes("llava") || m.includes("moondream") || m.includes("vision")) {
+      chatInput.placeholder = "Ask a question, or attach an image for visual inspection...";
+    } else {
+      chatInput.placeholder = "Ask anything, run /mail, /whatsapp, /youtube, /image, /team, /help... (Enter to send, Shift+Enter for newline)";
+    }
   }
 }
 
@@ -750,7 +784,7 @@ const SLASH_COMMANDS = [
   { cmd: "/team", desc: "Toggle autonomous 7-role AI engineering team", cat: "Agents" },
   { cmd: "/supervisor", desc: "Open Antigravity Autonomous Supervisor in AI Team", cat: "Agents" },
   { cmd: "/antigravity", desc: "Launch continuous autonomous agent in AI Team tab", cat: "Agents" },
-  { cmd: "/image", desc: "Generate image with Local SD-Turbo or Cloud AI (Imagen / DALL-E)", cat: "Creative" },
+  { cmd: "/image", desc: "Generate image with Local FLUX (sd.cpp) or Free Cloud FLUX / Imagen / DALL-E", cat: "Creative" },
   { cmd: "/weather", desc: "Fetch live real-time weather telemetry", cat: "Tools" },
   { cmd: "/web", desc: "Search live web knowledge and display citations", cat: "Tools" },
   { cmd: "/mcp", desc: "Manage Model Context Protocol (MCP) servers & tools", cat: "System" },
@@ -782,9 +816,17 @@ function setupPcControlBar() {
   chkPc.addEventListener("change", async () => {
     const wantOn = chkPc.checked;
     if (wantOn) {
-      const ok = window.confirm(
-        "Enable PC Control Mode?\n\nPAI will be allowed to inspect Windows UI elements and control mouse/keyboard on your desktop.\n\nSafety: Outbound Send actions always pause for Approve & Send, and moving your mouse to the top-left corner (0,0) triggers an immediate emergency stop."
-      );
+      const ok = await showPaiConfirm({
+        title: "Enable PC Control Mode",
+        badge: "Desktop Control",
+        badgeTone: "warn",
+        message:
+          "PAI will be allowed to inspect Windows UI elements and control mouse/keyboard on your desktop.",
+        safety:
+          "Safety: Outbound Send actions always pause for Approve & Send, and moving your mouse to the top-left corner (0,0) triggers an immediate emergency stop.",
+        confirmText: "Enable PC Control",
+        cancelText: "Cancel",
+      });
       if (!ok) {
         chkPc.checked = false;
         return;
@@ -1059,8 +1101,17 @@ function initChatHistory() {
     createNewChatSession();
   });
 
-  btnClearAllHistory?.addEventListener("click", () => {
-    if (confirm("Are you sure you want to clear all conversation history?")) {
+  btnClearAllHistory?.addEventListener("click", async () => {
+    const ok = await showPaiConfirm({
+      title: "Clear Conversation History",
+      badge: "Destructive",
+      badgeTone: "danger",
+      message: "Are you sure you want to clear all saved conversation history?",
+      confirmText: "Clear History",
+      cancelText: "Keep",
+      danger: true,
+    });
+    if (ok) {
       clearAllChatSessions();
     }
   });
@@ -1811,11 +1862,14 @@ async function dispatchChatRequest(promptToSend, botMsgId, sentAttachments, user
           auto_saved_memory: data.auto_saved_memory,
           council_result: data.council_result,
           pending_confirmation: data.pending_confirmation,
+          pending_mcp_confirmation: data.pending_mcp_confirmation,
           desktop_steps: data.desktop_steps,
+          tool_trace: data.tool_trace,
           requires_pc_control: data.requires_pc_control,
           deep_think_used: data.deep_think_used,
           thought_graph_mermaid: data.thought_graph_mermaid,
           context_budget: data.context_budget,
+          context_telemetry: data.context_telemetry,
         });
       }
       chatHistory.push({ role: "user", content: promptToSend });
@@ -1968,11 +2022,14 @@ function pollChatJobUntilComplete(taskId) {
                     auto_saved_memory: result.auto_saved_memory,
                     council_result: result.council_result,
                     pending_confirmation: result.pending_confirmation,
+                    pending_mcp_confirmation: result.pending_mcp_confirmation,
                     desktop_steps: result.desktop_steps,
+                    tool_trace: result.tool_trace,
                     requires_pc_control: result.requires_pc_control,
                     deep_think_used: result.deep_think_used,
                     thought_graph_mermaid: result.thought_graph_mermaid,
                     context_budget: result.context_budget,
+                    context_telemetry: result.context_telemetry,
                   }
                 );
               }
@@ -2255,6 +2312,40 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
 
   let html = formatMarkdown(text);
 
+  if (extra && extra.tool_trace && Array.isArray(extra.tool_trace) && extra.tool_trace.length > 0) {
+    const traceLines = extra.tool_trace.map((t) => {
+      const st = t.ok ? "OK" : (t.hitl_required ? "HITL_REQUIRED" : "ERR");
+      return `#${t.turn || "?"} [${st}] ${t.tool || ""} (${t.ms || 0} ms) args=${JSON.stringify(t.args || {})}`;
+    }).join("\n");
+    const ctxNote = extra.context_telemetry
+      ? ` · ctx ${extra.context_telemetry.total_tokens_est}/${extra.context_telemetry.num_ctx} (${extra.context_telemetry.utilization_pct}%)`
+      : "";
+    html = `
+      <details class="thinking-accordion mb-2">
+        <summary class="thinking-summary">
+          <svg class="thinking-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+          <span>MCP Tool Execution Timeline (${extra.tool_trace.length} calls${escapeHtml(ctxNote)})</span>
+        </summary>
+        <div class="thinking-body">
+          <pre>${escapeHtml(traceLines)}</pre>
+        </div>
+      </details>
+    ` + html;
+  }
+
+  if (extra && extra.pending_mcp_confirmation) {
+    const pm = extra.pending_mcp_confirmation;
+    html += `
+      <div class="hitl-action-card mt-2">
+        <div class="hitl-header">MCP Tool Approval Required: <code>${escapeHtml(pm.server)}:${escapeHtml(pm.tool)}</code></div>
+        <div class="hitl-detail">${escapeHtml(pm.reason || "Side-effect or tainted tool execution")}</div>
+        <div class="hitl-actions mt-2">
+          <button type="button" class="btn btn-primary btn-xs btn-approve-mcp-tool">Approve & Execute</button>
+        </div>
+      </div>
+    `;
+  }
+
   if (extra && extra.thought_graph_mermaid && extra.thought_graph_mermaid.trim()) {
     const budgetInfo = extra.context_budget
       ? ` · ctx ${extra.context_budget.num_ctx} (${extra.context_budget.tier || "BALANCED"})`
@@ -2466,6 +2557,44 @@ function updateAssistantMessage(id, text, factcheck, grounding, userPrompt = "",
 
   body.innerHTML = html;
 
+  const btnMcpApprove = body.querySelector(".btn-approve-mcp-tool");
+  if (btnMcpApprove && extra && extra.pending_mcp_confirmation) {
+    const pm = extra.pending_mcp_confirmation;
+    btnMcpApprove.addEventListener("click", async () => {
+      const ok = await showPaiConfirm({
+        title: "Approve MCP Tool Execution",
+        badge: "ToolFirewall",
+        badgeTone: "warn",
+        message: `Execute "${pm.server}:${pm.tool}"?`,
+        safetyNote: pm.reason || "Side-effect or tainted tool requires explicit confirmation.",
+        code: JSON.stringify(pm.arguments || {}, null, 2),
+        confirmText: "Approve & Execute",
+        cancelText: "Decline",
+      });
+      if (!ok) return;
+      btnMcpApprove.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/mcp/call_tool`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            server: pm.server,
+            tool: pm.tool,
+            arguments: pm.arguments || {},
+            tainted: !!pm.tainted,
+            confirm: true,
+          }),
+        });
+        const d = await res.json();
+        showToast(d.success ? `Executed ${pm.server}:${pm.tool}` : (d.error || "Tool failed"), d.success ? "success" : "error");
+        const noteEl = btnMcpApprove.closest(".hitl-action-card")?.querySelector(".hitl-detail");
+        if (noteEl) noteEl.textContent = d.success ? String(d.result || "Completed.") : `Denied/Error: ${d.error}`;
+      } catch (err) {
+        showToast(`MCP execution failed: ${err.message}`, "error");
+      }
+    });
+  }
+
   const hitlCard = body.querySelector(".hitl-confirm-card[data-action-id]");
   if (hitlCard) {
     const actionId = hitlCard.getAttribute("data-action-id");
@@ -2585,6 +2714,48 @@ function updateAssistantTeamMessage(id, data, userPrompt = "") {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
+async function saveGeneratedImageAs(dataUrl, filename, btnEl) {
+  const safeName = filename || `pai-image-${Date.now()}.png`;
+  const origHtml = btnEl ? btnEl.innerHTML : "";
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = "Choose Folder...";
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/image/save_as`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data_url: dataUrl, filename: safeName }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (res.ok && out.success) {
+      if (typeof showToast === "function") {
+        showToast(`Image saved to: ${out.saved_path}`, "success", "Saved");
+      }
+      if (btnEl) {
+        btnEl.textContent = "Saved ✓";
+        setTimeout(() => {
+          btnEl.innerHTML = origHtml;
+          btnEl.disabled = false;
+        }, 2000);
+        return;
+      }
+    } else if (!out.cancelled) {
+      if (typeof showToast === "function") {
+        showToast(out.error || "Could not save image to selected folder.", "error", "Save Failed");
+      }
+    }
+  } catch (err) {
+    if (typeof showToast === "function") {
+      showToast(`Save failed: ${err.message || err}`, "error", "Save Failed");
+    }
+  }
+  if (btnEl) {
+    btnEl.innerHTML = origHtml;
+    btnEl.disabled = false;
+  }
+}
+
 function updateAssistantMessageImage(id, dataUrl, prompt, model, filename) {
   const msg = document.getElementById(id);
   if (!msg) return;
@@ -2601,10 +2772,10 @@ function updateAssistantMessageImage(id, dataUrl, prompt, model, filename) {
           <span class="image-prompt-badge">"${escapeHtml(prompt)}"</span>
           <span class="image-model-badge">${SVG_ICONS.image} ${escapeHtml(model)}</span>
         </div>
-        <a href="${dataUrl}" download="${escapeHtml(filename || 'pai-generated.png')}" class="btn btn-sm btn-download-image">
-          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-          Download PNG
-        </a>
+        <button type="button" class="btn btn-sm btn-download-image" title="Choose Desktop or any folder to save image">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+          Save to Desktop / Folder...
+        </button>
       </div>
       <div class="msg-footer-actions">
         <button type="button" class="btn-msg-action btn-regenerate-msg" title="Re-generate image">
@@ -2615,6 +2786,10 @@ function updateAssistantMessageImage(id, dataUrl, prompt, model, filename) {
     </div>
   `;
 
+  const btnSaveImg = body.querySelector(".btn-download-image");
+  if (btnSaveImg) {
+    btnSaveImg.addEventListener("click", () => saveGeneratedImageAs(dataUrl, filename, btnSaveImg));
+  }
   const btnRegen = body.querySelector(".btn-regenerate-msg");
   if (btnRegen) {
     btnRegen.addEventListener("click", () => regeneratePrompt(`/image ${prompt}`));
@@ -2623,14 +2798,40 @@ function updateAssistantMessageImage(id, dataUrl, prompt, model, filename) {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
+function formatFriendlyChatError(rawErr) {
+  let msg = String(rawErr || "An unexpected error occurred.").trim();
+  msg = msg.replace(/^(?:Error:\s*)+/i, "").replace(/^Image generation failed:\s*/i, "").trim();
+  const low = msg.toLowerCase();
+  if (low.includes("ggml_cuda_init") || low.includes("load_backend:") || low.includes("ram graph capacity")) {
+    return "Not enough free RAM/VRAM right now to run this heavy image model locally. Try clicking the RAM button (top-right) -> 'Optimize & Free Memory Now', switch to lighter 'sd-turbo', or enable Internet for Free Cloud FLUX.";
+  }
+  if (low.includes("timed out") || low.includes("timeout")) {
+    return "The AI model took too long to respond on this request. If running a large 27B/FLUX model, try clicking RAM -> 'Optimize & Free Memory Now' first or click Retry below.";
+  }
+  if (low.includes("402") || low.includes("rate-limit") || low.includes("cooldown") || low.includes("temporarily busy")) {
+    return msg;
+  }
+  if (low.includes("offline mode") || low.includes("internet access is disabled")) {
+    return "Internet is currently turned OFF (Offline Mode). Enable the Internet toggle at the top bar or switch to an installed local model.";
+  }
+  msg = msg.replace(/[A-Za-z]:\\Users\\[^\\\s]+/gi, "<user>");
+  if (msg.length > 280) {
+    msg = msg.slice(0, 277) + "...";
+  }
+  return msg;
+}
+
 function updateAssistantError(id, errText, promptForRetry = "") {
   const msg = document.getElementById(id);
   if (!msg) return;
   const body = msg.querySelector(".msg-body");
   body.classList.remove("loading-indicator");
   const p = promptForRetry || lastSentPrompt;
+  const friendly = formatFriendlyChatError(errText);
   body.innerHTML = `
-    <p class="error-text">Error: ${escapeHtml(errText)}</p>
+    <div class="friendly-error-card">
+      <p class="error-text">${escapeHtml(friendly)}</p>
+    </div>
     ${p ? `
       <div class="msg-footer-actions">
         <button type="button" class="btn-msg-action btn-regenerate-msg" title="Retry this request">
@@ -2717,13 +2918,20 @@ function setupProjects() {
     }
   });
 
-  btnNewFile.addEventListener("click", () => {
+  btnNewFile.addEventListener("click", async () => {
     if (!activeProjectPath) {
       showToast("Please activate a project first", "warning");
       return;
     }
-    const fname = prompt("Enter new filename (e.g. index.html or utils.js):");
-    if (fname) {
+    const fname = await showPaiPrompt({
+      title: "Create New File",
+      badge: "Workspace",
+      message: "Enter a new filename inside the active workspace.",
+      placeholder: "e.g. index.html or utils.js",
+      confirmText: "Create File",
+      cancelText: "Cancel",
+    });
+    if (fname && fname.trim()) {
       currentOpenFile = fname.trim();
       currentOpenFilename.textContent = currentOpenFile;
       codeEditorTextarea.value = "";
@@ -2972,8 +3180,226 @@ async function activateProject(folderPath) {
   }
 }
 
+let _paiModalActiveClose = null;
+
+function showPaiModal(options = {}) {
+  const modal = document.getElementById("pai-dialog-modal");
+  if (!modal) {
+    return Promise.resolve(options.mode === "prompt" ? null : false);
+  }
+
+  if (typeof _paiModalActiveClose === "function") {
+    _paiModalActiveClose(options.mode === "prompt" ? null : false);
+  }
+
+  const titleEl = document.getElementById("pai-dialog-title");
+  const badgeEl = document.getElementById("pai-dialog-badge");
+  const msgEl = document.getElementById("pai-dialog-message");
+  const safetyEl = document.getElementById("pai-dialog-safety");
+  const codeEl = document.getElementById("pai-dialog-code");
+  const inputWrapEl = document.getElementById("pai-dialog-input-wrap");
+  const inputEl = document.getElementById("pai-dialog-input");
+  const copyBtn = document.getElementById("pai-dialog-copy");
+  const cancelBtn = document.getElementById("pai-dialog-cancel");
+  const confirmBtn = document.getElementById("pai-dialog-confirm");
+  const closeBtn = document.getElementById("pai-dialog-close");
+
+  const mode = options.mode || "confirm";
+  const previousFocus = document.activeElement;
+
+  if (titleEl) titleEl.textContent = options.title || "PAI Studio";
+
+  if (badgeEl) {
+    badgeEl.classList.remove("hidden", "badge-danger", "badge-warn");
+    if (options.badge) {
+      badgeEl.textContent = options.badge;
+      if (options.badgeTone === "danger") badgeEl.classList.add("badge-danger");
+      else if (options.badgeTone === "warn") badgeEl.classList.add("badge-warn");
+    } else {
+      badgeEl.textContent = "";
+      badgeEl.classList.add("hidden");
+    }
+  }
+
+  if (msgEl) {
+    if (options.message) {
+      msgEl.textContent = options.message;
+      msgEl.classList.remove("hidden");
+    } else {
+      msgEl.textContent = "";
+      msgEl.classList.add("hidden");
+    }
+  }
+
+  if (safetyEl) {
+    if (options.safety) {
+      safetyEl.textContent = options.safety;
+      safetyEl.classList.remove("hidden");
+    } else {
+      safetyEl.textContent = "";
+      safetyEl.classList.add("hidden");
+    }
+  }
+
+  if (codeEl) {
+    if (options.code) {
+      codeEl.textContent = options.code;
+      codeEl.classList.remove("hidden");
+    } else {
+      codeEl.textContent = "";
+      codeEl.classList.add("hidden");
+    }
+  }
+
+  if (copyBtn) {
+    if (options.code) {
+      copyBtn.textContent = "Copy";
+      copyBtn.classList.remove("hidden");
+    } else {
+      copyBtn.classList.add("hidden");
+    }
+  }
+
+  if (inputWrapEl && inputEl) {
+    if (mode === "prompt") {
+      inputEl.value = options.defaultValue || "";
+      inputEl.placeholder = options.placeholder || "";
+      inputWrapEl.classList.remove("hidden");
+    } else {
+      inputEl.value = "";
+      inputWrapEl.classList.add("hidden");
+    }
+  }
+
+  if (cancelBtn) {
+    cancelBtn.textContent = options.cancelText || "Cancel";
+    if (mode === "alert") {
+      cancelBtn.classList.add("hidden");
+    } else {
+      cancelBtn.classList.remove("hidden");
+    }
+  }
+
+  if (confirmBtn) {
+    confirmBtn.textContent = options.confirmText || (mode === "alert" ? "OK" : "Confirm");
+    confirmBtn.classList.remove("btn-danger-solid");
+    if (options.danger) {
+      confirmBtn.classList.add("btn-danger-solid");
+    }
+  }
+
+  modal.classList.remove("hidden");
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const cleanup = (result) => {
+      if (settled) return;
+      settled = true;
+      _paiModalActiveClose = null;
+      modal.classList.add("hidden");
+      document.removeEventListener("keydown", onKeyDown);
+      modal.removeEventListener("click", onBackdropClick);
+      confirmBtn?.removeEventListener("click", onConfirm);
+      cancelBtn?.removeEventListener("click", onCancel);
+      closeBtn?.removeEventListener("click", onCancel);
+      copyBtn?.removeEventListener("click", onCopy);
+      inputEl?.removeEventListener("keydown", onInputKeyDown);
+      if (previousFocus && typeof previousFocus.focus === "function") {
+        try { previousFocus.focus(); } catch (_) {}
+      }
+      resolve(result);
+    };
+
+    _paiModalActiveClose = cleanup;
+
+    const onConfirm = () => {
+      if (mode === "prompt") {
+        cleanup(inputEl ? inputEl.value : "");
+      } else {
+        cleanup(true);
+      }
+    };
+
+    const onCancel = () => {
+      cleanup(mode === "prompt" ? null : false);
+    };
+
+    const onCopy = async () => {
+      if (!options.code || !copyBtn) return;
+      try {
+        await navigator.clipboard.writeText(options.code);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => {
+          if (!settled) copyBtn.textContent = "Copy";
+        }, 1600);
+      } catch (_) {
+        copyBtn.textContent = "Copy failed";
+      }
+    };
+
+    const onBackdropClick = (e) => {
+      if (e.target === modal) {
+        onCancel();
+      }
+    };
+
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+
+    const onInputKeyDown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onConfirm();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    modal.addEventListener("click", onBackdropClick);
+    confirmBtn?.addEventListener("click", onConfirm);
+    cancelBtn?.addEventListener("click", onCancel);
+    closeBtn?.addEventListener("click", onCancel);
+    copyBtn?.addEventListener("click", onCopy);
+    inputEl?.addEventListener("keydown", onInputKeyDown);
+
+    setTimeout(() => {
+      if (mode === "prompt" && inputEl) {
+        inputEl.focus();
+        inputEl.select();
+      } else if (confirmBtn) {
+        confirmBtn.focus();
+      }
+    }, 10);
+  });
+}
+
+function showPaiConfirm(options) {
+  return showPaiModal({ ...options, mode: "confirm" });
+}
+
+function showPaiPrompt(options) {
+  return showPaiModal({ ...options, mode: "prompt" });
+}
+
+function showPaiAlert(options) {
+  return showPaiModal({ ...options, mode: "alert" });
+}
+
 async function deleteProject(folderPath) {
-  if (!confirm(`Are you sure you want to remove this project workspace? (Your disk files will not be deleted)`)) return;
+  const ok = await showPaiConfirm({
+    title: "Remove Project Workspace",
+    badge: "Workspace",
+    message: "Are you sure you want to remove this project workspace?",
+    safety: "Your files on disk will NOT be deleted.",
+    confirmText: "Remove",
+    cancelText: "Cancel",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     const res = await fetch(`${API_BASE}/api/projects/delete`, {
       method: "POST",
@@ -3397,35 +3823,68 @@ function renderDeliverableTab(tab) {
 
 // 5. Plugins & MCPs Hub System
 const MCP_PRESETS = {
+  github: {
+    name: "github-mcp",
+    transport: "stdio",
+    cmd: "github-mcp-server stdio",
+    toolsets: "context,repos,issues,pull_requests",
+    read_only: true,
+    lockdown_mode: true,
+    desc: "Official GitHub MCP Server with modular toolsets, Read-Only & Lockdown guardrails"
+  },
   filesystem: {
     name: "filesystem-tools",
     transport: "stdio",
-    cmd: "npx -y @modelcontextprotocol/server-filesystem ./",
+    cmd: "npx @modelcontextprotocol/server-filesystem@2025.3.28 ./",
+    toolsets: "files",
+    read_only: true,
+    lockdown_mode: true,
     desc: "Local workspace sandboxed file inspection and editing"
+  },
+  git: {
+    name: "git-tools",
+    transport: "stdio",
+    cmd: "uvx mcp-server-git",
+    toolsets: "git",
+    read_only: true,
+    lockdown_mode: true,
+    desc: "Local git status, diff, log, and branch inspection"
   },
   fetch: {
     name: "web-fetch",
     transport: "stdio",
-    cmd: "npx -y @modelcontextprotocol/server-fetch",
+    cmd: "uvx mcp-server-fetch",
+    toolsets: "web",
+    read_only: true,
+    lockdown_mode: true,
     desc: "Direct web page content extraction and Markdown scraping"
   },
   memory: {
     name: "memory-graph",
     transport: "stdio",
-    cmd: "npx -y @modelcontextprotocol/server-memory",
+    cmd: "npx @modelcontextprotocol/server-memory@2025.3.28",
+    toolsets: "knowledge_graph",
+    read_only: false,
+    lockdown_mode: true,
     desc: "Knowledge graph persistence across multi-turn sessions"
   },
   sqlite: {
     name: "sqlite-db",
     transport: "stdio",
-    cmd: "npx -y @modelcontextprotocol/server-sqlite --db ./workspace.db",
+    cmd: "npx @modelcontextprotocol/server-sqlite@2025.3.28 --db ./workspace.db",
+    toolsets: "sql",
+    read_only: true,
+    lockdown_mode: true,
     desc: "Relational database schema inspection and SQL queries"
   },
   sse: {
     name: "remote-mcp-stream",
     transport: "sse",
     cmd: "http://127.0.0.1:8000/sse",
-    desc: "Remote HTTP Server-Sent Events MCP capability provider"
+    toolsets: "",
+    read_only: true,
+    lockdown_mode: true,
+    desc: "Remote Streamable HTTP / SSE MCP capability provider"
   }
 };
 
@@ -3433,28 +3892,79 @@ const PLUGIN_PRESETS = {
   nextjs: {
     name: "NextJS Architect",
     category: "Web Development",
-    desc: "Generates production Next.js 15 App Router components, Tailwind CSS styling, and SSR routes."
+    desc: "Generates production Next.js 15 App Router components, Tailwind CSS styling, and SSR routes.",
+    skill_prompt: "Prefer React Server Components by default, type props strictly, and include Tailwind responsive classes."
   },
   fastapi: {
     name: "FastAPI Backend",
     category: "API & Backend",
-    desc: "Scaffolds asynchronous Python FastAPI endpoints, Pydantic schemas, and SQLAlchemy models."
+    desc: "Scaffolds asynchronous Python FastAPI endpoints, Pydantic schemas, and SQLAlchemy models.",
+    skill_prompt: "Use Pydantic v2 BaseModel validation, explicit HTTP status codes, and parameterized SQL queries."
   },
   qa: {
     name: "QA Test Suite",
     category: "Testing & Quality",
-    desc: "Generates automated unit, integration, and end-to-end test cases with pytest and Jest."
+    desc: "Generates automated unit, integration, and end-to-end test cases with pytest and Jest.",
+    skill_prompt: "Always include negative-control failure tests alongside happy-path assertions."
   },
   security: {
     name: "Security Auditor",
     category: "Security & Guardrails",
-    desc: "Scans code for OWASP Top 10 vulnerabilities, leaked API secrets, and unsafe injection patterns."
+    desc: "Scans code for OWASP Top 10 vulnerabilities, leaked API secrets, and unsafe injection patterns.",
+    skill_prompt: "Check trust boundaries, input sanitization, SSRF guards, and least-privilege grants first."
   }
 };
+
+async function syncDynamicMcpPromptsToSlashCommands() {
+  try {
+    const res = await fetch(`${API_BASE}/api/mcp/prompts`);
+    const data = await res.json();
+    if (!data || !data.success) return;
+    const existingSet = new Set(SLASH_COMMANDS.map((c) => c.cmd));
+    (data.prompts || []).forEach((p) => {
+      const cmdStr = `/mcp:${p.server_name}:${p.name}`;
+      if (!existingSet.has(cmdStr)) {
+        SLASH_COMMANDS.push({ cmd: cmdStr, desc: p.description || "MCP Server Prompt", cat: "MCP Prompt" });
+        existingSet.add(cmdStr);
+      }
+    });
+    (data.plugin_commands || []).forEach((pc) => {
+      if (pc.cmd && !existingSet.has(pc.cmd)) {
+        SLASH_COMMANDS.push({ cmd: pc.cmd, desc: pc.desc || "Plugin Command", cat: pc.cat || "Plugin" });
+        existingSet.add(pc.cmd);
+      }
+    });
+  } catch (_) {}
+}
 
 function setupSkills() {
   setupMcpForm();
   setupPluginForm();
+  syncDynamicMcpPromptsToSlashCommands();
+
+  const btnFirewall = document.getElementById("btn-mcp-firewall-log");
+  if (btnFirewall) {
+    btnFirewall.addEventListener("click", async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/mcp/firewall`);
+        const data = await res.json();
+        const events = (data && data.events) || [];
+        const body = events.length
+          ? events.map((ev) => `#${ev.seq} [${ev.allowed ? "ALLOW" : "DENY"}] ${ev.server}:${ev.tool} (${ev.risk}, tainted=${ev.tainted}) -> ${ev.reason} (${ev.duration_ms}ms)`).join("\n")
+          : "No MCP tool calls recorded in ToolFirewall yet during this session.";
+        await showPaiAlert({
+          title: "MCP Tool Firewall & Audit Log",
+          badge: "Audit",
+          badgeTone: "info",
+          message: "Recent MCP tool decisions governed by Capability Broker & Lockdown policy:",
+          code: body,
+          copyable: true,
+        });
+      } catch (err) {
+        showToast(`Failed to read firewall log: ${err.message}`, "error");
+      }
+    });
+  }
 
   // MCP 1-Click Preset Buttons
   document.querySelectorAll(".btn-mcp-preset").forEach((btn) => {
@@ -3466,6 +3976,12 @@ function setupSkills() {
       mcpTransportSelect.value = p.transport;
       mcpCmdInput.value = p.cmd;
       mcpDescInput.value = p.desc;
+      const tsEl = document.getElementById("mcp-toolsets-input");
+      const roEl = document.getElementById("mcp-readonly-check");
+      const ldEl = document.getElementById("mcp-lockdown-check");
+      if (tsEl) tsEl.value = p.toolsets || "";
+      if (roEl) roEl.checked = !!p.read_only;
+      if (ldEl) ldEl.checked = p.lockdown_mode !== false;
       showToast(`Applied preset: ${p.name}`, "info", "MCP Preset Loaded");
       mcpCmdInput.focus();
     });
@@ -3480,6 +3996,8 @@ function setupSkills() {
       pluginNameInput.value = p.name;
       pluginCatInput.value = p.category;
       pluginDescInput.value = p.desc;
+      const skEl = document.getElementById("plugin-skill-input");
+      if (skEl) skEl.value = p.skill_prompt || "";
       showToast(`Applied preset: ${p.name}`, "info", "Plugin Preset Loaded");
       pluginDescInput.focus();
     });
@@ -3514,12 +4032,13 @@ async function loadMcpServers() {
 function renderMcpServers(servers) {
   if (!mcpServersGrid) return;
   const enabledCount = servers.filter((s) => s.enabled).length;
+  const liveCount = servers.filter((s) => s.live_connected).length;
   if (mcpServersCount) {
-    mcpServersCount.textContent = `${enabledCount} of ${servers.length} Connected`;
+    mcpServersCount.textContent = `${liveCount} Live / ${enabledCount} Enabled`;
   }
   const ribbonMcp = document.getElementById("ribbon-mcp-count");
   if (ribbonMcp) {
-    ribbonMcp.textContent = `${enabledCount} Connected`;
+    ribbonMcp.textContent = `${enabledCount} Enabled`;
   }
   mcpServersGrid.innerHTML = "";
   if (servers.length === 0) {
@@ -3532,9 +4051,15 @@ function renderMcpServers(servers) {
   servers.forEach((srv) => {
     const card = document.createElement("div");
     card.className = `mcp-server-card ${srv.enabled ? "active" : ""}`;
-    const transportBadge = srv.transport === "sse"
-      ? `<span class="transport-badge sse">SSE</span>`
+    const transportBadge = srv.transport === "sse" || srv.transport === "http"
+      ? `<span class="transport-badge sse">HTTP/SSE</span>`
       : `<span class="transport-badge stdio">STDIO</span>`;
+    const policyBadges = [
+      srv.live_connected ? `<span class="mcp-policy-pill live">LIVE (${Number(srv.tools_count || 0)} tools)</span>` : "",
+      srv.read_only ? `<span class="mcp-policy-pill readonly">READ-ONLY</span>` : "",
+      srv.lockdown_mode ? `<span class="mcp-policy-pill lockdown">LOCKDOWN</span>` : "",
+      srv.has_vault_secret ? `<span class="mcp-policy-pill vault">DPAPI VAULT</span>` : "",
+    ].filter(Boolean).join(" ");
 
     card.innerHTML = `
       <div class="mcp-card-header">
@@ -3543,9 +4068,11 @@ function renderMcpServers(servers) {
           <div class="mcp-title-wrap">
             <span class="mcp-name font-mono-target">${escapeHtml(srv.name)}</span>
             ${transportBadge}
+            ${policyBadges}
           </div>
         </div>
         <div class="mcp-actions">
+          <button type="button" class="btn btn-secondary btn-xs btn-connect-mcp" data-name="${escapeHtml(srv.name)}" title="Connect Live">${srv.live_connected ? "Refresh" : "Connect"}</button>
           <label class="switch">
             <input type="checkbox" class="mcp-toggle-input" data-name="${escapeHtml(srv.name)}" ${srv.enabled ? "checked" : ""} />
             <span class="slider"></span>
@@ -3559,28 +4086,86 @@ function renderMcpServers(servers) {
       <div class="mcp-cmd-box font-mono-target">${escapeHtml(srv.command)}</div>
     `;
 
+    const btnConn = card.querySelector(".btn-connect-mcp");
+    if (btnConn) {
+      btnConn.addEventListener("click", async () => {
+        const ok = await showPaiConfirm({
+          title: "Connect Live MCP Server",
+          badge: "MCP",
+          badgeTone: "info",
+          message: `Start and discover live tools/resources/prompts from "${srv.name}"?`,
+          safetyNote: "Child environment variables are scrubbed to strict allowlists; any vaulted token stays encrypted in DPAPI.",
+          confirmText: "Connect Live",
+          cancelText: "Cancel",
+        });
+        if (!ok) return;
+        try {
+          const res = await fetch(`${API_BASE}/api/mcp/connect`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: srv.name, confirm: true }),
+          });
+          const d = await res.json();
+          if (d.success) {
+            showToast(`"${srv.name}" live (${d.live.tools_count} tools, ${d.live.resources_count} resources)`, "success");
+            loadMcpServers();
+            syncDynamicMcpPromptsToSlashCommands();
+          } else {
+            showToast(`Failed to connect "${srv.name}": ${d.error || "Error"}`, "error");
+          }
+        } catch (err) {
+          showToast(`Connect error: ${err.message}`, "error");
+        }
+      });
+    }
+
     const toggle = card.querySelector(".mcp-toggle-input");
     toggle.addEventListener("change", async (e) => {
       const val = e.target.checked;
+      const ok = await showPaiConfirm({
+        title: val ? "Enable MCP Server" : "Disable MCP Server",
+        badge: "MCP",
+        badgeTone: val ? "warn" : "info",
+        message: `${val ? "Enable" : "Disable"} MCP capability server "${srv.name}"?`,
+        confirmText: val ? "Enable" : "Disable",
+        cancelText: "Cancel",
+      });
+      if (!ok) {
+        toggle.checked = !val;
+        return;
+      }
       try {
         const res = await fetch(`${API_BASE}/api/mcp/toggle`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: srv.name, enabled: val }),
+          body: JSON.stringify({ name: srv.name, enabled: val, confirm: true }),
         });
         const d = await res.json();
         if (d.success) {
           showToast(`MCP Server "${srv.name}" ${val ? "enabled" : "disabled"}`, "info");
           loadMcpServers();
+        } else {
+          toggle.checked = !val;
+          showToast(`Failed to toggle MCP server: ${d.error || "Forbidden"}`, "error");
         }
       } catch (err) {
+        toggle.checked = !val;
         showToast(`Failed to toggle MCP server: ${err.message}`, "error");
       }
     });
 
     const btnDel = card.querySelector(".btn-delete-mcp");
     btnDel.addEventListener("click", async () => {
-      if (!confirm(`Are you sure you want to disconnect MCP server "${srv.name}"?`)) return;
+      const ok = await showPaiConfirm({
+        title: "Disconnect MCP Server",
+        badge: "MCP",
+        badgeTone: "warn",
+        message: `Are you sure you want to disconnect MCP server "${srv.name}"?`,
+        confirmText: "Disconnect",
+        cancelText: "Cancel",
+        danger: true,
+      });
+      if (!ok) return;
       try {
         const res = await fetch(`${API_BASE}/api/mcp/delete`, {
           method: "POST",
@@ -3609,24 +4194,54 @@ function setupMcpForm() {
     const transport = mcpTransportSelect.value;
     const command = mcpCmdInput.value.trim();
     const description = mcpDescInput.value.trim();
+    const toolsetsRaw = (document.getElementById("mcp-toolsets-input")?.value || "").trim();
+    const secretVal = (document.getElementById("mcp-secret-input")?.value || "").trim();
+    const readOnly = !!document.getElementById("mcp-readonly-check")?.checked;
+    const lockdownMode = !!document.getElementById("mcp-lockdown-check")?.checked;
+    const toolsets = toolsetsRaw ? toolsetsRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
     if (!name || !command) {
       showToast("Server name and command/URL are required", "warning");
       return;
     }
 
+    const ok = await showPaiConfirm({
+      title: "Register MCP Server",
+      badge: "MCP",
+      badgeTone: "warn",
+      message: `Register "${name}" (${transport.toUpperCase()}) with PAI's capability firewall?`,
+      safetyNote: `Command/Endpoint: ${command}${readOnly ? " [Read-Only]" : ""}${lockdownMode ? " [Lockdown]" : ""}`,
+      confirmText: "Approve & Save",
+      cancelText: "Cancel",
+    });
+    if (!ok) return;
+
     try {
       const res = await fetch(`${API_BASE}/api/mcp/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, transport, command, description }),
+        body: JSON.stringify({
+          name,
+          transport,
+          command,
+          description,
+          toolsets,
+          read_only: readOnly,
+          lockdown_mode: lockdownMode,
+          secret_value: secretVal,
+          confirm: true,
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`MCP Server "${name}" connected!`, "success", "MCP Connected");
+        showToast(`MCP Server "${name}" saved safely!`, "success", "MCP Registered");
         mcpNameInput.value = "";
         mcpCmdInput.value = "";
         mcpDescInput.value = "";
+        const tsEl = document.getElementById("mcp-toolsets-input");
+        const secEl = document.getElementById("mcp-secret-input");
+        if (tsEl) tsEl.value = "";
+        if (secEl) secEl.value = "";
         loadMcpServers();
       } else {
         showToast(`Failed to connect MCP server: ${data.error || "Unknown error"}`, "error");
@@ -3644,6 +4259,7 @@ function setupPluginForm() {
     const name = pluginNameInput.value.trim();
     const category = pluginCatInput.value.trim() || "Custom Extensions";
     const description = pluginDescInput.value.trim();
+    const skillPrompt = (document.getElementById("plugin-skill-input")?.value || "").trim();
 
     if (!name || !description) {
       showToast("Plugin name and description are required", "warning");
@@ -3654,17 +4270,26 @@ function setupPluginForm() {
       const res = await fetch(`${API_BASE}/api/plugins/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, category, description }),
+        body: JSON.stringify({ name, category, description, skill_prompt: skillPrompt }),
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`Plugin "${name}" added!`, "success", "Plugin Installed");
+        const badge = data.scan ? ` (${data.scan.trust_badge} ${data.scan.trust_score}/100)` : "";
+        showToast(`Plugin "${name}" installed${badge}!`, "success", "Plugin Installed");
         pluginNameInput.value = "";
         pluginCatInput.value = "";
         pluginDescInput.value = "";
+        const skEl = document.getElementById("plugin-skill-input");
+        if (skEl) skEl.value = "";
         loadSkills();
       } else {
-        showToast(`Failed to add plugin: ${data.error || "Unknown error"}`, "error");
+        const detail = data.scan && data.scan.findings ? `\n\nFindings:\n- ${data.scan.findings.join("\n- ")}` : "";
+        await showPaiAlert({
+          title: "Plugin Blocked by Trust Scanner",
+          badge: "Security",
+          badgeTone: "danger",
+          message: (data.error || "Unsafe plugin blocked.") + detail,
+        });
       }
     } catch (err) {
       showToast(`Failed to add plugin: ${err.message}`, "error");
@@ -3691,6 +4316,9 @@ function renderSkillsList(skills) {
       </button>
     ` : '';
 
+    const trustScore = typeof skill.trust_score === "number" ? skill.trust_score : 100;
+    const trustBadge = skill.trust_badge || "CORE";
+    const trustClass = trustBadge === "BLOCKED" ? "lockdown" : (trustBadge === "REVIEW" ? "vault" : "live");
     card.innerHTML = `
       <div class="skill-header">
         <div class="skill-identity">
@@ -3711,6 +4339,7 @@ function renderSkillsList(skills) {
       <div class="skill-desc">${escapeHtml(skill.description)}</div>
       <div class="skill-footer">
         <span class="skill-status-tag ${skill.enabled ? "enabled" : "disabled"}">${skill.enabled ? "ACTIVE" : "INACTIVE"}</span>
+        <span class="mcp-policy-pill ${trustClass}">${escapeHtml(trustBadge)} ${trustScore}/100</span>
       </div>
     `;
 
@@ -3738,7 +4367,16 @@ function renderSkillsList(skills) {
     const delBtn = card.querySelector(".btn-delete-plugin");
     if (delBtn) {
       delBtn.addEventListener("click", async () => {
-        if (!confirm(`Delete custom plugin "${skill.name}"?`)) return;
+        const ok = await showPaiConfirm({
+          title: "Delete Custom Plugin",
+          badge: "Plugin",
+          badgeTone: "danger",
+          message: `Delete custom plugin "${skill.name}"?`,
+          confirmText: "Delete",
+          cancelText: "Cancel",
+          danger: true,
+        });
+        if (!ok) return;
         try {
           const res = await fetch(`${API_BASE}/api/plugins/delete`, {
             method: "POST",
@@ -4310,12 +4948,16 @@ function renderRecommendedModels(recs) {
       footerBtnHtml = `<button type="button" class="btn btn-primary btn-sm btn-download-rec" data-tag="${escapeHtml(rec.tag)}">Install Model</button>`;
     }
 
+    const fitBadge = rec.vram_fit && rec.vram_fit.fit_mode
+      ? `<div class="rec-model-fit mt-1"><span class="mcp-policy-pill ${rec.vram_fit.fit_mode === "LOW_HEADROOM_WARN" ? "lockdown" : "readonly"}">${escapeHtml(rec.vram_fit.fit_mode)}</span> <span class="text-muted" style="font-size:11px;">${escapeHtml(rec.vram_fit.advisory || "")}</span></div>`
+      : "";
     card.innerHTML = `
       <div class="rec-model-header">
         <span class="rec-model-name">${escapeHtml(rec.name)}</span>
         <span class="rec-model-size">${escapeHtml(rec.size)}</span>
       </div>
       <div class="rec-model-desc">${escapeHtml(rec.desc)}</div>
+      ${fitBadge}
       <div class="rec-model-footer">
         ${footerBtnHtml}
       </div>
@@ -4344,7 +4986,6 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
   const pctEl = document.getElementById("install-modal-pct-text");
   const barEl = document.getElementById("install-modal-progress-bar");
   const bytesEl = document.getElementById("install-modal-bytes-text");
-  const pauseBtnLabel = document.getElementById("btn-pause-download-label");
   const pauseBtn = document.getElementById("btn-pause-install-download");
 
   if (statusEl && activeDownloadStatus) statusEl.textContent = activeDownloadStatus;
@@ -4352,17 +4993,18 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
   if (barEl) barEl.style.width = `${activeDownloadPct}%`;
   if (bytesEl && activeDownloadBytes) bytesEl.textContent = activeDownloadBytes;
 
-  if (pauseBtn && pauseBtnLabel) {
+  const playSvg = `<svg class="btn-icon-xs" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+  const pauseSvg = `<svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+
+  if (pauseBtn) {
     if (isPaused) {
       pauseBtn.classList.remove("text-danger");
-      pauseBtn.classList.add("btn-primary");
-      pauseBtnLabel.textContent = "Resume Download";
-      pauseBtn.innerHTML = `<svg class="btn-icon-xs" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>Resume Download</span>`;
+      pauseBtn.classList.add("btn-primary", "paused");
+      pauseBtn.innerHTML = `${playSvg}<span id="btn-pause-download-label">Resume Download</span>`;
     } else {
-      pauseBtn.classList.remove("btn-primary");
+      pauseBtn.classList.remove("btn-primary", "paused");
       pauseBtn.classList.add("text-danger");
-      pauseBtnLabel.textContent = "Pause Download";
-      pauseBtn.innerHTML = `<svg class="btn-icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg><span>Pause Download</span>`;
+      pauseBtn.innerHTML = `${pauseSvg}<span id="btn-pause-download-label">Pause Download</span>`;
     }
   }
 
@@ -4372,7 +5014,7 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
   const floatingPct = document.getElementById("floating-dl-pct");
   const floatingBar = document.getElementById("floating-mini-bar-fill");
   const floatingBytes = document.getElementById("floating-dl-bytes");
-  const floatingPauseText = document.getElementById("btn-floating-pause-text");
+  const floatingPauseBtn = document.getElementById("btn-floating-pause");
 
   if (floatingWidget) {
     floatingWidget.classList.remove("hidden");
@@ -4380,7 +5022,12 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
     if (floatingPct) floatingPct.textContent = `${activeDownloadPct}%`;
     if (floatingBar) floatingBar.style.width = `${activeDownloadPct}%`;
     if (floatingBytes) floatingBytes.textContent = activeDownloadBytes;
-    if (floatingPauseText) floatingPauseText.textContent = isPaused ? "Resume" : "Pause";
+    if (floatingPauseBtn) {
+      floatingPauseBtn.classList.toggle("paused", !!isPaused);
+      floatingPauseBtn.innerHTML = isPaused
+        ? `${playSvg}<span id="btn-floating-pause-text">Resume</span>`
+        : `${pauseSvg}<span id="btn-floating-pause-text">Pause</span>`;
+    }
   }
 
   // 3. Header Pill
@@ -4400,7 +5047,7 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
   const stripBar = document.getElementById("models-strip-bar");
   const stripPct = document.getElementById("models-strip-pct-val");
   const stripBytes = document.getElementById("models-strip-bytes");
-  const stripPauseLabel = document.getElementById("btn-models-strip-pause-label");
+  const stripPauseBtn = document.getElementById("btn-models-strip-pause");
 
   if (strip) {
     strip.classList.remove("hidden");
@@ -4409,7 +5056,13 @@ function syncDownloadUI(pct, statusText, bytesText, isPaused = false) {
     if (stripBar) stripBar.style.width = `${activeDownloadPct}%`;
     if (stripPct) stripPct.textContent = `${activeDownloadPct}%`;
     if (stripBytes) stripBytes.textContent = activeDownloadBytes;
-    if (stripPauseLabel) stripPauseLabel.textContent = isPaused ? "Resume" : "Pause";
+    if (stripPauseBtn) {
+      stripPauseBtn.classList.toggle("paused", !!isPaused);
+      stripPauseBtn.classList.toggle("text-danger", !isPaused);
+      stripPauseBtn.innerHTML = isPaused
+        ? `${playSvg}<span id="btn-models-strip-pause-label">Resume</span>`
+        : `${pauseSvg}<span id="btn-models-strip-pause-label">Pause</span>`;
+    }
   }
 
   // 5. Card buttons live update
@@ -4588,6 +5241,8 @@ function getModelCategoryBadge(modelName) {
 
   // 1. Deep Reasoning & Math models
   if (
+    m.includes("bonsai") ||
+    m.includes("ternary") ||
     m.includes("r1") ||
     m.includes("reasoner") ||
     m.includes("deepseek-r1") ||
@@ -5018,10 +5673,30 @@ async function switchModel(modelName) {
 
 async function checkInstallPathStorage(pathVal) {
   const infoEl = document.getElementById("install-modal-storage-info");
+  const confirmBtn = document.getElementById("btn-confirm-install-model");
   if (!infoEl) return;
-  infoEl.textContent = "Checking disk space...";
+  infoEl.textContent = "Checking disk space, GPU/VRAM & RAM readiness...";
   infoEl.className = "storage-hint-ok";
   try {
+    const modelTag = (currentInstallTargetModel && (currentInstallTargetModel.tag || currentInstallTargetModel.name)) || "";
+    if (modelTag) {
+      const pq = `?model=${encodeURIComponent(modelTag)}${pathVal ? `&path=${encodeURIComponent(pathVal)}` : ""}`;
+      const pRes = await fetch(`${API_BASE}/api/models/preflight_fit${pq}`);
+      const fit = await pRes.json();
+      if (fit && fit.success) {
+        const diskLabel = `${fit.disk_free_gb} GB free (need ~${fit.required_disk_gb} GB)`;
+        if (!fit.disk_ok) {
+          infoEl.textContent = `Insufficient Disk: ${diskLabel} · ${fit.advisory || ""}`;
+          infoEl.className = "storage-hint-warn";
+          if (confirmBtn && !isModelDownloading) confirmBtn.disabled = true;
+          return;
+        }
+        if (confirmBtn && !isModelDownloading) confirmBtn.disabled = false;
+        infoEl.textContent = `Ready [${fit.fit_mode || "OK"}] · ${diskLabel} · ${fit.gpu_label || fit.gpu_backend || "CPU"}`;
+        infoEl.className = fit.run_ready ? "storage-hint-ok" : "storage-hint-warn";
+        return;
+      }
+    }
     const q = pathVal ? `?path=${encodeURIComponent(pathVal)}` : "";
     const res = await fetch(`${API_BASE}/api/models/storage${q}`);
     const data = await res.json();
@@ -5069,8 +5744,8 @@ async function openModelInstallModal(modelInfo, autoStart = false) {
   if (sizeEl) sizeEl.textContent = modelInfo.size ? `~${modelInfo.size}` : "Variable";
   if (descEl) descEl.textContent = modelInfo.desc || "High-performance open weights calibrated for coding, fast chat and deep reasoning.";
 
-  // Populate install destination path synchronously so UI never shows empty or hangs
-  const defaultPath = currentInstallTargetPath || (pathInput && pathInput.value ? pathInput.value : "") || "C:\\Users\\hp\\.ollama\\models";
+  // Populate install destination path cleanly from current storage or live API
+  const defaultPath = currentInstallTargetPath || (pathInput && pathInput.value ? pathInput.value : "") || "";
   if (modelInfo.targetPath && pathInput) {
     pathInput.value = modelInfo.targetPath;
     checkInstallPathStorage(modelInfo.targetPath);
@@ -5166,8 +5841,8 @@ function formatDownloadError(rawError) {
 
   const lower = rawError.toLowerCase();
 
-  // Check for Cloudflare 522 or connection timeout
-  if (rawError.includes("522") || lower.includes("cloudflare") || lower.includes("connection timed out") || lower.includes("timed out")) {
+  // Check for Cloudflare 522 or connection timeout (do not match unrelated Cloudflare provider messages)
+  if (rawError.includes("522") || lower.includes("cloudflare 522") || lower.includes("registry.ollama.ai") || lower.includes("connection timed out") || lower.includes("timed out")) {
     return "Ollama Registry Connection Timeout (Cloudflare 522). The official model registry (registry.ollama.ai) is temporarily overloaded or unreachable. Please wait 1-2 minutes and click Retry.";
   }
   // Check for 502 / 503 / 504 server errors
@@ -5284,6 +5959,17 @@ function startModelDownload(modelInfo, targetPath = "") {
     function read() {
       reader.read().then(({ done, value }) => {
         if (done) {
+          const tail = (sseBuffer || "").trim();
+          if (tail.startsWith("data: ")) {
+            try {
+              const dt = JSON.parse(tail.substring(6));
+              if (dt.status === "success") hasCompletedSuccess = true;
+              if (dt.error) {
+                handleDownloadFailure(dt.error);
+                return;
+              }
+            } catch (_) {}
+          }
           if (hasCompletedSuccess) {
             handleDownloadSuccess(modelName);
           } else {
@@ -5319,20 +6005,29 @@ function startModelDownload(modelInfo, targetPath = "") {
               let bytesStr = activeDownloadBytes;
               let pct = activeDownloadPct || 0;
 
-              if (d.total && d.completed) {
-                // Large layers (>= 5MB) represent actual model weights
-                if (d.total >= 5 * 1024 * 1024) {
-                  pct = Math.max(2, Math.min(99, Math.round((d.completed / d.total) * 100)));
+              const isRuntimePhase = d.phase === "runtime" || /runtime|cudart|extracting|\.zip|llama\.cpp|stable-diffusion\.cpp/i.test(statusMsg);
+              if (typeof d.total === "number" && d.total > 0 && typeof d.completed === "number") {
+                if (isRuntimePhase) {
+                  pct = Math.max(pct, Math.max(1, Math.min(12, Math.round((d.completed / d.total) * 12))));
+                  const completedMB = (d.completed / (1024 * 1024)).toFixed(1);
+                  const totalMB = (d.total / (1024 * 1024)).toFixed(1);
+                  bytesStr = `Runtime ${completedMB} MB / ${totalMB} MB`;
+                } else if (d.total >= 5 * 1024 * 1024) {
+                  const baseOffset = pct <= 12 && statusMsg.includes("[1/") ? 12 : 0;
+                  const rawPct = Math.round((d.completed / d.total) * 100);
+                  pct = Math.min(99, Math.max(baseOffset > 0 ? 12 : 2, rawPct));
+                  if (d.completed === 0) pct = Math.max(pct, 1);
                   const completedMB = (d.completed / (1024 * 1024)).toFixed(1);
                   const totalMB = (d.total / (1024 * 1024)).toFixed(1);
                   bytesStr = `${completedMB} MB / ${totalMB} MB`;
                 } else {
-                  // Metadata / manifest preparation layer
-                  pct = Math.max(pct, 2);
+                  pct = Math.max(pct, 1);
                   const completedKB = (d.completed / 1024).toFixed(0);
                   const totalKB = (d.total / 1024).toFixed(0);
-                  bytesStr = `${completedKB} KB / ${totalKB} KB (Manifest)`;
+                  bytesStr = statusMsg.includes("Connecting") ? statusMsg : `${completedKB} KB / ${totalKB} KB (Preparing)`;
                 }
+              } else if (statusMsg) {
+                pct = Math.max(pct, 1);
               }
 
               if (hasCompletedSuccess) {
@@ -6057,7 +6752,16 @@ function renderConfiguredCloudModels(customModels, activeModel, cloudProviders) 
     const delBtn = card.querySelector(".btn-delete-cloud-model");
     if (delBtn) {
       delBtn.addEventListener("click", async () => {
-        if (!confirm(`Delete configuration for model "${m.model_name}"?`)) return;
+        const ok = await showPaiConfirm({
+          title: "Delete Model Configuration",
+          badge: "Models",
+          badgeTone: "danger",
+          message: `Delete configuration for model "${m.model_name}"?`,
+          confirmText: "Delete",
+          cancelText: "Cancel",
+          danger: true,
+        });
+        if (!ok) return;
         try {
           const res = await fetch(`${API_BASE}/api/cloud/delete_model`, {
             method: "POST",
@@ -6318,6 +7022,8 @@ function initLiveEnvironmentTelemetry() {
 }
 
 let preflightPollTimer = null;
+let preflightDismissed = false;
+let preflightPollInFlight = false;
 
 function stopPreflightPolling() {
   if (preflightPollTimer) {
@@ -6326,24 +7032,40 @@ function stopPreflightPolling() {
   }
 }
 
+function dismissPreflightModal() {
+  preflightDismissed = true;
+  stopPreflightPolling();
+  if (preflightModal) {
+    preflightModal.classList.add("hidden");
+  }
+}
+
 function startPreflightPolling() {
-  if (preflightPollTimer) return;
+  if (preflightPollTimer || preflightDismissed) return;
   preflightPollTimer = setInterval(async () => {
-    if (!preflightModal || preflightModal.classList.contains("hidden")) {
+    if (preflightDismissed || !preflightModal || preflightModal.classList.contains("hidden")) {
       stopPreflightPolling();
       return;
     }
+    if (preflightPollInFlight) return;
+    preflightPollInFlight = true;
     try {
       const res = await fetch(`${API_BASE}/api/system/preflight`);
       const data = await res.json();
+      if (preflightDismissed || !preflightModal || preflightModal.classList.contains("hidden")) {
+        stopPreflightPolling();
+        return;
+      }
       if (data && data.success) {
         showPreflightModal(data);
         if (data.ollama && data.ollama.running) {
           stopPreflightPolling();
         }
       }
-    } catch (_) {}
-  }, 1200);
+    } catch (_) {} finally {
+      preflightPollInFlight = false;
+    }
+  }, 1500);
 }
 
 // 10. Startup Preflight Check
@@ -6352,7 +7074,7 @@ async function checkStartupPreflight() {
     const res = await fetch(`${API_BASE}/api/system/preflight`);
     const data = await res.json();
     if (data.success && data.models) {
-      if (!data.ready || (data.ollama && !data.ollama.running)) {
+      if (!preflightDismissed && (!data.ready || (data.ollama && !data.ollama.running))) {
         showPreflightModal(data);
       }
       availableModels = data.models.installed || [];
@@ -6373,6 +7095,7 @@ async function checkStartupPreflight() {
 }
 
 function showPreflightModal(data) {
+  if (preflightDismissed) return;
   preflightStatusItems.innerHTML = "";
 
   const pyItem = document.createElement("div");
@@ -6468,8 +7191,7 @@ function showPreflightModal(data) {
       </button>
     `;
     document.getElementById("btn-preflight-pull-llama")?.addEventListener("click", () => {
-      stopPreflightPolling();
-      preflightModal.classList.add("hidden");
+      dismissPreflightModal();
       switchTab("models");
       pullModel("llama3.2:3b");
     });
@@ -6489,17 +7211,13 @@ function showPreflightModal(data) {
     }
   }
 
-  preflightModal.classList.remove("hidden");
+  if (!preflightDismissed) {
+    preflightModal.classList.remove("hidden");
+  }
 }
 
-btnClosePreflight.addEventListener("click", () => {
-  stopPreflightPolling();
-  preflightModal.classList.add("hidden");
-});
-btnDismissPreflight.addEventListener("click", () => {
-  stopPreflightPolling();
-  preflightModal.classList.add("hidden");
-});
+btnClosePreflight.addEventListener("click", dismissPreflightModal);
+btnDismissPreflight.addEventListener("click", dismissPreflightModal);
 
 let currentColorMode = "dark"; // "dark" | "light" | "auto"
 
@@ -8189,7 +8907,16 @@ async function loadCoworkData() {
       foldersList.querySelectorAll(".btn-disconnect-folder").forEach(btn => {
         btn.addEventListener("click", async (e) => {
           const fid = e.target.getAttribute("data-id");
-          if (confirm(`Disconnect folder '${fid}'?`)) {
+          const ok = await showPaiConfirm({
+            title: "Disconnect Mounted Folder",
+            badge: "Cowork",
+            badgeTone: "warn",
+            message: `Disconnect folder '${fid}'?`,
+            confirmText: "Disconnect",
+            cancelText: "Cancel",
+            danger: true,
+          });
+          if (ok) {
             await fetch("http://127.0.0.1:8765/api/cowork/folders/disconnect", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -8273,7 +9000,16 @@ async function loadCoworkData() {
         `;
 
         voiceBox.querySelector(".btn-reset-style")?.addEventListener("click", async () => {
-          if (confirm("Reset author writing style persona to default?")) {
+          const ok = await showPaiConfirm({
+            title: "Reset Writing Style Persona",
+            badge: "Style Persona",
+            badgeTone: "warn",
+            message: "Reset author writing style persona to default?",
+            confirmText: "Reset",
+            cancelText: "Cancel",
+            danger: true,
+          });
+          if (ok) {
             await fetch("http://127.0.0.1:8765/api/cowork/voice/delete", { method: "POST" });
             showToast("Writing style persona reset.", "info");
             loadCoworkData();
@@ -8343,7 +9079,13 @@ async function loadCoworkData() {
             const res = await fetch(`http://127.0.0.1:8765/api/cowork/tasks/graph?task_id=${encodeURIComponent(tid)}`);
             const gdata = await res.json();
             if (gdata.success && gdata.mermaid) {
-              if (typeof alert !== "undefined") alert(`Thought Graph (#${tid}):\n\n${gdata.mermaid}`);
+              await showPaiAlert({
+                title: `Thought Graph (#${tid})`,
+                badge: "Reasoning Tree",
+                message: "Mermaid thought graph generated for this Cowork session.",
+                code: gdata.mermaid,
+                confirmText: "Close",
+              });
             } else {
               showToast(`No Thought Graph recorded yet for task #${tid}.`, "info", "Thought Graph");
             }
@@ -8406,7 +9148,13 @@ async function loadCoworkData() {
             const data = await res.json();
             if (data.success) {
               showToast(`Author handoff generated for task #${tid}!`, "success", "Handoff Created");
-              if (typeof alert !== "undefined") alert(data.handoff);
+              await showPaiAlert({
+                title: `Author Handoff (#${tid})`,
+                badge: "Code Tour & Handoff",
+                message: "Structured architectural handoff and verification summary.",
+                code: data.handoff || "",
+                confirmText: "Close",
+              });
             }
           } catch (err) {
             showToast(`Error creating handoff: ${err}`, "error", "Handoff Error");
@@ -8439,5 +9187,167 @@ async function loadCoworkData() {
     }
   } catch (e) {
     console.error("Error loading cowork tasks:", e);
+  }
+}
+
+// =========================================================================
+// Pre-Inference RAM & VRAM Memory Optimizer UI
+// =========================================================================
+let _memOptTimer = null;
+
+async function refreshMemoryOptimizerPill(includeApps = false) {
+  const pill = document.getElementById("header-memory-pill");
+  const pillText = document.getElementById("header-memory-text");
+  try {
+    const res = await fetch(`${API_BASE}/api/system/memory_status${includeApps ? "?apps=1" : ""}`);
+    const data = await res.json();
+    if (!data || !data.success) return null;
+    const availGb = (Number(data.avail_ram_mb || 0) / 1024).toFixed(1);
+    const vramGb = data.vram_mb ? `${(Number(data.vram_mb) / 1024).toFixed(1)}G` : "CPU";
+    if (pillText) pillText.textContent = `RAM ${availGb}G · ${vramGb}`;
+    if (pill) {
+      pill.classList.toggle("mem-low", Number(data.avail_ram_mb || 0) < 1500);
+    }
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
+function renderMemoryOptimizerModalState(data) {
+  const metricsEl = document.getElementById("mem-opt-metrics");
+  const advEl = document.getElementById("mem-opt-advisory");
+  const appsWrap = document.getElementById("mem-opt-apps-wrap");
+  const appsList = document.getElementById("mem-opt-apps-list");
+  if (!data) return;
+
+  const availMb = Number(data.avail_ram_mb || 0);
+  const totalGb = (Number(data.total_ram_mb || 0) / 1024).toFixed(1);
+  const availGb = (availMb / 1024).toFixed(2);
+  const vramTxt = data.vram_mb ? `${data.vram_mb} MB` : "Not detected (CPU/Vulkan)";
+  const enginesTxt = (data.active_engines && data.active_engines.length)
+    ? data.active_engines.join(", ")
+    : "Idle (no heavy local engine resident)";
+
+  if (metricsEl) {
+    metricsEl.innerHTML = `
+      <div class="preflight-item">
+        <div class="preflight-item-info">
+          <span class="preflight-item-title">System RAM Available</span>
+          <span class="preflight-item-detail">${escapeHtml(availGb)} GB free / ${escapeHtml(totalGb)} GB total</span>
+        </div>
+        <span class="preflight-badge ${availMb >= 2048 ? "healthy" : (availMb >= 1024 ? "warning" : "error")}">
+          ${availMb >= 2048 ? "Healthy" : (availMb >= 1024 ? "Tight" : "Critical")}
+        </span>
+      </div>
+      <div class="preflight-item">
+        <div class="preflight-item-info">
+          <span class="preflight-item-title">GPU Dedicated VRAM</span>
+          <span class="preflight-item-detail">${escapeHtml(vramTxt)}</span>
+        </div>
+        <span class="preflight-badge healthy">Ready</span>
+      </div>
+      <div class="preflight-item">
+        <div class="preflight-item-info">
+          <span class="preflight-item-title">Resident AI Engines</span>
+          <span class="preflight-item-detail">${escapeHtml(enginesTxt)}</span>
+        </div>
+        <span class="preflight-badge ${data.active_engines && data.active_engines.length ? "warning" : "healthy"}">
+          ${data.active_engines && data.active_engines.length ? "Active" : "Free"}
+        </span>
+      </div>
+    `;
+  }
+
+  if (advEl) {
+    if (data.freed_mb && Number(data.freed_mb) > 0) {
+      advEl.textContent = `Reclaimed ${data.freed_mb} MB system memory. ${(data.actions || []).join(" · ")}`;
+      advEl.className = availMb >= 1500 ? "storage-hint-ok mb-3" : "storage-hint-warn mb-3";
+    } else if (data.advisory) {
+      advEl.textContent = data.advisory;
+      advEl.className = "storage-hint-warn mb-3";
+    } else {
+      advEl.textContent = availMb >= 1800
+        ? "Memory headroom is ready for Ternary Bonsai 2.5 (27B) or FLUX.1-schnell (low-VRAM streaming)."
+        : "Low uncompressed RAM detected. Click 'Optimize & Free Memory Now' before launching 27B or FLUX.";
+      advEl.className = availMb >= 1800 ? "storage-hint-ok mb-3" : "storage-hint-warn mb-3";
+    }
+  }
+
+  const topApps = Array.isArray(data.top_external_apps) ? data.top_external_apps : [];
+  if (appsWrap && appsList) {
+    if (topApps.length > 0) {
+      appsWrap.classList.remove("hidden");
+      appsList.innerHTML = topApps
+        .map((a) => `${escapeHtml(String(a.name || "app"))}: ${Number(a.ram_mb || 0).toFixed(0)} MB`)
+        .join(" &nbsp;|&nbsp; ");
+    } else {
+      appsWrap.classList.add("hidden");
+    }
+  }
+}
+
+async function openMemoryOptimizerModal() {
+  const modal = document.getElementById("memory-optimizer-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  modal.style.display = "flex";
+  const data = await refreshMemoryOptimizerPill(true);
+  if (data) renderMemoryOptimizerModalState(data);
+}
+
+function closeMemoryOptimizerModal() {
+  const modal = document.getElementById("memory-optimizer-modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  modal.style.display = "none";
+}
+
+function setupMemoryOptimizer() {
+  const pill = document.getElementById("header-memory-pill");
+  const btnModelsOpt = document.getElementById("btn-models-optimize-ram");
+  const btnClose = document.getElementById("btn-close-mem-opt");
+  const btnCancel = document.getElementById("btn-cancel-mem-opt");
+  const btnRun = document.getElementById("btn-run-mem-opt");
+
+  if (pill) pill.addEventListener("click", openMemoryOptimizerModal);
+  if (btnModelsOpt) btnModelsOpt.addEventListener("click", openMemoryOptimizerModal);
+  if (btnClose) btnClose.addEventListener("click", closeMemoryOptimizerModal);
+  if (btnCancel) btnCancel.addEventListener("click", closeMemoryOptimizerModal);
+
+  if (btnRun) {
+    btnRun.addEventListener("click", async () => {
+      btnRun.disabled = true;
+      btnRun.textContent = "Optimizing RAM & VRAM...";
+      try {
+        const res = await fetch(`${API_BASE}/api/system/optimize_memory`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stop_all_engines: true }),
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          renderMemoryOptimizerModalState(data);
+          await refreshMemoryOptimizerPill(false);
+          showToast(
+            data.freed_mb > 0
+              ? `Freed ${data.freed_mb} MB RAM (${(Number(data.avail_ram_mb || 0) / 1024).toFixed(2)} GB available).`
+              : `Engines cleared & working sets trimmed (${(Number(data.avail_ram_mb || 0) / 1024).toFixed(2)} GB available).`,
+            "success",
+            "Memory Optimized"
+          );
+        }
+      } catch (err) {
+        showToast(`Memory optimization error: ${err.message}`, "error");
+      } finally {
+        btnRun.disabled = false;
+        btnRun.textContent = "Optimize & Free Memory Now";
+      }
+    });
+  }
+
+  refreshMemoryOptimizerPill(false);
+  if (!_memOptTimer) {
+    _memOptTimer = setInterval(() => refreshMemoryOptimizerPill(false), 20000);
   }
 }

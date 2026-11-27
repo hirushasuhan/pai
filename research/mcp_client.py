@@ -1,11 +1,13 @@
 """
 Model Context Protocol (MCP) Client for Personal Agentic AI (PAI).
-Implements JSON-RPC 2.0 communication over STDIO and HTTP transports.
-Bridges external MCP tool servers into PAI's sandboxed Capability Broker.
+Implements JSON-RPC 2.0 communication over STDIO and Streamable HTTP/SSE transports,
+supporting Tools, Resources, Prompts, Elicitation safety validation, Tasks,
+GitHub MCP Toolsets / Read-Only / Lockdown Mode, and Capability Broker firewalling.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -13,11 +15,15 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
-    from research import ingest
+    from research import ingest, net_guard
     from research.capabilities import (
         Grant,
         PermissionDenied,
@@ -28,6 +34,7 @@ try:
     )
 except ModuleNotFoundError:
     import ingest
+    import net_guard
     from capabilities import (
         Grant,
         PermissionDenied,
@@ -231,6 +238,39 @@ class MCPToolDefinition:
     description: str
     input_schema: Dict[str, Any]
     server_name: str = "default"
+    toolset: str = "default"
+    read_only_hint: Optional[bool] = None
+    destructive_hint: Optional[bool] = None
+    risk: Risk = Risk.WRITE
+
+
+@dataclass
+class MCPResourceDefinition:
+    uri: str
+    name: str
+    description: str = ""
+    mime_type: str = "text/plain"
+    server_name: str = "default"
+
+
+@dataclass
+class MCPPromptDefinition:
+    name: str
+    description: str = ""
+    arguments: List[Dict[str, Any]] = field(default_factory=list)
+    server_name: str = "default"
+
+
+@dataclass
+class MCPServerPolicy:
+    """Governance policy applied to an MCP server (GitHub MCP + HOL Guard pattern)."""
+    read_only: bool = False
+    lockdown_mode: bool = False
+    dynamic_discovery: bool = True
+    toolsets: Tuple[str, ...] = ()
+    allowed_tools: Tuple[str, ...] = ()
+    excluded_tools: Tuple[str, ...] = ()
+    allow_loopback_http: bool = False
 
 
 @dataclass
@@ -238,6 +278,92 @@ class MCPToolResult:
     content: List[Dict[str, Any]]
     is_error: bool = False
     raw_text: str = ""
+    sanitized_text: str = ""
+    tainted: bool = True
+    secret_redacted: bool = False
+
+
+_READ_TOOL_PREFIXES = (
+    "get_", "list_", "read_", "search_", "find_", "fetch_", "describe_",
+    "inspect_", "state", "screenshot", "view_", "check_", "query_", "diff", "log",
+)
+_DESTRUCTIVE_TOOL_TOKENS = (
+    "delete", "remove", "drop", "destroy", "force_push", "merge", "execute_command",
+    "run_shell", "terminate", "kill", "purge", "revoke", "transfer",
+)
+_WRITE_TOOL_TOKENS = (
+    "create", "update", "write", "edit", "patch", "post", "send", "push",
+    "commit", "comment", "assign", "click", "type", "drag", "move", "launch",
+    "shortcut", "clipboard", "set_", "add_", "save", "insert",
+)
+_SECRET_ELICIT_FIELD_RE = re.compile(
+    r"(?:password|passwd|secret|api[_\-]?key|token|private[_\-]?key|credential|pin|ssn)",
+    re.IGNORECASE,
+)
+
+
+def infer_mcp_tool_risk(
+    name: str,
+    annotations: Optional[Dict[str, Any]] = None,
+    transport_is_remote: bool = False,
+) -> Risk:
+    """Conservatively infers ToolBroker Risk level for an external MCP tool."""
+    ann = annotations or {}
+    if ann.get("destructiveHint") is True:
+        return Risk.DESTRUCTIVE
+    if ann.get("readOnlyHint") is True:
+        return Risk.READ
+
+    low = (name or "").strip().lower().replace("-", "_")
+    if any(tok in low for tok in _DESTRUCTIVE_TOOL_TOKENS):
+        return Risk.DESTRUCTIVE
+    if any(low.startswith(pref) or low == pref.rstrip("_") for pref in _READ_TOOL_PREFIXES):
+        return Risk.READ
+    if any(tok in low for tok in _WRITE_TOOL_TOKENS):
+        return Risk.NETWORK_OUT if transport_is_remote else Risk.WRITE
+    return Risk.NETWORK_OUT if transport_is_remote else Risk.DESTRUCTIVE
+
+
+def is_secret_elicitation_schema(requested_schema: Dict[str, Any]) -> Optional[str]:
+    """Per MCP Elicitation spec, Form Mode MUST NOT request secrets or passwords."""
+    props = (requested_schema or {}).get("properties")
+    if not isinstance(props, dict):
+        return None
+    for field_name, spec in props.items():
+        if _SECRET_ELICIT_FIELD_RE.search(str(field_name)):
+            return str(field_name)
+        if isinstance(spec, dict):
+            fmt = str(spec.get("format", "")).lower()
+            desc = str(spec.get("description", ""))
+            if fmt == "password" or _SECRET_ELICIT_FIELD_RE.search(desc):
+                return str(field_name)
+    return None
+
+
+def redact_and_sanitize_mcp_text(text: str, source_label: str = "mcp") -> Tuple[str, bool]:
+    """Scrubs leaked secrets and neutralizes injection markers in untrusted MCP output."""
+    raw = str(text or "")
+    secret_hit = ingest.scan_secret_content(raw)
+    redacted = False
+    if secret_hit is not None:
+        raw = f"[REDACTED_SECRET:{secret_hit}] Output suppressed because an external MCP server emitted sensitive credential material."
+        redacted = True
+    clean = ingest.defang_envelope_markers(raw)
+    clean = clean.replace("[[SRC:", "[ [SRC:")
+    wrapped = ingest.wrap_untrusted_envelope(clean, header=source_label)
+    return wrapped, redacted
+
+
+def _is_loopback_http_url(url: str) -> bool:
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").strip().lower()
+        if host == "localhost":
+            return True
+        ip = ipaddress.ip_address(host)
+        return ip.is_loopback
+    except Exception:
+        return False
 
 
 class MCPTransport:
@@ -353,80 +479,370 @@ class StdioMCPTransport(MCPTransport):
             self._proc = None
 
 
+class StreamableHttpMCPTransport(MCPTransport):
+    """Streamable HTTP / SSE MCP transport (supports 2024-11-05, 2025-03-26, and stateless _meta).
+
+    Routes target URLs through `net_guard.validate_url` to block SSRF, link-local
+    metadata endpoints, and non-HTTP schemes. Private loopback (`127.0.0.1` / `localhost`)
+    is permitted only when explicitly opted-in via `allow_loopback=True` AND gated via
+    `ToolBroker` / confirmation.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        timeout_sec: float = 15.0,
+        allow_loopback: bool = False,
+        offline_check_fn: Optional[Callable[[], bool]] = None,
+        broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
+        tainted: bool = False,
+        require_confirmation: bool = False,
+    ):
+        clean_url = (url or "").strip()
+        is_loopback = _is_loopback_http_url(clean_url)
+        if allow_loopback and not is_loopback:
+            raise PermissionDenied("allow_loopback=True only permits explicit localhost/127.0.0.1 MCP endpoints")
+
+        try:
+            net_guard.validate_url(clean_url, allow_private=bool(allow_loopback and is_loopback))
+        except Exception as exc:
+            raise ValueError(f"Rejected MCP HTTP endpoint URL: {exc}") from exc
+
+        if not is_loopback and offline_check_fn is not None and not offline_check_fn():
+            raise ConnectionError("Offline air-gap active: remote HTTP MCP endpoints are disabled.")
+
+        if broker is not None:
+            broker.invoke("mcp_connect", {"url": clean_url}, tainted=bool(tainted))
+        elif confirm is not None:
+            req = ToolRequest(
+                "mcp_connect",
+                Risk.NETWORK_OUT,
+                clean_url[:200],
+                bool(tainted),
+                "connecting to HTTP/SSE MCP server",
+            )
+            if not bool(confirm(req)):
+                raise PermissionDenied("MCP HTTP connection declined by confirmation")
+        elif require_confirmation or tainted:
+            raise PermissionDenied("MCP HTTP connection requires ToolBroker or confirmation")
+
+        self.url = clean_url
+        self.timeout_sec = max(1.0, float(timeout_sec))
+        self.allow_loopback = allow_loopback
+        self.is_loopback = is_loopback
+        self.offline_check_fn = offline_check_fn
+        self._headers = {str(k): str(v) for k, v in (headers or {}).items()}
+        self._session_id: Optional[str] = None
+        self._req_id = 0
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _parse_sse_jsonrpc(raw_body: str, target_id: Optional[int]) -> Dict[str, Any]:
+        last_obj: Optional[Dict[str, Any]] = None
+        for line in raw_body.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                obj = json.loads(data_str)
+                if isinstance(obj, dict):
+                    last_obj = obj
+                    if target_id is not None and obj.get("id") == target_id:
+                        return obj
+            except json.JSONDecodeError:
+                continue
+        if last_obj is not None:
+            return last_obj
+        raise RuntimeError("No valid JSON-RPC payload found in SSE stream")
+
+    def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.is_loopback and self.offline_check_fn is not None and not self.offline_check_fn():
+            raise ConnectionError("Offline air-gap active: blocking outbound MCP HTTP call.")
+        net_guard.validate_url(self.url, allow_private=bool(self.allow_loopback and self.is_loopback))
+
+        with self._lock:
+            self._req_id += 1
+            cur_id = self._req_id
+            payload: Dict[str, Any] = {
+                "jsonrpc": "2.0",
+                "id": cur_id,
+                "method": method,
+            }
+            if params is not None:
+                payload["params"] = params
+            body_bytes = json.dumps(payload).encode("utf-8")
+
+            req_headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                **self._headers,
+            }
+            if self._session_id:
+                req_headers["Mcp-Session-Id"] = self._session_id
+
+            req = urllib.request.Request(self.url, data=body_bytes, headers=req_headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
+                    sid = resp.headers.get("Mcp-Session-Id")
+                    if sid:
+                        self._session_id = sid
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                    raw_text = resp.read(2 * 1024 * 1024).decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"MCP HTTP {exc.code} during '{method}'") from exc
+            except Exception as exc:
+                raise ConnectionError(f"MCP HTTP transport error during '{method}': {exc}") from exc
+
+            if "text/event-stream" in ctype or raw_text.lstrip().startswith("event:") or raw_text.lstrip().startswith("data:"):
+                resp_obj = self._parse_sse_jsonrpc(raw_text, cur_id)
+            else:
+                resp_obj = json.loads(raw_text.strip()) if raw_text.strip() else {}
+
+            if "error" in resp_obj:
+                err = resp_obj["error"]
+                raise RuntimeError(f"MCP error {err.get('code')}: {err.get('message')}")
+            return resp_obj.get("result", {})
+
+    def close(self) -> None:
+        self._session_id = None
+
+
 class MCPClient:
     """
-    High-level Model Context Protocol client for discovering and executing external tools.
+    High-level Model Context Protocol client for discovering and executing external tools,
+    reading URI resources, rendering prompts, and polling long-running tasks.
     """
-    def __init__(self, name: str, transport: MCPTransport):
+    SUPPORTED_PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
+
+    def __init__(
+        self,
+        name: str,
+        transport: MCPTransport,
+        policy: Optional[MCPServerPolicy] = None,
+    ):
         self.name = name
         self.transport = transport
+        self.policy = policy or MCPServerPolicy()
         self.server_info: Dict[str, Any] = {}
+        self.server_capabilities: Dict[str, Any] = {}
+        self.protocol_version: str = "2024-11-05"
         self.available_tools: Dict[str, MCPToolDefinition] = {}
+        self.available_resources: Dict[str, MCPResourceDefinition] = {}
+        self.available_prompts: Dict[str, MCPPromptDefinition] = {}
         self.is_initialized = False
 
     def initialize(self) -> Dict[str, Any]:
-        """Performs initial MCP protocol handshake."""
-        params = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-                "tools": {},
-                "resources": {},
-            },
-            "clientInfo": {
-                "name": "PAI-Agent",
-                "version": "1.1.0-rc4",
-            },
-        }
-        res = self.transport.send_request("initialize", params)
-        self.server_info = res
-        self.is_initialized = True
-        return res
+        """Performs MCP protocol handshake (supports 2025-03-26 and 2024-11-05)."""
+        last_err: Optional[Exception] = None
+        for proto_ver in self.SUPPORTED_PROTOCOL_VERSIONS:
+            params = {
+                "protocolVersion": proto_ver,
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                    "prompts": {},
+                    "elicitation": {"form": {}},
+                },
+                "clientInfo": {
+                    "name": "PAI-Agent",
+                    "version": "1.5.0",
+                },
+            }
+            try:
+                res = self.transport.send_request("initialize", params)
+                self.server_info = res
+                self.server_capabilities = res.get("capabilities", {}) if isinstance(res, dict) else {}
+                self.protocol_version = str(res.get("protocolVersion") or proto_ver)
+                self.is_initialized = True
+                return res
+            except Exception as exc:
+                last_err = exc
+        raise RuntimeError(f"MCP initialize handshake failed: {last_err}")
 
-    def list_tools(self) -> List[MCPToolDefinition]:
-        """Discovers tools registered on the MCP server."""
+    def _tool_permitted_by_policy(self, tool_def: MCPToolDefinition) -> bool:
+        p = self.policy
+        if p.excluded_tools and tool_def.name in p.excluded_tools:
+            return False
+        if p.allowed_tools and tool_def.name not in p.allowed_tools:
+            return False
+        if p.toolsets and tool_def.toolset not in ("default", "") and tool_def.toolset not in p.toolsets:
+            return False
+        if p.read_only and tool_def.risk != Risk.READ:
+            return False
+        return True
+
+    def list_tools(self, apply_policy: bool = True) -> List[MCPToolDefinition]:
+        """Discovers tools registered on the MCP server, enforcing policy/toolset filters."""
         if not self.is_initialized:
             self.initialize()
         res = self.transport.send_request("tools/list", {})
         tools_raw = res.get("tools", [])
         self.available_tools.clear()
-        tool_list = []
+        is_remote = isinstance(self.transport, StreamableHttpMCPTransport) and not self.transport.is_loopback
+        tool_list: List[MCPToolDefinition] = []
         for t in tools_raw:
+            ann = t.get("annotations") if isinstance(t.get("annotations"), dict) else {}
+            meta = t.get("_meta") if isinstance(t.get("_meta"), dict) else {}
+            toolset = str(meta.get("toolset") or t.get("toolset") or "default")
+            name = str(t.get("name", ""))
+            risk = infer_mcp_tool_risk(name, annotations=ann, transport_is_remote=is_remote)
             tool_def = MCPToolDefinition(
-                name=t.get("name", ""),
-                description=t.get("description", ""),
+                name=name,
+                description=str(t.get("description", "")),
                 input_schema=t.get("inputSchema", {}),
                 server_name=self.name,
+                toolset=toolset,
+                read_only_hint=ann.get("readOnlyHint"),
+                destructive_hint=ann.get("destructiveHint"),
+                risk=risk,
             )
+            if apply_policy and not self._tool_permitted_by_policy(tool_def):
+                continue
             self.available_tools[tool_def.name] = tool_def
             tool_list.append(tool_def)
         return tool_list
+
+    def list_resources(self) -> List[MCPResourceDefinition]:
+        """Discovers application-controlled URI resources exposed by the server."""
+        if not self.is_initialized:
+            self.initialize()
+        try:
+            res = self.transport.send_request("resources/list", {})
+        except Exception:
+            return []
+        out: List[MCPResourceDefinition] = []
+        self.available_resources.clear()
+        for r in res.get("resources", []):
+            rdef = MCPResourceDefinition(
+                uri=str(r.get("uri", "")),
+                name=str(r.get("name", r.get("uri", ""))),
+                description=str(r.get("description", "")),
+                mime_type=str(r.get("mimeType", "text/plain")),
+                server_name=self.name,
+            )
+            if rdef.uri:
+                self.available_resources[rdef.uri] = rdef
+                out.append(rdef)
+        return out
+
+    def read_resource(self, uri: str) -> Tuple[str, bool]:
+        """Reads an MCP resource URI, scans for secrets, and wraps as untrusted data."""
+        if not self.is_initialized:
+            self.initialize()
+        res = self.transport.send_request("resources/read", {"uri": str(uri)})
+        contents = res.get("contents", []) if isinstance(res, dict) else []
+        chunks: List[str] = []
+        for item in contents:
+            if isinstance(item, dict) and "text" in item:
+                chunks.append(str(item["text"]))
+            elif isinstance(item, dict) and "blob" in item:
+                chunks.append(f"[binary resource mime={item.get('mimeType', 'application/octet-stream')} bytes={len(str(item['blob']))}]")
+        raw = "\n".join(chunks) if chunks else str(res)
+        return redact_and_sanitize_mcp_text(raw, source_label=f"mcp_resource:{self.name}:{uri}")
+
+    def list_prompts(self) -> List[MCPPromptDefinition]:
+        """Discovers reusable user-triggered prompt templates from the server."""
+        if not self.is_initialized:
+            self.initialize()
+        try:
+            res = self.transport.send_request("prompts/list", {})
+        except Exception:
+            return []
+        out: List[MCPPromptDefinition] = []
+        self.available_prompts.clear()
+        for p in res.get("prompts", []):
+            pdef = MCPPromptDefinition(
+                name=str(p.get("name", "")),
+                description=str(p.get("description", "")),
+                arguments=list(p.get("arguments", []) or []),
+                server_name=self.name,
+            )
+            if pdef.name:
+                self.available_prompts[pdef.name] = pdef
+                out.append(pdef)
+        return out
+
+    def get_prompt(self, prompt_name: str, arguments: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Resolves a prompt template on the MCP server with user arguments."""
+        if not self.is_initialized:
+            self.initialize()
+        return self.transport.send_request(
+            "prompts/get",
+            {"name": str(prompt_name), "arguments": arguments or {}},
+        )
 
     def call_tool(
         self,
         tool_name: str,
         arguments: Dict[str, Any],
         broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
         tainted: bool = False,
     ) -> MCPToolResult:
-        """Executes a tool on the MCP server with given JSON arguments."""
+        """Executes a tool on the MCP server with policy firewall + ToolBroker checks."""
+        if not self.is_initialized:
+            self.initialize()
+
+        tdef = self.available_tools.get(tool_name)
+        is_remote = isinstance(self.transport, StreamableHttpMCPTransport) and not self.transport.is_loopback
+        inferred_risk = tdef.risk if tdef else infer_mcp_tool_risk(tool_name, transport_is_remote=is_remote)
+
+        if self.policy.excluded_tools and tool_name in self.policy.excluded_tools:
+            raise PermissionDenied(f"Tool '{tool_name}' is excluded by server policy on '{self.name}'.")
+        if self.policy.allowed_tools and tool_name not in self.policy.allowed_tools:
+            raise PermissionDenied(f"Tool '{tool_name}' is not in server allowed_tools for '{self.name}'.")
+        if self.policy.read_only and inferred_risk != Risk.READ:
+            raise PermissionDenied(
+                f"Read-only policy active on MCP server '{self.name}': blocked non-READ tool '{tool_name}'."
+            )
+
+        effective_tainted = bool(tainted or self.policy.lockdown_mode)
+        needs_confirm = (inferred_risk >= Risk.DESTRUCTIVE) or (effective_tainted and inferred_risk >= Risk.WRITE)
+
         if broker is not None:
             broker.invoke(
                 "mcp_call_tool",
                 {"server": self.name, "tool": tool_name, "arguments": arguments},
-                tainted=bool(tainted),
+                tainted=effective_tainted,
             )
-        if not self.is_initialized:
-            self.initialize()
+        elif needs_confirm:
+            if confirm is None:
+                raise PermissionDenied(
+                    f"MCP tool '{self.name}:{tool_name}' (risk={inferred_risk.name}, tainted={effective_tainted}) requires human confirmation."
+                )
+            req = ToolRequest(
+                f"mcp:{self.name}:{tool_name}",
+                inferred_risk,
+                json.dumps(arguments, default=str)[:200],
+                effective_tainted,
+                "lockdown/tainted MCP side effect" if effective_tainted else "destructive/outbound MCP tool",
+            )
+            if not bool(confirm(req)):
+                raise PermissionDenied(f"MCP tool '{self.name}:{tool_name}' declined by user.")
+
         params = {
             "name": tool_name,
             "arguments": arguments,
         }
         res = self.transport.send_request("tools/call", params)
         content = res.get("content", [])
-        is_error = res.get("isError", False)
+        is_error = bool(res.get("isError", False))
         text_parts = [item.get("text", "") for item in content if isinstance(item, dict) and "text" in item]
         raw_text = "\n".join(text_parts) if text_parts else str(res)
-        return MCPToolResult(content=content, is_error=is_error, raw_text=raw_text)
+        sanitized, redacted = redact_and_sanitize_mcp_text(raw_text, source_label=f"mcp:{self.name}:{tool_name}")
+        return MCPToolResult(
+            content=content,
+            is_error=is_error,
+            raw_text="" if redacted else raw_text,
+            sanitized_text=sanitized,
+            tainted=True,
+            secret_redacted=redacted,
+        )
 
     def close(self) -> None:
         self.transport.close()
@@ -483,6 +899,7 @@ class MCPRegistry:
         confirm: Optional[Callable[[ToolRequest], bool]] = None,
         tainted: bool = False,
         allow_unpinned: bool = False,
+        policy: Optional[MCPServerPolicy] = None,
     ) -> MCPClient:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("MCP server name must be a non-empty string")
@@ -497,7 +914,49 @@ class MCPRegistry:
             allow_unpinned=allow_unpinned,
             require_confirmation=True,
         )
-        client = MCPClient(name=name.strip(), transport=transport)
+        client = MCPClient(name=name.strip(), transport=transport, policy=policy)
+        try:
+            cls.register_server(
+                name=name.strip(),
+                client=client,
+                broker=broker,
+                confirm=confirm,
+                tainted=tainted,
+                require_confirmation=True,
+            )
+        except Exception:
+            client.close()
+            raise
+        return client
+
+    @classmethod
+    def connect_http(
+        cls,
+        name: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        allow_loopback: bool = False,
+        offline_check_fn: Optional[Callable[[], bool]] = None,
+        broker: Optional[ToolBroker] = None,
+        confirm: Optional[Callable[[ToolRequest], bool]] = None,
+        tainted: bool = False,
+        policy: Optional[MCPServerPolicy] = None,
+    ) -> MCPClient:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("MCP server name must be a non-empty string")
+        if broker is None and confirm is None:
+            raise PermissionDenied("MCP HTTP registration requires ToolBroker or explicit confirmation")
+        transport = StreamableHttpMCPTransport(
+            url=url,
+            headers=headers,
+            allow_loopback=allow_loopback,
+            offline_check_fn=offline_check_fn,
+            broker=broker,
+            confirm=confirm,
+            tainted=tainted,
+            require_confirmation=True,
+        )
+        client = MCPClient(name=name.strip(), transport=transport, policy=policy)
         try:
             cls.register_server(
                 name=name.strip(),
@@ -551,14 +1010,40 @@ class MCPRegistry:
         return all_tools
 
     @classmethod
+    def list_all_resources(cls) -> List[MCPResourceDefinition]:
+        all_res = []
+        for s in cls._servers.values():
+            try:
+                all_res.extend(s.list_resources())
+            except Exception:
+                pass
+        return all_res
+
+    @classmethod
+    def list_all_prompts(cls) -> List[MCPPromptDefinition]:
+        all_prompts = []
+        for s in cls._servers.values():
+            try:
+                all_prompts.extend(s.list_prompts())
+            except Exception:
+                pass
+        return all_prompts
+
+    @classmethod
     def format_status(cls, color_enabled: bool = False) -> str:
-        lines = ["🔌 Model Context Protocol (MCP) Hub:"]
+        lines = ["Model Context Protocol (MCP Hub Status):"]
         if not cls._servers:
             lines.append("  (No active MCP servers connected. Use /mcp connect <command>)")
-            lines.append("  Supported: STDIO servers (Apollo GraphQL, Filesystem, GitHub, Custom Tools)")
+            lines.append("  Supported: STDIO + Streamable HTTP/SSE (GitHub MCP, Filesystem, Memory, Git, Windows-MCP)")
             return "\n".join(lines)
         for name, s in cls._servers.items():
-            lines.append(f"  • Server: {name} (Running)")
+            flags = []
+            if s.policy.read_only:
+                flags.append("read-only")
+            if s.policy.lockdown_mode:
+                flags.append("lockdown")
+            flag_str = f" [{', '.join(flags)}]" if flags else ""
+            lines.append(f"  - Server: {name} (Running{flag_str}, {len(s.available_tools)} tools)")
             for t_name, t in s.available_tools.items():
-                lines.append(f"    - Tool: {t_name}: {t.description}")
+                lines.append(f"    * {t_name} [{t.risk.name}]: {t.description}")
         return "\n".join(lines)

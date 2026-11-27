@@ -45,3 +45,49 @@ def rss_bytes() -> Optional[int]:
         return int(psutil.Process().memory_info().rss)
     except Exception:
         return None
+
+
+def get_windows_ram_stats() -> Optional[dict]:
+    """Reads live physical and pagefile RAM metrics on Windows (approved ctypes boundary)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        class _MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        ms = _MEMORYSTATUSEX()
+        ms.dwLength = ctypes.sizeof(ms)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+            return {
+                "total_ram_mb": round(ms.ullTotalPhys / (1024 * 1024), 1),
+                "avail_ram_mb": round(ms.ullAvailPhys / (1024 * 1024), 1),
+                "memory_load_pct": float(ms.dwMemoryLoad),
+                "page_avail_mb": round(ms.ullAvailPageFile / (1024 * 1024), 1),
+            }
+    except Exception:
+        pass
+    return None
+
+
+def trim_current_process_working_set() -> int:
+    """Safely empties unused pages from current Python process working set on Windows."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        k32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        h_self = k32.GetCurrentProcess()
+        psapi.EmptyWorkingSet(h_self)
+        return 1
+    except Exception:
+        return 0

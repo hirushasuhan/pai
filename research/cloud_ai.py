@@ -870,9 +870,10 @@ def resolve_local_virtual_model(virtual_model: str, installed_models: List[str])
             return chosen
         return sorted(installed_models, key=lambda x: len(x))[0]
 
-    elif vm == "auto:smart" or any(k in vm for k in ("deepseek", "r1", "reason", "smart", "pro", "coder", "code")):
-        # Deep reasoning and code intelligence: DeepSeek R1 -> Coder -> 7b / 8b / 14b+
+    elif vm == "auto:smart" or any(k in vm for k in ("deepseek", "r1", "reason", "smart", "pro", "coder", "code", "bonsai", "ternary")):
+        # Deep reasoning and code intelligence: Ternary Bonsai 2.5 -> DeepSeek R1 -> Coder -> 7b / 8b / 14b+
         smart_patterns = [
+            "ternary-bonsai-2.5", "bonsai",
             "deepseek-r1", "r1:7b", "r1:8b", "r1:14b",
             "qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen2.5-coder:32b",
             "llama3.3", "llama3.1:8b", "mistral:7b", "qwen3.5:4b",
@@ -884,8 +885,9 @@ def resolve_local_virtual_model(virtual_model: str, installed_models: List[str])
         return installed_models[0]
 
     else:  # "auto", "fusion", or default
-        # Balanced all-rounder: quality + speed
+        # Balanced all-rounder: Ternary Bonsai -> Coder -> DeepSeek -> Llama 3.2
         balanced_patterns = [
+            "ternary-bonsai-2.5", "bonsai",
             "qwen2.5-coder:7b", "deepseek-r1:7b", "llama3.2:3b", "qwen3.5:4b",
             "mistral:7b", "llama3.1:8b", "llama3.2:1b", "qwen2.5-coder:1.5b"
         ]
@@ -995,6 +997,12 @@ def generate_image_cloud(
     images_dir.mkdir(parents=True, exist_ok=True)
     filename = f"pai_image_{int(time.time())}.png"
     out_file = images_dir / filename
+    backend_errors: List[str] = []
+
+    def _sanitize_err_msg(err_obj: Any) -> str:
+        msg = re.sub(r"\s+", " ", str(err_obj or "")).strip()
+        msg = re.sub(r"(?:[A-Za-z]:)?(?:\\\\|/)?(?:Users|home)(?:\\\\|/)[^\\\\/\s]+", "<user>", msg)
+        return msg[:180]
 
     # 1. Try Gemini Imagen
     if key and endpoint and _is_gemini_endpoint(endpoint):
@@ -1026,8 +1034,8 @@ def generate_image_cloud(
                         out_file.write_bytes(img_bytes)
                         data_uri = f"data:image/png;base64,{b64_data}"
                         return True, data_uri, str(out_file), filename
-        except Exception:
-            pass
+        except Exception as exc:
+            backend_errors.append(f"Gemini Imagen: {_sanitize_err_msg(exc)}")
 
     # 2. Try OpenAI DALL-E
     if key and endpoint and _is_openai_image_endpoint(endpoint):
@@ -1071,10 +1079,172 @@ def generate_image_cloud(
                             b64_data = base64.b64encode(img_bytes).decode("ascii")
                             data_uri = f"data:image/png;base64,{b64_data}"
                             return True, data_uri, str(out_file), filename
-        except Exception:
-            pass
+        except Exception as exc:
+            backend_errors.append(f"OpenAI DALL-E: {_sanitize_err_msg(exc)}")
 
-    # 3. Local diffusion fallback
+    # 3. Free Hugging Face Inference API (if huggingface key configured)
+    hf_key = get_provider_key("huggingface")
+    if hf_key and (target_model in ("hf-flux-schnell", "flux-schnell") or not key):
+        try:
+            hf_url = _validate_cloud_endpoint_url(
+                "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
+                allow_private=False,
+            )
+            hf_req = urllib.request.Request(
+                hf_url,
+                data=json.dumps({"inputs": prompt_clean}).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {hf_key}",
+                    "User-Agent": USER_AGENT,
+                },
+                method="POST",
+            )
+            with _guarded_urlopen(hf_req, timeout=60.0, allow_private=False) as hf_resp:
+                img_bytes, truncated = _read_bounded(hf_resp, 16 * 1024 * 1024)
+                if not truncated and (img_bytes.startswith(b"\x89PNG\r\n\x1a\n") or img_bytes.startswith(b"\xff\xd8\xff")):
+                    out_file.write_bytes(img_bytes)
+                    b64_data = base64.b64encode(img_bytes).decode("ascii")
+                    mime = "image/png" if img_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                    return True, f"data:{mime};base64,{b64_data}", str(out_file), filename
+        except Exception as exc:
+            backend_errors.append(f"HuggingFace: {_sanitize_err_msg(exc)}")
+
+    # 4. Cloudflare Workers AI Free Tier (@cf/black-forest-labs/flux-1-schnell)
+    cf_key = get_provider_key("cloudflare")
+    cf_acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    if cf_key and cf_acct and re.fullmatch(r"[a-zA-Z0-9_-]{8,64}", cf_acct):
+        try:
+            cf_url = _validate_cloud_endpoint_url(
+                f"https://api.cloudflare.com/client/v4/accounts/{cf_acct}/ai/run/@cf/black-forest-labs/flux-1-schnell",
+                allow_private=False,
+            )
+            cf_req = urllib.request.Request(
+                cf_url,
+                data=json.dumps({"prompt": prompt_clean, "steps": 4}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {cf_key}", "User-Agent": USER_AGENT},
+                method="POST",
+            )
+            with _guarded_urlopen(cf_req, timeout=60.0, allow_private=False) as cf_resp:
+                raw_cf, cf_trunc = _read_bounded(cf_resp, 16 * 1024 * 1024)
+                if not cf_trunc:
+                    if raw_cf.startswith(b"\x89PNG\r\n\x1a\n") or raw_cf.startswith(b"\xff\xd8\xff"):
+                        out_file.write_bytes(raw_cf)
+                        b64_data = base64.b64encode(raw_cf).decode("ascii")
+                        return True, f"data:image/png;base64,{b64_data}", str(out_file), filename
+                    cf_json = json.loads(raw_cf.decode("utf-8", errors="replace"))
+                    b64_cf = (cf_json.get("result") or {}).get("image")
+                    if b64_cf:
+                        img_bytes = base64.b64decode(b64_cf)
+                        out_file.write_bytes(img_bytes)
+                        return True, f"data:image/png;base64,{b64_cf}", str(out_file), filename
+        except Exception as exc:
+            backend_errors.append(f"Cloudflare: {_sanitize_err_msg(exc)}")
+
+    # 5. Free Keyless Pollinations FLUX (Online Only, Zero-Key, net_guard SSRF validated)
+    keyless_allowed = target_model in ("pollinations-flux", "hf-flux-schnell", "cloudflare-flux-schnell", "flux", "auto", "imagen-3.0-generate-002") or not key
+    if keyless_allowed:
+        try:
+            encoded_prompt = urllib.parse.quote(prompt_clean[:500], safe="")
+            pol_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=768&height=768&nologo=true"
+            pol_req = urllib.request.Request(
+                pol_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PAI-Desktop/1.5"},
+                method="GET",
+            )
+            with _guarded_urlopen(pol_req, timeout=50.0, allow_private=False) as pol_resp:
+                img_bytes, pol_trunc = _read_bounded(pol_resp, 16 * 1024 * 1024)
+                if not pol_trunc and (
+                    img_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                    or img_bytes.startswith(b"\xff\xd8\xff")
+                    or (img_bytes.startswith(b"RIFF") and img_bytes[8:12] == b"WEBP")
+                ):
+                    out_file.write_bytes(img_bytes)
+                    b64_data = base64.b64encode(img_bytes).decode("ascii")
+                    mime = "image/png" if img_bytes.startswith(b"\x89PNG") else ("image/webp" if img_bytes.startswith(b"RIFF") else "image/jpeg")
+                    return True, f"data:{mime};base64,{b64_data}", str(out_file), filename
+                backend_errors.append("Pollinations returned a non-image payload")
+        except urllib.error.HTTPError as he:
+            retry_after = ""
+            try:
+                retry_after = str(he.headers.get("Retry-After") or "").strip() if he.headers else ""
+            except Exception:
+                pass
+            if he.code in (402, 429):
+                wait_hint = f" (wait ~{retry_after}s)" if retry_after else " (1 free image per ~45s cooldown)"
+                backend_errors.append(f"Pollinations free tier cooldown{wait_hint}")
+            else:
+                backend_errors.append(f"Pollinations HTTP {he.code}")
+        except Exception as exc:
+            backend_errors.append(f"Pollinations: {_sanitize_err_msg(exc)}")
+
+        # 5b. Secondary Free Keyless Cluster Fallback: AI Horde Anonymous API (no card or signup needed)
+        if is_internet_enabled():
+            try:
+                horde_submit_url = _validate_cloud_endpoint_url("https://stablehorde.net/api/v2/generate/async", allow_private=False)
+                horde_payload = json.dumps({
+                    "prompt": prompt_clean[:500],
+                    "params": {"width": 512, "height": 512, "steps": 16, "n": 1},
+                    "nsfw": False,
+                    "models": ["FLUX.1-schnell", "Deliberate", "AlbedoBase XL (SDXL)"],
+                }).encode("utf-8")
+                horde_req = urllib.request.Request(
+                    horde_submit_url,
+                    data=horde_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "apikey": "0000000000",
+                        "Client-Agent": "PAI-Desktop:1.5:github",
+                    },
+                    method="POST",
+                )
+                with _guarded_urlopen(horde_req, timeout=15.0, allow_private=False) as h_resp:
+                    raw_h, _ = _read_bounded(h_resp, 256 * 1024)
+                    h_data = json.loads(raw_h.decode("utf-8", errors="replace"))
+                    job_id = str(h_data.get("id") or "").strip()
+                if job_id and re.fullmatch(r"[a-zA-Z0-9-]{8,64}", job_id):
+                    check_url = _validate_cloud_endpoint_url(f"https://stablehorde.net/api/v2/generate/check/{job_id}", allow_private=False)
+                    status_url = _validate_cloud_endpoint_url(f"https://stablehorde.net/api/v2/generate/status/{job_id}", allow_private=False)
+                    poll_deadline = time.time() + 45.0
+                    is_done = False
+                    while time.time() < poll_deadline and is_internet_enabled():
+                        time.sleep(3.0)
+                        chk_req = urllib.request.Request(check_url, headers={"Client-Agent": "PAI-Desktop:1.5:github"}, method="GET")
+                        with _guarded_urlopen(chk_req, timeout=10.0, allow_private=False) as c_resp:
+                            raw_c, _ = _read_bounded(c_resp, 128 * 1024)
+                            c_data = json.loads(raw_c.decode("utf-8", errors="replace"))
+                            if c_data.get("done") or not c_data.get("is_possible", True):
+                                is_done = bool(c_data.get("done"))
+                                break
+                    if is_done and is_internet_enabled():
+                        st_req = urllib.request.Request(status_url, headers={"Client-Agent": "PAI-Desktop:1.5:github"}, method="GET")
+                        with _guarded_urlopen(st_req, timeout=15.0, allow_private=False) as s_resp:
+                            raw_s, _ = _read_bounded(s_resp, 1024 * 1024)
+                            s_data = json.loads(raw_s.decode("utf-8", errors="replace"))
+                            gens = s_data.get("generations") or []
+                            if gens and gens[0].get("img"):
+                                img_ref = str(gens[0]["img"]).strip()
+                                if img_ref.startswith(("https://", "http://")):
+                                    img_dl_req = urllib.request.Request(img_ref, headers={"User-Agent": USER_AGENT}, method="GET")
+                                    with _guarded_urlopen(img_dl_req, timeout=25.0, allow_private=False) as img_r:
+                                        img_bytes, img_trunc = _read_bounded(img_r, 16 * 1024 * 1024)
+                                else:
+                                    img_bytes = base64.b64decode(img_ref)
+                                    img_trunc = False
+                                if not img_trunc and (
+                                    img_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                                    or img_bytes.startswith(b"\xff\xd8\xff")
+                                    or (img_bytes.startswith(b"RIFF") and img_bytes[8:12] == b"WEBP")
+                                ):
+                                    out_file.write_bytes(img_bytes)
+                                    b64_data = base64.b64encode(img_bytes).decode("ascii")
+                                    mime = "image/png" if img_bytes.startswith(b"\x89PNG") else ("image/webp" if img_bytes.startswith(b"RIFF") else "image/jpeg")
+                                    return True, f"data:{mime};base64,{b64_data}", str(out_file), filename
+                    backend_errors.append("AI Horde free cluster timed out waiting for worker")
+            except Exception as exc:
+                backend_errors.append(f"AI Horde: {_sanitize_err_msg(exc)}")
+
+    # 6. Local diffusion loopback fallback (stable-diffusion.cpp server / A1111 / Forge on :7860)
     for local_ep in ("http://127.0.0.1:7860/sdapi/v1/txt2img", "http://localhost:7860/sdapi/v1/txt2img"):
         try:
             sd_payload = json.dumps({"prompt": prompt_clean, "steps": 20, "width": 512, "height": 512}).encode("utf-8")
@@ -1093,10 +1263,11 @@ def generate_image_cloud(
         except Exception:
             pass
 
+    detail_summary = "; ".join(backend_errors[:2]) if backend_errors else "Free image servers are temporarily busy."
     return False, (
-        "No AI Image Generation model is currently installed or configured. "
-        "Please install sd-turbo from Local Models, or add your Google Gemini API Key (for Imagen 3) "
-        "in the Cloud AI tab."
+        f"Image service is temporarily busy ({detail_summary}). "
+        "Please wait ~30-45 seconds and click Retry, switch to your local 'sd-turbo' model, "
+        "or add a free Gemini / HuggingFace / Cloudflare key in Cloud AI."
     ), None, None
 
 

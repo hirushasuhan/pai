@@ -311,6 +311,30 @@ class TestUIAndCSPSecurity(unittest.TestCase):
         self.assertIn("vbscript:", content)
         self.assertIn("data:", content)
 
+    def test_no_native_browser_dialogs_and_modal_present(self):
+        import re
+
+        ui_dir = REPO_ROOT / "desktop" / "ui"
+        app_js = (ui_dir / "app.js").read_text(encoding="utf-8")
+        index_html = (ui_dir / "index.html").read_text(encoding="utf-8")
+        style_css = (ui_dir / "style.css").read_text(encoding="utf-8")
+
+        native_dialog_re = re.compile(r"(?<![.\w])(?:window\.)?(?:alert|confirm|prompt)\s*\(")
+        # Negative control: pattern must catch native WebView dialogs
+        self.assertIsNotNone(native_dialog_re.search("window.confirm('Enable?')"))
+        self.assertIsNotNone(native_dialog_re.search("alert('hi')"))
+        self.assertIsNone(native_dialog_re.search("await showPaiConfirm({ title: 'x' })"))
+
+        matches = native_dialog_re.findall(app_js) + native_dialog_re.findall(index_html)
+        self.assertEqual(matches, [], f"Unexpected native browser dialogs found: {matches}")
+
+        for helper in ("function showPaiModal", "function showPaiConfirm", "function showPaiPrompt", "function showPaiAlert"):
+            self.assertIn(helper, app_js)
+        for modal_id in ('id="pai-dialog-modal"', 'id="pai-dialog-confirm"', 'id="pai-dialog-cancel"'):
+            self.assertIn(modal_id, index_html)
+        self.assertIn("#pai-dialog-modal", style_css)
+        self.assertIn("body.light-theme .slash-cmd-pill", style_css)
+
 
 class TestOllamaLifecycleDelegation(unittest.TestCase):
     """FINDING-10: Ollama management delegated to ServiceManager."""

@@ -71,8 +71,15 @@ def probe_gpu() -> str:
     # 2. Windows: query CIM / WMI
     if sys.platform == "win32":
         try:
-            cmd = ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2.5)
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
+            res = subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=2.5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+            )
             if res.returncode == 0 and res.stdout.strip():
                 gpus = [line.strip() for line in res.stdout.splitlines() if line.strip()]
                 if gpus:

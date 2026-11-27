@@ -16,6 +16,7 @@ high-speed endpoints for the PAI Studio Desktop UI:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import hmac
 import io
@@ -194,6 +195,25 @@ try:
     )
     from research.desktop_control import DesktopController, find_ui_agent_binary
     from research.desktop_orchestrator import DesktopOrchestrator
+    from research import ingest, mcp_client, net_guard
+    from research.mcp_hub import MCPHubManager, MCPVaultManager
+    from research.plugin_manager import PluginBundleManager, PluginScanner
+    from research.context_engine import AgentToolLoop, ContextWindowAssembler
+    from research.local_sidecars import (
+        BONSAI_MODEL_CATALOG,
+        FREE_CLOUD_IMAGE_CATALOG,
+        LOCAL_IMAGE_MODEL_CATALOG,
+        SidecarRuntimeManager,
+        assess_install_and_run_readiness,
+        assess_model_hardware_fit,
+        check_runtime_admission,
+        find_sd_cpp_binary,
+        get_gguf_models_dir,
+        get_image_models_dir,
+        get_model_spec,
+    )
+    from research.sidecar_installer import provision_runtime_and_model
+    from research import memory_optimizer
 except ImportError:
     from thinking_engine import (
         assess_temporal_stability,
@@ -223,6 +243,27 @@ except ImportError:
     )
     from desktop_control import DesktopController, find_ui_agent_binary
     from desktop_orchestrator import DesktopOrchestrator
+    import ingest
+    import mcp_client
+    import net_guard
+    from mcp_hub import MCPHubManager, MCPVaultManager
+    from plugin_manager import PluginBundleManager, PluginScanner
+    from context_engine import AgentToolLoop, ContextWindowAssembler
+    from local_sidecars import (
+        BONSAI_MODEL_CATALOG,
+        FREE_CLOUD_IMAGE_CATALOG,
+        LOCAL_IMAGE_MODEL_CATALOG,
+        SidecarRuntimeManager,
+        assess_install_and_run_readiness,
+        assess_model_hardware_fit,
+        check_runtime_admission,
+        find_sd_cpp_binary,
+        get_gguf_models_dir,
+        get_image_models_dir,
+        get_model_spec,
+    )
+    from sidecar_installer import provision_runtime_and_model
+    import memory_optimizer
 
 # Desktop PC Control Governance & HITL Pending Actions
 _desktop_control_enabled: bool = False
@@ -332,12 +373,16 @@ def _is_valid_host(host_header: str, bound_port: int) -> bool:
         return False
     return host_header in (f"127.0.0.1:{bound_port}", "127.0.0.1", "localhost", f"localhost:{bound_port}")
 
-# Cowork & Thinking Global Managers
+# Cowork, Thinking & MCP/Plugin Global Managers
 _cowork_orchestrator = CoworkOrchestrator()
 _connected_folders_mgr = ConnectedFoldersManager()
 _auto_memory_mgr = AutoMemoryManager()
 _stylometry_analyzer = StylometryAnalyzer()
 _council_runner = ModelCouncilRunner()
+_mcp_vault = MCPVaultManager()
+_mcp_hub = MCPHubManager(vault=_mcp_vault, offline_check_fn=is_internet_enabled)
+_plugin_mgr = PluginBundleManager()
+_sidecar_mgr = SidecarRuntimeManager()
 _chat_abort_event = threading.Event()
 
 
@@ -473,9 +518,21 @@ def _run_cowork_step_llm(
         except Exception:
             pass
     try:
-        ok_loc, rep_loc = query_ollama(active_m, f"{sys_prompt}\n\n{step_prompt}", timeout=180, num_ctx=num_ctx)
-        if ok_loc and str(rep_loc).strip():
-            return True, rep_loc
+        target_loc = active_m
+        if not target_loc or target_loc.lower() in ("auto", "auto:smart", "auto:fast", "fusion"):
+            models_list, _ = get_all_installed_local_models()
+            inst_names = [m["name"] for m in models_list if m.get("model_type") != "image"]
+            if inst_names:
+                target_loc = resolve_local_virtual_model(target_loc or "auto:smart", inst_names)
+        if target_loc:
+            ok_loc, rep_loc = _execute_local_ollama_query(
+                target_loc,
+                f"{sys_prompt}\n\n{step_prompt}",
+                timeout=180,
+                num_ctx=num_ctx,
+            )
+            if ok_loc and str(rep_loc).strip():
+                return True, rep_loc
     except Exception:
         pass
     if has_keys:
@@ -952,6 +1009,12 @@ def get_installed_image_models() -> List[Dict[str, Any]]:
     return []
 
 
+def _get_active_sidecar_manager() -> SidecarRuntimeManager:
+    """Keeps global sidecar manager synchronized with current configured models_path."""
+    _sidecar_mgr.storage_root = Path(get_model_storage_path())
+    return _sidecar_mgr
+
+
 def set_installed_image_model(model_tag: str, is_installed: bool = True) -> None:
     p = INSTALLED_IMAGE_MODELS_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -960,7 +1023,7 @@ def set_installed_image_model(model_tag: str, is_installed: bool = True) -> None
     if is_installed:
         if not any(m.get("tag", "").lower() == clean_tag for m in cur):
             matching = [m for m in DEFAULT_RECOMMENDED_MODELS if m["tag"].lower() == clean_tag]
-            item = matching[0] if matching else {
+            item = dict(matching[0]) if matching else {
                 "name": model_tag,
                 "tag": model_tag,
                 "size": "2.3 GB",
@@ -1064,17 +1127,33 @@ def get_all_installed_local_models() -> Tuple[List[Dict[str, Any]], bool]:
         except Exception:
             pass
 
-    # 3. Merge locally installed image synthesis models (SD-Turbo, Stable Diffusion)
-    for im in get_installed_image_models():
+    # 3. Merge locally installed image synthesis models (stable-diffusion.cpp GGUF/safetensors + free presets)
+    active_sc = SidecarRuntimeManager(storage_root=get_model_storage_path())
+    for im in active_sc.list_installed_local_image_models() + get_installed_image_models():
         tag = im.get("tag", "")
         if tag and tag.lower() not in models_dict:
             models_dict[tag.lower()] = {
                 "name": tag,
-                "size_gb": 2.3 if "sd-turbo" in tag.lower() else 4.0,
+                "size_gb": im.get("size_gb", 0.0 if "pollinations" in tag.lower() or "hf-flux" in tag.lower() or "cloudflare" in tag.lower() else 2.3),
                 "modified_at": "",
                 "is_active": tag == get_current_model(),
                 "model_type": "image",
-                "category": "Image Synthesis (Local)",
+                "runtime": im.get("runtime", "stable-diffusion.cpp"),
+                "category": im.get("category", "Image Synthesis (Local)"),
+            }
+
+    # 4. Merge local Ternary Bonsai 2.5 GGUF models managed for llama.cpp sidecar
+    for gm in active_sc.list_installed_gguf_models():
+        gname = gm.get("name", "")
+        if gname and gname.lower() not in models_dict:
+            models_dict[gname.lower()] = {
+                "name": gname,
+                "size_gb": gm.get("size_gb", 7.67),
+                "modified_at": "",
+                "is_active": gname == get_current_model(),
+                "model_type": "text",
+                "runtime": gm.get("runtime", "llama.cpp"),
+                "category": gm.get("category", "Coding & Agentic Reasoning (Ternary 27B)"),
             }
 
     model_list = sorted(list(models_dict.values()), key=lambda x: x["name"])
@@ -1229,8 +1308,34 @@ def delete_local_model(model_name: str) -> Tuple[bool, str]:
     except Exception:
         pass
 
-    # 5. Clean up image model state if applicable
-    if clean_target in ("sd-turbo", "stable-diffusion-v1-5"):
+    # 5. Clean up sidecar weights, manifests, and image model state if applicable
+    spec = get_model_spec(clean_target)
+    if spec or clean_target.startswith("ternary-bonsai"):
+        _sidecar_mgr.stop_llama_server()
+        for base_d in (get_gguf_models_dir(get_model_storage_path()), get_image_models_dir(get_model_storage_path()), Path.home() / ".pai" / "models" / "gguf", Path.home() / ".pai" / "models" / "image"):
+            if not base_d.is_dir():
+                continue
+            man_f = base_d / f"{clean_target}.manifest.json"
+            if man_f.is_file():
+                try:
+                    m_data = json.loads(man_f.read_text(encoding="utf-8"))
+                    for fn in (m_data.get("files") or []):
+                        wf = base_d / str(fn)
+                        if wf.is_file():
+                            freed_bytes += wf.stat().st_size
+                            wf.unlink(missing_ok=True)
+                    man_f.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            elif spec and spec.get("filename"):
+                wf = base_d / str(spec["filename"])
+                if wf.is_file():
+                    try:
+                        freed_bytes += wf.stat().st_size
+                        wf.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+    if clean_target in ("sd-turbo", "stable-diffusion-v1-5", "sdxl-turbo", "flux-1-schnell-q4", "pollinations-flux", "cloudflare-flux-schnell", "hf-flux-schnell"):
         set_installed_image_model(clean_target, is_installed=False)
 
     # 6. Active model fallback if the uninstalled model was active
@@ -1311,6 +1416,9 @@ DEFAULT_RECOMMENDED_MODELS: List[Dict[str, Any]] = [
         "desc": "Meta Llama 3.2 1B - Ultra-compact, low latency conversational model",
         "category": "Chat & Fast Reasoning",
     },
+    *[{k: v for k, v in item.items() if k != "download_url"} for item in BONSAI_MODEL_CATALOG],
+    *[{k: v for k, v in item.items() if k != "download_url"} for item in LOCAL_IMAGE_MODEL_CATALOG],
+    *FREE_CLOUD_IMAGE_CATALOG,
 ]
 
 
@@ -1345,14 +1453,15 @@ def load_recommended_catalog(installed_names: Optional[set] = None) -> List[Dict
         if def_m["tag"].lower() not in existing_tags:
             catalog_list.append(dict(def_m))
 
-    # Ensure descriptions reflect latest authoritative guidance
-    desc_map = {m["tag"].lower(): (m["desc"], m.get("category", "")) for m in DEFAULT_RECOMMENDED_MODELS}
+    # Ensure full metadata stays synchronized with DEFAULT_RECOMMENDED_MODELS
+    def_map = {m["tag"].lower(): m for m in DEFAULT_RECOMMENDED_MODELS}
     for entry in catalog_list:
         tag_k = entry.get("tag", "").lower()
-        if tag_k in desc_map:
-            entry["desc"] = desc_map[tag_k][0]
-            if desc_map[tag_k][1]:
-                entry["category"] = desc_map[tag_k][1]
+        if tag_k in def_map:
+            ref = def_map[tag_k]
+            for sync_k in ("desc", "category", "size", "size_gb", "runtime", "model_type"):
+                if sync_k in ref:
+                    entry[sync_k] = ref[sync_k]
 
     if installed_names is None:
         local_models, _ = get_all_installed_local_models()
@@ -1362,6 +1471,11 @@ def load_recommended_catalog(installed_names: Optional[set] = None) -> List[Dict
     for item in catalog_list:
         entry = dict(item)
         entry["is_installed"] = entry.get("tag", "").lower() in installed_names
+        if entry.get("runtime") in ("llama.cpp", "llama.cpp-ternary", "stable-diffusion.cpp") and entry.get("size_gb"):
+            try:
+                entry["vram_fit"] = assess_model_hardware_fit(entry["name"], float(entry["size_gb"])).to_dict()
+            except Exception:
+                pass
         results.append(entry)
     return results
 
@@ -1455,17 +1569,13 @@ def get_plugins_config_path() -> Path:
 
 
 def load_plugins_list() -> List[Dict[str, Any]]:
-    p = get_plugins_config_path()
-    custom_plugins = []
-    if p.is_file():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                custom_plugins = data
-        except Exception:
-            pass
-
-    all_plugins = list(SKILLS_CATALOG)
+    custom_plugins = _plugin_mgr.load_all_custom_plugins()
+    all_plugins = []
+    for s in SKILLS_CATALOG:
+        enriched = dict(s)
+        enriched.setdefault("trust_score", 100)
+        enriched.setdefault("trust_badge", "CORE")
+        all_plugins.append(enriched)
     seen_ids = {s["id"] for s in all_plugins}
     for cp in custom_plugins:
         if cp.get("id") not in seen_ids:
@@ -1474,20 +1584,8 @@ def load_plugins_list() -> List[Dict[str, Any]]:
 
 
 def save_custom_plugin(plugin: Dict[str, Any]) -> bool:
-    try:
-        p = get_plugins_config_path()
-        curr = []
-        if p.is_file():
-            try:
-                curr = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                curr = []
-        curr = [x for x in curr if x.get("id") != plugin.get("id")]
-        curr.append(plugin)
-        p.write_text(json.dumps(curr, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
+    ok, _scan = _plugin_mgr.save_plugin(plugin)
+    return ok
 
 
 def get_pai_config_path() -> Path:
@@ -1534,13 +1632,20 @@ def set_model_storage_path(new_path: str) -> bool:
     """Update active models storage path in config, process environment and Windows registry.
 
     FINDING-02: Uses winreg API instead of PowerShell to avoid command injection.
-    Rejects control characters in path.
+    Rejects control characters, UNC network paths, ADS colons, and symlinks/reparse points.
     """
     try:
-        # Reject control characters (FINDING-02)
-        if any(ord(c) < 32 for c in new_path):
+        clean = (new_path or "").strip()
+        if not clean or any(ord(c) < 32 for c in clean):
             return False
-        p_dir = Path(new_path).resolve()
+        if clean.startswith("\\\\") or clean.startswith("//"):
+            return False
+        if len(clean) > 2 and ":" in clean[2:]:
+            return False
+        p_raw = Path(clean).expanduser()
+        if p_raw.exists() and ingest._is_symlink_or_reparse(str(p_raw)):
+            return False
+        p_dir = p_raw.resolve()
         p_dir.mkdir(parents=True, exist_ok=True)
         (p_dir / "manifests").mkdir(parents=True, exist_ok=True)
         (p_dir / "blobs").mkdir(parents=True, exist_ok=True)
@@ -2104,7 +2209,28 @@ def _execute_local_ollama_query(
     num_ctx: int = 4096,
     timeout: float = 150.0,
 ) -> Tuple[bool, str]:
-    """Execute inference against local Ollama server on 127.0.0.1:11434 with automatic warm-up retries."""
+    """Execute inference against local Ollama server on 127.0.0.1:11434 or llama.cpp sidecar for Ternary Bonsai GGUF."""
+    low_m = (model_name or "").strip().lower()
+    active_sc = _get_active_sidecar_manager()
+    if low_m.startswith("ternary-bonsai") or low_m in {m["name"].lower() for m in active_sc.list_installed_gguf_models()}:
+        return active_sc.query_llama_cpp(
+            prompt=prompt,
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=min(1200, max(512, num_ctx // 2)),
+            min_p=0.0,
+            timeout=timeout,
+        )
+    # Pre-inference swapper: evict resident llama.cpp / unrelated Ollama models before booting new Ollama model
+    try:
+        memory_optimizer.prepare_memory_for_engine("ollama", sidecar_mgr=active_sc, target_model=model_name)
+    except Exception:
+        pass
+    # Gate 3: Pre-load RAM/VRAM resource admission check & safe ctx clamp for heavy local Ollama models
+    adm = check_runtime_admission(model_name, size_gb=0.0)
+    if not adm["allowed"]:
+        return False, adm["reason"]
+    num_ctx = min(num_ctx, int(adm["recommended_ctx_size"]))
     ensure_ollama_server(timeout=8.0)
     ollama_url = "http://127.0.0.1:11434/api/generate"
     payload: Dict[str, Any] = {
@@ -2192,7 +2318,7 @@ def run_local_model_fusion(
 # -------------------------------------------------------------------------
 # Software Update Management Subsystem (ADR-005, TUF-Lite, GitHub Releases)
 # -------------------------------------------------------------------------
-PAI_CURRENT_VERSION = "1.5.0-beta.4"
+PAI_CURRENT_VERSION = "1.5.1-beta.1"
 try:
     _curr_dir = Path(__file__).resolve().parent
     _v_candidates = [
@@ -2863,6 +2989,34 @@ def _resolve_ui_dir(desktop_dir: Optional[Path] = None) -> Path:
     return base
 
 
+def _looks_like_image_generation_request(prompt_text: str) -> bool:
+    """Distinguishes visual image-generation requests from general text/coding/Q&A questions when an image model is selected."""
+    txt = (prompt_text or "").strip().lower()
+    if not txt:
+        return False
+    if txt.startswith(("/image", "/img")):
+        return True
+    visual_tokens = (
+        "draw", "paint", "painting", "sketch", "illustrate", "illustration", "render",
+        "image", "picture", "photo", "portrait", "wallpaper", "logo", "poster", "avatar",
+        "banner", "thumbnail", "icon", "cartoon", "anime", "art", "pinthura", "chithra",
+    )
+    has_visual = any(re.search(rf"\b{re.escape(tok)}\b", txt) for tok in visual_tokens)
+    if has_visual and not txt.startswith(("how to ", "what is a ", "explain ", "why does ", "write python ", "write code ")):
+        return True
+    chat_question_starts = (
+        "who ", "what ", "why ", "when ", "where ", "which ", "how ", "can you explain",
+        "can you write ", "write a ", "write python", "write code", "fix ", "debug ",
+        "help me ", "tell me ", "translate ", "summarize ", "compare ", "list ",
+        "hi", "hello", "hey", "good morning", "good evening", "ayubowan", "kohomada",
+    )
+    if txt.endswith("?") or txt.startswith(chat_question_starts):
+        return False
+    if any(w in txt for w in ("kiyanna", "mokakda", "kawda", "code", "script", "error", "bug", "function", "class ")):
+        return False
+    return True
+
+
 class PAIBridgeHandler(BaseHTTPRequestHandler):
     """Threaded HTTP handler serving desktop frontend requests on 127.0.0.1."""
 
@@ -3097,10 +3251,47 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             q = query_params.get("q", [""])[0]
             ok, msg, res = search_web(q)
             self._send_json({"success": ok, "message": msg, "results": res})
-        # 10b. MCP Servers List
+        # 10b. MCP Servers List & Live Hub Endpoints
         elif path == "/api/mcp/list":
             servers = load_mcp_servers()
-            self._send_json({"success": True, "servers": servers})
+            live = _mcp_hub.get_live_clients()
+            vault_refs = set(_mcp_vault.list_refs())
+            enriched = []
+            for s in servers:
+                item = dict(s)
+                client = live.get(s.get("name", ""))
+                item["live_connected"] = client is not None
+                item["tools_count"] = len(client.available_tools) if client else 0
+                item["resources_count"] = len(client.available_resources) if client else 0
+                item["prompts_count"] = len(client.available_prompts) if client else 0
+                item["has_vault_secret"] = bool(item.get("credential_ref") and item["credential_ref"] in vault_refs)
+                enriched.append(item)
+            self._send_json({"success": True, "servers": enriched})
+        elif path == "/api/mcp/registry":
+            q = query_params.get("q", [""])[0]
+            self._send_json({"success": True, "catalog": _mcp_hub.search_registry_catalog(q)})
+        elif path == "/api/mcp/tools":
+            q = query_params.get("q", [""])[0]
+            srv = query_params.get("server", [""])[0] or None
+            tools = _mcp_hub.tool_index.search_tools(query=q, server=srv, limit=25)
+            self._send_json({
+                "success": True,
+                "tools": tools,
+                "compact_index": _mcp_hub.tool_index.compact_index_prompt(),
+            })
+        elif path == "/api/mcp/resources":
+            res_list = [asdict(r) for r in mcp_client.MCPRegistry.list_all_resources()]
+            self._send_json({"success": True, "resources": res_list})
+        elif path == "/api/mcp/prompts":
+            prompts = [asdict(p) for p in mcp_client.MCPRegistry.list_all_prompts()]
+            plugin_cmds = _plugin_mgr.collect_plugin_slash_commands()
+            self._send_json({"success": True, "prompts": prompts, "plugin_commands": plugin_cmds})
+        elif path == "/api/mcp/firewall":
+            self._send_json({"success": True, "events": _mcp_hub.get_firewall_log(limit=60)})
+        elif path == "/api/context/budget":
+            m_name = query_params.get("model", [get_current_model()])[0] or get_current_model()
+            b = _get_adaptive_budget(is_cloud=is_cloud_model(m_name), deep_mode=False, has_project=False)
+            self._send_json({"success": True, "budget": asdict(b)})
         # 10b2. Desktop Control Capabilities
         elif path == "/api/desktop/capabilities":
             ui_bin = find_ui_agent_binary()
@@ -3119,6 +3310,15 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         # 11. Doctor / Hardware telemetry
         elif path in ("/api/doctor", "/api/system/hardware"):
             self._handle_doctor()
+        elif path == "/api/system/sidecars":
+            self._send_json({"success": True, **_get_active_sidecar_manager().sidecar_status_summary()})
+        elif path == "/api/system/memory_status":
+            inc_apps = query_params.get("apps", ["0"])[0] == "1"
+            st_mem = memory_optimizer.get_memory_optimizer_status(
+                sidecar_mgr=_get_active_sidecar_manager(),
+                include_top_apps=inc_apps,
+            )
+            self._send_json({"success": True, **st_mem})
         # 11b. Model Storage Path & Telemetry
         elif path == "/api/models/storage":
             target_p = query_params.get("path", [get_model_storage_path()])[0] or get_model_storage_path()
@@ -3129,6 +3329,11 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 "target_path": target_p,
                 "storage": st,
             })
+        elif path == "/api/models/preflight_fit":
+            m_tag = query_params.get("model", [""])[0].strip()
+            target_p = query_params.get("path", [get_model_storage_path()])[0] or get_model_storage_path()
+            readiness = assess_install_and_run_readiness(m_tag, target_path=target_p)
+            self._send_json({"success": True, **readiness})
         # 12. Preflight system health check
         elif path == "/api/system/preflight":
             self._handle_system_preflight()
@@ -3396,14 +3601,28 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 "latency_sec": test_sec,
                 "provider": prov,
             })
-        # 6. Generate Image Endpoint
+        # 6. Generate Image Endpoint (Offline local sd.cpp when installed, else fail-closed online check)
         elif path == "/api/image/generate":
-            if not is_internet_enabled():
-                self._send_json({"success": False, "error": "Internet access is disabled in settings (Offline Mode active)."}, status=400)
-                return
             prompt = body.get("prompt", "").strip()
             model = body.get("model", "")
-            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(prompt, model=model)
+            sc_mgr = _get_active_sidecar_manager()
+            local_img_tags = {m["name"].lower() for m in LOCAL_IMAGE_MODEL_CATALOG}
+            has_local_sdcpp = bool(find_sd_cpp_binary() is not None and sc_mgr.list_installed_local_image_models())
+            if not is_internet_enabled():
+                if has_local_sdcpp and model.lower() in local_img_tags:
+                    ok_img, data_url_or_err, fpath, fname = sc_mgr.generate_image_local_sdcpp(prompt, model_tag=model)
+                else:
+                    self._send_json({"success": False, "error": "Internet access is disabled in settings (Offline Mode active)."}, status=400)
+                    return
+            elif has_local_sdcpp and model.lower() in local_img_tags:
+                ok_img, data_url_or_err, fpath, fname = sc_mgr.generate_image_local_sdcpp(prompt, model_tag=model)
+                if not ok_img and "Admission blocked" in str(data_url_or_err) and is_internet_enabled():
+                    ok_fb, uri_fb, fp_fb, fn_fb = generate_image_cloud(prompt, model="")
+                    if ok_fb:
+                        ok_img, data_url_or_err, fpath, fname = ok_fb, uri_fb, fp_fb, fn_fb
+                        model = f"{model} -> Cloud Fallback"
+            else:
+                ok_img, data_url_or_err, fpath, fname = generate_image_cloud(prompt, model=model)
             if ok_img:
                 self._send_json({
                     "success": True,
@@ -3416,6 +3635,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self._send_json({"success": False, "error": data_url_or_err}, status=500)
+        # 6b. Native Explorer Save-As Endpoint for Generated Images (defaults to Desktop)
+        elif path == "/api/image/save_as":
+            self._handle_image_save_as(body)
         # 7. Projects Endpoints
         elif path == "/api/projects/save":
             self._handle_project_save(body)
@@ -3566,39 +3788,68 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             with _pending_hitl_lock:
                 _pending_hitl_actions.clear()
             self._send_json({"success": True, "aborted": True})
-        # 14. MCP Save Server
+        # 14. MCP Save Server (STDIO + Streamable HTTP/SSE + DPAPI Vault + Toolsets)
         elif path == "/api/mcp/save":
             name = body.get("name", "").strip()
             cmd = body.get("command", "").strip()
-            trans = body.get("transport", "stdio").strip()
+            trans = body.get("transport", "stdio").strip().lower()
             desc = body.get("description", "").strip()
-            if not body.get("confirm") and not body.get("confirmed"):
+            is_confirm = bool(body.get("confirm") or body.get("confirmed"))
+            if not is_confirm:
                 self._send_json({"success": False, "error": "Explicit user confirmation required (confirm: true)."}, status=403)
             elif not name or not cmd:
                 self._send_json({"success": False, "error": "Server name and command/URL are required."}, status=400)
             else:
-                try:
-                    from research.mcp_client import validate_mcp_command
-                    v_ok, v_err = validate_mcp_command(cmd)
-                    if not v_ok:
-                        self._send_json({"success": False, "error": f"Invalid MCP command: {v_err}"}, status=400)
+                if trans in ("http", "sse", "streamable_http"):
+                    is_loopback = mcp_client._is_loopback_http_url(cmd)
+                    try:
+                        net_guard.validate_url(cmd, allow_private=is_loopback)
+                    except Exception as exc:
+                        self._send_json({"success": False, "error": f"Invalid MCP endpoint URL: {exc}"}, status=400)
                         return
-                except Exception:
-                    pass
-                servers = load_mcp_servers()
-                existing = [s for s in servers if s.get("name") != name]
-                existing.append({
+                else:
+                    try:
+                        mcp_client.parse_mcp_command_string(cmd, allow_unpinned=is_confirm)
+                    except Exception as exc:
+                        self._send_json({"success": False, "error": f"Invalid MCP command: {exc}"}, status=400)
+                        return
+
+                cred_ref = str(body.get("credential_ref") or "").strip()
+                secret_val = str(body.get("secret_value") or "").strip()
+                if secret_val:
+                    cred_ref = cred_ref or f"mcp_{re.sub(r'[^a-z0-9_]+', '_', name.lower()).strip('_')}"
+                    _mcp_vault.set_secret(cred_ref, secret_val)
+
+                toolsets = [str(x).strip() for x in (body.get("toolsets") or []) if str(x).strip()]
+                entry = {
                     "name": name,
                     "command": cmd,
                     "transport": trans,
                     "description": desc or f"Custom {trans.upper()} MCP server",
+                    "toolsets": toolsets,
+                    "read_only": bool(body.get("read_only", False)),
+                    "lockdown_mode": bool(body.get("lockdown_mode", False)),
+                    "dynamic_discovery": bool(body.get("dynamic_discovery", True)),
+                    "credential_ref": cred_ref,
+                    "secret_env_var": str(body.get("secret_env_var") or "").strip(),
                     "enabled": True,
-                })
+                }
+                servers = load_mcp_servers()
+                existing = [s for s in servers if s.get("name") != name]
+                existing.append(entry)
                 ok_s = save_mcp_servers(existing)
-                self._send_json({"success": ok_s, "servers": existing})
+
+                live_info: Dict[str, Any] = {"connected": False}
+                if bool(body.get("connect_now", False)):
+                    try:
+                        live_info = _mcp_hub.connect_server_config(entry, confirm_fn=lambda _req: True, allow_unpinned=True)
+                    except Exception as exc:
+                        live_info = {"connected": False, "error": str(exc)}
+                self._send_json({"success": ok_s, "servers": existing, "live": live_info})
         # 15. MCP Delete Server
         elif path == "/api/mcp/delete":
             name = body.get("name", "").strip()
+            _mcp_hub.disconnect_server(name)
             servers = load_mcp_servers()
             filtered = [s for s in servers if s.get("name") != name]
             ok_d = save_mcp_servers(filtered)
@@ -3607,20 +3858,90 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         elif path == "/api/mcp/toggle":
             name = body.get("name", "").strip()
             val = bool(body.get("enabled", True))
-            if not body.get("confirm") and not body.get("confirmed"):
+            is_confirm = bool(body.get("confirm") or body.get("confirmed"))
+            if not is_confirm:
                 self._send_json({"success": False, "error": "Explicit user confirmation required (confirm: true)."}, status=403)
                 return
             servers = load_mcp_servers()
+            target_cfg = None
             for s in servers:
                 if s.get("name") == name:
                     s["enabled"] = val
+                    if "read_only" in body:
+                        s["read_only"] = bool(body["read_only"])
+                    if "lockdown_mode" in body:
+                        s["lockdown_mode"] = bool(body["lockdown_mode"])
+                    target_cfg = s
             ok_t = save_mcp_servers(servers)
+            if not val:
+                _mcp_hub.disconnect_server(name)
+            elif target_cfg and bool(body.get("connect_now", False)):
+                try:
+                    _mcp_hub.connect_server_config(target_cfg, confirm_fn=lambda _req: True, allow_unpinned=True)
+                except Exception:
+                    pass
             self._send_json({"success": ok_t, "servers": servers})
-        # 17. Save Custom Plugin
+        elif path == "/api/mcp/connect":
+            name = body.get("name", "").strip()
+            if not (body.get("confirm") or body.get("confirmed")):
+                self._send_json({"success": False, "error": "Explicit user confirmation required (confirm: true)."}, status=403)
+                return
+            cfg = next((s for s in load_mcp_servers() if s.get("name") == name), None)
+            if not cfg:
+                self._send_json({"success": False, "error": f"Unknown MCP server: {name}"}, status=404)
+                return
+            try:
+                info = _mcp_hub.connect_server_config(cfg, confirm_fn=lambda _req: True, allow_unpinned=True)
+                self._send_json({"success": True, "live": info})
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=400)
+        elif path == "/api/mcp/call_tool":
+            srv = str(body.get("server", "")).strip()
+            tool_name = str(body.get("tool", "")).strip()
+            args = body.get("arguments") if isinstance(body.get("arguments"), dict) else {}
+            is_confirm = bool(body.get("confirm") or body.get("confirmed"))
+            tainted = bool(body.get("tainted", False))
+            try:
+                res = _mcp_hub.execute_tool(
+                    server=srv,
+                    tool_name=tool_name,
+                    arguments=args,
+                    tainted=tainted,
+                    confirm=(lambda _req: True) if is_confirm else None,
+                )
+                self._send_json({
+                    "success": not res.is_error,
+                    "result": res.sanitized_text or res.raw_text,
+                    "tainted": res.tainted,
+                    "secret_redacted": res.secret_redacted,
+                })
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=403 if "PermissionDenied" in type(exc).__name__ else 400)
+        elif path == "/api/mcp/resource_read":
+            srv = str(body.get("server", "")).strip()
+            uri = str(body.get("uri", "")).strip()
+            client = _mcp_hub.get_live_clients().get(srv)
+            if not client:
+                self._send_json({"success": False, "error": f"Server '{srv}' not connected."}, status=404)
+                return
+            try:
+                wrapped, redacted = client.read_resource(uri)
+                self._send_json({"success": True, "content": wrapped, "secret_redacted": redacted, "tainted": True})
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=400)
+        elif path == "/api/mcp/elicitation_check":
+            schema = body.get("requestedSchema") if isinstance(body.get("requestedSchema"), dict) else {}
+            bad_field = mcp_client.is_secret_elicitation_schema(schema)
+            if bad_field:
+                self._send_json({"success": False, "allowed": False, "error": f"Elicitation Form Mode cannot request secret field '{bad_field}'."}, status=400)
+            else:
+                self._send_json({"success": True, "allowed": True})
+        # 17. Save Custom Plugin (with PluginScanner Trust Scoring)
         elif path == "/api/plugins/save":
             p_name = body.get("name", "").strip()
             p_desc = body.get("description", "").strip()
             p_cat = body.get("category", "Custom Extensions").strip()
+            p_skill = str(body.get("skill_prompt") or "").strip()
             if not p_name:
                 self._send_json({"success": False, "error": "Plugin name is required."}, status=400)
             else:
@@ -3630,11 +3951,23 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     "name": p_name,
                     "description": p_desc or "Custom agentic plugin extension.",
                     "category": p_cat,
+                    "skill_prompt": p_skill,
+                    "slash_commands": body.get("slash_commands") if isinstance(body.get("slash_commands"), list) else [],
+                    "mcp_servers": body.get("mcp_servers") if isinstance(body.get("mcp_servers"), list) else [],
                     "icon": "zap",
                     "enabled": True,
                 }
-                ok_p = save_custom_plugin(new_plug)
-                self._send_json({"success": ok_p, "plugin": new_plug, "plugins": load_plugins_list()})
+                ok_p, scan_res = _plugin_mgr.save_plugin(new_plug, save_bundle_dir=bool(body.get("save_bundle_dir", False)))
+                if not ok_p:
+                    self._send_json({
+                        "success": False,
+                        "error": "Plugin rejected by PluginScanner security policy.",
+                        "scan": scan_res.to_dict(),
+                    }, status=400)
+                    return
+                new_plug["trust_score"] = scan_res.trust_score
+                new_plug["trust_badge"] = scan_res.trust_badge
+                self._send_json({"success": True, "plugin": new_plug, "scan": scan_res.to_dict(), "plugins": load_plugins_list()})
         # 18. Delete Custom Plugin
         elif path == "/api/plugins/delete":
             p_id = body.get("id", "").strip()
@@ -3651,6 +3984,15 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "plugins": load_plugins_list()})
             except Exception as e:
                 self._send_json({"success": False, "error": str(e)}, status=500)
+        elif path == "/api/system/optimize_memory":
+            stop_all = bool(body.get("stop_all_engines", True))
+            res_opt = memory_optimizer.prepare_memory_for_engine(
+                target_engine="manual",
+                sidecar_mgr=_get_active_sidecar_manager(),
+                stop_all_sidecars=stop_all,
+            )
+            res_opt["top_external_apps"] = memory_optimizer.get_top_external_memory_consumers(limit=5)
+            self._send_json({"success": True, **res_opt})
         # 19. Cowork Tasks Create
         elif path == "/api/cowork/tasks/create":
             title = body.get("title", "Cowork Task").strip()
@@ -4349,13 +4691,15 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             return
 
         custom_path = body.get("path", "").strip()
+        if custom_path and not set_model_storage_path(custom_path):
+            self._send_json({"error": "Invalid or disallowed custom model storage path."}, status=400)
+            return
         target_storage = custom_path or get_model_storage_path()
-        if custom_path:
-            set_model_storage_path(custom_path)
 
         clean_model = model_name.lower().strip()
-        # Handle local image synthesis models (SD-Turbo, Stable Diffusion 1.5)
-        if clean_model in ("sd-turbo", "stable-diffusion-v1-5"):
+        dl_abort = threading.Event()
+
+        def _begin_sse() -> None:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -4364,40 +4708,87 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.close_connection = True
 
-            err_data = json.dumps({
-                "status": "error",
-                "error": "Local image models (Stable Diffusion) require an external Stable Diffusion WebUI (A1111/ComfyUI on http://127.0.0.1:7860) or Cloud AI (Google Imagen 3 / OpenAI DALL-E). Model weights cannot be pulled via Ollama."
-            })
+        def _emit_sse(obj: Dict[str, Any]) -> None:
             try:
-                self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
+                self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode("utf-8"))
                 self.wfile.flush()
             except Exception:
-                pass
+                dl_abort.set()
+
+        # 1. Free Cloud FLUX presets (keyless out-of-the-box via Pollinations fallback; native API when keys exist)
+        if clean_model in ("pollinations-flux", "cloudflare-flux-schnell", "hf-flux-schnell"):
+            _begin_sse()
+            if not is_internet_enabled():
+                _emit_sse({"status": "error", "error": "Internet access is disabled (Offline Mode active). Enable Internet or install local FLUX/SDXL."})
+                return
+            set_installed_image_model(clean_model, is_installed=True)
+            create_physical_model_folder(target_storage, clean_model, model_type="image")
+            has_hf = bool(get_provider_key("huggingface"))
+            has_cf = bool(get_provider_key("cloudflare") and os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip())
+            if clean_model == "hf-flux-schnell" and not has_hf:
+                mode_note = "Free Keyless Cloud Mode (no API token required; auto-routes via keyless FLUX until a HF token is added)"
+            elif clean_model == "cloudflare-flux-schnell" and not has_cf:
+                mode_note = "Free Keyless Cloud Mode (no API token required; auto-routes via keyless FLUX until Cloudflare keys are added)"
+            else:
+                mode_note = "configured provider API"
+            _emit_sse({"status": "success", "message": f"Enabled '{clean_model}' in {mode_note}."})
             return
 
+        # 2. Plug-and-Play Local Sidecar Provisioning (Ternary Bonsai 2.5 + FLUX.1-schnell + SDXL-Turbo + SD-Turbo)
+        if get_model_spec(clean_model) is not None:
+            _begin_sse()
+            readiness = assess_install_and_run_readiness(clean_model, target_path=target_storage)
+            if not readiness.get("disk_ok", False):
+                _emit_sse({"status": "error", "error": readiness.get("advisory", "Insufficient disk space on target drive.")})
+                return
+
+            hf_tok = get_provider_key("huggingface")
+            try:
+                _emit_sse({
+                    "status": f"Initializing provisioner for {clean_model}...",
+                    "completed": 1024,
+                    "total": 102400,
+                })
+                ok_prov, msg_prov = provision_runtime_and_model(
+                    model_tag=clean_model,
+                    storage_path=target_storage,
+                    progress_cb=lambda st_msg, comp, tot: _emit_sse({
+                        "status": st_msg,
+                        "completed": max(int(comp), 1),
+                        "total": max(int(tot) if tot else max(int(comp), 10 * 1024 * 1024), 1),
+                    }),
+                    offline_check_fn=is_internet_enabled,
+                    hf_token=hf_tok,
+                    abort_event=dl_abort,
+                )
+            except InterruptedError:
+                ok_prov, msg_prov = False, "Download paused or cancelled."
+            except BaseException as exc:
+                append_log(f"[SidecarPull] Exception during '{clean_model}': {exc}")
+                ok_prov, msg_prov = False, str(exc)
+
+            if ok_prov:
+                m_spec = get_model_spec(clean_model) or {}
+                m_type = str(m_spec.get("model_type", "text"))
+                create_physical_model_folder(target_storage, clean_model, model_type=m_type)
+                if m_type == "image":
+                    set_installed_image_model(clean_model, is_installed=True)
+                _emit_sse({"status": "success", "message": msg_prov})
+            elif not dl_abort.is_set():
+                _emit_sse({"status": "error", "error": msg_prov})
+            return
+
+        # 3. Standard Ollama pull with Gate 1 disk check
+        _begin_sse()
+        _emit_sse({"status": f"Connecting to Ollama & checking {clean_model}...", "completed": 0, "total": 100})
         if not ensure_ollama_server(custom_models_path=target_storage):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self._send_cors_headers()
-            self.end_headers()
-            self.close_connection = True
-            err_data = json.dumps({"status": "error", "error": "Ollama service is offline and could not be started. Please start Ollama."})
-            try:
-                self.wfile.write(f"data: {err_data}\n\n".encode("utf-8"))
-                self.wfile.flush()
-            except Exception:
-                pass
+            _emit_sse({"status": "error", "error": "Ollama service is offline and could not be started. Please start Ollama."})
             return
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self._send_cors_headers()
-        self.end_headers()
-        self.close_connection = True
+        readiness_ol = assess_install_and_run_readiness(clean_model, target_path=target_storage)
+        if not readiness_ol.get("disk_ok", True):
+            _emit_sse({"status": "error", "error": readiness_ol.get("advisory", "Insufficient disk space on target drive.")})
+            return
 
         payload = json.dumps({"name": model_name, "stream": True}).encode("utf-8")
         req = urllib.request.Request(
@@ -4450,6 +4841,91 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "path": folder, "name": Path(folder).name})
         else:
             self._send_json({"success": False, "cancelled": True})
+
+    def _handle_image_save_as(self, body: Dict[str, Any]) -> None:
+        """Validate generated image bytes, open native folder picker (Desktop default), and save securely."""
+        if not isinstance(body, dict):
+            self._send_json({"success": False, "error": "Invalid JSON body."}, status=400)
+            return
+
+        raw_data_url = str(body.get("data_url") or "").strip()
+        raw_filename = str(body.get("filename") or "pai-generated.png").strip()
+
+        m = re.match(r"^data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)$", raw_data_url)
+        if not m:
+            self._send_json({"success": False, "error": "Invalid or unsupported image data URL."}, status=400)
+            return
+        ext_kind = "jpg" if m.group(1) in ("jpeg", "jpg") else m.group(1)
+        b64_payload = re.sub(r"\s+", "", m.group(2))
+        if len(b64_payload) > 32 * 1024 * 1024:
+            self._send_json({"success": False, "error": "Image payload exceeds 24 MB size limit."}, status=400)
+            return
+        try:
+            img_bytes = base64.b64decode(b64_payload, validate=True)
+        except Exception:
+            self._send_json({"success": False, "error": "Malformed base64 image payload."}, status=400)
+            return
+
+        if len(img_bytes) > 24 * 1024 * 1024:
+            self._send_json({"success": False, "error": "Decoded image exceeds 24 MB size limit."}, status=400)
+            return
+        is_valid_magic = (
+            img_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            or img_bytes.startswith(b"\xff\xd8\xff")
+            or (img_bytes.startswith(b"RIFF") and img_bytes[8:12] == b"WEBP")
+        )
+        if not is_valid_magic:
+            self._send_json({"success": False, "error": "Image payload failed PNG/JPEG/WEBP header verification."}, status=400)
+            return
+
+        base_name = Path(raw_filename).name
+        base_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", base_name).strip("._") or f"pai-generated-{int(time.time())}"
+        if not base_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            base_name = f"{base_name}.{ext_kind}"
+
+        desktop_dir = Path.home() / "Desktop"
+        init_dir = str(desktop_dir) if desktop_dir.is_dir() else str(Path.home())
+        selected_folder = open_native_folder_dialog(
+            title="Choose Folder to Save Image (Default: Desktop)",
+            initial_path=init_dir,
+        )
+        if not selected_folder:
+            self._send_json({"success": False, "cancelled": True})
+            return
+
+        dest_dir = Path(selected_folder).resolve()
+        if not dest_dir.is_dir():
+            self._send_json({"success": False, "error": "Selected destination folder is invalid."}, status=400)
+            return
+
+        dest_file = dest_dir / base_name
+        stem = dest_file.stem
+        suffix = dest_file.suffix
+        counter = 1
+        while dest_file.exists():
+            dest_file = dest_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+        try:
+            from research import ingest as _ingest_mod
+        except ModuleNotFoundError:
+            import ingest as _ingest_mod
+        if _ingest_mod._is_symlink_or_reparse(str(dest_dir)) or _ingest_mod._is_symlink_or_reparse(str(dest_file)):
+            self._send_json({"success": False, "error": "Destination symlink/reparse point rejected by security policy."}, status=400)
+            return
+
+        try:
+            dest_file.write_bytes(img_bytes)
+        except Exception as exc:
+            self._send_json({"success": False, "error": f"Failed to write image: {exc}"}, status=500)
+            return
+
+        self._send_json({
+            "success": True,
+            "saved_path": str(dest_file),
+            "folder": str(dest_dir),
+            "filename": dest_file.name,
+        })
 
     def _handle_system_preflight(self) -> None:
         """Provide detailed preflight diagnostics and auto-boot Ollama if offline."""
@@ -4543,25 +5019,36 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         return aligned_search_query, contextual_prompt
 
     def _check_image_generation_availability(self) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Check if any image generator (local installed SD or cloud Google Imagen/DALL-E) is available."""
-        # 1. Local Image Synthesis models installed
+        """Check if any image generator (local sd.cpp, cloud paid/free FLUX, or Gemini/DALL-E) is available."""
+        # 1. Local stable-diffusion.cpp binary + image GGUF/safetensors
+        local_sd_imgs = _get_active_sidecar_manager().list_installed_local_image_models()
+        if local_sd_imgs and find_sd_cpp_binary() is not None:
+            return True, local_sd_imgs[0].get("tag", "flux-1-schnell-q4"), "local_sdcpp"
+
+        # 2. Legacy local image models registered
         installed_imgs = get_installed_image_models()
         if installed_imgs:
             return True, installed_imgs[0].get("tag", "sd-turbo"), "local"
 
-        # 2. Cloud configured models
-        cfg = load_cloud_config()
-        for cm in cfg.get("configured_models", []):
-            if cm.get("model_type") == "image" and cm.get("api_key"):
-                return True, cm.get("model_name"), cm.get("provider", "custom")
-            if any(tok in cm.get("model_name", "").lower() for tok in ("imagen", "dall-e")) and cm.get("api_key"):
-                return True, cm.get("model_name"), cm.get("provider", "custom")
+        # 3. Cloud configured models (only when online)
+        if is_internet_enabled():
+            cfg = load_cloud_config()
+            for cm in cfg.get("configured_models", []):
+                if cm.get("model_type") == "image" and cm.get("api_key"):
+                    return True, cm.get("model_name"), cm.get("provider", "custom")
+                if any(tok in cm.get("model_name", "").lower() for tok in ("imagen", "dall-e", "flux")) and cm.get("api_key"):
+                    return True, cm.get("model_name"), cm.get("provider", "custom")
 
-        # 3. Preset provider keys
-        if get_provider_key("gemini"):
-            return True, "imagen-3.0-generate-002", "gemini"
-        if get_provider_key("openai"):
-            return True, "dall-e-3", "openai"
+            if get_provider_key("gemini"):
+                return True, "imagen-3.0-generate-002", "gemini"
+            if get_provider_key("openai"):
+                return True, "dall-e-3", "openai"
+            if get_provider_key("huggingface"):
+                return True, "hf-flux-schnell", "huggingface"
+            if get_provider_key("cloudflare"):
+                return True, "cloudflare-flux-schnell", "cloudflare"
+            # Zero-key keyless Free Cloud FLUX (Pollinations) available whenever internet is enabled
+            return True, "pollinations-flux", "pollinations_free"
 
         return False, None, None
 
@@ -4720,8 +5207,30 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             if cm.get("model_name") == model and cm.get("model_type") == "image":
                 is_img_model = True
                 break
-        if any(tok in model.lower() for tok in ("imagen", "dall-e")):
+        if any(tok in model.lower() for tok in ("imagen", "dall-e", "flux", "z-image", "sdxl", "sd-turbo")):
             is_img_model = True
+
+        if is_img_model and not prompt_is_image and not _looks_like_image_generation_request(stripped_prompt):
+            local_models, _ = get_all_installed_local_models()
+            text_candidates = [
+                m["name"] for m in local_models
+                if m.get("model_type") != "image" and not any(tok in m.get("name", "").lower() for tok in ("imagen", "dall-e", "flux", "sdxl", "sd-turbo", "stable-diffusion"))
+            ]
+            suggestion_list = ", ".join(f"`{name}`" for name in text_candidates[:4]) or "`ternary-bonsai-2.5-27b-q2_0` or `llama3.2:3b`"
+            return {
+                "success": True,
+                "is_image": False,
+                "image_model_warning": True,
+                "response": (
+                    f"### ⚠️ Image Generation Model Active (`{model}`)\n\n"
+                    f"You asked a text/general question (`\"{stripped_prompt[:100]}\"`), "
+                    f"but **`{model}`** is an **Image Generation model** — it only generates pictures from visual descriptions.\n\n"
+                    f"**How to proceed:**\n"
+                    f"- **To ask text / coding questions:** Switch the **Model** selector at the top bar to a chat/reasoning model (e.g. {suggestion_list}).\n"
+                    f"- **To draw an image instead:** Start your prompt with `/image` (for example `/image a golden sunset over Colombo`)."
+                ),
+                "model": model,
+            }
 
         if is_img_model or prompt_is_image:
             clean_prompt = re.sub(r"^/(image|img)\s*", "", stripped_prompt).strip()
@@ -4782,8 +5291,34 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     "model": model,
                 }
 
+            sc_mgr = _get_active_sidecar_manager()
             target_image_model = img_model if not is_img_model else model
-            ok_img, data_url_or_err, fpath, fname = generate_image_cloud(clean_prompt, model=target_image_model)
+            local_img_tags = {m["name"].lower() for m in LOCAL_IMAGE_MODEL_CATALOG}
+            cloud_img_tags = {m["name"].lower() for m in FREE_CLOUD_IMAGE_CATALOG}
+            explicit_cloud_selected = is_img_model and (
+                target_image_model.lower() in cloud_img_tags
+                or any(tok in target_image_model.lower() for tok in ("imagen", "dall-e"))
+            )
+            use_local_sdcpp = (not explicit_cloud_selected) and (
+                img_provider == "local_sdcpp"
+                or (
+                    target_image_model.lower() in local_img_tags
+                    and find_sd_cpp_binary() is not None
+                    and bool(sc_mgr.list_installed_local_image_models())
+                )
+            )
+            if use_local_sdcpp:
+                ok_img, data_url_or_err, fpath, fname = sc_mgr.generate_image_local_sdcpp(
+                    clean_prompt,
+                    model_tag=target_image_model,
+                )
+                if not ok_img and is_internet_enabled():
+                    ok_fb, uri_fb, fp_fb, fn_fb = generate_image_cloud(clean_prompt, model="")
+                    if ok_fb:
+                        ok_img, data_url_or_err, fpath, fname = ok_fb, uri_fb, fp_fb, fn_fb
+                        target_image_model = "Cloud Image (Auto Fallback)"
+            else:
+                ok_img, data_url_or_err, fpath, fname = generate_image_cloud(clean_prompt, model=target_image_model)
             if ok_img:
                 return {
                     "success": True,
@@ -4793,7 +5328,7 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                     "filename": fname,
                     "prompt": clean_prompt,
                     "model": target_image_model,
-                    "response": f"Generated image for: \"{clean_prompt}\"",
+                    "response": f"Generated image for: \"{clean_prompt}\" (`{target_image_model}`)",
                 }
             else:
                 return {"success": False, "error": f"Image generation failed: {data_url_or_err}"}
@@ -5075,12 +5610,17 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         if project_path and Path(project_path).is_dir():
             proj_context = get_project_codebase_context(Path(project_path))
 
+        # Load active plugins / SKILL.md context
+        skills_ctx = _plugin_mgr.format_active_skills_context(raw_prompt, base_catalog=SKILLS_CATALOG)
+        tool_idx_ctx = _mcp_hub.tool_index.compact_index_prompt()
+
         # Build full cognitive system prompt using PAI Cognitive Engine v2
         cognitive_system_prompt = format_cognitive_system_prompt(
             clock_context=clock_str,
             workspace_path=project_path if project_path else None,
             internet_enabled=is_internet_enabled(),
             memory_context=active_mem_ctx,
+            skills_context=skills_ctx,
             user_voice_profile=voice_ctx,
             oververbosity=3,
             active_model=model,
@@ -5100,23 +5640,6 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             append_log("[Chat] Request cancelled by user prior to model inference.")
             return {"success": False, "aborted": True, "error": "Generation cancelled by user"}
 
-        ground_block = f"\n<grounded_web_context>\n{grounding_context}\n</grounded_web_context>\n" if grounding_context else ""
-        proj_block = f"\n<project_codebase_files>\n{proj_context}\n</project_codebase_files>\n" if proj_context else ""
-
-        prompt = (
-            f"{cognitive_system_prompt}\n"
-            f"{ground_block}"
-            f"{proj_block}"
-            f"{puzzle_guidance}"
-            f"{clarification_guidance}\n"
-            f"User Query:\n{contextual_prompt}"
-        )
-
-        reply_text = ""
-        think_text = ""
-        error_msg = ""
-
-        # Query local models cache
         local_models, _ = get_all_installed_local_models()
         installed_names = [m["name"] for m in local_models]
         installed_map = {m["name"].lower(): m["name"] for m in local_models}
@@ -5134,6 +5657,23 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
         ctx_size = ctx_budget.num_ctx
         temp_val = float(body.get("temperature", 0.3))
         deep_graph_mermaid = ""
+
+        prompt, ctx_telemetry = ContextWindowAssembler.assemble(
+            budget=ctx_budget,
+            cognitive_system_prompt=cognitive_system_prompt,
+            user_query=contextual_prompt,
+            tool_index_prompt=tool_idx_ctx,
+            grounding_context=grounding_context,
+            project_context=proj_context,
+            extra_guidance=f"{puzzle_guidance}\n{clarification_guidance}",
+            history_turns=history,
+        )
+
+        reply_text = ""
+        think_text = ""
+        error_msg = ""
+        tool_trace: List[Dict[str, Any]] = []
+        pending_mcp_hitl = None
 
         def _invoke_active_llm(sys_p: str, usr_p: str) -> Tuple[bool, str]:
             combined_p = f"{sys_p}\n\n{usr_p}"
@@ -5194,6 +5734,20 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
                 f"{tot_res.best_answer[:1800]}"
             )
             reply_text = tt_res.final_synthesis or tot_res.best_answer
+        elif _mcp_hub.get_live_clients() and (is_direct_local or installed_names or (is_internet_enabled() and has_keys)):
+            loop_turns = 8 if ctx_budget.tier == "HIGH" else (5 if ctx_budget.tier == "BALANCED" else 3)
+            loop = AgentToolLoop(hub=_mcp_hub, llm_fn=_invoke_active_llm, max_turns=loop_turns)
+            loop_res = loop.run(
+                system_prompt=cognitive_system_prompt,
+                user_prompt=prompt.split("User Query:\n", 1)[-1] if "User Query:\n" in prompt else contextual_prompt,
+                initial_tainted=bool(grounding_context),
+                confirm_fn=None,
+            )
+            reply_text = loop_res.final_reply
+            tool_trace = loop_res.tool_trace
+            pending_mcp_hitl = loop_res.pending_hitl
+            if installed_names and not (is_internet_enabled() and has_keys and (is_cloud_model(model) or is_virtual)) and not is_direct_local:
+                actual_model_used = resolve_local_virtual_model(model, installed_names)
         elif is_direct_local:
             # 1. Exact local Ollama model selected by user (e.g. deepseek-r1:7b, mistral:7b, llama3.2:1b)
             # MUST ALWAYS run locally in Ollama, never routing to cloud!
@@ -5540,6 +6094,9 @@ class PAIBridgeHandler(BaseHTTPRequestHandler):
             "deep_think_used": bool(is_deep_think),
             "thought_graph_mermaid": deep_graph_mermaid if "deep_graph_mermaid" in locals() else "",
             "context_budget": _safe_asdict(ctx_budget) if "ctx_budget" in locals() else None,
+            "context_telemetry": _safe_asdict(ctx_telemetry) if "ctx_telemetry" in locals() else None,
+            "tool_trace": tool_trace if "tool_trace" in locals() else [],
+            "pending_mcp_confirmation": _safe_asdict(pending_mcp_hitl) if "pending_mcp_hitl" in locals() and pending_mcp_hitl else None,
             "model": actual_model_used,
             "project_path": project_path,
             "grounding": grounding_citations,
