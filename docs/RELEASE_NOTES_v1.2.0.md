@@ -7,7 +7,7 @@
 
 ---
 
-## 🚀 Key Highlights & New Capabilities
+## Key Highlights & New Capabilities
 
 ### 1. Ultra-Lightweight Native Desktop Application (Tauri 2.0 + Rust)
 - Fully compiled standalone binary (`pai-desktop.exe`) replacing browser-based execution.
@@ -36,7 +36,7 @@
 
 ---
 
-## 🔒 Verification & Compliance
+## Verification & Compliance
 - Core Tree ID invariant verified.
 - Research Tree ID invariant verified.
 - All pre-freeze pin consistency audits pass (`tools/test_check_pins.py` 7/7, `tools/test_check_n_plus_1.py` 6/6).

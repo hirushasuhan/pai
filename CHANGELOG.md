@@ -1,5 +1,86 @@
 # Changelog
 
+## [1.5.1-beta.1] — 2026-11-28 — Memory Optimizer, Local Sidecar Engine, Keyless FLUX Fallback, MCP Hub & Plugin Ecosystem
+
+### Memory Optimizer & Hardware Pressure Engine
+- **Active Memory Optimization**: Implemented `research/memory_optimizer.py` and `research/memory_probe.py`, providing real-time hardware telemetry, RAM/VRAM pressure monitoring, and working set trimming via Win32 `EmptyWorkingSet`.
+- **System Memory Endpoints**: Exposed `/api/system/memory_status` and `/api/system/optimize_memory` on the local bridge server, offering process isolation and advisory resource recovery without impacting running user processes.
+- **Hardware-Aware Context Budgeting**: Dynamically computes token allocation limits based on live system tier (`HIGH`, `BALANCED`, `COMPRESSED`), guarding against out-of-memory faults during long-context inference.
+
+### Local Inference Sidecars & Installer
+- **Process Orchestration**: Introduced `research/local_sidecars.py` and `research/sidecar_installer.py` for managing external C++ inference runtimes (`llama-server`, `sd-cli`) as isolated background sidecars bound strictly to loopback (`127.0.0.1:11435`).
+- **Admission Gates**: Added Gate 1 disk space/hardware checks and Gate 3 pre-load RAM/VRAM checks, calculating 64-layer offload capacity, automatic CPU offloading for FLUX weights, and automated 300-second idle process reaping.
+- **Safe Asset Provisioning**: Sidecar installer enforces HTTPS host allowlists (GitHub Releases, HuggingFace), path traversal (zip-slip) defenses, symlink rejection, and total archive size limits (512 MiB maximum).
+
+### Keyless FLUX Image Synthesis & Polish
+- **Image Pipeline Architecture**: Integrated Pollinations FLUX and local image synthesis fallbacks in `research/cloud_ai.py` with fail-closed offline air-gap enforcement.
+- **Image Verification & Export**: Hardened `/api/image/save_as` endpoint with PNG/JPEG magic byte verification, directory containment validation, and integration with the native Windows folder picker dialog.
+- **Prompt Intent Detection**: Added heuristic routing (`_looks_like_image_generation_request`) to prevent accidental image generation on standard conversational queries.
+
+### Model Context Protocol (MCP) Hub & Plugin Manager
+- **MCP Client & Hub**: Introduced `research/mcp_hub.py` and expanded `research/mcp_client.py` to support multi-agent MCP tool routing across STDIO and Streamable HTTP/SSE transports.
+- **Credential Protection**: Implemented `MCPVaultManager` leveraging Windows DPAPI (`CryptProtectData`) to store tokens encrypted at rest without plaintext leakage in configuration files.
+- **Security & Schema Screening**: Added `PluginScanner` and `ToolFirewall` enforcing schema verification, blocking secret-harvesting `elicitation` forms, redacting markers from tool outputs, and validating endpoints against `net_guard`.
+- **Context Engine**: Implemented `research/context_engine.py` with observation masking, semantic window slicing, and token budget enforcement for multi-agent workflows.
+
+### Desktop Workstation Polish
+- **System Status Indicators**: Added real-time sidecar state badges, memory optimization controls, and thought inspector overlays in the workstation UI.
+- **Ecosystem Management**: Added dedicated UI panels for MCP server configurations and plugin management.
+
+## [1.5.0-beta.4] — 2026-11-26 — Auto-Updater Cryptographic Verification & Research Module Bundling
+
+### Update Verification & Security Hardening
+- **Manifest Integrity Checks**: Hardened `desktop/apply_pending_update.py` and `desktop/bridge_server.py` to verify SHA-256 digests and release manifests against GitHub release metadata prior to extraction.
+- **Safety Bounds**: Enforced strict non-downgrade SemVer evaluation, 250 MiB archive size caps, and automated rejection of archive entries with path traversals or symlinks.
+- **Module Synchronization**: Ensured full synchronization of research modules and dependencies into the packaged distribution payload, maintaining runtime parity between CLI and desktop environments.
+
+## [1.5.0-beta.3] — 2026-11-26 — Deep Reasoning Engine, Stuck-Recovery Cowork & UIA / MCP Desktop Control
+
+### Deep Reasoning Engine
+- **Tree-of-Thought Exploration**: Implemented `research/deep_reasoning.py` featuring radial node expansion, thought graph serialization, step-by-step reflection cycles, and UI thought trace visualization.
+- **Confidence Scoring & Pruning**: Evaluates branch validity, automatically pruning incomplete or dead-end reasoning paths before final answer synthesis.
+
+### Stuck-Recovery Cowork
+- **Watchdog Protection**: Enhanced `research/cowork.py` with `StuckDetectorWatchdog`, tracking loop repetitions, heartbeat timeouts, and stalling signals.
+- **Automated Checkpoint Recovery**: Automatically rolls back to the last known valid reasoning checkpoint (up to 3 recovery attempts) and verifies task completion quality using `verify_task_quality`.
+
+### Native Windows UI Automation & PC Control
+- **UIA Agent Bridge**: Created `desktop/bin/pai_ui_agent.cs`, a compiled native C# UI Automation driver for Windows accessibility-tree element discovery, window management, and action execution.
+- **Capability Gating**: Routed all automation commands through `research/automation.py`, `research/windows_mcp_server.py`, and `research/capabilities.py` (`ToolBroker`), requiring explicit human-in-the-loop confirmation.
+
+## [1.5.0-beta.2] — 2026-11-26 — UI Contrast Hardening & Air-Gap Modal Polish
+
+### Workstation Interface Refinement
+- **Modal Accessibility**: Refined styling and contrast for the offline air-gap confirmation dialog, ensuring full readability across both Light and Dark themes.
+- **Visual Ergonomics**: Standardized button contrast ratios, state indicators, and border definitions across modal components.
+
+## [1.5.0-beta.1] — 2026-11-26 — Complete Offline Air-Gap Mode & Security Confirmation Gates
+
+### Complete Offline Air-Gap Mode
+- **Air-Gap Architecture**: Added `AIRGAP_OFFLINE` / `pai_airgap` toggle in `desktop/bridge_server.py` and workstation settings.
+- **Fail-Closed Network Enforcement**: Completely blocks non-loopback outbound socket connections and external API requests when air-gap mode is active.
+- **Human-in-the-Loop Confirmation**: Integrated security confirmation dialogs for sensitive file system and system configuration operations.
+
+## [1.4.2] — 2026-11-23 — Silent Workstation Startup & Channel-Gated Testing
+
+### Workstation Execution Improvements
+- **Silent Launch**: Eliminated terminal console popups on Windows startup using headless execution flags in `desktop/desktop_launcher.py`.
+- **Channel Gating**: Introduced automated channel validation separating Stable, Beta, and Preview distribution tracks.
+
+## [1.4.0] — 2026-11-23 — Background Update Applicator & Resilient Process Management
+
+### Desktop Update Lifecycle
+- **Background Update Applicator**: Implemented `desktop/apply_pending_update.py` for atomic staging and application of updates on desktop restart.
+- **Port Conflict Resolution**: Added automatic detection and termination of orphaned bridge server processes on port `8765`.
+- **Download Management**: Implemented pause, resume, cancel, and background minimize functionality for in-flight model and update downloads.
+
+## [1.3.0] — 2026-11-22 — Software Auto-Updater & Multi-Channel Desktop Release
+
+### Software Auto-Update Subsystem
+- **Native Auto-Updater**: Implemented `research/updater.py` and `desktop/bridge_server.py` update managers supporting GitHub Releases API and cryptographic verification.
+- **Multi-Channel Distribution**: Added support for user-configurable Stable and Beta/Preview update channels with dynamic release telemetry.
+- **Vision Model Support**: Added initial integration for local vision models and image analysis workflows.
+
 ## [1.2.0] — 2026-11-14 — Ultra-Lightweight Native Desktop Application (Tauri 2.0 + Rust), Dual Workstation Themes & Modern Model Lifecycle Management
 
 ### Desktop Workstation Architecture & Native Shell

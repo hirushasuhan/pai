@@ -1,6 +1,6 @@
 # Trust Boundary Diagram & Inventory
 
-> **Living Security Architecture Document (synced 2026-11-26)**
+> **Living Security Architecture Document (synced 2026-11-28)**
 >
 > **Mandatory Maintenance Rule (see [AGENTS.md](../AGENTS.md)):** Whenever any feature, HTTP route, Tauri command, CLI subcommand, IPC channel, network integration, model/cloud provider, MCP server/plugin, automation target, persistent store, or sandbox/updater path is added, modified, or removed, this document and [STRIDE_THREAT_MODEL.md](STRIDE_THREAT_MODEL.md) **must be updated in the same change**.
 

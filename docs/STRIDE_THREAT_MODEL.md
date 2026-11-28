@@ -1,6 +1,6 @@
 # STRIDE Threat Model
 
-> **Living Security Analysis (synced 2026-11-26)**
+> **Living Security Analysis (synced 2026-11-28)**
 >
 > **Mandatory Maintenance Rule (see [AGENTS.md](../AGENTS.md)):** Whenever any feature, endpoint, transport, IPC channel, provider, MCP/plugin integration, automation capability, storage format, or sandbox/updater flow is added, modified, or removed, this STRIDE model, [TRUST_BOUNDARY_DIAGRAM.md](TRUST_BOUNDARY_DIAGRAM.md), and [THREAT_MODEL.md](THREAT_MODEL.md) **must be updated in the same change**.
 >

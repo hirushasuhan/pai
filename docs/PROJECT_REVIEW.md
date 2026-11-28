@@ -77,13 +77,13 @@ Test suite: **140 tests, all passing** (Linux, Python 3.10).
 
 | Criterion | State |
 |-----------|-------|
-| 140 unit tests green | ✅ on Linux (Python 3.10) · ⏳ must be run on the Windows machine (Python 3.14) |
-| Windows `kernel32` code paths executed | ⏳ not yet — only struct sizes verified on Linux |
-| Live Wikipedia/DuckDuckGo ingestion (both transports) | ⏳ not yet — the review sandbox had no internet; local-server tests pass for both transports |
-| Purge benchmark | ✅ offline PASS (retained ≈ 6 KB over 8 cycles) · ⏳ record Windows RSS trend |
-| Schema v1 + tier table frozen | ✅ documented · ⏳ freeze at gate |
-| CI on Windows | ⏳ not set up |
-| Decisions D1–D2 | ✅ defaults implemented (ADR-001/002) · ⏳ owner confirmation |
+| 140 unit tests green | [PASS] on Linux (Python 3.10) · [PENDING] must be run on the Windows machine (Python 3.14) |
+| Windows `kernel32` code paths executed | [PENDING] not yet — only struct sizes verified on Linux |
+| Live Wikipedia/DuckDuckGo ingestion (both transports) | [PENDING] not yet — the review sandbox had no internet; local-server tests pass for both transports |
+| Purge benchmark | [PASS] offline PASS (retained ≈ 6 KB over 8 cycles) · [PENDING] record Windows RSS trend |
+| Schema v1 + tier table frozen | [PASS] documented · [PENDING] freeze at gate |
+| CI on Windows | [PENDING] not set up |
+| Decisions D1–D2 | [PASS] defaults implemented (ADR-001/002) · [PENDING] owner confirmation |
 
 ## 7. Verification Notes (honesty section)
 * Second pass additions: the local-model adapter is tested against a fake local server only (no real model was run); the Windows Sandbox policy is validated as configuration only (no Windows host was available); the updater's privilege separation is documented, not enforced by Python.
@@ -4002,3 +4002,43 @@ Findings GD and GE are closed:
 Owner formally confirmed in chat:
 1. Orphaned commit `f781919`: Formally accepted in writing the residual exposure of unreachable orphaned commit `f781919` without a support purge.
 2. Credential rotation: Confirmed all personal credentials/tokens from prior history were rotated on 2026-10-20.
+
+
+## Reviewer addendum (2026-11-28): Desktop Workstation (v1.2.0), Auto-Updater (v1.3.0/v1.4.x), v1.5.0 Subsystems & v1.5.1-beta.1 Expansion
+
+### 1. Scope & Verified Milestones
+
+This addendum documents the formal engineering review of the desktop application workstation, native update infrastructure, and the v1.5.0/v1.5.1 capability expansions:
+
+* **Milestone D3 — Native Desktop Application (Release v1.2.0)**:
+  - Tauri 2.0 + Rust shell (`pai-desktop.exe`) replacing external browser execution.
+  - Headless Python bridge server on `127.0.0.1` with dynamic port assignment and per-session `X-PAI-Token` header authentication.
+  - Headless Win32 folder picker dialogs (`desktop/bin/pai_folder_picker.cs` -> `pai_folder_picker.exe`) eliminating console flickers.
+  - Dual Workstation themes (Clean Light and Deep Space Dark) with hotkey switching (`Ctrl+Shift+L`).
+  - Interactive Model Install modal with custom destination selection and real-time disk storage telemetry.
+
+* **Milestone D4 — Software Auto-Updater & Resilient Distribution (Releases v1.3.0, v1.4.0, v1.4.2)**:
+  - Cryptographic auto-updater (`research/updater.py`, `desktop/apply_pending_update.py`) verifying release manifests, SHA-256 digests against GitHub release assets, and non-downgrade SemVer rules.
+  - Multi-channel release support separating Stable, Beta, and Preview distribution tracks.
+  - Background update applicator executing atomic directory swaps and rollback safety on application restart.
+  - Headless desktop launcher eliminating terminal console popups during startup.
+
+* **Milestone D5 — v1.5.0 Subsystems (Air-Gap, Deep Reasoning, Cowork & UIA PC Control)**:
+  - Complete Offline Air-Gap Mode (`AIRGAP_OFFLINE` / `pai_airgap`) fail-closed socket guards blocking all non-loopback network calls and cloud AI requests.
+  - Deep Reasoning Engine (`research/deep_reasoning.py`) with radial tree-of-thought exploration, thought graph serialization, reflection loops, and thought trace inspector.
+  - Stuck-Recovery Cowork Watchdog (`research/cowork.py` `StuckDetectorWatchdog`) detecting loop repetitions and heartbeat stalls, rolling back to checkpointed reasoning states, and verifying task quality (`verify_task_quality`).
+  - Native Windows UI Automation driver (`desktop/bin/pai_ui_agent.cs`, `research/automation.py`, `research/windows_mcp_server.py`) exposing accessibility trees for desktop automation, gated strictly by `ToolBroker` and human confirmation.
+
+* **Milestone D6 — v1.5.1-beta.1 Subsystems (Memory Optimizer, Sidecars, Keyless FLUX, MCP Hub & Context Engine)**:
+  - Memory Optimizer (`research/memory_optimizer.py`, `research/memory_probe.py`) evaluating RAM/VRAM pressure, executing Win32 `EmptyWorkingSet` trimming, and exposing `/api/system/memory_status` / `/api/system/optimize_memory`.
+  - Local Inference Sidecars (`research/local_sidecars.py`, `research/sidecar_installer.py`) managing `llama-server` and `sd-cli` on loopback `127.0.0.1:11435` with Gate 1 storage and Gate 3 RAM/VRAM admission checks, 64-layer offloading calculations, and 300-second idle process reaping.
+  - Keyless FLUX Image Synthesis (`research/cloud_ai.py`) with fail-closed offline air-gap enforcement, PNG/JPEG magic byte verification, and native folder picker integration.
+  - Model Context Protocol (MCP) Hub & Plugin Manager (`research/mcp_hub.py`, `research/plugin_manager.py`) supporting STDIO and Streamable HTTP/SSE, DPAPI token encryption (`MCPVaultManager`), `PluginScanner` security grading, and `ToolFirewall` redaction.
+  - Context Engine (`research/context_engine.py`) observation masking, semantic window slicing, and hardware-adaptive token budgeting.
+
+### 2. Verification & Safety Invariants Audit
+
+1. **Security Claims Lint**: Zero unfalsifiable claims detected across all documentation and source files (`research/tests/test_claims.py` passed).
+2. **Secret Scanner Audit**: Full repository scan completed with no tracked credentials, private keys, or API tokens detected (`tools/check_secrets.py` passed).
+3. **Threat Model Sync**: All new architectural boundaries (`B1` through `B8`) and threats (`T1` through `T40`) documented in `docs/TRUST_BOUNDARY_DIAGRAM.md`, `docs/STRIDE_THREAT_MODEL.md`, and `docs/THREAT_MODEL.md`.
+4. **Safety Constitution Invariance**: `docs/CONSTITUTION.md` and `research/trust.json` remain untouched and cryptographically pinned.

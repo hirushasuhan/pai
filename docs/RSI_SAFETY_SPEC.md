@@ -68,7 +68,7 @@ Self-modification is never evaluated by the same cognitive instance that generat
 To prevent intent drift across hundreds of iterative updates:
 * **The Constitution**: A set of core operational rules (e.g., "Always prioritize user privacy", "Never execute unverified network payloads", "Never bypass containment sandboxes").
 * **Read-Only Lock (ROM)**: The cryptographic hash of the Constitution is compiled directly into the binary's read-only memory segment. During every self-update cycle, the new binary must verify that its cryptographic hash matches the immutable master key. If any modification to the Constitution is detected, the update is instantly aborted.
-* **⚠️ Weakness found in review**: on a normal PC there is no true ROM. A program that can rewrite its own binary can rewrite the embedded hash (and the checker) too. The hash is therefore only a *tripwire*; the real guarantee must come from an **external trust anchor** — see §5 and ADR-005.
+* **Note on weakness found in review**: on a normal PC there is no true ROM. A program that can rewrite its own binary can rewrite the embedded hash (and the checker) too. The hash is therefore only a *tripwire*; the real guarantee must come from an **external trust anchor** — see §5 and ADR-005.
 
 ---
 
