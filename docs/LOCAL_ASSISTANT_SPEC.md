@@ -3,7 +3,7 @@
 _Status: planned, nothing in this document is implemented yet. Written 2026-10-07._
 
 ## 1. Purpose and scope
-A simple, local, **stateless** assistant that can analyze code projects, documents, web pages and business datasets (with forecasts) and write and test code. It runs on the owner's own machine, talks to a local model server over loopback only, and keeps no conversation history.
+A simple, local, privacy-focused assistant that can analyze code projects, documents, web pages and business datasets (with forecasts) and write and test code. It runs on the owner's own machine, talks to a local model server over loopback only, and keeps no conversation history.
 
 Commands (CLI first, local web page later):
 
@@ -17,9 +17,9 @@ Commands (CLI first, local web page later):
 
 Out of scope for this spec: voice, desktop control (Phase 5), automatic weight updates (see §9).
 
-## 2. Statelessness rules
+## 2. Privacy and data retention rules
 * No history file, no cache of prompts or file contents. Each run: ingest → reason → output → verified purge (`SecureBuffer`).
-* Cloud runs (§10) are not stateless: the provider receives the data, and the output says so.
+* Cloud runs (§10): when external cloud providers are explicitly configured, the provider receives the prompt data, and the output explicitly records cloud transmission.
 * Output is written only where the user says (`--out`); existing files are never overwritten (new names, diff shown).
 * Model server: requests set `keep_alive: 0` for sensitive runs so the prompt is not left resident in the model process (threat T13). To be verified in M1 by observing `ollama ps`; residual risk stays documented until in-process inference exists.
 
@@ -58,7 +58,7 @@ Purpose: pick, **per task**, the model that fits the machine's current condition
 7. *Fallback chain:* on error, timeout or `finish_reason == "length"` without an answer, try the next eligible model (at most 2 switches); if none remain, return the stub answer labelled as having no model. Never silently use a different model: the output states the model used and the reason codes.
 8. *Re-evaluation:* between tasks only, never in the middle of a generation.
 
-**Output:** `RouteDecision { model, thinking, reason_codes[], rejected[(model, reason)], budget_snapshot }`, printable with `--explain-route`, kept only in memory (stateless).
+**Output:** `RouteDecision { model, thinking, reason_codes[], rejected[(model, reason)], budget_snapshot }`, printable with `--explain-route`, kept only in ephemeral working memory.
 
 **Security rules:** model names come only from the owner's allow-list; text from files, web pages or the model itself can never name or select a model (T21); the task class is derived from the command, not from the content.
 
@@ -85,7 +85,7 @@ Implements §3.3 with its properties and golden decision vectors. Acceptance: th
 Flow: plan → generate → Tier-1 AST guard → run tests in a restricted runner → on failure feed the error back (max 3 repairs) → write result.
 Restricted runner requirements: fresh temp directory; no network (sandboxed process or firewall rule; if not provable, fall back to Windows Sandbox, ADR-003); wall-clock timeout; memory and process limits; scrubbed environment; confirmation prompt before the first run of each task.
 Tests (must exist before merging): infinite loop is killed; attempt to delete files outside the temp dir fails; network call fails; fork bomb is bounded; oversized output is truncated.
-Residual: AST filtering is not a security boundary (RSI spec §5.1); the runner is.
+Residual: AST filtering is not a security boundary (see [STRIDE_THREAT_MODEL.md](STRIDE_THREAT_MODEL.md)); the runner is.
 
 ### M3 — `pai analyze <folder>`
 * **Path safety:** allow-listed root folders; resolve real paths and require them to stay inside a root (blocks `..` and symlink escape); extension allow-list; per-file and total size caps tied to the hardware tier; binary files skipped; secrets skipped (`.env`, `*.key`, `*.pem`, `id_rsa*`, token-like patterns) and never sent to the model.
@@ -130,7 +130,7 @@ User configuration (non-secret, schema-validated, unknown keys rejected): model 
 
 Router additions: machine-profile numbers replace card numbers when present; `uncalibrated` decisions use the conservative rule of ADR-010; cloud candidates follow decision 7 of ADR-010; every route report includes "data leaves machine: yes/no".
 
-Statelessness: local runs are stateless as in §2; cloud runs are not described as stateless (the provider receives the data).
+Data retention: local runs purge working buffers as in §2; cloud runs transmit data to the external provider.
 
 ### M1c — Portability, calibration and model selection
 Deliverables: `pai setup`, `pai doctor`, `pai calibrate`, `pai models`, user configuration schema, machine profile, Linux CI job.

@@ -2,15 +2,15 @@
 
 **Document Version:** 1.0.0  
 **Status:** Research Track Specification (Option B; ADR-001 & ADR-007)  
-**Target Environment:** Stateless Python/Rust Pure Reasoning Core  
+**Target Environment:** Isolated Python/Rust Symbolic Reasoning Core  
 
 ---
 
 ## 1. Overview & Architectural Motivation
 
-The **PAI Native Symbolic Reasoning Engine** is a deterministic, knowledge-free, and stateless reasoning architecture. Unlike large neural language models (LLMs) that store vast factual corpora inside tens of billions of dense matrix weights, this engine operates on strict formal logic principles:
+The **PAI Native Symbolic Reasoning Engine** is a deterministic, knowledge-free symbolic reasoning architecture. Unlike large neural language models (LLMs) that store vast factual corpora inside tens of billions of dense matrix weights, this engine operates on strict formal logic principles:
 
-1. **Stateless Ephemeral Execution**: Operates exclusively in ephemeral memory with zero persistent weights or weights-derived knowledge bases. All working memory is zeroized post-task.
+1. **Ephemeral Working Memory**: Operates in memory-isolated working buffers without mutating model weights. Working buffers and intermediate reasoning atoms are cleared post-task.
 2. **Deterministic Grounding**: Claims are deduced exclusively from explicit, fenced external context ingested through the SSRF-guarded network pipeline or user input.
 3. **Formal Invariant Verification**: Deductive reasoning and code generation steps are bounded by dynamic hardware budgets, validated through an Abstract Syntax Tree (AST) guard, and checked for contradictions.
 
@@ -143,9 +143,9 @@ The reasoning engine must continuously uphold six core invariants under all oper
 
 ---
 
-## 7. Recursive Self-Improvement (RSI) Promotion Gate
+## 7. Algorithmic Promotion & Verification Gate (Research Reference)
 
-Under the PAI RSI architecture (ADR-005, `RSI_SAFETY_SPEC.md`), self-generated algorithmic updates to the symbolic reasoner cannot be automatically promoted to production. Any candidate revision must pass the following promotion gate:
+Under the PAI safety architecture (ADR-005, [STRIDE_THREAT_MODEL.md](STRIDE_THREAT_MODEL.md)), self-generated modifications to the core reasoner or executable codebase are prohibited at runtime. The system does not autonomously self-modify or self-promote. For experimental developer-authored algorithm revisions, candidates must satisfy the following strict promotion gate before manual merge:
 
 1. **Static AST Analysis**: 0 violations against `ast_guard.py`.
 2. **Invariant Conformance**: 100% pass rate on all automated unit and property-based tests verifying Invariants I1 through I6.

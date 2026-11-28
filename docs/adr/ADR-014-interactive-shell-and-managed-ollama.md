@@ -50,12 +50,12 @@ The interactive shell and managed service features share a common service-detect
 - **Session Control & Signal Handling:**
   - `Ctrl+C` (SIGINT) cancels the currently generating model response and safely returns to the interactive prompt without killing the shell session.
   - `Ctrl+D` (EOF), `Ctrl+Z` (Windows EOF), or `/exit` cleanly terminates the shell.
-- **User Banner & Stateless Chat Mode (Finding DX):**
+- **User Banner & Session Chat Mode (Finding DX):**
   - On launch, the shell displays an honest banner stating:
     - Active resident model name, or "no model loaded yet" if uninitialized.
     - Inference endpoint (`127.0.0.1:11434`).
     - Honest capability disclaimer: local models rely on static training data and lack live clock/web access; answers regarding current events may be outdated.
-    - Stateless mode declaration: chat operates statelessly where each line is evaluated independently without cross-turn memory.
+    - Turn isolation declaration: interactive chat operates with turn isolation where each line is evaluated independently.
 - **History & Privacy:**
   - Command line editing and session history (Up/Down arrow navigation) are supported natively by standard terminal line editing (`input()` / `readline`).
   - No persistent cross-session history file is written to disk by default, maintaining the zero-unnecessary-storage privacy posture of ADR-002.
@@ -118,7 +118,7 @@ When implemented in Build Stage:
 The interactive shell banner features:
 - A compact ASCII block-letter PAI logo (5 lines, fitting comfortably within 80-column terminals).
 - Developer credit declaring provenance: `Developed by Hirusha Suhan`.
-- Explicit capability disclaimers: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off. Conversation chat operates in stateless mode without cross-turn memory.
+- Explicit capability disclaimers: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off. Interactive chat operates with turn isolation without cross-turn memory.
 
 ### 2. ANSI Terminal Colours & Virtual Terminal Processing
 - ANSI styling is activated only when standard output is an interactive TTY, the `NO_COLOR` environment variable is not set, `TERM` is not set to `dumb`, and on Windows, after successfully enabling Virtual Terminal processing via `SetConsoleMode` with `ENABLE_VIRTUAL_TERMINAL_PROCESSING` (0x0004).
@@ -196,7 +196,7 @@ To provide a clean, modern terminal interface while maintaining low screen footp
   - Fail-closed sandbox execution verification.
   - Resident model profile and endpoint address.
   - Computer clock date/time provisioning with training cut-off and zero live web access disclaimer.
-  - Stateless turn isolation notice.
+  - Turn isolation notice.
   - `/help` and `/exit` command hints.
 
 ### 4. Non-Pinned Clear and Multi-byte History Byte-Cap (Finding FN)

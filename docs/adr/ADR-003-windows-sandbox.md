@@ -3,7 +3,7 @@
 **Status:** Accepted · **Smoke test passed 2026-10-07** (exit 0, 7/7 checks passed) · **Owner decision D3** · **Date:** 2026-10-05
 
 ## Context
-Firecracker needs Linux + KVM and does not run natively on Windows. Tier 2 of the RSI spec needs a disposable environment with **no network**, tight resource caps and a hostile-output-safe result channel. Containers alone share the host kernel and are not an acceptable sole boundary.
+Firecracker needs Linux + KVM and does not run natively on Windows. Tier 2 of the code verification sandbox spec needs a disposable environment with **no network**, tight resource caps and a hostile-output-safe result channel. Containers alone share the host kernel and are not an acceptable sole boundary.
 
 ## Options
 | Option | Isolation | Disposable | Network off | Effort | Notes |

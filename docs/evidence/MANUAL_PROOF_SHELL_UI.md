@@ -34,7 +34,7 @@ This document establishes the test procedure and record template for manual veri
      - `Sandbox execution boundary verified fail-closed.`
      - `Model: ... | Endpoint: ...`
      - `Note: PAI gives the model your computer's date and time. It has no web access and its knowledge ends at a training cut-off.`
-     - `Mode: Stateless (each line is evaluated independently without prior conversation memory).`
+     - `Mode: Turn Isolation (each line is evaluated independently without prior conversation memory).`
      - `Type /help for available commands or /exit to quit.`
    - Cursor positioned at `pai> ` prompt in the chat region below the notices.
 3. Execute 40 turns of conversation or commands (e.g. alternating `/time`, `/models`, and conversational queries).

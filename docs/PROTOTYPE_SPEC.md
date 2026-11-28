@@ -2,7 +2,7 @@
 
 ## 1. Overview & Objective
 
-The **Python Research Prototype** in `research/` is the testbed and reference implementation for **Personal Agentic AI**. It validates the 3-pillar design (Stateless Core, Hardware Telemetry, Direct Network Pipeline) and the safety ideas (sanitisation, injection screening, purge verification, static code gating) before they are re-implemented in Rust and C++.
+The **Python Research Prototype** in `research/` is the testbed and reference implementation for **Personal Agentic AI**. It validates the core design (Reasoning Core, Hardware Telemetry, Ingestion Pipeline) and the safety ideas (sanitization, injection screening, purge verification, static code gating) before native compilation.
 
 **What the prototype is — and is not**
 * It *is* a verification lab: every claim in the architecture that can be tested in Python is tested, with automated tests (`research/tests/`).
@@ -26,7 +26,7 @@ The **Python Research Prototype** in `research/` is the testbed and reference im
 | `COMPRESSED` | avail RAM < 512 MB **or** load ≥ 90 % | 2 MB | 1 | off |
 
   Modifiers: on battery below 20 % → drop one tier and disable speculation; CPU load ≥ 90 % → disable speculation and halve threads. Each applied rule is recorded in `budget.reasons`.
-* **IPC contract**: `HardwareTelemetry.to_ipc_dict()` emits the JSON message that the Phase 2 C++ daemon must reproduce (schema v1, see `ARCHITECTURE.md` §3.1).
+* **IPC contract**: `HardwareTelemetry.to_ipc_dict()` emits the JSON message for hardware status and tier policy (schema v1, see `ARCHITECTURE.md` §3.1).
 
 ### 2.2 `net_guard.py` + `network_pipeline.py` + `raw_http.py` — Direct Ingestion Engine
 * **Purpose**: fetch live data without a headless browser (200–500 MB RAM per instance).
@@ -55,7 +55,7 @@ The **Python Research Prototype** in `research/` is the testbed and reference im
 * `LocalLLMReasoner` (ADR-001) — OpenAI-compatible **loopback-only** client for llama.cpp / Ollama / LM Studio / vLLM. No redirects or proxies, no tool parameters ever sent, untrusted context fenced (fence markers inside it neutralised), `max_tokens` by hardware tier (1024 / 512 / 128), response size cap. Enabled with `--model-url`.
 * Phase 3 replaces both with the Rust engine's model runtime behind the same contract.
 
-### 2.6 `agent_core.py` — Stateless Agentic Loop
+### 2.6 `agent_core.py` — Deterministic Agentic Execution Loop
 The 4-step cycle (the canonical name everywhere in the docs):
 1. **Perceive** — read telemetry, derive the budget.
 2. **Ingest** — if the query starts with a trigger phrase (*what is, who is, explain, research, how does, summarize, tell me about*), fetch + verify live data into a `SecureBuffer` (capacity = budget context size). A rejected payload degrades the task (`status: DEGRADED`) instead of silently continuing.
@@ -64,7 +64,7 @@ The 4-step cycle (the canonical name everywhere in the docs):
 
 `memory_purged_successfully` is now `True` only when every buffer was *verified* all-zero.
 
-### 2.7 `ast_guard.py` — RSI Tier-1 Prototype
+### 2.7 `ast_guard.py` — Static Code Analysis & AST Guard
 Static allow-list gate for AI-generated Python: import allow-list, forbidden builtins (`eval, exec, open, getattr, __import__, …`), no dunder access, size/complexity caps, warning on `while True` without `break`. A lint-level filter, **not** a sandbox (Tier 2 is the boundary).
 
 ### 2.8 Privacy: `outbound_policy.py`, `local_knowledge.py` (ADR-002)
@@ -103,7 +103,7 @@ python -m unittest discover -s tests -v
 
 ## 4. Phase 1 → Phase 2 Handoff Contracts
 * Telemetry JSON schema v1 (`ARCHITECTURE.md` §3.1) — frozen at Phase 1 exit.
-* Tier policy table (§2.1) — the C++ daemon must reproduce it bit-for-bit; the Python tests become the daemon's conformance suite.
+* Tier policy table (§2.1) — native implementations (Rust/C++) must reproduce it bit-for-bit; the Python tests become the conformance suite.
 * Outbound URL policy (§2.2) — re-implemented in the native network layer.
 * `Reasoner` contract (§2.5) — implemented by the Rust core in Phase 3.
 * Golden conformance vectors (§2.12) — the executable form of the first two contracts.

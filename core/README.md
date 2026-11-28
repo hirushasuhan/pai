@@ -1,6 +1,6 @@
 # core/ — Rust Engine (`pai-core`)
 
-Charter (ADR-004, ADR-011): engine, planner, stateless purge (`zeroize`), network client, URL policy, capability broker, safe ingestion primitives, verify-loop primitives, hardware telemetry.
+Charter (ADR-004, ADR-011): engine, planner, memory zeroization (`zeroize`), network client, URL policy, capability broker, safe ingestion primitives, verify-loop primitives, hardware telemetry.
 
 ## Implemented Slices
 1. `src/tier.rs` (VS2): Pure hardware budgeting policy mirroring Python `_calculate_budget`.

@@ -8,7 +8,7 @@ The architecture assumes a very small, knowledge-free "reasoning core". Followin
 ## Decision
 1. **Product path (Option A):** use an existing open-weights small model served **locally** (llama.cpp `llama-server`, Ollama, LM Studio, vLLM — any OpenAI-compatible `/v1/chat/completions` endpoint) behind the `Reasoner` interface. Implemented: `research/reasoner.py::LocalLLMReasoner`.
 2. **Research path (Option B):** a custom architecture is a separate track with its own benchmarks. It becomes a candidate `Reasoner` only if it beats the adopted model on a fixed evaluation suite at equal or lower RAM.
-3. The model is **a replaceable component**, never the identity of the project: the stateless loop, hardware budgeting, ingestion safety and RSI containment are the project.
+3. The model is **a replaceable component**, never the identity of the project: the verified execution loop, hardware budgeting, ingestion safety and process containment are the project.
 
 ## Safety constraints built into the adapter (all tested)
 Loopback-only endpoint (the model can never be an exfiltration hop) · no redirects or proxies · no tool/function-calling parameters ever sent · untrusted context fenced, and fence markers inside it neutralised · token cap follows the hardware tier · response size cap · failures surface as errors and the purge still runs.

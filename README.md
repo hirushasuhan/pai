@@ -1,6 +1,6 @@
 # Personal Agentic AI (PAI)
 
-> **A Hardware-Aware, Recursive Self-Improving Personal Intelligence Engine**
+> **A Hardware-Aware, Privacy-Focused Personal Agentic AI Workstation**
 
 **Status (2026-11-28):**
 - **Release v1.5.1-beta.1 (Memory Optimizer, Local Sidecars, Keyless FLUX Fallback & MCP Hub):** Introduced active memory pressure monitoring and working set trimming via Win32 `EmptyWorkingSet`, isolated local inference sidecars (`llama-server`, `sd-cli`) on loopback `127.0.0.1:11435` with Gate 1 and Gate 3 admission controls, keyless FLUX fallback with PNG/JPEG magic byte verification, and multi-agent Model Context Protocol (MCP) hub with DPAPI credential encryption.
@@ -18,42 +18,48 @@ See [Roadmap](docs/ROADMAP.md) · [Packaging Spec](docs/PACKAGING_SPEC.md) · [R
 
 ## Executive Summary
 
-**Personal Agentic AI** is a novel, high-efficiency personal intelligence system built from first principles. Unlike conventional Large Language Models (LLMs) that store hundreds of gigabytes of memorized factual knowledge in static weights, Personal Agentic AI is designed around an **Agentic Reasoning Core**. It treats intelligence as an executable logic machine rather than an encyclopedia, acquiring knowledge dynamically via low-level network pipelines and executing autonomously with hardware self-awareness.
+**Personal Agentic AI (PAI)** is a high-efficiency personal intelligence system and desktop workstation built from first principles. Designed around an **Agentic Reasoning Core**, PAI runs locally on user hardware with adaptive resource awareness, executing tasks autonomously while keeping user data private and protected.
 
-The system is developed across a synergistic three-tier language architecture:
-1. **Rust (`core/`)**: High-performance, memory-safe reasoning engine, security policy enforcement, and hot-swappable algorithm core.
-2. **C / C++ (`hardware/`)**: Low-level hardware telemetry daemon (CPU, GPU, NPU, RAM) and zero-overhead raw socket networking.
-3. **Python (`research/`)**: Dynamic research prototyping, agentic tool workflows, data verification pipelines, and algorithmic testbeds.
+The system is developed across a synergistic three-tier architecture:
+1. **Desktop Shell (`desktop/`, `pai-desktop.exe`)**: Ultra-lightweight native Windows desktop application built with Tauri 2.0 (Rust) and a local Python bridge daemon on `127.0.0.1`.
+2. **Policy Core (`core/`, `pai-core`)**: High-performance, memory-safe Rust policy core enforcing resource tiers, URL validation, cryptographic verify-loop grading, and secret scanning.
+3. **Execution & Research Engine (`research/`)**: Dynamic agentic tool workflows, model routing, hardware telemetry probes, sandboxed verification loops, deep reasoning, and Model Context Protocol (MCP) integrations.
 
 ---
 
-## The Three Architectural Pillars
+## Architectural Pillars
 
 ```text
 +-------------------------------------------------------------------------+
 |                       Personal Agentic AI System                        |
 +-------------------------------------------------------------------------+
-|  1. Cognitive Logic Core (Rust)                                         |
-|     - Zero factual memorization footprint                               |
-|     - Fast cognitive grammar & intent decomposition                     |
-|     - Instant working-memory purge after task execution                 |
+|  1. Local-First Agentic Workstation (Tauri 2.0 + Python Bridge)         |
+|     - Native standalone desktop application (Clean Light & Dark themes) |
+|     - Local inference via Ollama and C++ sidecars (llama-server, sd-cli)|
+|     - Complete offline air-gap mode with fail-closed socket guards      |
 +-------------------------------------------------------------------------+
-|  2. Hardware Self-Awareness Daemon (C/C++)                              |
-|     - Real-time telemetry: CPU load, RAM pressure, NPU/GPU availability |
-|     - Dynamic precision throttling (8-bit <-> 4-bit) under pressure     |
-|     - Thermal and battery-aware compute budgeting                       |
+|  2. Hardware Self-Awareness & Memory Optimization (Win32 / Linux)       |
+|     - Real-time telemetry: CPU load, RAM pressure, VRAM availability    |
+|     - Dynamic compute tiers: HIGH, BALANCED, COMPRESSED context budget  |
+|     - Active working set trimming (EmptyWorkingSet) and idle reaping    |
 +-------------------------------------------------------------------------+
-|  3. Direct Network Ingestion Pipeline (C++/Rust)                        |
-|     - Direct TCP/HTTP/WebSocket sockets bypassing heavy headless browsers|
-|     - High-speed binary/text data streaming                             |
-|     - Inline heuristic data verification and sanitization               |
+|  3. Defense-in-Depth Security & Sandboxed Verification (Rust & Python)  |
+|     - Outbound URL policy (net_guard) blocking SSRF and private CIDRs   |
+|     - Cryptographic nonce framing (--- UNTRUSTED DATA BEGIN ---)        |
+|     - Isolated sandbox runners (AppContainer / Bubblewrap / AST guard)  |
++-------------------------------------------------------------------------+
+|  4. Deep Reasoning & Extensible Tool Orchestration (MCP & Cowork)      |
+|     - Tree-of-thought deep reasoning engine with thought graph tracking |
+|     - Multi-agent cowork with stuck-recovery watchdog and auto-rollback |
+|     - Native Windows UI Automation (UIA) desktop control                |
+|     - Model Context Protocol (MCP) hub with DPAPI credential vault      |
 +-------------------------------------------------------------------------+
 ```
 
-1. **Cognitive Logic Core**: The AI algorithm does not store factual databases inside weight parameters. It possesses linguistic structure, reasoning paths, and code generation faculties. All facts are ingested dynamically, processed within temporary RAM, and immediately scrubbed upon task completion.
-2. **Hardware Self-Awareness**: The agent actively monitors the host machine's hardware state. If host RAM is strained, the engine compresses computation or offloads tasks; if an NPU/GPU is present, it routes matrix algebra to accelerated silicon.
-3. **Direct Network Ingestion**: Instead of using heavy headless browsers (Chromium/Puppeteer), the agent speaks directly to internet protocols over raw sockets, parsing raw HTML/JSON directly into working memory in milliseconds.
-4. **Safe Recursive Self-Improvement (RSI)**: The AI is engineered with coding as its primary skill. It iteratively improves its own performance through isolated sandboxes, adversarial auditing and scoped verification before a *signed* hot-swap of its executable engine.
+1. **Local-First Agentic Workstation**: Runs locally on host hardware using Ollama and local C++ inference sidecars (`llama-server`, `sd-cli`) with optional cloud providers and a complete offline air-gap toggle.
+2. **Hardware Self-Awareness & Memory Optimization**: Continuously monitors host CPU load, available RAM, and VRAM pressure via native Win32 `kernel32` APIs and memory probes to dynamically adjust compute tiers (`HIGH`, `BALANCED`, `COMPRESSED`) and trim working sets (`EmptyWorkingSet`).
+3. **Defense-in-Depth Security & Sandboxing**: Strict URL policies (`net_guard`), secret detection in ingested data, unforgeable cryptographic nonce envelopes, and isolated sandbox execution (Win32 AppContainer, Linux Bubblewrap, AST guard) for model-generated code in a bounded verification loop.
+4. **Deep Reasoning & Tool Orchestration**: Multi-agent cowork coordination with stuck-recovery watchdogs, tree-of-thought exploration, Windows UI Automation (UIA) desktop control, and Model Context Protocol (MCP) integrations with DPAPI encrypted credential vaulting.
 
 > **Security stance:** The project aims for *defense in depth*, not an absolute-security promise. Every guarantee is tied to a named test or a named residual risk in [THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
@@ -178,7 +184,7 @@ pai/
 │   ├── ROADMAP.md                # Phases 1-5, release train, exit criteria, decision gates
 │   ├── PACKAGING_SPEC.md         # Packaging, installer, and model setup specification
 │   ├── RELEASE_NOTES_N.md        # Release N (v1.0.0-rc1) evaluated binary notes
-│   ├── RSI_SAFETY_SPEC.md        # Recursive self-improvement safety tiers + known weaknesses
+│   ├── RSI_SAFETY_SPEC.md        # Safety tiers & sandbox isolation (historical research)
 │   ├── PROTOTYPE_SPEC.md         # Python prototype specification
 │   ├── THREAT_MODEL.md           # Assets, trust boundaries, threat register T1-T40
 │   ├── STRIDE_THREAT_MODEL.md    # STRIDE evaluations and mitigations
@@ -195,7 +201,7 @@ pai/
 │   ├── Cargo.toml
 │   └── src/                      # Memory-safe tier, URL, secret, verify-loop, and release policies
 │
-├── hardware/                     # C / C++ Daemon (Phase 2 telemetry & hardware probes)
+├── hardware/                     # Hardware telemetry charter (Phase 2 probe plan)
 │
 ├── research/                     # Python reference implementation & testbeds
 │   ├── pai.py                    # Unified CLI command router (doctor, analyze, chat, etc.)
@@ -230,7 +236,7 @@ pai/
 * [Trust Boundary Diagrams](docs/TRUST_BOUNDARY_DIAGRAM.md)
 * [STRIDE Threat Model](docs/STRIDE_THREAT_MODEL.md)
 * [Threat Model](docs/THREAT_MODEL.md)
-* [Recursive Self-Improvement (RSI) Safety Specification](docs/RSI_SAFETY_SPEC.md)
+* [Safety Specification (Historical Research Archive)](docs/RSI_SAFETY_SPEC.md)
 * [Python Research Prototype Specification](docs/PROTOTYPE_SPEC.md)
 * [Local Assistant Specification](docs/LOCAL_ASSISTANT_SPEC.md)
 * [Outbound Network Policy](docs/NET_POLICY.md)

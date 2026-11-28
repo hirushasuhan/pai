@@ -5,42 +5,43 @@
 Traditional Deep Learning models conflate **cognitive processing** with **factual memorization**. A 70-billion-parameter model allocates 90%+ of its parameter weights to storing trivia, historical dates, and encyclopedic facts. This leads to massive binary footprints (50GB - 140GB+), high memory overhead, rapid factual obsolescence, and continuous hallucination risks.
 
 **Personal Agentic AI (PAI)** decouples reasoning from storage:
-* **The Brain (Pure Reasoning Engine)**: Contains only the algorithmic structure required for syntax comprehension, logic deduction, task decomposition, and code synthesis.
-* **The Senses (Direct Data Ingestion Pipeline)**: Live real-time ingestion from raw networks and local storage, streamed directly into temporary RAM registers.
-* **The Organism (Hardware Awareness Layer)**: Continuous introspection of physical host resources (CPU, GPU, NPU, Memory, Battery) to modulate reasoning depth and prevent system resource exhaustion.
+* **The Brain (Pure Reasoning Engine)**: Focuses on algorithmic structure, syntax comprehension, logic deduction, task decomposition, and code synthesis.
+* **The Senses (Safe Ingestion Pipeline)**: Live real-time ingestion from network endpoints and local storage, filtered by strict URL policies and framed inside cryptographic nonce envelopes.
+* **The Organism (Hardware Awareness Layer)**: Continuous introspection of physical host resources (CPU, RAM, VRAM, Battery) to modulate reasoning depth, manage context budgets, and prevent system resource exhaustion.
 
 ```mermaid
 graph TD
-    subgraph Host Hardware Layer [Hardware Awareness Daemon - C/C++]
-        HW[Physical Hardware: CPU, GPU, NPU, RAM, Power]
-        TELEMETRY[Telemetry Monitor - Win32/PDH/DirectX/CUDA]
-        HW <-->|Poll & Control| TELEMETRY
+    subgraph Hardware & OS Telemetry [Python ctypes & Win32]
+        HW[Host Hardware: CPU, RAM, VRAM, Battery]
+        TELEMETRY[Telemetry Engine: GlobalMemoryStatusEx / GetSystemTimes / /proc]
+        MEM_OPT[Memory Optimizer: EmptyWorkingSet / Memory Pressure Monitor]
+        HW <-->|Query Metrics| TELEMETRY
+        TELEMETRY --> MEM_OPT
     end
 
-    subgraph Core Cognitive Engine [Rust Core]
-        IPC_IN[IPC / Shared Memory Interface]
-        PLANNER[Task Planner & Reasoning Loop]
-        CODEGEN[Code Synthesis & AST Transformer]
-        WORKING_RAM[(Ephemeral Working Memory)]
-        PURGE[Purge Controller]
-        
-        TELEMETRY -->|Hardware Budget & State| IPC_IN
-        IPC_IN --> PLANNER
-        PLANNER <--> WORKING_RAM
-        PLANNER --> CODEGEN
-        PLANNER --> PURGE
-        PURGE -.->|Scrub All Context| WORKING_RAM
+    subgraph Desktop Shell & Loopback Bridge [Tauri 2.0 Rust & Python Daemon]
+        DESKTOP[Native Desktop Shell: pai-desktop.exe]
+        BRIDGE[Bridge Server on 127.0.0.1 with X-PAI-Token]
+        DESKTOP <-->|HTTP / SSE| BRIDGE
     end
 
-    subgraph Direct Ingestion Layer [Network Pipeline - C++/Rust]
-        RAW_SOCK[Raw Socket Client: TCP / HTTP / TLS / WebSocket]
-        VERIFIER[Real-time Data Verifier & Sanitizer]
-        INTERNET((Global Internet / APIs / Endpoints))
+    subgraph Core Policy & Verification [Rust Core]
+        POLICY[URL & Tier Policies: url_policy.rs / tier.rs]
+        VERIFY_CODEC[Verify-Loop Framing: HMAC Verdicts & Tagged Codec]
+        INGEST_RUST[Secret Scanning & Sanitization: ingest.rs]
+    end
+
+    subgraph Execution & Ingestion Engine [Python Research Modules]
+        PLANNER[Task Planner & Reasoning Engine]
+        INGEST[Safe Ingestion: net_guard.py & Nonce Envelope]
+        VERIFY_LOOP[Sandboxed Code Verification: AppContainer / Bubblewrap]
+        REASONER[Local Inference: Ollama & C++ Sidecars llama-server / sd-cli]
         
-        PLANNER -->|Direct Query Request| RAW_SOCK
-        RAW_SOCK <-->|High-Speed Stream| INTERNET
-        INTERNET -->|Streamed Payload| VERIFIER
-        VERIFIER -->|Sanitized Structured Context| WORKING_RAM
+        BRIDGE --> PLANNER
+        PLANNER --> INGEST
+        PLANNER --> REASONER
+        PLANNER --> VERIFY_LOOP
+        BRIDGE <-->|JSON stdin/stdout| POLICY
     end
 ```
 
@@ -48,64 +49,64 @@ graph TD
 
 ## 2. Component Specifications
 
-### 2.1 The Logic Core (`core/` - Rust)
+### 2.1 The Policy & Verification Core (`core/` - Rust)
 * **Language**: Rust (2021 Edition).
 * **Guarantees**: Memory safety without a garbage collector (GC), deterministic latency, data-race freedom across multi-threaded executor pools.
 * **Responsibilities**:
-  * **Intent Analysis**: Parses incoming user instructions into a Directed Acyclic Graph (DAG) of discrete execution steps.
-  * **Ephemeral Context Management**: Allocates temporary memory buffers for the duration of a reasoning cycle. Zero persistent context is written to disk unless explicitly demanded by the user.
-  * **Purge Protocol**: Once a task finishes — *or fails* — the engine zeroizes all ephemeral buffers, **verifies** the zeroing, and only then deallocates. Purge runs in a `finally`/RAII scope so no error path can skip it.
+  * **Resource Tier Policy (`src/tier.rs`)**: Evaluates host telemetry to assign compute tiers (`HIGH`, `BALANCED`, `COMPRESSED`).
+  * **Outbound URL Policy (`src/url_policy.rs`)**: Validates destination URLs against canonical blocked CIDRs, loopback escapes, and protocol smuggling.
+  * **Safe Ingestion Primitives (`src/ingest.rs`)**: High-performance secret scanning (`re.ASCII`), credential pattern matching, terminal escape stripping, and nonce envelope framing.
+  * **Verify-Loop Framing (`src/verify_loop.rs`)**: Tagged RPC value codec, HMAC-SHA256 verdict frame verification, and canonical assertion extraction.
 
-### 2.2 Hardware Self-Awareness Daemon (`hardware/` - C / C++)
-* **Language**: C++20 / Modern C.
-* **OS Target**: Windows (with Win32 API, Performance Data Helper `pdh.dll`, Windows Management Instrumentation `WMI`, DirectX/DXGI, NVIDIA NVML/CUDA API).
+### 2.2 Hardware Self-Awareness & Telemetry Subsystem (Python / Win32 / Linux)
+* **Implementation**: `research/hardware_telemetry.py`, `research/memory_optimizer.py`, `research/memory_probe.py`, and `core/src/win32.rs`.
+* **OS Target**: Windows (Win32 API via `ctypes`: `kernel32.GlobalMemoryStatusEx`, `GetSystemTimes`, `GetSystemPowerStatus`) and Linux (`/proc/meminfo`, `/proc/stat`, `/sys/class/power_supply`).
 * **Telemetry Metrics Monitored**:
   * Total & Available Physical RAM (bytes).
   * System-wide CPU load percentage & per-core thermal headroom.
   * GPU Core utilization, VRAM allocation, and temperature.
-  * NPU presence and driver capability.
   * Battery status (AC connected vs discharge rate).
 * **Adaptive Control Policies**:
-  * **Tier policy** (single source of truth: `PROTOTYPE_SPEC.md` §2.1): `COMPRESSED` when available RAM < 512 MB or load ≥ 90 % (emergency compression, drops non-essential buffers); `BALANCED` below 2048 MB or load ≥ 75 %; otherwise `HIGH`.
-  * **NPU / GPU Present**: Automatically redirects matrix calculations and vector transformations away from the CPU onto hardware accelerators.
-  * **Thermal / Battery Throttling**: Restricts speculative thread branching when running on battery or when thermal trip points are approached.
+  * **Tier policy**: `COMPRESSED` when available RAM < 512 MB or load >= 90 % (emergency compression, clamps context budget); `BALANCED` below 2048 MB or load >= 75 %; otherwise `HIGH`.
+  * **Memory Optimization**: Leverages Win32 `EmptyWorkingSet` to trim working sets of PAI-owned processes and child sidecars during model switching or memory pressure.
 
-### 2.3 Direct Network Ingestion Pipeline (`hardware/` & `core/`)
-* **Core Principle**: Bypassing heavyweight browser engines (Chromium, WebKit) and DOM rendering trees.
-* **Protocol Support**: Raw TCP/IP, TLS 1.3, HTTP/1.1 & HTTP/2, WebSockets.
+### 2.3 Safe Ingestion & Network Pipeline (Python & Rust)
+* **Core Principle**: Secure HTTP(S) data fetching with strict SSRF defense, data sanitization, and cryptographic nonce isolation.
+* **Modules**: `research/ingest.py`, `research/net_guard.py`, `core/src/url_policy.rs`, and `core/src/ingest.rs`.
 * **Pipeline Stages**:
-  1. **Socket Request**: Dispatches lightweight HTTP/TLS requests directly to target endpoints or search APIs.
-  2. **Streaming Parse**: Streams response bytes directly into a streaming parser (extracting raw text, Markdown, JSON, XML).
-  3. **Verification & Sanitization**:
-     * Strips active code scripts (`<script>`, inline JS, tracking pixels).
-     * Computes quality scores based on source trust heuristics and content density.
-     * Enforces size thresholds to prevent buffer overflows or denial-of-service payloads.
+  1. **Destination Validation**: `net_guard` validates destination URLs against blocklists, RFC 1918 private CIDRs, cloud metadata (`169.254.169.254`), and non-HTTP schemes.
+  2. **Streaming Parse & Sanitization**: Strips executable scripts (`<script>`, inline JS), terminal escape codes, bidirectional overrides, and CSV formula characters (`=`, `+`, `-`, `@`).
+  3. **Secret Pattern Screening**: Filters 35+ credential and API key patterns via `scan_secret_content`.
+  4. **Cryptographic Nonce Framing**: Encapsulates external untrusted data inside random per-task nonces (`--- UNTRUSTED DATA BEGIN [<nonce>] ---`) so the reasoner treats it strictly as data, not instructions.
 
 ---
 
 ## 3. Inter-Process Communication (IPC) Architecture
 
-The multi-tier system communicates across low-latency IPC boundaries:
+The multi-tier system communicates across local boundaries:
 
 ```
-[ Hardware Daemon (C++) ] <---- Named Pipe / Shared Memory ----> [ Policy Core (Rust) ]
-                                                                           ^
-                                                                           | FFI / Subprocess
-                                                                           v
-                                                               [ Research Modules (Python) ]
+[ Tauri 2.0 (Rust) ] <─── Local HTTP / SSE (127.0.0.1, X-PAI-Token) ───> [ Bridge Server (Python) ]
+                                                                                   │
+                                         ┌─────────────────────────────────────────┴───────────────────────┐
+                                         ▼                                                                 ▼
+                    [ Rust Policy Core (pai-core) ]                                            [ Local Sidecars / Ollama ]
+                    (JSON stdin/stdout subprocess)                                             (Loopback HTTP 127.0.0.1:11435)
 ```
 
-1. **Rust $\leftrightarrow$ C++ Boundary**:
-   * Uses **Windows Named Pipes** (`\\.\pipe\pai_telemetry`) or **Shared Memory (`CreateFileMappingW`)** for zero-copy streaming of hardware telemetry metrics at 100Hz.
-   * Direct Foreign Function Interface (FFI) bindings via `cxx` or `bindgen` for embedded C++ routines. (Whether the *network* layer stays in C++ is decided by the Phase 2 spike — see `ROADMAP.md`.)
-2. **Rust $\leftrightarrow$ Python Boundary**:
-   * For rapid prototyping and research, Python modules interface via `PyO3` or standardized JSON-RPC over Standard I/O (stdio).
+1. **Tauri Shell $\leftrightarrow$ Bridge Server**:
+   * Uses local HTTP and Server-Sent Events (SSE) bound strictly to `127.0.0.1` on a dynamic port.
+   * Authenticated per session using the `X-PAI-Token` header.
+2. **Python $\leftrightarrow$ Rust Policy Core Boundary**:
+   * Python modules interface with `pai-core.exe` via standardized JSON-RPC over Standard I/O (stdin/stdout) with graceful fallback (`PAI_RUST_FALLBACK_PYTHON=1`).
+3. **Bridge Server $\leftrightarrow$ Local Sidecars**:
+   * Communicates with isolated child inference processes (`llama-server`, `sd-cli`) over loopback HTTP (`127.0.0.1:11435`).
 
 ---
 
 ### 3.1 Telemetry IPC schema v1 (frozen at Phase 1 exit)
 
-The C++ daemon publishes this JSON object (Named Pipe, one message per sample); the Python prototype emits the identical shape via `HardwareTelemetry.to_ipc_dict()` / `main.py --telemetry --json`.
+The telemetry subsystem emits this standardized JSON object via `HardwareTelemetry.to_ipc_dict()` / `main.py --telemetry --json`:
 
 ```jsonc
 {
@@ -141,20 +142,24 @@ Rules: unknown values are `null`, never guessed; consumers must treat `source ==
 sequenceDiagram
     autonumber
     actor User
-    participant Planner as Task Planner (Rust)
-    participant Telemetry as HW Daemon (C++)
-    participant Network as Raw Network Socket
-    participant RAM as Working Memory (RAM)
+    participant UI as Desktop Workstation (Tauri)
+    participant Bridge as Bridge Server (Python)
+    participant Telemetry as Telemetry & Memory (Win32)
+    participant Ingest as Safe Ingestion (net_guard)
+    participant Model as Local Inference (Ollama / Sidecars)
+    participant Memory as Working Memory (RAM)
 
-    User->>Planner: Submit User Request
-    Planner->>Telemetry: Query Resource Budget
-    Telemetry-->>Planner: Returns Budget (e.g. 1.2GB RAM, 8 Threads)
-    Planner->>Network: Fetch Live Knowledge for Query
-    Network-->>RAM: Stream Sanitized Text Payload
-    Planner->>RAM: Synthesize & Execute Solution
-    RAM-->>User: Deliver Final Response / Action
-    Planner->>RAM: Execute Memory Purge (Zeroize, VERIFY, Drop)
-    Note over RAM: Buffers verified all-zero before release
+    User->>UI: Submit User Request
+    UI->>Bridge: HTTP/SSE with X-PAI-Token
+    Bridge->>Telemetry: Query Host Resource Budget
+    Telemetry-->>Bridge: Returns Budget (e.g. BALANCED, Context Cap)
+    Bridge->>Ingest: Fetch & Sanitize Untrusted Knowledge
+    Ingest-->>Memory: Stream Nonce-Framed Context
+    Bridge->>Model: Query Model (Local / Sidecar)
+    Model-->>Memory: Synthesize Response
+    Memory-->>UI: Stream Final Response
+    Bridge->>Memory: Memory Purge & Working Set Trim (EmptyWorkingSet)
+    Note over Memory: Ephemeral buffers zeroized and verified
 ```
 
 ---

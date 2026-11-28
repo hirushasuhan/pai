@@ -1,6 +1,6 @@
 # Engineering Roadmap (Phases 1 - 5)
 
-This roadmap outlines the systematic development of the **Personal Agentic AI (PAI)** from an agile Python research prototype to a fully autonomous, recursive self-improving native intelligence daemon and standalone desktop workstation.
+This roadmap outlines the systematic development of the **Personal Agentic AI (PAI)** from an agile Python research prototype to a high-performance, privacy-focused native intelligence engine and standalone desktop workstation.
 
 _Last reviewed: 2026-11-28. Phase 1 closed at `05c9739`; Phase 2 Slices 1-2 verified; Track L (Local Assistant M1-M7) complete; Packaging (Inno Setup, native launcher) complete; Desktop Workstation Track (Tauri 2.0 shell, dual themes, model management) delivered in v1.2.0; Auto-Updater delivered in v1.3.0 and hardened in v1.4.0/v1.4.2; Deep Reasoning, Stuck-Recovery Cowork, Offline Air-Gap Mode, and UIA PC Automation delivered in v1.5.0; Memory Optimizer, Local Sidecars (llama-server, sd-cli), Keyless FLUX Fallback, and MCP Hub delivered in v1.5.1-beta.1. Risks R1–R16 mitigated or closed — see [PROJECT_REVIEW.md](PROJECT_REVIEW.md), [THREAT_MODEL.md](THREAT_MODEL.md), and [STRIDE_THREAT_MODEL.md](STRIDE_THREAT_MODEL.md)._
 
@@ -33,11 +33,12 @@ gantt
     section v1.5.0 & v1.5.1 Subsystems
     v1.5.0 Air-gap, Deep Reasoning, Cowork & UIA PC control :done, 2026-11-24, 2026-11-26
     v1.5.1-beta.1 Memory optimizer, sidecars, MCP hub    :done, 2026-11-26, 2026-11-28
-    section Phase 4: Sandboxed RSI
-    Sandbox launch + result collection                   :2027-02-01, 2027-03-01
-    Signed hot-swap engine (Rust)                        :2027-03-01, 2027-04-01
-    section Phase 5: Autonomous assistant
-    Hardware telemetry daemon (C++) & voice integration  :2027-04-01, 2027-06-01
+    section Phase 4: Sandboxed Code Verification
+    Windows Sandbox & AppContainer runner (done)         :done, 2026-10-10, 2026-10-25
+    Verify loop & tagged codec parity (done)             :done, 2026-10-13, 2026-10-14
+    section Phase 5: Autonomous Workstation Integration
+    Hardware telemetry & dynamic budgeting (done)        :done, 2026-10-25, 2026-11-28
+    UIA PC automation & local sidecars (done)            :done, 2026-11-24, 2026-11-28
 ```
 
 ---
@@ -50,12 +51,12 @@ gantt
 - [x] `research/hardware_telemetry.py` — Windows `kernel32` + Linux `/proc`, RAM, CPU load, battery, single-source tier policy, JSON IPC form. *(Hardened 2026-10-05: no invented fallback values.)*
 - [x] `research/network_pipeline.py` — direct HTTP(S) ingestion, Wikipedia search→summary (multi-language incl. Sinhala), DuckDuckGo fallback, typed errors.
 - [x] `research/net_guard.py` — outbound URL policy (SSRF / `file://` protection). *(Added after review finding C1.)*
-- [x] `research/raw_http.py` — experimental raw `socket`+`ssl` client modelling the Phase 2 Winsock design.
+- [x] `research/raw_http.py` — experimental raw `socket`+`ssl` client with IP pinning and DNS-rebinding protection.
 - [x] `research/data_verifier.py` — HTML-parser sanitiser, byte-safe truncation, Unicode-aware scoring, prompt-injection screening.
 - [x] `research/secure_buffer.py`, `memory_probe.py` — wipe-and-verify purge primitive and RSS probe.
 - [x] `research/reasoner.py` — `Reasoner` interface + honest stub.
 - [x] `research/agent_core.py` — Perceive → Ingest → Reason → Purge with guaranteed purge (`finally`) and a measured `PurgeReport`.
-- [x] `research/ast_guard.py` — RSI Tier-1 static gate prototype.
+- [x] `research/ast_guard.py` — Tier-1 static AST guard and import allowlist.
 - [x] `research/benchmark.py` — purge benchmark that can actually fail.
 - [x] `research/main.py` — interactive CLI + scriptable flags.
 - [x] `research/tests/` — 170 unit tests at 2026-10-07 (stdlib `unittest`; 5 skipped on Windows).
@@ -70,7 +71,7 @@ All must be true before Phase 2 starts:
 - [x] `python -m unittest discover -s tests` is green **on the Windows development machine** (170 tests at the 2026-10-07 check).
 - [x] Live ingestion verified on Windows: `main.py --ask "Explain Rust ownership"` and `--lang si`, with both `--transport urllib` and `--transport raw`.
 - [x] `main.py --benchmark` passes on Windows; RSS trend recorded in `PROJECT_REVIEW.md`.
-- [x] Telemetry JSON schema v1 and the tier-policy table are frozen (they become the C++ daemon's conformance tests).
+- [x] Telemetry JSON schema v1 and the tier-policy table are frozen (conformance tests for Rust/native core).
 - [x] CI runs the test suite on Windows (GitHub Actions `windows-latest` run #37520707673 passed).
 - [x] Owner confirms the default decisions D1–D4 (ADR-001…004 confirmed).
 - [x] **Windows Sandbox smoke test** (ADR-003): verified 7/7 checks passed; recorded in `docs/evidence/sandbox_results.json`.
@@ -86,13 +87,13 @@ All must be true before Phase 2 starts:
 ## Phase 2: Native layers — Rust policy core (VS2 done), Rust safe-ingestion string primitives (Slice 1 done), Rust verify-loop & tagged value codec (Slice 2), Win32 telemetry (VS3), C++ probe (VS4)
 _Status 2026-10-12: the Rust slice VS2 (tier + URL policy), Phase 2 Slice 1 (`core/src/ingest.rs` string-level safe-ingestion, secret-scanning with `re.ASCII` on all credential regexes, terminal/text/header sanitization, and cryptographic nonce-envelope primitives; file/folder traversal `ingest_file`, `ingest_folder`, and `assemble_untrusted_context` remain in Python `research/ingest.py`), and Phase 2 Slice 2 (`core/src/verify_loop.rs` tagged RPC value codec `encode_value`/`decode_value`/`decode_envelope_json`, constant-time HMAC-SHA256 verdict frame verification `verify_verdict_frame`, and bounded canonical example assertion extraction `extract_example_assertions`; subprocess orchestration, `ast_guard`, `prepare_test_suite`, and the repair loop remain in Python `research/verify_loop.py`) are implemented and verified against 200 tier vectors, 87 URL vectors, 113 ingest vectors, and 66 verify-loop vectors, 5,000+ case deterministic no-panic property tests in `ingest.rs` and `verify_loop.rs`, and multi-seed differential fuzzing (`--fuzz 10000` across 7 seeds `42`, `9001`, `1337`, `20261012`, `555`, `777`, `31337` — 43,330 cases per seed, 303,310 total cases, 0 mismatches, 0 panics)._
 
-**Objective**: Native low-level Windows daemon for hardware telemetry (reduced C++ charter, ADR-004) and a time-boxed spike to confirm Rust as the network layer.
+**Objective**: Native low-level Windows integration for hardware telemetry and a time-boxed spike to confirm Rust as the network and policy layer.
 
 ### Deliverables
-- **Hardware Telemetry Daemon (`hardware/telemetry/`)**: Win32 (`GlobalMemoryStatusEx`, `GetSystemTimes`, `GetSystemPowerStatus`), PDH counters, NVIDIA NVML/CUDA/DXGI for GPU/NPU. Publishes **telemetry schema v1** (`ARCHITECTURE.md` §3.1) over `\\.\pipe\pai_telemetry` with an ACL limited to the current user.
-- **Conformance**: the daemon must pass `research/conformance/tier_policy_vectors.json` (200 vectors) — a C++ runner for the golden files is part of the deliverable.
-- **Memory-protection hooks**: `VirtualLock` for working buffers, disable Windows Error Reporting dumps for the engine process (threat T5).
-- **Network spike (2 weeks, decision gate)**: Rust baseline (`hyper`/`rustls`) vs a minimal C++ Winsock/IOCP+TLS client on 100 sequential + 8 concurrent fetches. C++ is adopted only if it is ≥ 20 % better on p95 latency **and** ≥ 30 % lower on peak RSS **and** passes every URL-policy vector (87 at 2026-10-07) including IP pinning (ADR-004). Otherwise networking stays in Rust and the C++ network engine is dropped.
+- **Hardware Telemetry Integration**: Native Win32 integration (`GlobalMemoryStatusEx`, `GetSystemTimes`, `GetSystemPowerStatus`) in Python (`research/hardware_telemetry.py`) and Rust (`core/src/win32.rs`). Publishes **telemetry schema v1** (`ARCHITECTURE.md` §3.1) and enforces resource tier limits.
+- **Conformance**: Passes `research/conformance/tier_policy_vectors.json` (200 vectors) across both Rust and Python runtimes.
+- **Memory-protection hooks**: `VirtualLock` for working buffers, memory trimming via `EmptyWorkingSet`, and memory wipe routines.
+- **Networking Architecture Evaluation**: Rust baseline (`hyper`/`rustls`/`ureq` patterns) and stdlib HTTP pipelines evaluated. Standalone C++ raw socket daemon dropped in favor of Rust policy core (`core/src/url_policy.rs`) and Python stdlib transport for memory safety and attack surface reduction.
 
 ---
 
@@ -112,16 +113,16 @@ Adopt a local open-weights model behind the `Reasoner` interface (Option A); a c
 
 ---
 
-## Phase 4: Sandboxed Recursive Self-Improvement (RSI)
-**Objective**: Enable the AI to write, test, verify and upgrade its own code inside a physically isolated sandbox.
+## Phase 4: Sandboxed Code Verification & Execution (Verify Loop)
+**Objective**: Enable safe, isolated execution and automated test verification of model-generated code without compromising host operating system security. (Note: In accordance with the system safety model, recursive self-modification of system binaries or source code is not implemented; code execution is confined strictly to task verification).
 
 ### Entry decision: Sandbox technology — **ADR-003 accepted (default)**
-Windows Sandbox (networking disabled, one writable output folder) is primary; AppContainer + Job Object runners are active for lightweight execution.
+Windows Sandbox (networking disabled, one writable output folder) is evaluated for heavy untrusted workloads; AppContainer + Job Object runners (`research/sandbox_win32.py`) and Linux bubblewrap (`research/sandbox_linux.py`) are active for lightweight execution.
 
 ### Deliverables
-- **Isolation environment** per the ADR with automated compile + test pipeline and a complete network airgap.
-- **Dual-Agent Auditor System**: Generator proposes; a separate Auditor fuzzes and red-teams.
-- **Signed Hot-Swap Engine (ADR-005)**: Active in `research/updater.py` and `desktop/apply_pending_update.py` (Ed25519 manifest, per-file SHA-256, anti-rollback, pinned Constitution hash, atomic install, rollback).
+- **Isolation environment** per the ADR with automated test execution pipeline, process-tree killing, wall-clock timeout enforcement, and complete network airgap.
+- **Verify-Loop Orchestrator & AST Guard**: Generator proposes code; `ast_guard.py` enforces AST node allowlists; tests execute in isolated sandbox processes with HMAC-graded verdicts.
+- **Cryptographic Updater (ADR-005)**: Maintained in `research/updater.py`, `core/src/updater.rs`, and `desktop/apply_pending_update.py` (Ed25519 manifest, per-file SHA-256, anti-rollback, pinned Constitution hash, atomic install, rollback).
 
 ---
 

@@ -1,11 +1,11 @@
-# ADR-007 — Stateless Deductive Reasoning Engine (Option B Implementation)
+# ADR-007 — Deterministic Deductive Reasoning Engine (Option B Implementation)
 
 **Status:** Accepted (Experimental track) · **Owner decision D1** · **Date:** 2026-10-06
 
 ## Context
 ADR-001 established two parallel tracks for the reasoning component:
 1. **Product path (Option A):** Use an existing open-weights small model served locally (`LocalLLMReasoner`) to satisfy real user queries immediately.
-2. **Research path (Option B):** A custom, knowledge-free architecture operating statelessly in ephemeral memory without massive pre-trained weights.
+2. **Research path (Option B):** A custom, knowledge-free architecture operating with ephemeral working memory without massive pre-trained weights.
 
 To prevent premature claims or deceptive stubs from masquerading as a completed engine, the research path required a rigorous, mathematically sound specification. Rather than relying on simple pattern-matching or unconditional guarantees, the custom engine must execute deterministic deductive reasoning over explicit evidence atoms, detect dialectic contradictions, and strictly enforce verifiable grounding.
 

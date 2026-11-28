@@ -1,15 +1,21 @@
-# Recursive Self-Improvement (RSI) Safety Specification
+# Code Verification & Sandbox Safety Specification (Historical Research Archive)
+
+> [!IMPORTANT]
+> **Historical Research & Non-Operational Status Notice**:
+> Personal Agentic AI (PAI) **does not implement recursive self-improvement (RSI), autonomous self-modification, runtime binary hot-swapping, or self-compilation**. The production codebase strictly forbids autonomous modification of host binaries, system source code, or model weights.
+> 
+> The containment tiers described below (Tier 1 AST analysis, Tier 2 process isolation / Windows Sandbox, and Tier 4 cryptographic update verification) are operational in the codebase solely for **task code verification (the Verify Loop)** and **external developer-signed software updates (the Updater)**. This document is retained purely as a historical research specification and defense-in-depth safety reference.
 
 ## 1. Introduction & Theoretical Foundation
 
-**Recursive Self-Improvement (RSI)** refers to the theoretical and engineering process by which an artificial intelligence system iteratively analyzes, optimizes, and rewrites its own codebase. When an AI possesses state-of-the-art coding abilities, it can theoretically enhance its algorithmic efficiency, latency, and reasoning capability without human intervention.
+**Recursive Self-Improvement (RSI)** refers to the theoretical process by which an artificial intelligence system iteratively analyzes, optimizes, and rewrites its own codebase. When an AI possesses advanced coding abilities, theoretical research models consider how systems might attempt algorithmic optimizations without human intervention.
 
-However, an unconstrained self-modifying system presents existential and operational risks to the host machine:
-* **Host System Compromise**: Defective code could accidentally delete user files, overwrite master boot records, or corrupt storage.
-* **Runaway Loops**: Unbounded self-optimization can lead to catastrophic memory exhaustion or freeze host CPU cores.
-* **Intent Drift**: Across dozens of self-update generations, subtle semantic shifts can erode original user alignment, leading the system to optimize for unintended objectives.
+However, an unconstrained self-modifying system presents severe operational risks to the host machine:
+* **Host System Compromise**: Defective code could accidentally delete user files, overwrite system records, or corrupt storage.
+* **Runaway Loops**: Unbounded execution can lead to catastrophic memory exhaustion or freeze host CPU cores.
+* **Intent Drift**: Across multiple iterations, subtle semantic shifts can erode original user alignment, leading the system to optimize for unintended objectives.
 
-This specification defines the strict, non-negotiable architectural guardrails governing all self-modification within **Personal Agentic AI**.
+To eliminate these risks, **PAI permanently disables runtime self-modification of system files**. Instead, code generation is confined strictly to task solutions verified within isolated sandboxes. This specification documents the containment architecture designed to enforce that boundary.
 
 ---
 

@@ -22,7 +22,7 @@ On the same machine, 100 sequential and 8 concurrent Wikipedia-summary fetches. 
 2. **VS2 (done 2026-10-07):** Rust CLI reproduces `--telemetry --json` and passes `conformance/tier_policy_vectors.json` and `url_policy_vectors.json`.
 3. **VS3:** Rust runs the full cycle with `LocalLLMReasoner` equivalent; Python becomes a client/test harness.
 4. **VS4:** C++ GPU/NPU probe feeds the same JSON schema; passes the same tier vectors.
-5. Only then: RSI sandbox integration (Phase 4), OS control (Phase 5).
+5. Only then: Sandbox verification integration (Phase 4), OS control (Phase 5).
 A slice is finished when its conformance vectors pass in CI; no layer is started before the previous slice ships.
 
 ## Conformance mechanism (implemented)

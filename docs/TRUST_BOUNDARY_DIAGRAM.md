@@ -39,7 +39,7 @@ flowchart TB
         RUST_CORE["Rust Policy Core (pai-core --bridge)"]
         ROUTER["Model Router and Config Validator (router.py / config.py)"]
         BROKER["Capability Broker and Audit Chain (capabilities.py)"]
-        PURGE["Stateless Purge Controller (secure_buffer.py)"]
+        PURGE["Memory Management & Purge Controller (secure_buffer.py)"]
     end
 
     subgraph Z_EXEC["Isolated Execution and Local Inference Zone"]
@@ -119,7 +119,7 @@ flowchart LR
     UPD_API -->|"Extracts verified ZIP with Ed25519 signature + anti-rollback"| INSTALL_DIR["%LOCALAPPDATA%\\Programs\\PAI"]
 ```
 
-### 2.2 Verify-Loop Code Execution & RSI Sandbox (`B4`, `B6`)
+### 2.2 Verify-Loop Code Execution & Sandbox Boundary (`B4`, `B6`)
 
 ```mermaid
 flowchart LR
@@ -139,7 +139,7 @@ flowchart LR
     WORKER -->|"Constant-Time HMAC-SHA256 Verdict Frame"| DRIVER
     DRIVER -->|"Verified Verdict + Bounded Repair N<=3"| HOST_OUT["User Workspace Output"]
 
-    RSI_CODE["Phase 4 RSI Patch (Untrusted)"] -->|"Tier-2 WSB Policy (sandbox_policy.py)"| WSB["Windows Sandbox (Networking Disabled)"]
+    UNTRUSTED_CODE["Untrusted Task Code"] -->|"Tier-2 WSB Policy (sandbox_policy.py)"| WSB["Windows Sandbox (Networking Disabled)"]
     WSB -->|"Hostile Output Channel: <=256KB results.json"| READER["read_sandbox_results()"]
 ```
 
